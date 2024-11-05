@@ -681,6 +681,10 @@ mod tests {
 
     use super::*;
 
+    // TESTS TO ADD:
+    // - Ensure ArrayData::get_slice_memory_size_with_alignment returns the same data size as IPC
+    //   encoding it
+
     #[test]
     // flight_data_from_arrow_batch is deprecated but does exactly what we need. Would probably be
     // good to just move it to this test mod when it's due to be removed.

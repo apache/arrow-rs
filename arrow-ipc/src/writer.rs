@@ -1488,6 +1488,10 @@ fn encode_array_datas(
         };
 
         let rows_left = n_rows - offset;
+        // TODO? maybe this could be more efficient by continually approximating the maximum number
+        // of rows based on (size / n_rows) of the current ArrayData slice until we've found the
+        // maximum that can fit? e.g. 'oh, it's 200 bytes and 10 rows, so each row is probably 20
+        // bytes - let's do (max_size / 20) rows and see if that fits'
         let length = (1..=rows_left)
             .find(|len| {
                 // If we've exhausted the available length of the array datas, then just return -
