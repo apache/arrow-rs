@@ -2935,4 +2935,47 @@ mod tests {
         assert_eq!(stream_bytes_written_on_flush, expected_stream_flushed_bytes);
         assert_eq!(file_bytes_written_on_flush, expected_file_flushed_bytes);
     }
+
+    #[test]
+    fn encoded_arr_data_same_size_as_compute_api() {
+        fn encode_test<T: Array>(arr: T) {
+            println!("Checking arr {arr:?}");
+
+            let arr_data = arr.to_data();
+
+            let write_options = IpcWriteOptions {
+                batch_compression_type: None,
+                ..IpcWriteOptions::default()
+            };
+
+            let compute_size = arr_data
+                .get_slice_memory_size_with_alignment(Some(write_options.alignment))
+                .unwrap();
+            let num_rows = arr_data.len();
+
+            let encoded = encode_array_datas(
+                &[arr_data],
+                num_rows,
+                |_, root| root.as_union_value(),
+                MessageHeader::RecordBatch,
+                usize::MAX,
+                &write_options,
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+
+            assert_eq!(compute_size, encoded.arrow_data.len());
+        }
+
+        let str_arr = [Some("foo"), Some("bar"), Some("baz")]
+            .into_iter()
+            .collect::<StringArray>();
+        let int_arr = [None, Some(200), None, Some(2), Some(-4)]
+            .into_iter()
+            .collect::<Int32Array>();
+        encode_test(str_arr.clone());
+        encode_test(int_arr.clone());
+        encode_test(DictionaryArray::new(int_arr, Arc::new(str_arr)));
+    }
 }
