@@ -443,7 +443,7 @@ where
         let mut keep = false;
 
         let difference = end.saturating_sub(filter_values.len() as u64);
-        end = end - difference;
+        end -= difference;
 
         // Safety: we subtract the difference off `end` so we are always within bounds
         for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
