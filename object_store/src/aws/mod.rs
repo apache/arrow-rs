@@ -171,7 +171,7 @@ impl ObjectStore for AmazonS3 {
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
             (
                 PutMode::Create,
-                Some(S3ConditionalPut::ETagMatch | S3ConditionalPut::ETagCreateOnly),
+                Some(S3ConditionalPut::ETagMatch | S3ConditionalPut::ETagPutIfNotExists),
             ) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
@@ -196,7 +196,7 @@ impl ObjectStore for AmazonS3 {
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
                 match put {
-                    S3ConditionalPut::ETagCreateOnly => Err(Error::NotImplemented),
+                    S3ConditionalPut::ETagPutIfNotExists => Err(Error::NotImplemented),
                     S3ConditionalPut::ETagMatch => {
                         request.header(&IF_MATCH, etag.as_str()).do_put().await
                     }
@@ -302,27 +302,40 @@ impl ObjectStore for AmazonS3 {
                     .client
                     .create_multipart(to, PutMultipartOpts::default())
                     .await?;
-                let part_id = self
-                    .client
-                    .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
-                    .await?;
-                let res = match self
-                    .client
-                    .complete_multipart(
-                        to,
-                        &upload_id,
-                        vec![part_id],
-                        CompleteMultipartMode::Create,
-                    )
-                    .await
-                {
-                    Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
-                        path: to.to_string(),
-                        source: Box::new(e),
-                    }),
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e.into()),
-                };
+
+                let res = async {
+                    let part_id = self
+                        .client
+                        .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
+                        .await?;
+                    match self
+                        .client
+                        .complete_multipart(
+                            to,
+                            &upload_id,
+                            vec![part_id],
+                            CompleteMultipartMode::Create,
+                        )
+                        .await
+                    {
+                        Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
+                            path: to.to_string(),
+                            source: Box::new(e),
+                        }),
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e),
+                    }
+                }
+                .await;
+
+                // If the multipart upload failed, make a best effort attempt to
+                // clean it up. It's the caller's responsibility to add a
+                // lifecycle rule if guaranteed cleanup is required, as we
+                // cannot protect against an ill-timed process crash.
+                if res.is_err() {
+                    let _ = self.client.abort_multipart(to, &upload_id).await;
+                }
+
                 return res;
             }
             Some(S3CopyIfNotExists::Dynamo(lock)) => {
@@ -504,7 +517,7 @@ mod tests {
             copy_if_not_exists(&integration).await;
         }
         if let Some(conditional_put) = &config.conditional_put {
-            let supports_update = !matches!(conditional_put, S3ConditionalPut::ETagCreateOnly);
+            let supports_update = !matches!(conditional_put, S3ConditionalPut::ETagPutIfNotExists);
             put_opts(&integration, supports_update).await;
         }
 

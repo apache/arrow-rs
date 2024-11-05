@@ -641,7 +641,7 @@ impl S3Client {
             PutPartPayload::Part(payload) => request.with_payload(payload),
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
-                &format!("{}/{}", self.config.bucket, path),
+                &format!("{}/{}", self.config.bucket, encode_path(path)),
             ),
         };
 
@@ -669,6 +669,16 @@ impl S3Client {
             }
         };
         Ok(PartId { content_id })
+    }
+
+    pub(crate) async fn abort_multipart(&self, location: &Path, upload_id: &str) -> Result<()> {
+        self.request(Method::DELETE, location)
+            .query(&[("uploadId", upload_id)])
+            .with_encryption_headers()
+            .send()
+            .await?;
+
+        Ok(())
     }
 
     pub(crate) async fn complete_multipart(
