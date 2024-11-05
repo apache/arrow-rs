@@ -120,6 +120,7 @@ impl<'a> Predicate<'a> {
             }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
                     let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
@@ -128,7 +129,7 @@ impl<'a> Predicate<'a> {
                             })
                             .collect::<Vec<_>>(),
                     );
-                    BooleanArray::new(values, string_view_array.logical_nulls())
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_kernel) != negate
@@ -156,9 +157,24 @@ impl<'a> Predicate<'a> {
                     })
                 }
             }
-            Predicate::EndsWith(v) => BooleanArray::from_unary(array, |haystack| {
-                ends_with(haystack, v, equals_kernel) != negate
-            }),
+            Predicate::EndsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
+                        string_view_array
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    BooleanArray::new(values, nulls)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     // TODO respect null buffer
