@@ -271,15 +271,15 @@ impl FFI_ArrowArray {
         self.null_count as usize
     }
 
-    /// whether the null count value is valid
+    /// Returns the null count, checking for validity
     #[inline]
-    pub fn null_count_checked(&self) -> bool {
-        self.null_count >= 0
+    pub fn null_count_opt(&self) -> Option<usize> {
+        usize::try_from(self.null_count).ok()
     }
 
     /// set the null count of the array
     #[inline]
-    pub fn set_null_count(&mut self, null_count: i64) {
+    pub unsafe fn set_null_count(&mut self, null_count: i64) {
         self.null_count = null_count;
     }
 

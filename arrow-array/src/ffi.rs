@@ -301,13 +301,10 @@ impl ImportedArrowArray<'_> {
     fn consume(self) -> Result<ArrayData> {
         let len = self.array.len();
         let offset = self.array.offset();
-        let null_count = self
-            .array
-            .null_count_checked()
-            .then_some(match &self.data_type {
-                DataType::Null => 0,
-                _ => self.array.null_count(),
-            });
+        let null_count = match &self.data_type {
+            DataType::Null => Some(0),
+            _ => self.array.null_count_opt(),
+        };
 
         let data_layout = layout(&self.data_type);
         let buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
@@ -648,20 +645,24 @@ mod tests_to_then_from_ffi {
             .unwrap();
         let mut ffi_array = FFI_ArrowArray::new(&int32_data);
         assert_eq!(3, ffi_array.null_count());
-        assert!(ffi_array.null_count_checked());
+        assert_eq!(Some(3), ffi_array.null_count_opt());
         // Simulating uninitialized state
-        ffi_array.set_null_count(-1);
-        assert!(!ffi_array.null_count_checked());
+        unsafe {
+            ffi_array.set_null_count(-1);
+        }
+        assert_eq!(None, ffi_array.null_count_opt());
         let int32_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Int32) }.unwrap();
         assert_eq!(3, int32_data.null_count());
 
         let null_data = &ArrayData::new_null(&DataType::Null, 10);
         let mut ffi_array = FFI_ArrowArray::new(null_data);
         assert_eq!(10, ffi_array.null_count());
-        assert!(ffi_array.null_count_checked());
+        assert_eq!(Some(10), ffi_array.null_count_opt());
         // Simulating uninitialized state
-        ffi_array.set_null_count(-1);
-        assert!(!ffi_array.null_count_checked());
+        unsafe {
+            ffi_array.set_null_count(-1);
+        }
+        assert_eq!(None, ffi_array.null_count_opt());
         let null_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Null) }.unwrap();
         assert_eq!(0, null_data.null_count());
     }
