@@ -688,7 +688,7 @@ mod tests {
     #[test]
     // flight_data_from_arrow_batch is deprecated but does exactly what we need. Would probably be
     // good to just move it to this test mod when it's due to be removed.
-    #[expect(deprecated)]
+    #[allow(deprecated)]
     /// ensure only the batch's used data (not the allocated data) is sent
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {

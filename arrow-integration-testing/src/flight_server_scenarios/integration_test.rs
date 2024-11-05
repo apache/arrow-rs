@@ -127,7 +127,7 @@ impl FlightService for FlightServiceImpl {
             .iter()
             .enumerate()
             .flat_map(|(counter, batch)| {
-                #[expect(deprecated)]
+                #[allow(deprecated)]
                 let (dictionary_flight_data, mut batch_flight_data) =
                     arrow_flight::utils::flight_data_from_arrow_batch(batch, &options);
 

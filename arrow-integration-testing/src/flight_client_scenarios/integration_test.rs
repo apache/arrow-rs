@@ -125,7 +125,7 @@ async fn send_batch(
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
 ) -> Result {
-    #[expect(deprecated)]
+    #[allow(deprecated)]
     let (dictionary_flight_data, mut batch_flight_data) =
         arrow_flight::utils::flight_data_from_arrow_batch(batch, options);
 
