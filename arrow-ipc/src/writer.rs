@@ -1478,6 +1478,16 @@ fn encode_array_datas(
 
     let mut offset = 0;
     while offset < n_rows.max(1) {
+        let slice_arrays = |len: usize| {
+            arr_datas.iter().map(move |arr| {
+                if len >= arr.len() {
+                    arr.clone()
+                } else {
+                    arr.slice(offset, len)
+                }
+            })
+        };
+
         let rows_left = n_rows - offset;
         let length = (1..=rows_left)
             .find(|len| {
@@ -1487,19 +1497,10 @@ fn encode_array_datas(
                     return true;
                 }
 
-                let arr_iter = arr_datas
-                    .iter()
-                    // Since we're only returning up above if *all* of the arrays have exhausted
-                    // their available length, it's theoretically possible (though I don't think
-                    // expected or allowed by the invariants that this crate tries to hold) that
-                    // some arrays have different lengths from the others, so we need to call
-                    // `.min(*len)` to ensure we don't get a failed assertion when trying to slice
-                    .map(|arr| arr.slice(offset, arr.len().min(*len)));
-
                 // we can unwrap this here b/c this only errors on malformed buffer-type/data-type
                 // combinations, and if any of these arrays had that, this function would've
                 // already short-circuited on an earlier call of this function
-                get_arr_batch_size(arr_iter, write_options).unwrap() > max_msg_size
+                get_arr_batch_size(slice_arrays(*len), write_options).unwrap() > max_msg_size
             })
             // If no rows fit in the given max size, we want to try to get the data across anyways,
             // so that just means doing a single row. Calling `max(2)` is how we ensure that - if
@@ -1509,15 +1510,12 @@ fn encode_array_datas(
             // If all rows can comfortably fit in this given size, then just get them all
             .unwrap_or(rows_left);
 
-        let new_arrs = arr_datas
-            .iter()
-            // We could get into a situtation where we were given all 0-row arrays to be sent over
-            // flight - we do need to send a flight message to show that there is no data, but we
-            // also can't have `length` be 0 at this point because it could also be that all rows
-            // are too large to send with the provided limits and so we just want to try to send
-            // one row anyways, so this is just how we cover our bases there.
-            .map(|arr| arr.slice(offset, arr.len().min(length)))
-            .collect::<Vec<_>>();
+        // We could get into a situtation where we were given all 0-row arrays to be sent over
+        // flight - we do need to send a flight message to show that there is no data, but we also
+        // can't have `length` be 0 at this point because it could also be that all rows are too
+        // large to send with the provided limits and so we just want to try to send one now
+        // anyways, so the checks in this fn are just how we cover our bases there.
+        let new_arrs = slice_arrays(length).collect::<Vec<_>>();
 
         // If we've got more than one row to encode or if we have 0 rows to encode but we haven't
         // encoded anything yet, then continue with encoding. We don't need to do encoding, though,

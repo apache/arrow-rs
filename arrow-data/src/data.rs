@@ -559,7 +559,7 @@ impl ArrayData {
                 child_data: self
                     .child_data()
                     .iter()
-                    .map(|data| data.slice(offset, length.min(data.len())))
+                    .map(|data| data.slice(offset, length))
                     .collect(),
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
             }
