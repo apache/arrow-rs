@@ -497,6 +497,10 @@ parser_primitive!(Int64Type);
 parser_primitive!(Int32Type);
 parser_primitive!(Int16Type);
 parser_primitive!(Int8Type);
+parser_primitive!(DurationNanosecondType);
+parser_primitive!(DurationMicrosecondType);
+parser_primitive!(DurationMillisecondType);
+parser_primitive!(DurationSecondType);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
