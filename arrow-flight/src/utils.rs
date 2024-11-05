@@ -43,7 +43,7 @@ pub fn flight_data_from_arrow_batch(
     assert_eq!(
         flight_batches.len(),
         1,
-        "encoded_batch with a max size of usize::MAX should never return more than 1 batch"
+        "encoded_batch with a max size of usize::MAX should not be able to return more or less than 1 batch"
     );
     let flight_batch = flight_batches.pop().unwrap();
 

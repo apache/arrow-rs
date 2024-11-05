@@ -1555,7 +1555,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1564,7 +1564,7 @@ mod tests {
         let array = StringArray::from_iter_values((0..1024).map(|i| "*".repeat(i)));
         let batch = RecordBatch::try_from_iter([("data", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1597,7 +1597,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1613,7 +1613,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1625,7 +1625,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1637,7 +1637,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1660,7 +1660,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split_no_overhead(batch).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     /// Return size, in memory of flight data
@@ -1692,7 +1692,7 @@ mod tests {
     /// Note this overhead will likely always be greater than zero to
     /// account for encoding overhead such as IPC headers and padding.
     ///
-    async fn verify_encoded_split_no_overhead(batch: RecordBatch) {
+    async fn verify_encoded_split_no_overage(batch: RecordBatch) {
         let num_rows = batch.num_rows();
 
         for max_flight_data_size in [1024, 2021, 5000] {

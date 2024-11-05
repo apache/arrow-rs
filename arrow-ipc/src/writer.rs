@@ -422,7 +422,7 @@ impl IpcDataGenerator {
                     dict_id_seq,
                 )?;
 
-                // It's importnat to only take the dict_id at this point, because the dict ID
+                // It's important to only take the dict_id at this point, because the dict ID
                 // sequence is assigned depth-first, so we need to first encode children and have
                 // them take their assigned dict IDs before we take the dict ID for this field.
                 let dict_id = dict_id_seq
@@ -524,7 +524,6 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<EncodedData, ArrowError> {
         let mut encoded_datas = encode_array_datas(
-            // TODO: We can abstract this clone away, right?
             &[array_data.clone()],
             array_data.len(),
             |fbb, offset| {
@@ -542,7 +541,7 @@ impl IpcDataGenerator {
         assert_eq!(
             encoded_datas.len(),
             1,
-            "encode_array_datas with usize::MAX as the max size should never return more than a single item"
+            "encode_array_datas with a max size of usize::MAX should not be able to return more or less than 1 batch"
         );
 
         Ok(encoded_datas.pop().unwrap())
@@ -1550,6 +1549,16 @@ fn encode_array_datas(
     Ok(out)
 }
 
+/// A struct to help ensure that the size of encoded flight messages never goes over a provided
+/// limit (except in ridiculous cases like a limit of 1 byte). The way it does so is by first
+/// running through a provided slice of [`ArrayData`], producing an IPC header message for that
+/// slice, and then subtracting the size of that generated header from the message limit it has
+/// been given. Because IPC header message sizes don't change due to a different amount of rows,
+/// this header size will stay consistent throughout the entire time that we have to transmit a
+/// chunk of rows, so we can just subtract it from the overall limit and use that to check
+/// different slices of `ArrayData` against to know how many to transmit each time.
+///
+/// This whole process is done in [`encode_array_datas()`] above
 #[derive(Default)]
 struct FlatBufferSizeTracker<'fbb> {
     // the builder and backing flatbuffer that we use to write the arrow data into.
@@ -1564,6 +1573,8 @@ struct FlatBufferSizeTracker<'fbb> {
 }
 
 impl<'fbb> FlatBufferSizeTracker<'fbb> {
+    /// Preferred initializer, as this should always be used with a dry-run before a real run to
+    /// figure out the size of the IPC header.
     #[must_use]
     fn for_dry_run(capacity: usize) -> Self {
         Self {
@@ -1574,6 +1585,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
     }
 
+    /// Should be called in-between calls to `encode_array_datas` to ensure we don't accidentally
+    /// keep & encode old data each time.
     fn reset_for_real_run(&mut self) {
         self.fbb.reset();
         self.buffers.clear();

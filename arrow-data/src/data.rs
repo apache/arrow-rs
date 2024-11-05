@@ -899,7 +899,6 @@ impl ArrayData {
         let required_len = (len + self.offset) * mem::size_of::<T>();
 
         if buffer.len() < required_len {
-            // panic!("just get it over with");
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Buffer {} of {} isn't large enough. Expected {} bytes got {}",
                 idx,
