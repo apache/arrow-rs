@@ -271,6 +271,18 @@ impl FFI_ArrowArray {
         self.null_count as usize
     }
 
+    /// whether the null count value is valid
+    #[inline]
+    pub fn null_count_checked(&self) -> bool {
+        self.null_count >= 0
+    }
+
+    /// set the null count of the array
+    #[inline]
+    pub fn set_null_count(&mut self, null_count: i64) {
+        self.null_count = null_count;
+    }
+
     /// Returns the buffer at the provided index
     ///
     /// # Panic

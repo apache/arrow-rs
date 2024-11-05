@@ -301,10 +301,13 @@ impl ImportedArrowArray<'_> {
     fn consume(self) -> Result<ArrayData> {
         let len = self.array.len();
         let offset = self.array.offset();
-        let null_count = match &self.data_type {
-            DataType::Null => 0,
-            _ => self.array.null_count(),
-        };
+        let null_count = self
+            .array
+            .null_count_checked()
+            .then_some(match &self.data_type {
+                DataType::Null => 0,
+                _ => self.array.null_count(),
+            });
 
         let data_layout = layout(&self.data_type);
         let buffers = self.buffers(data_layout.can_contain_null_mask, data_layout.variadic)?;
@@ -329,7 +332,7 @@ impl ImportedArrowArray<'_> {
             ArrayData::new_unchecked(
                 self.data_type,
                 len,
-                Some(null_count),
+                null_count,
                 null_bit_buffer,
                 offset,
                 buffers,
@@ -634,6 +637,34 @@ mod tests_to_then_from_ffi {
         Ok(())
     }
     // case with nulls is tested in the docs, through the example on this module.
+
+    #[test]
+    fn test_null_count_handling() {
+        let int32_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .null_bit_buffer(Some(Buffer::from([0b01011111, 0b00000001])))
+            .build()
+            .unwrap();
+        let mut ffi_array = FFI_ArrowArray::new(&int32_data);
+        assert_eq!(3, ffi_array.null_count());
+        assert!(ffi_array.null_count_checked());
+        // Simulating uninitialized state
+        ffi_array.set_null_count(-1);
+        assert!(!ffi_array.null_count_checked());
+        let int32_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Int32) }.unwrap();
+        assert_eq!(3, int32_data.null_count());
+
+        let null_data = &ArrayData::new_null(&DataType::Null, 10);
+        let mut ffi_array = FFI_ArrowArray::new(null_data);
+        assert_eq!(10, ffi_array.null_count());
+        assert!(ffi_array.null_count_checked());
+        // Simulating uninitialized state
+        ffi_array.set_null_count(-1);
+        assert!(!ffi_array.null_count_checked());
+        let null_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Null) }.unwrap();
+        assert_eq!(0, null_data.null_count());
+    }
 
     fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
