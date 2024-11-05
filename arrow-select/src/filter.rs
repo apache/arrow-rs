@@ -434,19 +434,19 @@ where
     let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
-    let mut start = 0i64;
+    let mut start = 0u64;
     let mut i = 0;
     let mut count = R::default_value();
     let filter_values = pred.filter.values();
 
-    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
+    for mut end in run_ends.inner().into_iter().map(|i| (*i).into() as u64) {
         let mut keep = false;
 
-        for pred in filter_values
-            .iter()
-            .skip(start as usize)
-            .take((end - start) as usize)
-        {
+        let difference = end.saturating_sub(filter_values.len() as u64);
+        end = end - difference;
+
+        // Safety: we subtract the difference off `end` so we are always within bounds
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
             count += R::Native::from(pred);
             keep |= pred
         }
