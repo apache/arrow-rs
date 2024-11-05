@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use memchr::memmem::Finder;
@@ -119,19 +120,15 @@ impl<'a> Predicate<'a> {
             }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
-                    BooleanArray::from(
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
-                            .enumerate()
-                            .map(|(idx, haystack)| {
-                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
-                                    return None;
-                                }
-                                Some(equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate)
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, string_view_array.logical_nulls())
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_kernel) != negate
@@ -159,27 +156,9 @@ impl<'a> Predicate<'a> {
                     })
                 }
             }
-            Predicate::EndsWith(v) => {
-                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    let nulls = string_view_array.logical_nulls();
-                    BooleanArray::from(
-                        string_view_array
-                            .suffix_bytes_iter(v.len())
-                            .enumerate()
-                            .map(|(idx, haystack)| {
-                                if nulls.as_ref().map(|n| n.is_null(idx)).unwrap_or_default() {
-                                    return None;
-                                }
-                                Some(equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate)
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    BooleanArray::from_unary(array, |haystack| {
-                        ends_with(haystack, v, equals_kernel) != negate
-                    })
-                }
-            }
+            Predicate::EndsWith(v) => BooleanArray::from_unary(array, |haystack| {
+                ends_with(haystack, v, equals_kernel) != negate
+            }),
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
                     // TODO respect null buffer
