@@ -718,7 +718,7 @@ mod tests {
     use std::io::{BufReader, Cursor, Seek};
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, ArrayAccessor, BooleanArray, Float64Array, ListArray, StringArray};
+    use arrow_array::{Array, BooleanArray, Float64Array, ListArray, StringArray};
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
