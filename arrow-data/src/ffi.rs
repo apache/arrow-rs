@@ -277,9 +277,10 @@ impl FFI_ArrowArray {
         usize::try_from(self.null_count).ok()
     }
 
-    /// # Safety
-    ///
     /// Set the null count of the array
+    ///
+    /// # Safety
+    /// Null count must match that of null buffer
     #[inline]
     pub unsafe fn set_null_count(&mut self, null_count: i64) {
         self.null_count = null_count;
