@@ -1863,8 +1863,6 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         compression_codec: Option<CompressionCodec>,
         alignment: u8,
     ) -> Result<(), ArrowError> {
-        let start_len = self.arrow_data.len();
-
         let len: i64 = if self.dry_run {
             // Flatbuffers will essentially optimize this away if we say the len is 0 for all of
             // these, so to make sure the header size is the same in the dry run and in the real
