@@ -407,8 +407,20 @@ impl std::fmt::Debug for StructArray {
         writeln!(f, "StructArray")?;
         writeln!(f, "-- validity: ")?;
         writeln!(f, "[")?;
-        for i in 0..self.len() {
+        let head = std::cmp::min(10, self.len());
+        for i in 0..head {
             writeln!(f, "  {},", if self.is_valid(i) { "valid" } else { "null" })?;
+        }
+        if self.len() > 10 {
+            if self.len() > 20 {
+                writeln!(f, "  ...{} elements...,", self.len() - 20)?;
+            }
+
+            let tail = std::cmp::max(head, self.len() - 10);
+
+            for i in tail..self.len() {
+                writeln!(f, "  {},", if self.is_valid(i) { "valid" } else { "null" })?;
+            }
         }
         writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
@@ -736,5 +748,17 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_struct_array_fmt_debug() {
+        let arr: StructArray = StructArray::new(
+            vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
+            vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
+            Some(NullBuffer::new(BooleanBuffer::from(
+                (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
+            ))),
+        );
+        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity: \n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
     }
 }
