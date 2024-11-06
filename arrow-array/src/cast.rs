@@ -779,18 +779,13 @@ pub trait AsArray: private::Sealed {
     }
 
     /// Downcast this to a [`StringViewArray`] returning `None` if not possible
-    fn as_string_view(&self) -> &StringViewArray {
-        self.as_byte_view_opt().expect("string view array")
-    }
-
-    /// Downcast this to a [`StringViewArray`] returning `None` if not possible
     fn as_string_view_opt(&self) -> Option<&StringViewArray> {
         self.as_byte_view_opt()
     }
 
-    /// Downcast this to a [`StringViewArray`] returning `None` if not possible
-    fn as_binary_view(&self) -> &BinaryViewArray {
-        self.as_byte_view_opt().expect("binary view array")
+    /// Downcast this to a [`StringViewArray`] panicking if not possible
+    fn as_string_view(&self) -> &StringViewArray {
+        self.as_byte_view_opt().expect("string view array")
     }
 
     /// Downcast this to a [`BinaryViewArray`] returning `None` if not possible
@@ -798,13 +793,18 @@ pub trait AsArray: private::Sealed {
         self.as_byte_view_opt()
     }
 
-    /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
-    fn as_byte_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
-        self.as_byte_view_opt().expect("byte view array")
+    /// Downcast this to a [`StringViewArray`] panicking if not possible
+    fn as_binary_view(&self) -> &BinaryViewArray {
+        self.as_byte_view_opt().expect("binary view array")
     }
 
     /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
     fn as_byte_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>>;
+
+    /// Downcast this to a [`GenericByteViewArray`] panicking if not possible
+    fn as_byte_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
+        self.as_byte_view_opt().expect("byte view array")
+    }
 
     /// Downcast this to a [`StructArray`] returning `None` if not possible
     fn as_struct_opt(&self) -> Option<&StructArray>;
