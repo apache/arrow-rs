@@ -159,8 +159,7 @@ impl FixedSizeListArray {
                 if let Some(n) = nulls.as_ref() {
                     if n.len() != len {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "Incorrect length of null buffer for FixedSizeListArray, expected {} got {}",
-                            len,
+                            "Incorrect length of null buffer for FixedSizeListArray, expected {len} got {}",
                             n.len(),
                         )));
                     }

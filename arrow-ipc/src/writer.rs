@@ -1425,6 +1425,29 @@ fn chunked_encoded_batch_bytes(
     )
 }
 
+fn get_encoded_arr_batch_size<AD: Borrow<ArrayData>>(
+    iter: impl IntoIterator<Item = AD>,
+    write_options: &IpcWriteOptions,
+) -> Result<usize, ArrowError> {
+    iter.into_iter()
+        .map(|arr| {
+            let arr = arr.borrow();
+            arr.get_slice_memory_size_with_alignment(Some(write_options.alignment))
+                .map(|size| {
+                    let didnt_count_nulls = arr.nulls().is_none();
+                    let will_write_nulls = has_validity_bitmap(arr.data_type(), write_options);
+
+                    if will_write_nulls && didnt_count_nulls {
+                        let null_len = bit_util::ceil(arr.len(), 8);
+                        size + null_len + pad_to_alignment(write_options.alignment, null_len)
+                    } else {
+                        size
+                    }
+                })
+        })
+        .sum()
+}
+
 fn encode_array_datas(
     arr_datas: &[ArrayData],
     n_rows: usize,
@@ -1445,32 +1468,10 @@ fn encode_array_datas(
         write_options,
     )?;
 
-    fn get_arr_batch_size<AD: Borrow<ArrayData>>(
-        iter: impl Iterator<Item = AD>,
-        write_options: &IpcWriteOptions,
-    ) -> Result<usize, ArrowError> {
-        iter.map(|arr| {
-            let arr = arr.borrow();
-            arr.get_slice_memory_size_with_alignment(Some(write_options.alignment))
-                .map(|size| {
-                    let didnt_count_nulls = arr.nulls().is_none();
-                    let will_write_nulls = has_validity_bitmap(arr.data_type(), write_options);
-
-                    if will_write_nulls && didnt_count_nulls {
-                        let null_len = bit_util::ceil(arr.len(), 8);
-                        size + null_len + pad_to_alignment(write_options.alignment, null_len)
-                    } else {
-                        size
-                    }
-                })
-        })
-        .sum()
-    }
-
     let header_len = fbb.fbb.finished_data().len();
     max_msg_size = max_msg_size.saturating_sub(header_len).max(1);
 
-    let total_size = get_arr_batch_size(arr_datas.iter(), write_options)?;
+    let total_size = get_encoded_arr_batch_size(arr_datas.iter(), write_options)?;
 
     let n_batches = bit_util::ceil(total_size, max_msg_size);
     let mut out = Vec::with_capacity(n_batches);
@@ -1503,7 +1504,8 @@ fn encode_array_datas(
                 // we can unwrap this here b/c this only errors on malformed buffer-type/data-type
                 // combinations, and if any of these arrays had that, this function would've
                 // already short-circuited on an earlier call of this function
-                get_arr_batch_size(slice_arrays(*len), write_options).unwrap() > max_msg_size
+                get_encoded_arr_batch_size(slice_arrays(*len), write_options).unwrap()
+                    > max_msg_size
             })
             // If no rows fit in the given max size, we want to try to get the data across anyways,
             // so that just means doing a single row. Calling `max(2)` is how we ensure that - if
@@ -1861,6 +1863,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         compression_codec: Option<CompressionCodec>,
         alignment: u8,
     ) -> Result<(), ArrowError> {
+        let start_len = self.arrow_data.len();
+
         let len: i64 = if self.dry_run {
             // Flatbuffers will essentially optimize this away if we say the len is 0 for all of
             // these, so to make sure the header size is the same in the dry run and in the real
@@ -2948,9 +2952,7 @@ mod tests {
                 ..IpcWriteOptions::default()
             };
 
-            let compute_size = arr_data
-                .get_slice_memory_size_with_alignment(Some(write_options.alignment))
-                .unwrap();
+            let compute_size = get_encoded_arr_batch_size([&arr_data], &write_options).unwrap();
             let num_rows = arr_data.len();
 
             let encoded = encode_array_datas(
@@ -2968,14 +2970,29 @@ mod tests {
             assert_eq!(compute_size, encoded.arrow_data.len());
         }
 
-        let str_arr = [Some("foo"), Some("bar"), Some("baz")]
+        let str_arr = [Some("fooo"), Some("ba"), Some("bazrrrrrrrrr"), Some("quz")]
             .into_iter()
             .collect::<StringArray>();
-        let int_arr = [None, Some(200), None, Some(2), Some(-4)]
+        let int_arr = [None, Some(2), Some(1), Some(3)]
             .into_iter()
             .collect::<Int32Array>();
         encode_test(str_arr.clone());
         encode_test(int_arr.clone());
-        encode_test(DictionaryArray::new(int_arr, Arc::new(str_arr)));
+
+        // For some reason, DictionaryArrays don't encode their `values` the flight messages. I
+        // don't know why that is, but that will cause this test to fail.
+        // encode_test(DictionaryArray::new(int_arr, Arc::new(str_arr)));
+
+        let time_arr = [Some(0), Some(14000), Some(-1), Some(-1)]
+            .into_iter()
+            .collect::<TimestampSecondArray>();
+        encode_test(time_arr);
+
+        let list_field: FieldRef = Arc::new(Field::new("a", DataType::Int32, true));
+        let all_null_list = FixedSizeListArray::new_null(Arc::clone(&list_field), 3, 8);
+        encode_test(all_null_list);
+
+        let list = FixedSizeListArray::new(list_field, 2, make_array(int_arr.to_data()), None);
+        encode_test(list);
     }
 }

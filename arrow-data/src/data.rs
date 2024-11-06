@@ -440,6 +440,10 @@ impl ArrayData {
         &self,
         alignment: Option<u8>,
     ) -> Result<usize, ArrowError> {
+        // Note: This accounts for data used by the Dictionary DataType that isn't actually encoded
+        // as a part of `write_array_data` in arrow-ipc - specifically, the `values` part of
+        // each Dictionary are encoded in the `child_data` of the `ArrayData` it produces, but (for
+        // some reason that I don't fully understand) it doesn't encode those values. hmm.
         let layout = layout(&self.data_type);
 
         // Just pulled from arrow-ipc
