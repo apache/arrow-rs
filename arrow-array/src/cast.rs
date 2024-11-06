@@ -793,7 +793,7 @@ pub trait AsArray: private::Sealed {
         self.as_byte_view_opt()
     }
 
-    /// Downcast this to a [`StringViewArray`] panicking if not possible
+    /// Downcast this to a [`BinaryViewArray`] panicking if not possible
     fn as_binary_view(&self) -> &BinaryViewArray {
         self.as_byte_view_opt().expect("binary view array")
     }
