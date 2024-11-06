@@ -579,7 +579,6 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
-
             // SAFETY: `Vec::iter` is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
@@ -615,8 +614,8 @@ where
 struct FilterBytes<'a, OffsetSize> {
     src_offsets: &'a [OffsetSize],
     src_values: &'a [u8],
-    dst_offsets: MutableBuffer,
-    dst_values: MutableBuffer,
+    dst_offsets: Vec<OffsetSize>,
+    dst_values: Vec<u8>,
     cur_offset: OffsetSize,
 }
 
@@ -628,9 +627,8 @@ where
     where
         T: ByteArrayType<Offset = OffsetSize>,
     {
-        let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
-        let mut dst_offsets = MutableBuffer::new(num_offsets_bytes);
-        let dst_values = MutableBuffer::new(0);
+        let mut dst_offsets = Vec::with_capacity(capacity);
+        let dst_values = Vec::new();
         let cur_offset = OffsetSize::from_usize(0).unwrap();
         dst_offsets.push(cur_offset);
 
