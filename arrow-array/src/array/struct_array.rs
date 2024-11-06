@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -407,21 +408,7 @@ impl std::fmt::Debug for StructArray {
         writeln!(f, "StructArray")?;
         writeln!(f, "-- validity: ")?;
         writeln!(f, "[")?;
-        let head = std::cmp::min(10, self.len());
-        for i in 0..head {
-            writeln!(f, "  {},", if self.is_valid(i) { "valid" } else { "null" })?;
-        }
-        if self.len() > 10 {
-            if self.len() > 20 {
-                writeln!(f, "  ...{} elements...,", self.len() - 20)?;
-            }
-
-            let tail = std::cmp::max(head, self.len() - 10);
-
-            for i in tail..self.len() {
-                writeln!(f, "  {},", if self.is_valid(i) { "valid" } else { "null" })?;
-            }
-        }
+        print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
         writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
