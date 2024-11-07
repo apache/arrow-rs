@@ -1785,7 +1785,7 @@ mod tests {
         // can be compared as such.
         assert_eq!(input_batch.column(1), output_batch.column(1));
 
-        let run_array_1_unsliced = unslice_run_array(run_array_1_sliced.into_data()).unwrap();
+        let run_array_1_unsliced = unslice_run_array(&run_array_1_sliced.into_data()).unwrap();
         assert_eq!(run_array_1_unsliced, output_batch.column(0).into_data());
     }
 
