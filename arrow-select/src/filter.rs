@@ -627,9 +627,10 @@ where
     where
         T: ByteArrayType<Offset = OffsetSize>,
     {
-        let mut dst_offsets = Vec::with_capacity(capacity);
         let dst_values = Vec::new();
+        let mut dst_offsets: Vec<OffsetSize> = Vec::with_capacity(capacity + 1);
         let cur_offset = OffsetSize::from_usize(0).unwrap();
+
         dst_offsets.push(cur_offset);
 
         Self {
@@ -659,13 +660,15 @@ where
 
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
-        for idx in iter {
-            let (start, end, len) = self.get_value_range(idx);
+        self.dst_offsets.extend(iter.map(|idx| {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
             self.cur_offset += len;
-            self.dst_offsets.push(self.cur_offset);
             self.dst_values
                 .extend_from_slice(&self.src_values[start..end]);
-        }
+            self.cur_offset
+        }));
     }
 
     /// Extends the in-progress array by the ranges in the provided iterator
