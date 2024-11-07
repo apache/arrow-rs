@@ -21,6 +21,9 @@ use crate::array::*;
 use crate::types::*;
 use arrow_data::ArrayData;
 
+/// Re-export symbols needed for downcast macros
+/// 
+/// Name follows `serde` convention
 #[doc(hidden)]
 pub mod __private {
     pub use arrow_schema::{DataType, IntervalUnit, TimeUnit};
