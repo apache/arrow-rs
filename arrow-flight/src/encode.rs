@@ -681,10 +681,6 @@ mod tests {
 
     use super::*;
 
-    // TESTS TO ADD:
-    // - Ensure ArrayData::get_slice_memory_size_with_alignment returns the same data size as IPC
-    //   encoding it
-
     #[test]
     // flight_data_from_arrow_batch is deprecated but does exactly what we need. Would probably be
     // good to just move it to this test mod when it's due to be removed.
@@ -1684,17 +1680,11 @@ mod tests {
 
     /// Coverage for <https://github.com/apache/arrow-rs/issues/3478>
     ///
-    /// Encodes the specified batch using several values of
-    /// `max_flight_data_size` between 1K to 5K and ensures that the
-    /// resulting size of the flight data stays within the limit
-    /// + `allowed_overage`
-    ///
-    /// `allowed_overage` is how far off the actual data encoding is
-    /// from the target limit that was set. It is an improvement when
-    /// the allowed_overage decreses.
-    ///
-    /// Note this overhead will likely always be greater than zero to
-    /// account for encoding overhead such as IPC headers and padding.
+    /// Encodes the specified batch using several values of `max_flight_data_size` between 1K to 5K
+    /// and ensures that the resulting size of the flight data stays within the limit, except for
+    /// in cases where only 1 row is sent - if only 1 row is sent, then we know that there was no
+    /// way to keep the data within the limit (since the minimum possible amount of data was sent),
+    /// so we allow it to go over.
     ///
     async fn verify_encoded_split_no_overage(batch: RecordBatch) {
         let num_rows = batch.num_rows();
