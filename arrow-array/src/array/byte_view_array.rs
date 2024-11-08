@@ -583,6 +583,11 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
         self.nulls.as_ref()
     }
 
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         let mut sum = self.buffers.iter().map(|b| b.capacity()).sum::<usize>();
         sum += self.views.inner().capacity();

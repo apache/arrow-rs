@@ -378,6 +378,11 @@ impl Array for StructArray {
         self.nulls.as_ref()
     }
 
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         let mut size = self.fields.iter().map(|a| a.get_buffer_memory_size()).sum();
         if let Some(n) = self.nulls.as_ref() {

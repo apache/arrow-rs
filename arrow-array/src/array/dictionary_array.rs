@@ -866,6 +866,10 @@ impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V
         self.dictionary.logical_nulls()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.dictionary.logical_null_count()
+    }
+
     fn is_nullable(&self) -> bool {
         self.dictionary.is_nullable()
     }
