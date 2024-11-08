@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use memchr::memmem::Finder;
@@ -114,30 +115,21 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(finder) => {
-                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
-                        string_view_array
-                            .bytes_iter()
-                            .map(|haystack| finder.find(haystack).is_some() != negate)
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    BooleanArray::from_unary(array, |haystack| {
-                        finder.find(haystack.as_bytes()).is_some() != negate
-                    })
-                }
-            }
+            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
+                finder.find(haystack.as_bytes()).is_some() != negate
+            }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_kernel) != negate
@@ -146,6 +138,7 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IStartsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    // TODO respect null buffer
                     BooleanArray::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
@@ -166,14 +159,16 @@ impl<'a> Predicate<'a> {
             }
             Predicate::EndsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         ends_with(haystack, v, equals_kernel) != negate
@@ -182,6 +177,7 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    // TODO respect null buffer
                     BooleanArray::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
