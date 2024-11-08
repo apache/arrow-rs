@@ -138,8 +138,8 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IStartsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    // TODO respect null buffer
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
@@ -150,7 +150,8 @@ impl<'a> Predicate<'a> {
                                 ) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
@@ -177,8 +178,8 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    // TODO respect null buffer
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
@@ -189,7 +190,8 @@ impl<'a> Predicate<'a> {
                                 ) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
