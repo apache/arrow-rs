@@ -961,7 +961,7 @@ impl AmazonS3Builder {
         let virtual_hosted = self.virtual_hosted_style_request.get()?;
         let bucket_endpoint = match (&self.endpoint, zonal_endpoint, virtual_hosted) {
             (Some(endpoint), _, true) => endpoint.clone(),
-            (Some(endpoint), _, false) => format!("{endpoint}/{bucket}"),
+            (Some(endpoint), _, false) => format!("{}/{}", endpoint.trim_end_matches("/"), bucket),
             (None, Some(endpoint), _) => endpoint,
             (None, None, true) => format!("https://{bucket}.s3.{region}.amazonaws.com"),
             (None, None, false) => format!("https://s3.{region}.amazonaws.com/{bucket}"),
@@ -1314,6 +1314,29 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(builder.client.config.region, "us-east-1");
+    }
+
+    #[test]
+    fn s3_test_bucket_endpoint() {
+        let builder = AmazonS3Builder::new()
+            .with_endpoint("http://some.host:1234")
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+        assert_eq!(
+            builder.client.config.bucket_endpoint,
+            "http://some.host:1234/foo"
+        );
+
+        let builder = AmazonS3Builder::new()
+            .with_endpoint("http://some.host:1234/")
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+        assert_eq!(
+            builder.client.config.bucket_endpoint,
+            "http://some.host:1234/foo"
+        );
     }
 
     #[test]
