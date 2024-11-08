@@ -318,10 +318,16 @@ mod tests {
             (r"foo_bar", r"^foo.bar$"),
             // escaped wildcards
             (r"\%\_", r"^%_$"),
+            // escaped non-wildcard
+            (r"\a", r"^a$"),
             // escaped escape and wildcard
             (r"\\%", r"^\\"),
+            // escaped escape and non-wildcard
+            (r"\\a", r"^\\a$"),
             // regex meta character
             (r".", r"^\.$"),
+            (r"$", r"^\$$"),
+            (r"\\", r"^\\$"),
         ];
 
         for (like_pattern, expected_regexp) in test_cases {
