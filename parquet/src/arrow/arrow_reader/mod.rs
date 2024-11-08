@@ -4065,4 +4065,72 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_map_no_value() {
+        let schema = "
+            message spark_schema {
+                REQUIRED group my_map (MAP) {
+                    REPEATED group key_value {
+                        REQUIRED INT32 key;
+                    }
+                }
+                REQUIRED group my_list (LIST) {
+                    REPEATED group list {
+                        REQUIRED INT32 element;
+                    }
+                }
+            }
+            ";
+        let schema = Arc::new(parse_message_type(schema).unwrap());
+
+        // Write Parquet file to buffer
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+
+        // Write column my_map.key_value.key
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch(
+                &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+                Some(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
+                Some(&[0, 1, 1, 0, 1, 1, 0, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Write column my_list.list.element
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch(
+                &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+                Some(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
+                Some(&[0, 1, 1, 0, 1, 1, 0, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Finalize Parquet file
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+        assert_eq!(&buffer[0..4], b"PAR1");
+
+        // Read Parquet file from buffer
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))
+            .unwrap()
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 2);
+        // map and list columns should now be equivalent
+        let c0 = out.column(0).as_list::<i32>();
+        let c1 = out.column(1).as_list::<i32>();
+        assert_eq!(c0.len(), c1.len());
+        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
+    }
 }
