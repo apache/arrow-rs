@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::BufferBuilder;
-use crate::{bytes::Bytes, native::ArrowNativeType};
+use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
@@ -265,7 +265,7 @@ impl Buffer {
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
         if offset % 8 == 0 {
-            return self.slice_with_length(offset / 8, len.div_ceil(8));
+            return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
         bitwise_unary_op_helper(self, offset, len, |a| a)
@@ -868,7 +868,7 @@ mod tests {
 
         let assert_preserved = |offset: usize, len: usize| {
             let new_buf = buf.bit_slice(offset, len);
-            assert_eq!(new_buf.len(), len.div_ceil(8));
+            assert_eq!(new_buf.len(), bit_util::ceil(len, 8));
 
             // if the offset is not byte-aligned, we have to create a deep copy to a new buffer
             // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
