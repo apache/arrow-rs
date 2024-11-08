@@ -308,51 +308,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_replace_start_end_percent() {
-        let a_eq = "%foobar%";
-        let expected = "foobar";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
+    fn test_regex_like() {
+        let test_cases = [
+            // %..%
+            (r"%foobar%", r"foobar"),
+            // ..%..
+            (r"foo%bar", r"^foo.*bar$"),
+            // .._..
+            (r"foo_bar", r"^foo.bar$"),
+            // escaped wildcards
+            (r"\%\_", r"^%_$"),
+            // escaped escape and wildcard
+            (r"\\%", r"^\\"),
+            // regex meta character
+            (r".", r"^\.$"),
+        ];
 
-    #[test]
-    fn test_replace_middle_percent() {
-        let a_eq = "foo%bar";
-        let expected = "^foo.*bar$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_underscore() {
-        let a_eq = "foo_bar";
-        let expected = "^foo.bar$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_leave_like_meta_chars() {
-        let a_eq = "\\%\\_";
-        let expected = "^%_$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_with_multiple_escape_chars() {
-        let a_eq = "\\\\%";
-        let expected = "^\\\\";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_escape_regex_meta_char() {
-        let a_eq = ".";
-        let expected = "^\\.$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
+        for (like_pattern, expected_regexp) in test_cases {
+            let r = regex_like(like_pattern, false).unwrap();
+            assert_eq!(r.to_string(), expected_regexp);
+        }
     }
 
     #[test]
