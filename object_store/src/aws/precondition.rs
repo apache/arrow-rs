@@ -46,6 +46,21 @@ pub enum S3CopyIfNotExists {
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
     HeaderWithStatus(String, String, reqwest::StatusCode),
+    /// Native Amazon S3 supports copy if not exists through a multipart upload
+    /// where the upload copies an existing object and is completed only if the
+    /// new object does not already exist.
+    ///
+    /// WARNING: When using this mode, `copy_if_not_exists` does not copy tags
+    /// or attributes from the source object.
+    ///
+    /// WARNING: When using this mode, `copy_if_not_exists` makes only a best
+    /// effort attempt to clean up the multipart upload if the copy operation
+    /// fails. Consider using a lifecycle rule to automatically clean up
+    /// abandoned multipart uploads. See [the module
+    /// docs](super#multipart-uploads) for details.
+    ///
+    /// Encoded as `multipart` ignoring whitespace.
+    Multipart,
     /// The name of a DynamoDB table to use for coordination
     ///
     /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
@@ -64,6 +79,7 @@ impl std::fmt::Display for S3CopyIfNotExists {
             Self::HeaderWithStatus(k, v, code) => {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
+            Self::Multipart => f.write_str("multipart"),
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -71,6 +87,10 @@ impl std::fmt::Display for S3CopyIfNotExists {
 
 impl S3CopyIfNotExists {
     fn from_str(s: &str) -> Option<Self> {
+        if s.trim() == "multipart" {
+            return Some(Self::Multipart);
+        };
+
         let (variant, value) = s.split_once(':')?;
         match variant.trim() {
             "header" => {
@@ -118,6 +138,17 @@ pub enum S3ConditionalPut {
     /// [HTTP precondition]: https://datatracker.ietf.org/doc/html/rfc9110#name-preconditions
     ETagMatch,
 
+    /// Like `ETagMatch`, but with support for `PutMode::Create` and not
+    /// `PutMode::Option`.
+    ///
+    /// This is the limited form of conditional put supported by Amazon S3
+    /// as of August 2024 ([announcement]).
+    ///
+    /// Encoded as `etag-put-if-not-exists` ignoring whitespace.
+    ///
+    /// [announcement]: https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/
+    ETagPutIfNotExists,
+
     /// The name of a DynamoDB table to use for coordination
     ///
     /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
@@ -133,6 +164,7 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
+            Self::ETagPutIfNotExists => write!(f, "etag-put-if-not-exists"),
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -142,6 +174,7 @@ impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
+            "etag-put-if-not-exists" => Some(Self::ETagPutIfNotExists),
             trimmed => match trimmed.split_once(':')? {
                 ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
                 _ => None,
