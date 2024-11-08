@@ -1720,33 +1720,36 @@ mod tests {
             "%a%",        // can_execute as contains("a")
             "%a%b_c_d%e", // can_execute as regular expression
         ] {
-            let a = Scalar::new(StringArray::new_null(1));
-            let b = StringArray::new_scalar(pattern);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+            // These tests focus on the null handling, but are case-insensitive
+            for like_f in [like, ilike, nlike, nilike] {
+                let a = Scalar::new(StringArray::new_null(1));
+                let b = StringArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = Scalar::new(StringArray::new_null(1));
-            let b = StringArray::from_iter_values([pattern]);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = Scalar::new(StringArray::new_null(1));
+                let b = StringArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = StringArray::new_null(1);
-            let b = StringArray::from_iter_values([pattern]);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = StringArray::new_null(1);
+                let b = StringArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = StringArray::new_null(1);
-            let b = StringArray::new_scalar(pattern);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = StringArray::new_null(1);
+                let b = StringArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+            }
         }
     }
 
@@ -1763,95 +1766,102 @@ mod tests {
             "%a%",        // can_execute as contains("a")
             "%a%b_c_d%e", // can_execute as regular expression
         ] {
-            let a = Scalar::new(StringViewArray::new_null(1));
-            let b = StringViewArray::new_scalar(pattern);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+            // These tests focus on the null handling, but are case-insensitive
+            for like_f in [like, ilike, nlike, nilike] {
+                let a = Scalar::new(StringViewArray::new_null(1));
+                let b = StringViewArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = Scalar::new(StringViewArray::new_null(1));
-            let b = StringViewArray::from_iter_values([pattern]);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = Scalar::new(StringViewArray::new_null(1));
+                let b = StringViewArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = StringViewArray::new_null(1);
-            let b = StringViewArray::from_iter_values([pattern]);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = StringViewArray::new_null(1);
+                let b = StringViewArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-            let a = StringViewArray::new_null(1);
-            let b = StringViewArray::new_scalar(pattern);
-            let r = like(&a, &b).unwrap();
-            assert_eq!(r.len(), 1, "With pattern {pattern}");
-            assert_eq!(r.null_count(), 1, "With pattern {pattern}");
-            assert!(r.is_null(0), "With pattern {pattern}");
+                let a = StringViewArray::new_null(1);
+                let b = StringViewArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+            }
         }
     }
 
     #[test]
     fn string_like_scalar_null() {
-        let a = StringArray::new_scalar("a");
-        let b = Scalar::new(StringArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+        for like_f in [like, ilike, nlike, nilike] {
+            let a = StringArray::new_scalar("a");
+            let b = Scalar::new(StringArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringArray::from_iter_values(["a"]);
-        let b = Scalar::new(StringArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringArray::from_iter_values(["a"]);
+            let b = Scalar::new(StringArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringArray::from_iter_values(["a"]);
-        let b = StringArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringArray::from_iter_values(["a"]);
+            let b = StringArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringArray::new_scalar("a");
-        let b = StringArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringArray::new_scalar("a");
+            let b = StringArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+        }
     }
 
     #[test]
     fn string_view_like_scalar_null() {
-        let a = StringViewArray::new_scalar("a");
-        let b = Scalar::new(StringViewArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+        for like_f in [like, ilike, nlike, nilike] {
+            let a = StringViewArray::new_scalar("a");
+            let b = Scalar::new(StringViewArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringViewArray::from_iter_values(["a"]);
-        let b = Scalar::new(StringViewArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringViewArray::from_iter_values(["a"]);
+            let b = Scalar::new(StringViewArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringViewArray::from_iter_values(["a"]);
-        let b = StringViewArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringViewArray::from_iter_values(["a"]);
+            let b = StringViewArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
 
-        let a = StringViewArray::new_scalar("a");
-        let b = StringViewArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+            let a = StringViewArray::new_scalar("a");
+            let b = StringViewArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+        }
     }
 }
