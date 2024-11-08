@@ -1347,7 +1347,7 @@ pub fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, 
 ///
 /// Will panic if you call this on an `ArrayData` that does not have a buffer of offsets as the
 /// very first buffer (i.e. expects this to be a valid variable-length array)
-pub fn reencode_offsets<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, usize, usize) {
+fn reencode_offsets<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, usize, usize) {
     // first we want to see: what is the offset of this `ArrayData` into the buffer (which is a
     // buffer of offsets into the buffer of data)
     let orig_offset = data.offset();
