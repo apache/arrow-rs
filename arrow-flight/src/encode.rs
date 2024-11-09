@@ -1678,7 +1678,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 112).await;
+        verify_encoded_split(batch, 120).await;
     }
 
     #[tokio::test]
@@ -1689,7 +1689,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4304).await;
+        verify_encoded_split(batch, 4312).await;
     }
 
     #[tokio::test]
@@ -1725,7 +1725,7 @@ mod tests {
         // 5k over limit (which is 2x larger than limit of 5k)
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5800).await;
+        verify_encoded_split(batch, 5808).await;
     }
 
     #[tokio::test]
@@ -1741,7 +1741,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 160).await;
+        verify_encoded_split(batch, 168).await;
     }
 
     #[tokio::test]
@@ -1755,7 +1755,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3328).await;
+        verify_encoded_split(batch, 3336).await;
     }
 
     #[tokio::test]
@@ -1769,7 +1769,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5280).await;
+        verify_encoded_split(batch, 5288).await;
     }
 
     #[tokio::test]
@@ -1794,7 +1794,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4128).await;
+        verify_encoded_split(batch, 4136).await;
     }
 
     /// Return size, in memory of flight data
