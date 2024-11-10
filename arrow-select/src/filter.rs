@@ -437,10 +437,11 @@ where
     let mut j = 0;
     let mut count = R::default_value();
     let filter_values = predicate.filter.values();
+    let run_ends = run_ends.inner();
 
     let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
         let mut keep = false;
-        let mut end = run_ends.inner()[i].into() as u64;
+        let mut end = run_ends[i].into() as u64;
         let difference = end.saturating_sub(filter_values.len() as u64);
         end -= difference;
 
