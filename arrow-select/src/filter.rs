@@ -423,30 +423,30 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
 fn filter_run_end_array<R: RunEndIndexType>(
-    re_arr: &RunArray<R>,
-    pred: &FilterPredicate,
+    array: &RunArray<R>,
+    predicate: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
 where
     R::Native: Into<i64> + From<bool>,
     R::Native: AddAssign,
 {
-    let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
+    let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
-    let mut start = 0i64;
+    let mut start = 0u64;
     let mut i = 0;
     let mut count = R::default_value();
-    let filter_values = pred.filter.values();
+    let filter_values = predicate.filter.values();
 
-    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
+    for mut end in run_ends.inner().into_iter().map(|i| (*i).into() as u64) {
         let mut keep = false;
 
-        for pred in filter_values
-            .iter()
-            .skip(start as usize)
-            .take((end - start) as usize)
-        {
+        let difference = end.saturating_sub(filter_values.len() as u64);
+        end -= difference;
+
+        // Safety: we subtract the difference off `end` so we are always within bounds
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
             count += R::Native::from(pred);
             keep |= pred
         }
@@ -465,7 +465,7 @@ where
         new_run_ends.clear();
     }
 
-    let values = re_arr.values();
+    let values = array.values();
     let pred = BooleanArray::new(values_filter.finish(), None);
     let values = filter(&values, &pred)?;
 
