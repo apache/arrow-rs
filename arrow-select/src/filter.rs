@@ -456,8 +456,8 @@ where
 
         start = end;
         keep
-        }
-    ).into();
+    })
+    .into();
 
     new_run_ends.truncate(j);
 
