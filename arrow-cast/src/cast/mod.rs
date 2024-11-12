@@ -59,7 +59,6 @@ use crate::parse::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
     string_to_datetime, Parser,
 };
-use arrow_array::iterator::ArrayIter;
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
 use arrow_buffer::{i256, ArrowNativeType, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
@@ -2482,21 +2481,6 @@ where
     }
 
     Ok(Arc::new(byte_array_builder.finish()))
-}
-
-trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    /// Constructs a new iterator
-    fn iter(&self) -> ArrayIter<Self>;
-}
-impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<O>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
-    }
 }
 
 #[cfg(test)]

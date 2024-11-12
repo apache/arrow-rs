@@ -76,6 +76,8 @@ mod list_view_array;
 
 pub use list_view_array::*;
 
+use crate::iterator::ArrayIter;
+
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
@@ -568,6 +570,40 @@ pub trait ArrayAccessor: Array {
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
+}
+
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `StringArray`
+/// - `LargeStringArray`
+/// - `StringViewArray`
+///
+/// This trait helps to abstract over the different types of string arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Returns true if all data within this string array is ASCII
+    fn is_ascii(&self) -> bool;
+
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<O>::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<O>::iter(self)
+    }
+}
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
 }
 
 impl PartialEq for dyn Array + '_ {
