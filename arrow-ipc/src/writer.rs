@@ -39,11 +39,10 @@ use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
 use arrow_schema::*;
 
-use crate::compression::CompressionCodec;
-use crate::convert::IpcSchemaEncoder;
 use crate::{
-    BodyCompressionBuilder, BodyCompressionMethod, DictionaryBatchBuilder, MessageBuilder,
-    MessageHeader, RecordBatchBuilder, CONTINUATION_MARKER,
+    compression::CompressionCodec, convert::IpcSchemaEncoder, BodyCompressionBuilder,
+    BodyCompressionMethod, DictionaryBatchBuilder, MessageBuilder, MessageHeader, RecordBatchArgs,
+    CONTINUATION_MARKER,
 };
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
@@ -1314,32 +1313,6 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     }
 }
 
-/// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
-///
-/// In particular, this handles re-encoding the offsets if they don't start at `0`,
-/// slicing the values buffer as appropriate. This helps reduce the encoded
-/// size of sliced arrays, as values that have been sliced away are not encoded
-///
-/// # Panics
-///
-/// Panics if self.buffers does not contain at least 2 buffers (this code expects that the
-/// first will contain the offsets for this variable-length array and the other will contain
-/// the values)
-pub fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
-    if data.is_empty() {
-        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
-    }
-
-    // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
-    // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
-    // to only get the last offset, they'll be shifted to be [0, 2], since that would be the
-    // offset pair for the last value in this shifted slice).
-    // also, in this example, original_start_offset would be 5 and len would be 2.
-    let (offsets, original_start_offset, len) = reencode_offsets::<O>(data);
-    let values = data.buffers()[1].slice_with_length(original_start_offset, len);
-    (offsets, values)
-}
-
 /// Common functionality for re-encoding offsets. Returns the new offsets as well as
 /// original start offset and length for use in slicing child data.
 ///
@@ -1379,6 +1352,32 @@ fn reencode_offsets<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, usize, usi
     };
 
     (offsets, start_offset, end_offset - start_offset)
+}
+
+/// Returns the offsets and values [`Buffer`]s for a ByteArray with offset type `O`
+///
+/// In particular, this handles re-encoding the offsets if they don't start at `0`,
+/// slicing the values buffer as appropriate. This helps reduce the encoded
+/// size of sliced arrays, as values that have been sliced away are not encoded
+///
+/// # Panics
+///
+/// Panics if self.buffers does not contain at least 2 buffers (this code expects that the
+/// first will contain the offsets for this variable-length array and the other will contain
+/// the values)
+pub fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+    if data.is_empty() {
+        return (MutableBuffer::new(0).into(), MutableBuffer::new(0).into());
+    }
+
+    // get the buffer of offsets, now shifted so they are shifted to be accurate to the slice
+    // of values that we'll be taking (e.g. if they previously said [0, 3, 5, 7], but we slice
+    // to only get the last offset, they'll be shifted to be [0, 2], since that would be the
+    // offset pair for the last value in this shifted slice).
+    // also, in this example, original_start_offset would be 5 and len would be 2.
+    let (offsets, original_start_offset, len) = reencode_offsets::<O>(data);
+    let values = data.buffers()[1].slice_with_length(original_start_offset, len);
+    (offsets, values)
 }
 
 /// Similar logic as [`get_byte_array_buffers()`] but slices the child array instead
@@ -1674,34 +1673,27 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         let variadic_buffer = (!variadic_buffer_counts.is_empty())
             .then(|| self.fbb.create_vector(&variadic_buffer_counts));
 
-        let root = {
-            let mut builder = RecordBatchBuilder::new(&mut self.fbb);
-
-            builder.add_length(n_rows);
-            builder.add_nodes(nodes);
-            builder.add_buffers(buffers);
-            if let Some(c) = compression {
-                builder.add_compression(c);
-            }
-            if let Some(v) = variadic_buffer {
-                builder.add_variadicBufferCounts(v);
-            }
-
-            builder.finish()
-        };
+        let root = crate::RecordBatch::create(
+            &mut self.fbb,
+            &RecordBatchArgs {
+                length: n_rows,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression,
+                variadicBufferCounts: variadic_buffer,
+            },
+        );
 
         let root = encode_root(self, root);
 
         let arrow_len = self.arrow_data.len() as i64;
-        let msg = {
-            let mut builder = MessageBuilder::new(&mut self.fbb);
-            builder.add_version(write_options.metadata_version);
-            builder.add_header_type(header_type);
-            builder.add_bodyLength(arrow_len);
 
-            builder.add_header(root);
-            builder.finish()
-        };
+        let mut msg_bldr = MessageBuilder::new(&mut self.fbb);
+        msg_bldr.add_version(write_options.metadata_version);
+        msg_bldr.add_header_type(header_type);
+        msg_bldr.add_header(root);
+        msg_bldr.add_bodyLength(arrow_len);
+        let msg = msg_bldr.finish();
 
         self.fbb.finish(msg, None);
         Ok(())
@@ -1752,10 +1744,8 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_byte_array_byffers = |(offsets, values): (Buffer, Buffer)| {
-            for buffer in [offsets, values] {
-                self.write_buffer(&buffer, offset, compression_codec, write_options.alignment)?;
-            }
-            Ok::<_, ArrowError>(())
+            self.write_buffer(&offsets, offset, compression_codec, write_options.alignment)?;
+            self.write_buffer(&values, offset, compression_codec, write_options.alignment)
         };
 
         match array_data.data_type() {
@@ -1821,14 +1811,13 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
                     _ => unreachable!(),
                 };
                 self.write_buffer(&offsets, offset, compression_codec, write_options.alignment)?;
-                self.write_array_data(
+                return self.write_array_data(
                     &sliced_child_data,
                     offset,
                     sliced_child_data.len(),
                     sliced_child_data.null_count(),
                     write_options,
-                )?;
-                return Ok(());
+                );
             }
             _ => {
                 // This accommodates for even the `View` types (e.g. BinaryView and Utf8View):
@@ -1846,16 +1835,15 @@ impl<'fbb> FlatBufferSizeTracker<'fbb> {
         }
 
         let mut write_arr = |arr: &ArrayData| {
-            for data_ref in arr.child_data() {
+            arr.child_data().iter().try_for_each(|data_ref| {
                 self.write_array_data(
                     data_ref,
                     offset,
                     data_ref.len(),
                     data_ref.null_count(),
                     write_options,
-                )?;
-            }
-            Ok::<_, ArrowError>(())
+                )
+            })
         };
 
         match array_data.data_type() {

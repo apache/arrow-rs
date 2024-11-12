@@ -166,16 +166,12 @@ pub fn batches_to_flight_data(
     let mut flight_data = vec![];
 
     let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker =
+    let mut dict_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) = data_gen.encoded_batch_with_size(
-            batch,
-            &mut dictionary_tracker,
-            &options,
-            usize::MAX,
-        )?;
+        let (encoded_dictionaries, encoded_batch) =
+            data_gen.encoded_batch_with_size(batch, &mut dict_tracker, &options, usize::MAX)?;
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.extend(encoded_batch.into_iter().map(Into::into));
