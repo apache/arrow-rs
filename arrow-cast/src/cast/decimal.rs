@@ -447,10 +447,12 @@ where
             scale,
             cast_options,
         )?,
-        other => return Err(ArrowError::ComputeError(format!(
-            "Cannot cast {:?} to decimal",
-            other
-        ))),
+        other => {
+            return Err(ArrowError::ComputeError(format!(
+                "Cannot cast {:?} to decimal",
+                other
+            )))
+        }
     };
 
     Ok(Arc::new(result))
