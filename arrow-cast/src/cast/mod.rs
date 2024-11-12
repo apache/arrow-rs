@@ -175,13 +175,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // unsigned integer to decimal
         (UInt8 | UInt16 | UInt32 | UInt64, Decimal128(_, _)) |
         (UInt8 | UInt16 | UInt32 | UInt64, Decimal256(_, _)) |
-        // unsigned integer to string
-        (UInt8 | UInt16 | UInt32 | UInt64, Utf8View | Utf8 | LargeUtf8) |
         // signed numeric to decimal
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal256(_, _)) |
-        // signed numeric to string
-        (Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64, Utf8View | Utf8 | LargeUtf8) |
         // decimal to unsigned numeric
         (Decimal128(_, _) | Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
@@ -235,7 +231,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
-        (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
+        (_, Utf8View | Utf8 | LargeUtf8) => from_type.is_primitive(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
 
@@ -9157,6 +9153,15 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_string() {
+        assert!(can_cast_types(
+            &DataType::Decimal128(10, 4),
+            &DataType::Utf8View
+        ));
+        assert!(can_cast_types(
+            &DataType::Decimal256(38, 10),
+            &DataType::Utf8View
+        ));
+
         macro_rules! assert_decimal_values {
             ($array:expr) => {
                 let c = $array;
@@ -9207,9 +9212,6 @@ mod tests {
             .iter()
             .map(|num| num.map(i256::from_i128))
             .collect();
-
-        assert!(can_cast_types(&DataType::Decimal128(10, 4), &DataType::Utf8View));
-        assert!(can_cast_types(&DataType::Decimal256(38, 10), &DataType::Utf8View));
 
         test_decimal_to_string::<Decimal128Type, i32>(
             DataType::Utf8View,
