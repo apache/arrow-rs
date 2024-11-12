@@ -323,7 +323,7 @@ where
     })
 }
 
-pub(crate) fn generic_string_to_decimal_cast<'a, T, S, Offset>(
+pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
     from: &'a S,
     precision: u8,
     scale: i8,
@@ -333,7 +333,6 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
     &'a S: StringArrayType<'a>,
-    Offset: OffsetSizeTrait,
 {
     if cast_options.safe {
         let iter = from.iter().map(|v| {
@@ -387,7 +386,7 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    generic_string_to_decimal_cast::<T, GenericStringArray<Offset>, Offset>(
+    generic_string_to_decimal_cast::<T, GenericStringArray<Offset>>(
         from,
         precision,
         scale,
@@ -405,7 +404,7 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    generic_string_to_decimal_cast::<T, StringViewArray, i32>(from, precision, scale, cast_options)
+    generic_string_to_decimal_cast::<T, StringViewArray>(from, precision, scale, cast_options)
 }
 
 /// Cast Utf8 to decimal
