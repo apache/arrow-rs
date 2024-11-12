@@ -484,6 +484,13 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 /// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
+impl std::fmt::Write for StringViewBuilder {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.append_value(s);
+        Ok(())
+    }
+}
+
 ///  Array builder for [`BinaryViewArray`][crate::BinaryViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with

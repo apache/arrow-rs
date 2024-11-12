@@ -47,8 +47,8 @@ pub(crate) fn value_to_string_view(
     let nulls = array.nulls();
     for i in 0..array.len() {
         match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
-            false => builder.append_value(formatter.value(i).try_to_string()?),
             true => builder.append_null(),
+            false => formatter.value(i).write(&mut builder)?,
         }
     }
     Ok(Arc::new(builder.finish()))
