@@ -187,12 +187,32 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // Utf8 to decimal
         (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len() &&
-                from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
-                    // Assume that nullability between two structs are compatible, if not,
-                    // cast kernel will return error.
-                    can_cast_types(f1.data_type(), f2.data_type())
-                })
+            if from_fields.len() != to_fields.len() {
+                return false;
+            }
+
+            // first, try casting each field by field name
+            let can_cast_by_name = to_fields.iter().all(|to_field| {
+                from_fields.iter()
+                    .find(|from_field| from_field.name() == to_field.name())
+                    .map_or(false, |from_field| {
+                        // Assume that nullability between two structs are compatible.
+                        can_cast_types(from_field.data_type(), to_field.data_type())
+                    })
+            });
+
+            if can_cast_by_name {
+                return true;
+            }
+
+            // if the cast is not possible by field name, try by field position
+            let can_cast_by_position = from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+                // Assume that nullability between two structs are compatible, if not,
+                // cast kernel will return error.
+                can_cast_types(f1.data_type(), f2.data_type())
+            });
+
+            can_cast_by_position
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -1170,6 +1190,26 @@ pub fn cast_with_options(
         }
         (Struct(_), Struct(to_fields)) => {
             let array = array.as_struct();
+
+            // first, try casting fields by name
+            let fields = to_fields
+                .iter()
+                .map(|field| {
+                    array.column_by_name(field.name()).and_then(|array| {
+                        cast_with_options(array.as_ref(), field.data_type(), cast_options).ok()
+                    })
+                })
+                .collect::<Option<Vec<ArrayRef>>>();
+
+            if let Some(fields) = fields {
+                return Ok(Arc::new(StructArray::try_new(
+                    to_fields.clone(),
+                    fields,
+                    array.nulls().cloned(),
+                )?) as ArrayRef);
+            }
+
+            // if fields by name failed, try casting fields by position
             let fields = array
                 .columns()
                 .iter()
@@ -9719,6 +9759,117 @@ mod tests {
             "Cast error: Casting from Boolean to Date32 not supported",
             result.unwrap_err().to_string()
         );
+    }
+
+    #[test]
+    fn test_cast_struct_to_struct_by_name() {
+        let from_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]
+            .into(),
+        );
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("b", DataType::Int64, true),
+                Field::new("a", DataType::Int64, true),
+            ]
+            .into(),
+        );
+
+        assert!(can_cast_types(&from_type, &to_type));
+
+        let array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![5, 6, 7, 8])) as ArrayRef,
+            ),
+        ]);
+
+        let casted_array = cast(&array, &to_type).unwrap();
+
+        let casted_array = casted_array.as_struct();
+
+        assert_eq!(casted_array.data_type(), &to_type);
+
+        let casted_a = casted_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let casted_b = casted_array
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(casted_a.values(), &[1, 2, 3, 4]);
+
+        assert_eq!(casted_b.values(), &[5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_cast_struct_to_struct_by_position() {
+        let from_type = DataType::Struct(
+            vec![
+                Field::new("b", DataType::Int32, true),
+                Field::new("a", DataType::Int32, true),
+            ]
+            .into(),
+        );
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Int64, true),
+                Field::new("a", DataType::Int64, true),
+            ]
+            .into(),
+        );
+
+        assert!(can_cast_types(&from_type, &to_type));
+
+        let array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("b", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![5, 6, 7, 8])) as ArrayRef,
+            ),
+        ]);
+
+        let casted_array = cast(&array, &to_type).unwrap();
+
+        let casted_array = casted_array.as_struct();
+
+        assert_eq!(casted_array.data_type(), &to_type);
+
+        let casted_c = casted_array
+            .column_by_name("c")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        let casted_a = casted_array
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+
+        assert_eq!(casted_c.values(), &[1, 2, 3, 4]);
+
+        assert_eq!(casted_a.values(), &[5, 6, 7, 8]);
     }
 
     #[test]
