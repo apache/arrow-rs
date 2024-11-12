@@ -435,7 +435,8 @@ impl ArrayData {
     /// would return `20 * 8 = 160`.
     ///
     /// The `alignment` parameter is used to add padding to each buffer being counted, to ensure
-    /// the size for each one is aligned to `alignment` bytes (if it is `Some`)
+    /// the size for each one is aligned to `alignment` bytes (if it is `Some`). This function
+    /// assumes that `alignment` is a power of 2.
     pub fn get_slice_memory_size_with_alignment(
         &self,
         alignment: Option<u8>,
@@ -449,7 +450,7 @@ impl ArrayData {
         // Just pulled from arrow-ipc
         #[inline]
         fn pad_to_alignment(alignment: u8, len: usize) -> usize {
-            let a = usize::from(alignment - 1);
+            let a = usize::from(alignment.saturating_sub(1));
             ((len + a) & !a) - len
         }
 
