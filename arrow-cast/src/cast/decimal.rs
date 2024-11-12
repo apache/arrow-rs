@@ -323,8 +323,8 @@ where
     })
 }
 
-pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
-    from: &GenericStringArray<Offset>,
+pub(crate) fn generic_string_to_decimal_cast<'a, T, S, Offset>(
+    from: &'a S,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
@@ -332,6 +332,8 @@ pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
 where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
+    &'a S: StringArrayType<'a>,
+    Offset: OffsetSizeTrait,
 {
     if cast_options.safe {
         let iter = from.iter().map(|v| {
@@ -375,6 +377,37 @@ where
     }
 }
 
+pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
+    from: &GenericStringArray<Offset>,
+    precision: u8,
+    scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    generic_string_to_decimal_cast::<T, GenericStringArray<Offset>, Offset>(
+        from,
+        precision,
+        scale,
+        cast_options,
+    )
+}
+
+pub(crate) fn string_view_to_decimal_cast<T>(
+    from: &StringViewArray,
+    precision: u8,
+    scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    generic_string_to_decimal_cast::<T, StringViewArray, i32>(from, precision, scale, cast_options)
+}
+
 /// Cast Utf8 to decimal
 pub(crate) fn cast_string_to_decimal<T, Offset: OffsetSizeTrait>(
     from: &dyn Array,
@@ -399,14 +432,28 @@ where
         )));
     }
 
-    Ok(Arc::new(string_to_decimal_cast::<T, Offset>(
-        from.as_any()
-            .downcast_ref::<GenericStringArray<Offset>>()
-            .unwrap(),
-        precision,
-        scale,
-        cast_options,
-    )?))
+    let result = match from.data_type() {
+        DataType::Utf8View => string_view_to_decimal_cast::<T>(
+            from.as_any().downcast_ref::<StringViewArray>().unwrap(),
+            precision,
+            scale,
+            cast_options,
+        )?,
+        DataType::Utf8 | DataType::LargeUtf8 => string_to_decimal_cast::<T, Offset>(
+            from.as_any()
+                .downcast_ref::<GenericStringArray<Offset>>()
+                .unwrap(),
+            precision,
+            scale,
+            cast_options,
+        )?,
+        other => return Err(ArrowError::ComputeError(format!(
+            "Cannot cast {:?} to decimal",
+            other
+        ))),
+    };
+
+    Ok(Arc::new(result))
 }
 
 pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
