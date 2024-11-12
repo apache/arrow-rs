@@ -38,6 +38,22 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     Ok(Arc::new(builder.finish()))
 }
 
+pub(crate) fn value_to_string_view(
+    array: &dyn Array,
+    options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+    let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
+    let nulls = array.nulls();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            false => builder.append_value(formatter.value(i).try_to_string()?),
+            true => builder.append_null(),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Parse UTF-8
 pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     array: &dyn Array,
