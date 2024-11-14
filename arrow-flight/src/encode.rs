@@ -368,6 +368,10 @@ impl FlightDataEncoder {
 
     /// Encodes batch into one or more `FlightData` messages in self.queue
     fn encode_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
         let schema = match &self.schema {
             Some(schema) => schema.clone(),
             // encode the schema if this is the first time we have seen it
@@ -379,12 +383,12 @@ impl FlightDataEncoder {
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
 
-        for batch in split_batch_for_grpc_response(batch, self.max_flight_data_size) {
-            let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
+        let (flight_dictionaries, flight_batches) = self
+            .encoder
+            .encode_batch(&batch, self.max_flight_data_size)?;
 
-            self.queue_messages(flight_dictionaries);
-            self.queue_message(flight_batch);
-        }
+        self.queue_messages(flight_dictionaries);
+        self.queue_messages(flight_batches);
 
         Ok(())
     }
@@ -604,38 +608,6 @@ fn prepare_schema_for_flight(
     Schema::new(fields).with_metadata(schema.metadata().clone())
 }
 
-/// Split [`RecordBatch`] so it hopefully fits into a gRPC response.
-///
-/// Data is zero-copy sliced into batches.
-///
-/// Note: this method does not take into account already sliced
-/// arrays: <https://github.com/apache/arrow-rs/issues/3407>
-fn split_batch_for_grpc_response(
-    batch: RecordBatch,
-    max_flight_data_size: usize,
-) -> Vec<RecordBatch> {
-    let size = batch
-        .columns()
-        .iter()
-        .map(|col| col.get_buffer_memory_size())
-        .sum::<usize>();
-
-    let n_batches =
-        (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
-    let rows_per_batch = (batch.num_rows() / n_batches).max(1);
-    let mut out = Vec::with_capacity(n_batches + 1);
-
-    let mut offset = 0;
-    while offset < batch.num_rows() {
-        let length = (rows_per_batch).min(batch.num_rows() - offset);
-        out.push(batch.slice(offset, length));
-
-        offset += length;
-    }
-
-    out
-}
-
 /// The data needed to encode a stream of flight data, holding on to
 /// shared Dictionaries.
 ///
@@ -667,16 +639,23 @@ impl FlightIpcEncoder {
     }
 
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
-    /// dictionaries and a `FlightData` representing the batch
-    fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
-        let (encoded_dictionaries, encoded_batch) =
-            self.data_gen
-                .encoded_batch(batch, &mut self.dictionary_tracker, &self.options)?;
+    /// dictionaries and a Vec of `FlightData`s representing the batch
+    fn encode_batch(
+        &mut self,
+        batch: &RecordBatch,
+        max_flight_data_size: usize,
+    ) -> Result<(Vec<FlightData>, Vec<FlightData>)> {
+        let (encoded_dictionaries, encoded_batches) = self.data_gen.encoded_batch_with_size(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.options,
+            max_flight_data_size,
+        )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-        let flight_batch = encoded_batch.into();
+        let flight_batches = encoded_batches.into_iter().map(Into::into).collect();
 
-        Ok((flight_dictionaries, flight_batch))
+        Ok((flight_dictionaries, flight_batches))
     }
 }
 
@@ -725,7 +704,10 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 
 #[cfg(test)]
 mod tests {
-    use crate::decode::{DecodedPayload, FlightDataDecoder};
+    use crate::{
+        decode::{DecodedPayload, FlightDataDecoder},
+        utils, EncodedData,
+    };
     use arrow_array::builder::{
         GenericByteDictionaryBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
     };
@@ -741,6 +723,9 @@ mod tests {
     use super::*;
 
     #[test]
+    // flight_data_from_arrow_batch is deprecated but does exactly what we need. Would probably be
+    // good to just move it to this test mod when it's due to be removed.
+    #[allow(deprecated)]
     /// ensure only the batch's used data (not the allocated data) is sent
     /// <https://github.com/apache/arrow-rs/issues/208>
     fn test_encode_flight_data() {
@@ -752,12 +737,13 @@ mod tests {
             .expect("cannot create record batch");
         let schema = batch.schema_ref();
 
-        let (_, baseline_flight_batch) = make_flight_data(&batch, &options);
+        let (_, baseline_flight_batch) = utils::flight_data_from_arrow_batch(&batch, &options);
 
         let big_batch = batch.slice(0, batch.num_rows() - 1);
         let optimized_big_batch =
             hydrate_dictionaries(&big_batch, Arc::clone(schema)).expect("failed to optimize");
-        let (_, optimized_big_flight_batch) = make_flight_data(&optimized_big_batch, &options);
+        let (_, optimized_big_flight_batch) =
+            utils::flight_data_from_arrow_batch(&optimized_big_batch, &options);
 
         assert_eq!(
             baseline_flight_batch.data_body.len(),
@@ -767,7 +753,8 @@ mod tests {
         let small_batch = batch.slice(0, 1);
         let optimized_small_batch =
             hydrate_dictionaries(&small_batch, Arc::clone(schema)).expect("failed to optimize");
-        let (_, optimized_small_flight_batch) = make_flight_data(&optimized_small_batch, &options);
+        let (_, optimized_small_flight_batch) =
+            utils::flight_data_from_arrow_batch(&optimized_small_batch, &options);
 
         assert!(
             baseline_flight_batch.data_body.len() > optimized_small_flight_batch.data_body.len()
@@ -1087,12 +1074,16 @@ mod tests {
             ))],
         );
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("a"), None, Some("b")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type, GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("a"), None, Some("b")]);
         struct_builder.append(true);
 
         let arr1 = struct_builder.finish();
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("c"), None, Some("d")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type, GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("c"), None, Some("d")]);
         struct_builder.append(true);
 
         let arr2 = struct_builder.finish();
@@ -1300,6 +1291,11 @@ mod tests {
         .into_iter()
         .collect::<UnionFields>();
 
+        let mut field_types = union_fields.iter().map(|(_, field)| field.data_type());
+        let dict_list_ty = field_types.next().unwrap();
+        let struct_ty = field_types.next().unwrap();
+        let string_ty = field_types.next().unwrap();
+
         let struct_fields = vec![Field::new_list(
             "dict_list",
             Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
@@ -1318,9 +1314,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                Arc::new(arr1) as Arc<dyn Array>,
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                Arc::new(arr1),
+                new_null_array(struct_ty, 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1336,9 +1332,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
                 Arc::new(arr2),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1349,8 +1345,8 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
+                new_null_array(struct_ty, 1),
                 Arc::new(StringArray::from(vec!["e"])),
             ],
         )
@@ -1573,34 +1569,40 @@ mod tests {
         hydrate_dictionaries(&batch, batch.schema()).expect("failed to optimize");
     }
 
-    pub fn make_flight_data(
-        batch: &RecordBatch,
-        options: &IpcWriteOptions,
-    ) -> (Vec<FlightData>, FlightData) {
-        let data_gen = IpcDataGenerator::default();
-        let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+    #[tokio::test]
+    async fn test_split_batch_for_grpc_response() {
+        async fn get_decoded(schema: SchemaRef, encoded: Vec<EncodedData>) -> Vec<RecordBatch> {
+            FlightDataDecoder::new(futures::stream::iter(
+                std::iter::once(SchemaAsIpc::new(&schema, &IpcWriteOptions::default()).into())
+                    .chain(encoded.into_iter().map(FlightData::from))
+                    .map(Ok),
+            ))
+            .collect::<Vec<Result<_>>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .filter_map(|data| match data.payload {
+                DecodedPayload::RecordBatch(rb) => Some(rb),
+                _ => None,
+            })
+            .collect()
+        }
 
-        let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, options)
-            .expect("DictionaryTracker configured above to not error on replacement");
-
-        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-        let flight_batch = encoded_batch.into();
-
-        (flight_dictionaries, flight_batch)
-    }
-
-    #[test]
-    fn test_split_batch_for_grpc_response() {
         let max_flight_data_size = 1024;
+        let write_opts = IpcWriteOptions::default();
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let gen = IpcDataGenerator {};
 
         // no split
         let c = UInt32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
+        let split = gen
+            .encoded_batch_with_size(&batch, &mut dict_tracker, &write_opts, max_flight_data_size)
+            .unwrap()
+            .1;
         assert_eq!(split.len(), 1);
-        assert_eq!(batch, split[0]);
+        assert_eq!(batch, get_decoded(batch.schema(), split).await[0]);
 
         // split once
         let n_rows = max_flight_data_size + 1;
@@ -1608,56 +1610,19 @@ mod tests {
         let c = UInt8Array::from((0..n_rows).map(|i| (i % 256) as u8).collect::<Vec<_>>());
         let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(c) as ArrayRef)])
             .expect("cannot create record batch");
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size);
-        assert_eq!(split.len(), 3);
+        let split = gen
+            .encoded_batch_with_size(&batch, &mut dict_tracker, &write_opts, max_flight_data_size)
+            .unwrap()
+            .1;
+        assert_eq!(split.len(), 2);
+        let batches = get_decoded(batch.schema(), split).await;
         assert_eq!(
-            split.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
             n_rows
         );
-        let a = pretty_format_batches(&split).unwrap().to_string();
+        let a = pretty_format_batches(&batches).unwrap().to_string();
         let b = pretty_format_batches(&[batch]).unwrap().to_string();
         assert_eq!(a, b);
-    }
-
-    #[test]
-    fn test_split_batch_for_grpc_response_sizes() {
-        // 2000 8 byte entries into 2k pieces: 8 chunks of 250 rows
-        verify_split(2000, 2 * 1024, vec![250, 250, 250, 250, 250, 250, 250, 250]);
-
-        // 2000 8 byte entries into 4k pieces: 4 chunks of 500 rows
-        verify_split(2000, 4 * 1024, vec![500, 500, 500, 500]);
-
-        // 2023 8 byte entries into 3k pieces does not divide evenly
-        verify_split(2023, 3 * 1024, vec![337, 337, 337, 337, 337, 337, 1]);
-
-        // 10 8 byte entries into 1 byte pieces means each rows gets its own
-        verify_split(10, 1, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-
-        // 10 8 byte entries into 1k byte pieces means one piece
-        verify_split(10, 1024, vec![10]);
-    }
-
-    /// Creates a UInt64Array of 8 byte integers with input_rows rows
-    /// `max_flight_data_size_bytes` pieces and verifies the row counts in
-    /// those pieces
-    fn verify_split(
-        num_input_rows: u64,
-        max_flight_data_size_bytes: usize,
-        expected_sizes: Vec<usize>,
-    ) {
-        let array: UInt64Array = (0..num_input_rows).collect();
-
-        let batch = RecordBatch::try_from_iter(vec![("a", Arc::new(array) as ArrayRef)])
-            .expect("cannot create record batch");
-
-        let input_rows = batch.num_rows();
-
-        let split = split_batch_for_grpc_response(batch.clone(), max_flight_data_size_bytes);
-        let sizes: Vec<_> = split.iter().map(RecordBatch::num_rows).collect();
-        let output_rows: usize = sizes.iter().sum();
-
-        assert_eq!(sizes, expected_sizes, "mismatch for {batch:?}");
-        assert_eq!(input_rows, output_rows, "mismatch for {batch:?}");
     }
 
     // test sending record batches
@@ -1670,7 +1635,7 @@ mod tests {
         let s2 = StringArray::from_iter_values(std::iter::repeat("6bytes").take(1024));
         let i2 = Int64Array::from_iter_values(0..1024);
 
-        let batch = RecordBatch::try_from_iter(vec![
+        let batch = RecordBatch::try_from_iter([
             ("s1", Arc::new(s1) as _),
             ("i1", Arc::new(i1) as _),
             ("s2", Arc::new(s2) as _),
@@ -1678,18 +1643,16 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 112).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
     async fn flight_data_size_uneven_variable_lengths() {
         // each row has a longer string than the last with increasing lengths 0 --> 1024
         let array = StringArray::from_iter_values((0..1024).map(|i| "*".repeat(i)));
-        let batch = RecordBatch::try_from_iter(vec![("data", Arc::new(array) as _)]).unwrap();
+        let batch = RecordBatch::try_from_iter([("data", Arc::new(array) as _)]).unwrap();
 
-        // overage is much higher than ideal
-        // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4304).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1722,10 +1685,7 @@ mod tests {
         ])
         .unwrap();
 
-        // 5k over limit (which is 2x larger than limit of 5k)
-        // overage is much higher than ideal
-        // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5800).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1741,7 +1701,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 160).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1753,9 +1713,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        // overage is much higher than ideal
-        // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3328).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1767,9 +1725,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        // overage is much higher than ideal
-        // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5280).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     #[tokio::test]
@@ -1792,9 +1748,7 @@ mod tests {
         ])
         .unwrap();
 
-        // overage is much higher than ideal
-        // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4128).await;
+        verify_encoded_split_no_overage(batch).await;
     }
 
     /// Return size, in memory of flight data
@@ -1814,59 +1768,49 @@ mod tests {
 
     /// Coverage for <https://github.com/apache/arrow-rs/issues/3478>
     ///
-    /// Encodes the specified batch using several values of
-    /// `max_flight_data_size` between 1K to 5K and ensures that the
-    /// resulting size of the flight data stays within the limit
-    /// + `allowed_overage`
+    /// Encodes the specified batch using several values of `max_flight_data_size` between 1K to 5K
+    /// and ensures that the resulting size of the flight data stays within the limit, except for
+    /// in cases where only 1 row is sent - if only 1 row is sent, then we know that there was no
+    /// way to keep the data within the limit (since the minimum possible amount of data was sent),
+    /// so we allow it to go over.
     ///
-    /// `allowed_overage` is how far off the actual data encoding is
-    /// from the target limit that was set. It is an improvement when
-    /// the allowed_overage decreses.
-    ///
-    /// Note this overhead will likely always be greater than zero to
-    /// account for encoding overhead such as IPC headers and padding.
-    ///
-    ///
-    async fn verify_encoded_split(batch: RecordBatch, allowed_overage: usize) {
+    async fn verify_encoded_split_no_overage(batch: RecordBatch) {
         let num_rows = batch.num_rows();
-
-        // Track the overall required maximum overage
-        let mut max_overage_seen = 0;
 
         for max_flight_data_size in [1024, 2021, 5000] {
             println!("Encoding {num_rows} with a maximum size of {max_flight_data_size}");
 
-            let mut stream = FlightDataEncoderBuilder::new()
+            let stream = FlightDataEncoderBuilder::new()
                 .with_max_flight_data_size(max_flight_data_size)
                 // use 8-byte alignment - default alignment is 64 which produces bigger ipc data
                 .with_options(IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap())
                 .build(futures::stream::iter([Ok(batch.clone())]));
 
+            let mut stream = FlightDataDecoder::new(stream);
+
             let mut i = 0;
             while let Some(data) = stream.next().await.transpose().unwrap() {
-                let actual_data_size = flight_data_size(&data);
+                let actual_data_size = flight_data_size(&data.inner);
 
                 let actual_overage = actual_data_size.saturating_sub(max_flight_data_size);
 
-                assert!(
-                    actual_overage <= allowed_overage,
-                    "encoded data[{i}]: actual size {actual_data_size}, \
-                         actual_overage: {actual_overage} \
-                         allowed_overage: {allowed_overage}"
-                );
+                let is_1_row =
+                    matches!(data.payload, DecodedPayload::RecordBatch(rb) if rb.num_rows() == 1);
+
+                // If only 1 row was sent over via this recordBatch, there was no way to avoid
+                // going over the limit. There's currently no mechanism for splitting a single row
+                // of results over multiple messages, so we allow going over the limit if it's the
+                // bare minimum over (1 row)
+                if !is_1_row {
+                    assert_eq!(
+                        actual_overage,
+                        0,
+                        "encoded data[{i}]: actual size {actual_data_size}, actual_overage: {actual_overage}"
+                    );
+                }
 
                 i += 1;
-
-                max_overage_seen = max_overage_seen.max(actual_overage)
             }
         }
-
-        // ensure that the specified overage is exactly the maxmium so
-        // that when the splitting logic improves, the tests must be
-        // updated to reflect the better logic
-        assert_eq!(
-            allowed_overage, max_overage_seen,
-            "Specified overage was too high"
-        );
     }
 }

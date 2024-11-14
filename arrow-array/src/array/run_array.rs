@@ -254,14 +254,19 @@ impl<R: RunEndIndexType> RunArray<R> {
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
-    // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
-        match data.data_type() {
-            DataType::RunEndEncoded(_, _) => {}
-            _ => {
-                panic!("Invalid data type for RunArray. The data type should be DataType::RunEndEncoded");
-            }
-        }
+        Self::from(&data)
+    }
+}
+
+impl<R: RunEndIndexType> From<&ArrayData> for RunArray<R> {
+    // The method assumes the caller already validated the data using `ArrayData::validate_data()`
+    fn from(data: &ArrayData) -> Self {
+        let DataType::RunEndEncoded(_, _) = data.data_type() else {
+            panic!(
+                "Invalid data type for RunArray. The data type should be DataType::RunEndEncoded"
+            );
+        };
 
         // Safety
         // ArrayData is valid
