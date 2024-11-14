@@ -31,7 +31,7 @@ use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::MetadataFetch;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -321,7 +321,7 @@ impl ParquetMetaDataReader {
     ///
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_and_finish<F: MetadataFetch>(
         mut self,
         fetch: F,
@@ -336,7 +336,7 @@ impl ParquetMetaDataReader {
     ///
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn try_load<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
@@ -357,12 +357,12 @@ impl ParquetMetaDataReader {
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
         self.load_page_index_with_remainder(fetch, None).await
     }
 
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
@@ -513,7 +513,7 @@ impl ParquetMetaDataReader {
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
     /// been provided, then return that value if it is larger than the size of the Parquet
     /// file footer (8 bytes). Otherwise returns `8`.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     fn get_prefetch_size(&self) -> usize {
         if let Some(prefetch) = self.prefetch_hint {
             if prefetch > FOOTER_SIZE {
@@ -523,7 +523,7 @@ impl ParquetMetaDataReader {
         FOOTER_SIZE
     }
 
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_metadata<F: MetadataFetch>(
         fetch: &mut F,
         file_size: usize,
@@ -851,8 +851,7 @@ mod tests {
     }
 }
 
-#[cfg(feature = "async")]
-#[cfg(test)]
+#[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
     use bytes::Bytes;

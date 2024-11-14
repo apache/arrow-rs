@@ -106,7 +106,6 @@ impl From<str::Utf8Error> for ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
-
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
