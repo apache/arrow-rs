@@ -478,19 +478,19 @@ impl IpcDataGenerator {
     /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
     /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
     /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
-    /// The `max_flight_data_size` is used to control how much space each encoded [`RecordBatch`] is
+    /// The `max_encoded_data_size` is used to control how much space each encoded [`RecordBatch`] is
     /// allowed to take up.
     ///
     /// Each [`EncodedData`] in the second element of the returned tuple will be smaller than
-    /// `max_flight_data_size` bytes, if possible at all. However, this API has no support for
+    /// `max_encoded_data_size` bytes, if possible at all. However, this API has no support for
     /// splitting rows into multiple [`EncodedData`]s, so if a row is larger, by itself, than
-    /// `max_flight_data_size`, it will be encoded to a message which is larger than the limit.
+    /// `max_encoded_data_size`, it will be encoded to a message which is larger than the limit.
     pub fn encoded_batch_with_size(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
-        max_flight_data_size: usize,
+        max_encoded_data_size: usize,
     ) -> Result<(Vec<EncodedData>, Vec<EncodedData>), ArrowError> {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.flattened_fields().len());
@@ -510,7 +510,7 @@ impl IpcDataGenerator {
         }
 
         let encoded_message =
-            chunked_encoded_batch_bytes(batch, write_options, max_flight_data_size)?;
+            chunked_encoded_batch_bytes(batch, write_options, max_encoded_data_size)?;
         Ok((encoded_dictionaries, encoded_message))
     }
 
@@ -1408,7 +1408,7 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
 fn chunked_encoded_batch_bytes(
     batch: &RecordBatch,
     write_options: &IpcWriteOptions,
-    max_flight_data_size: usize,
+    max_encoded_data_size: usize,
 ) -> Result<Vec<EncodedData>, ArrowError> {
     encode_array_datas(
         &batch
@@ -1419,7 +1419,7 @@ fn chunked_encoded_batch_bytes(
         batch.num_rows(),
         |_, offset| offset.as_union_value(),
         MessageHeader::RecordBatch,
-        max_flight_data_size,
+        max_encoded_data_size,
         write_options,
     )
 }
