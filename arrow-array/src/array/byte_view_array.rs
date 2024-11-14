@@ -54,19 +54,6 @@ use super::ByteArrayType;
 ///
 /// [`ByteView`]: arrow_data::ByteView
 ///
-/// # Use the [`eq`] kernel to compare the logical content.
-///
-/// Comparing two `GenericByteViewArray` using PartialEq compares by structure
-/// (the `u128`s) and contents of the buffers, not by logical content. As there
-/// are many different buffer layouts to represent the same data (e.g. different
-/// offsets, different buffer sizes, etc) two arrays with the same data may not
-/// compare equal.
-///
-/// To compare the logical content of two `GenericByteViewArray`s, use the [`eq`]
-/// kernel.
-///
-/// [`eq`]: https://docs.rs/arrow/latest/arrow/compute/kernels/cmp/fn.eq.html
-///
 /// # Layout: "views" and buffers
 ///
 /// A `GenericByteViewArray` stores variable length byte strings. An array of
@@ -189,16 +176,6 @@ impl<T: ByteViewType + ?Sized> Clone for GenericByteViewArray<T> {
             nulls: self.nulls.clone(),
             phantom: Default::default(),
         }
-    }
-}
-
-// PartialEq
-impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
-    fn eq(&self, other: &Self) -> bool {
-        other.data_type.eq(&self.data_type)
-            && other.views.eq(&self.views)
-            && other.buffers.eq(&self.buffers)
-            && other.nulls.eq(&self.nulls)
     }
 }
 
@@ -604,6 +581,11 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -1065,6 +1047,6 @@ mod tests {
         };
         assert_eq!(array1, array1.clone());
         assert_eq!(array2, array2.clone());
-        assert_ne!(array1, array2);
+        assert_eq!(array1, array2);
     }
 }

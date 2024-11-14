@@ -28,8 +28,8 @@ use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::s3::{
-    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
-    ListResponse,
+    CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
+    InitiateMultipartUploadResult, ListResponse,
 };
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
@@ -98,8 +98,11 @@ pub(crate) enum Error {
     #[snafu(display("Error getting create multipart response body: {}", source))]
     CreateMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error performing complete multipart request: {}", source))]
-    CompleteMultipartRequest { source: crate::client::retry::Error },
+    #[snafu(display("Error performing complete multipart request: {}: {}", path, source))]
+    CompleteMultipartRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
 
     #[snafu(display("Error getting complete multipart response body: {}", source))]
     CompleteMultipartResponseBody { source: reqwest::Error },
@@ -118,11 +121,30 @@ pub(crate) enum Error {
 
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
-        Self::Generic {
-            store: STORE,
-            source: Box::new(err),
+        match err {
+            Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
+            _ => Self::Generic {
+                store: STORE,
+                source: Box::new(err),
+            },
         }
     }
+}
+
+pub(crate) enum PutPartPayload<'a> {
+    Part(PutPayload),
+    Copy(&'a Path),
+}
+
+impl Default for PutPartPayload<'_> {
+    fn default() -> Self {
+        Self::Part(PutPayload::default())
+    }
+}
+
+pub(crate) enum CompleteMultipartMode {
+    Overwrite,
+    Create,
 }
 
 #[derive(Deserialize)]
@@ -350,7 +372,9 @@ impl<'a> Request<'a> {
     }
 
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
-        if !self.config.skip_signature || self.config.checksum.is_some() {
+        if (!self.config.skip_signature && self.config.sign_payload)
+            || self.config.checksum.is_some()
+        {
             let mut sha256 = Context::new(&digest::SHA256);
             payload.iter().for_each(|x| sha256.update(x));
             let payload_sha256 = sha256.finish();
@@ -605,15 +629,24 @@ impl S3Client {
         path: &Path,
         upload_id: &MultipartId,
         part_idx: usize,
-        data: PutPayload,
+        data: PutPartPayload<'_>,
     ) -> Result<PartId> {
+        let is_copy = matches!(data, PutPartPayload::Copy(_));
         let part = (part_idx + 1).to_string();
 
         let mut request = self
             .request(Method::PUT, path)
-            .with_payload(data)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .idempotent(true);
+
+        request = match data {
+            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Copy(path) => request.header(
+                "x-amz-copy-source",
+                &format!("{}/{}", self.config.bucket, encode_path(path)),
+            ),
+        };
+
         if self
             .config
             .encryption_headers
@@ -625,8 +658,29 @@ impl S3Client {
         }
         let response = request.send().await?;
 
-        let content_id = get_etag(response.headers()).context(MetadataSnafu)?;
+        let content_id = match is_copy {
+            false => get_etag(response.headers()).context(MetadataSnafu)?,
+            true => {
+                let response = response
+                    .bytes()
+                    .await
+                    .context(CreateMultipartResponseBodySnafu)?;
+                let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
+                    .context(InvalidMultipartResponseSnafu)?;
+                response.e_tag
+            }
+        };
         Ok(PartId { content_id })
+    }
+
+    pub(crate) async fn abort_multipart(&self, location: &Path, upload_id: &str) -> Result<()> {
+        self.request(Method::DELETE, location)
+            .query(&[("uploadId", upload_id)])
+            .with_encryption_headers()
+            .send()
+            .await?;
+
+        Ok(())
     }
 
     pub(crate) async fn complete_multipart(
@@ -634,12 +688,18 @@ impl S3Client {
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
+        mode: CompleteMultipartMode,
     ) -> Result<PutResult> {
         let parts = if parts.is_empty() {
             // If no parts were uploaded, upload an empty part
             // otherwise the completion request will fail
             let part = self
-                .put_part(location, &upload_id.to_string(), 0, PutPayload::default())
+                .put_part(
+                    location,
+                    &upload_id.to_string(),
+                    0,
+                    PutPartPayload::default(),
+                )
                 .await?;
             vec![part]
         } else {
@@ -651,18 +711,27 @@ impl S3Client {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(location);
 
-        let response = self
+        let request = self
             .client
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
-            .with_aws_sigv4(credential.authorizer(), None)
+            .with_aws_sigv4(credential.authorizer(), None);
+
+        let request = match mode {
+            CompleteMultipartMode::Overwrite => request,
+            CompleteMultipartMode::Create => request.header("If-None-Match", "*"),
+        };
+
+        let response = request
             .retryable(&self.config.retry_config)
             .idempotent(true)
             .retry_error_body(true)
             .send()
             .await
-            .context(CompleteMultipartRequestSnafu)?;
+            .context(CompleteMultipartRequestSnafu {
+                path: location.as_ref(),
+            })?;
 
         let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
 

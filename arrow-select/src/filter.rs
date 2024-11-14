@@ -423,30 +423,30 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
 fn filter_run_end_array<R: RunEndIndexType>(
-    re_arr: &RunArray<R>,
-    pred: &FilterPredicate,
+    array: &RunArray<R>,
+    predicate: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
 where
     R::Native: Into<i64> + From<bool>,
     R::Native: AddAssign,
 {
-    let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
+    let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
-    let mut start = 0i64;
+    let mut start = 0u64;
     let mut i = 0;
     let mut count = R::default_value();
-    let filter_values = pred.filter.values();
+    let filter_values = predicate.filter.values();
 
-    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
+    for mut end in run_ends.inner().into_iter().map(|i| (*i).into() as u64) {
         let mut keep = false;
 
-        for pred in filter_values
-            .iter()
-            .skip(start as usize)
-            .take((end - start) as usize)
-        {
+        let difference = end.saturating_sub(filter_values.len() as u64);
+        end -= difference;
+
+        // Safety: we subtract the difference off `end` so we are always within bounds
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
             count += R::Native::from(pred);
             keep |= pred
         }
@@ -465,7 +465,7 @@ where
         new_run_ends.clear();
     }
 
-    let values = re_arr.values();
+    let values = array.values();
     let pred = BooleanArray::new(values_filter.finish(), None);
     let values = filter(&values, &pred)?;
 
@@ -582,7 +582,6 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
-
             // SAFETY: `Vec::iter` is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
@@ -618,8 +617,8 @@ where
 struct FilterBytes<'a, OffsetSize> {
     src_offsets: &'a [OffsetSize],
     src_values: &'a [u8],
-    dst_offsets: MutableBuffer,
-    dst_values: MutableBuffer,
+    dst_offsets: Vec<OffsetSize>,
+    dst_values: Vec<u8>,
     cur_offset: OffsetSize,
 }
 
@@ -631,10 +630,10 @@ where
     where
         T: ByteArrayType<Offset = OffsetSize>,
     {
-        let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
-        let mut dst_offsets = MutableBuffer::new(num_offsets_bytes);
-        let dst_values = MutableBuffer::new(0);
+        let dst_values = Vec::new();
+        let mut dst_offsets: Vec<OffsetSize> = Vec::with_capacity(capacity + 1);
         let cur_offset = OffsetSize::from_usize(0).unwrap();
+
         dst_offsets.push(cur_offset);
 
         Self {
@@ -664,13 +663,15 @@ where
 
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
-        for idx in iter {
-            let (start, end, len) = self.get_value_range(idx);
+        self.dst_offsets.extend(iter.map(|idx| {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
             self.cur_offset += len;
-            self.dst_offsets.push(self.cur_offset);
             self.dst_values
                 .extend_from_slice(&self.src_values[start..end]);
-        }
+            self.cur_offset
+        }));
     }
 
     /// Extends the in-progress array by the ranges in the provided iterator

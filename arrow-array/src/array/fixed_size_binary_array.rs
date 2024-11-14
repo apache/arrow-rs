@@ -610,6 +610,11 @@ impl Array for FixedSizeBinaryArray {
         self.nulls.as_ref()
     }
 
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         let mut sum = self.value_data.capacity();
         if let Some(n) = &self.nulls {

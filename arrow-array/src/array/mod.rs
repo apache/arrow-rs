@@ -654,6 +654,12 @@ impl PartialEq for StructArray {
     }
 }
 
+impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
 /// Constructs an array using the input `data`.
 /// Returns a reference-counted `Array` instance.
 pub fn make_array(data: ArrayData) -> ArrayRef {

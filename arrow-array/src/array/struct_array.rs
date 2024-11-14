@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -377,6 +378,11 @@ impl Array for StructArray {
         self.nulls.as_ref()
     }
 
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         let mut size = self.fields.iter().map(|a| a.get_buffer_memory_size()).sum();
         if let Some(n) = self.nulls.as_ref() {
@@ -404,7 +410,11 @@ impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
 
 impl std::fmt::Debug for StructArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "StructArray\n[\n")?;
+        writeln!(f, "StructArray")?;
+        writeln!(f, "-- validity: ")?;
+        writeln!(f, "[")?;
+        print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
+        writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
             writeln!(
@@ -730,5 +740,17 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_struct_array_fmt_debug() {
+        let arr: StructArray = StructArray::new(
+            vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
+            vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
+            Some(NullBuffer::new(BooleanBuffer::from(
+                (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
+            ))),
+        );
+        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity: \n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
     }
 }

@@ -36,7 +36,7 @@ use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
-use crate::aws::client::{RequestError, S3Client};
+use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
 use crate::client::get::GetClientExt;
 use crate::client::list::ListClientExt;
 use crate::client::CredentialProvider;
@@ -169,7 +169,10 @@ impl ObjectStore for AmazonS3 {
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
-            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
+            (
+                PutMode::Create,
+                Some(S3ConditionalPut::ETagMatch | S3ConditionalPut::ETagPutIfNotExists),
+            ) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
@@ -193,6 +196,7 @@ impl ObjectStore for AmazonS3 {
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
                 match put {
+                    S3ConditionalPut::ETagPutIfNotExists => Err(Error::NotImplemented),
                     S3ConditionalPut::ETagMatch => {
                         request.header(&IF_MATCH, etag.as_str()).do_put().await
                     }
@@ -293,6 +297,47 @@ impl ObjectStore for AmazonS3 {
         let (k, v, status) = match &self.client.config.copy_if_not_exists {
             Some(S3CopyIfNotExists::Header(k, v)) => (k, v, StatusCode::PRECONDITION_FAILED),
             Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
+            Some(S3CopyIfNotExists::Multipart) => {
+                let upload_id = self
+                    .client
+                    .create_multipart(to, PutMultipartOpts::default())
+                    .await?;
+
+                let res = async {
+                    let part_id = self
+                        .client
+                        .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
+                        .await?;
+                    match self
+                        .client
+                        .complete_multipart(
+                            to,
+                            &upload_id,
+                            vec![part_id],
+                            CompleteMultipartMode::Create,
+                        )
+                        .await
+                    {
+                        Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
+                            path: to.to_string(),
+                            source: Box::new(e),
+                        }),
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e),
+                    }
+                }
+                .await;
+
+                // If the multipart upload failed, make a best effort attempt to
+                // clean it up. It's the caller's responsibility to add a
+                // lifecycle rule if guaranteed cleanup is required, as we
+                // cannot protect against an ill-timed process crash.
+                if res.is_err() {
+                    let _ = self.client.abort_multipart(to, &upload_id).await;
+                }
+
+                return res;
+            }
             Some(S3CopyIfNotExists::Dynamo(lock)) => {
                 return lock.copy_if_not_exists(&self.client, from, to).await
             }
@@ -340,7 +385,12 @@ impl MultipartUpload for S3MultiPartUpload {
         Box::pin(async move {
             let part = state
                 .client
-                .put_part(&state.location, &state.upload_id, idx, data)
+                .put_part(
+                    &state.location,
+                    &state.upload_id,
+                    idx,
+                    PutPartPayload::Part(data),
+                )
                 .await?;
             state.parts.put(idx, part);
             Ok(())
@@ -352,7 +402,12 @@ impl MultipartUpload for S3MultiPartUpload {
 
         self.state
             .client
-            .complete_multipart(&self.state.location, &self.state.upload_id, parts)
+            .complete_multipart(
+                &self.state.location,
+                &self.state.upload_id,
+                parts,
+                CompleteMultipartMode::Overwrite,
+            )
             .await
     }
 
@@ -384,7 +439,9 @@ impl MultipartStore for AmazonS3 {
         part_idx: usize,
         data: PutPayload,
     ) -> Result<PartId> {
-        self.client.put_part(path, id, part_idx, data).await
+        self.client
+            .put_part(path, id, part_idx, PutPartPayload::Part(data))
+            .await
     }
 
     async fn complete_multipart(
@@ -393,7 +450,9 @@ impl MultipartStore for AmazonS3 {
         id: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        self.client.complete_multipart(path, id, parts).await
+        self.client
+            .complete_multipart(path, id, parts, CompleteMultipartMode::Overwrite)
+            .await
     }
 
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
@@ -427,7 +486,6 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
-        let test_conditional_put = config.conditional_put.is_some();
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -458,8 +516,9 @@ mod tests {
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }
-        if test_conditional_put {
-            put_opts(&integration, true).await;
+        if let Some(conditional_put) = &config.conditional_put {
+            let supports_update = !matches!(conditional_put, S3ConditionalPut::ETagPutIfNotExists);
+            put_opts(&integration, supports_update).await;
         }
 
         // run integration test with unsigned payload enabled
