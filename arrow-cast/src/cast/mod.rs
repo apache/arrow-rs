@@ -231,7 +231,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
         (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
-        (_, Utf8View | Utf8 | LargeUtf8) => from_type.is_primitive(),
+        (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
+        (_, Utf8View) => from_type.is_numeric(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
 
@@ -1464,7 +1465,7 @@ pub fn cast_with_options(
         (BinaryView, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
-        (from_type, Utf8View) if from_type.is_primitive() => {
+        (from_type, Utf8View) if from_type.is_numeric() => {
             value_to_string_view(array, cast_options)
         }
         (from_type, LargeUtf8) if from_type.is_primitive() => {
@@ -5184,41 +5185,45 @@ mod tests {
         assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
+    // Cast Timestamp to Utf8View is not supported yet
+    // TODO: Implement casting from Timestamp to Utf8View
+    macro_rules! assert_cast_timestamp_to_string {
+        ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
+            let out = cast(&$array, &$datatype).unwrap();
+            let actual = out
+                .as_any()
+                .downcast_ref::<$output_array_type>()
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(actual, $expected);
+        }};
+        ($array:expr, $datatype:expr, $output_array_type: ty, $options:expr, $expected:expr) => {{
+            let out = cast_with_options(&$array, &$datatype, &$options).unwrap();
+            let actual = out
+                .as_any()
+                .downcast_ref::<$output_array_type>()
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(actual, $expected);
+        }};
+    }
+
     #[test]
     fn test_cast_timestamp_to_strings() {
         // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
         let array =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19T00:00:03.005"),
-                Some("2018-12-25T00:00:02.001"),
-                None
-            ]
-        );
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19T00:00:03.005"),
-                Some("2018-12-25T00:00:02.001"),
-                None
-            ]
-        );
+        let expected = vec![
+            Some("1997-05-19T00:00:03.005"),
+            Some("2018-12-25T00:00:02.001"),
+            None,
+        ];
+
+        // assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::Utf8, StringArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
 
     #[test]
@@ -5231,73 +5236,53 @@ mod tests {
                 .with_timestamp_format(Some(ts_format))
                 .with_timestamp_tz_format(Some(ts_format)),
         };
+
         // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
         let array_without_tz =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-        let out = cast_with_options(&array_without_tz, &DataType::Utf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 00:00:03.005000"),
-                Some("2018-12-25 00:00:02.001000"),
-                None
-            ]
+        let expected = vec![
+            Some("1997-05-19 00:00:03.005000"),
+            Some("2018-12-25 00:00:02.001000"),
+            None,
+        ];
+        // assert_cast_timestamp_to_string!(array_without_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::Utf8,
+            StringArray,
+            cast_options,
+            expected
         );
-        let out =
-            cast_with_options(&array_without_tz, &DataType::LargeUtf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 00:00:03.005000"),
-                Some("2018-12-25 00:00:02.001000"),
-                None
-            ]
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
         );
 
         let array_with_tz =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None])
                 .with_timezone(tz.to_string());
-        let out = cast_with_options(&array_with_tz, &DataType::Utf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 05:45:03.005000"),
-                Some("2018-12-25 05:45:02.001000"),
-                None
-            ]
+        let expected = vec![
+            Some("1997-05-19 05:45:03.005000"),
+            Some("2018-12-25 05:45:02.001000"),
+            None,
+        ];
+        // assert_cast_timestamp_to_string!(array_with_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::Utf8,
+            StringArray,
+            cast_options,
+            expected
         );
-        let out = cast_with_options(&array_with_tz, &DataType::LargeUtf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 05:45:03.005000"),
-                Some("2018-12-25 05:45:02.001000"),
-                None
-            ]
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
         );
     }
 
