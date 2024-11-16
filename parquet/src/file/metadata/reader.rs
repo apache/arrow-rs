@@ -617,7 +617,8 @@ impl ParquetMetaDataReader {
         for rg in t_file_metadata.row_groups {
             row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
         }
-        let column_orders = Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr);
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
         let file_metadata = FileMetaData::new(
             t_file_metadata.version,
@@ -635,15 +636,13 @@ impl ParquetMetaDataReader {
     fn parse_column_orders(
         t_column_orders: Option<Vec<TColumnOrder>>,
         schema_descr: &SchemaDescriptor,
-    ) -> Option<Vec<ColumnOrder>> {
+    ) -> Result<Option<Vec<ColumnOrder>>> {
         match t_column_orders {
             Some(orders) => {
                 // Should always be the case
-                assert_eq!(
-                    orders.len(),
-                    schema_descr.num_columns(),
-                    "Column order length mismatch"
-                );
+                if orders.len() != schema_descr.num_columns() {
+                    return Err(general_err!("Column order length mismatch"));
+                };
                 let mut res = Vec::new();
                 for (i, column) in schema_descr.columns().iter().enumerate() {
                     match orders[i] {
@@ -657,9 +656,9 @@ impl ParquetMetaDataReader {
                         }
                     }
                 }
-                Some(res)
+                Ok(Some(res))
             }
-            None => None,
+            None => Ok(None),
         }
     }
 }
@@ -731,7 +730,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr),
+            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr).unwrap(),
             Some(vec![
                 ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
                 ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
@@ -740,20 +739,21 @@ mod tests {
 
         // Test when no column orders are defined.
         assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(None, &schema_descr),
+            ParquetMetaDataReader::parse_column_orders(None, &schema_descr).unwrap(),
             None
         );
     }
 
     #[test]
-    #[should_panic(expected = "Column order length mismatch")]
     fn test_metadata_column_orders_len_mismatch() {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
         let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
 
-        ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
+        let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
+        assert!(res.is_err());
+        assert!(format!("{:?}", res.unwrap_err()).contains("Column order length mismatch"));
     }
 
     #[test]

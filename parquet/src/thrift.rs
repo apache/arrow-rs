@@ -67,7 +67,17 @@ impl<'a> TCompactSliceInputProtocol<'a> {
         let mut shift = 0;
         loop {
             let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64) << shift;
+            let val = (byte & 0x7F) as u64;
+            let val = val.checked_shl(shift).map_or_else(
+                || {
+                    Err(thrift::Error::Protocol(thrift::ProtocolError {
+                        kind: thrift::ProtocolErrorKind::InvalidData,
+                        message: format!("cannot left-shift {} by {} bits", val, shift),
+                    }))
+                },
+                Ok,
+            )?;
+            in_progress |= val;
             shift += 7;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
@@ -96,13 +106,22 @@ impl<'a> TCompactSliceInputProtocol<'a> {
     }
 }
 
+macro_rules! thrift_unimplemented {
+    () => {
+        Err(thrift::Error::Protocol(thrift::ProtocolError {
+            kind: thrift::ProtocolErrorKind::NotImplemented,
+            message: "not implemented".to_string(),
+        }))
+    };
+}
+
 impl TInputProtocol for TCompactSliceInputProtocol<'_> {
     fn read_message_begin(&mut self) -> thrift::Result<TMessageIdentifier> {
-        unimplemented!()
+        thrift_unimplemented!()
     }
 
     fn read_message_end(&mut self) -> thrift::Result<()> {
-        unimplemented!()
+        thrift_unimplemented!()
     }
 
     fn read_struct_begin(&mut self) -> thrift::Result<Option<TStructIdentifier>> {
@@ -147,7 +166,21 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
             ),
             _ => {
                 if field_delta != 0 {
-                    self.last_read_field_id += field_delta as i16;
+                    self.last_read_field_id = self
+                        .last_read_field_id
+                        .checked_add(field_delta as i16)
+                        .map_or_else(
+                            || {
+                                Err(thrift::Error::Protocol(thrift::ProtocolError {
+                                    kind: thrift::ProtocolErrorKind::InvalidData,
+                                    message: format!(
+                                        "cannot add {} to {}",
+                                        field_delta, self.last_read_field_id
+                                    ),
+                                }))
+                            },
+                            Ok,
+                        )?;
                 } else {
                     self.last_read_field_id = self.read_i16()?;
                 };
@@ -226,15 +259,15 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
     }
 
     fn read_set_begin(&mut self) -> thrift::Result<TSetIdentifier> {
-        unimplemented!()
+        thrift_unimplemented!()
     }
 
     fn read_set_end(&mut self) -> thrift::Result<()> {
-        unimplemented!()
+        thrift_unimplemented!()
     }
 
     fn read_map_begin(&mut self) -> thrift::Result<TMapIdentifier> {
-        unimplemented!()
+        thrift_unimplemented!()
     }
 
     fn read_map_end(&mut self) -> thrift::Result<()> {

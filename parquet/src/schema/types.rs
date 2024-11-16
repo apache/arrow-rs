@@ -1122,6 +1122,10 @@ pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
         ));
     }
 
+    if !schema_nodes[0].is_group() {
+        return Err(general_err!("Expected root node to be a group type"));
+    }
+
     Ok(schema_nodes.remove(0))
 }
 
@@ -1227,6 +1231,10 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
                 if !is_root_node {
                     builder = builder.with_repetition(rep);
                 }
+            } else if !is_root_node {
+                return Err(general_err!(
+                    "Repetition level must be defined for non-root types"
+                ));
             }
             Ok((next_index, Arc::new(builder.build().unwrap())))
         }

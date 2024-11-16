@@ -165,7 +165,7 @@ impl InMemoryRowGroup {
         let mut vs = std::mem::take(&mut self.column_chunks);
         for (leaf_idx, meta) in self.metadata.columns().iter().enumerate() {
             if self.mask.leaf_included(leaf_idx) {
-                let (start, len) = meta.byte_range();
+                let (start, len) = meta.byte_range()?;
                 let data = reader
                     .get_bytes(start as usize..(start + len) as usize)
                     .await?;
