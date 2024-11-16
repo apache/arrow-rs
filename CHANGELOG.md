@@ -27,16 +27,13 @@
 
 - `PartialEq` of GenericByteViewArray \(StringViewArray / ByteViewArray\) that compares on equality rather than logical value [\#6679](https://github.com/apache/arrow-rs/issues/6679) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Need a mechanism to handle schema changes due to dictionary hydration in FlightSQL server implementations [\#6672](https://github.com/apache/arrow-rs/issues/6672) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- ObjectStore: Ability To Write Line-By-Line / Update Via LocalFileSystem [\#6656](https://github.com/apache/arrow-rs/issues/6656)
 - Support encoding Utf8View columns to JSON [\#6642](https://github.com/apache/arrow-rs/issues/6642) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Implement `append_n` for `BooleanBuilder` [\#6634](https://github.com/apache/arrow-rs/issues/6634) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Some take optimizations [\#6621](https://github.com/apache/arrow-rs/issues/6621) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Error Instead of Panic On Attempting to Write More Than 32769 Row Groups [\#6591](https://github.com/apache/arrow-rs/issues/6591) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Make casting from a timestamp without timezone to a timestamp with timezone configurable [\#6555](https://github.com/apache/arrow-rs/issues/6555)
 - Support `Binary` --\> `Utf8View` casting [\#6531](https://github.com/apache/arrow-rs/issues/6531) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- \[object-store\]: Implement credential\_process support for S3 [\#6422](https://github.com/apache/arrow-rs/issues/6422)
 - `downcast_primitive_array` and `downcast_dictionary_array` are not hygienic wrt imports [\#6400](https://github.com/apache/arrow-rs/issues/6400) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Release arrow-rs / parquet minor version `53.2.0` \(~November~ October 2024\) [\#6341](https://github.com/apache/arrow-rs/issues/6341) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 
 **Fixed bugs:**
 
