@@ -749,6 +749,26 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         }
     }
 
+    fn logical_null_count(&self) -> usize {
+        match (self.keys.nulls(), self.values.logical_nulls()) {
+            (None, None) => 0,
+            (Some(key_nulls), None) => key_nulls.null_count(),
+            (None, Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .filter(|k| value_nulls.is_null(k.as_usize()))
+                .count(),
+            (Some(key_nulls), Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .enumerate()
+                .filter(|(idx, k)| key_nulls.is_null(*idx) || value_nulls.is_null(k.as_usize()))
+                .count(),
+        }
+    }
+
     fn is_nullable(&self) -> bool {
         !self.is_empty() && (self.nulls().is_some() || self.values.is_nullable())
     }
