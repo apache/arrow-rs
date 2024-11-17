@@ -25,7 +25,7 @@ authors = { workspace = true }
 license = { workspace = true }
 edition = { workspace = true }
 publish = false
-rust-version = { workspace = true }
+rust-version = "1.75.0"
 
 [lib]
 crate-type = ["lib", "cdylib"]

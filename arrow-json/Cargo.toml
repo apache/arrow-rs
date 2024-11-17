@@ -60,4 +60,3 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 [[bench]]
 name = "serde"
 harness = false
-
