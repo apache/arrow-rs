@@ -72,6 +72,8 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
+# commit the intial changes
+git commit -a -m 'Create changelog'
 
 # run automated script to copy labels to issues based on referenced PRs
 # (NOTE 1:  this must be done by a committer / other who has
@@ -80,14 +82,12 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # NOTE 2: this must be done after creating the initial CHANGELOG file
 python dev/release/label_issues.py
 
-# review change log / edit issues and labels if needed, rerun
-git commit -a -m 'Create changelog'
-
-# Manually edit ./dev/release/update_change_log.sh to reflect the release version
-# Create the changelog
+# review change log / edit issues and labels if needed, rerun, repeat as necessary
+# note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
-# Review change log / edit issues and labels if needed, rerun
-git commit -a -m 'Create changelog'
+
+# Commit the changes
+git commit -a -m 'Update changelog'
 
 git push
 ```
