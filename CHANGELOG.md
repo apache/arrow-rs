@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [53.3.0](https://github.com/apache/arrow-rs/tree/53.3.0) (2024-11-16)
+## [53.3.0](https://github.com/apache/arrow-rs/tree/53.3.0) (2024-11-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/53.2.0...53.3.0)
 
@@ -32,12 +32,16 @@
 - Some take optimizations [\#6621](https://github.com/apache/arrow-rs/issues/6621) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Error Instead of Panic On Attempting to Write More Than 32769 Row Groups [\#6591](https://github.com/apache/arrow-rs/issues/6591) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Make casting from a timestamp without timezone to a timestamp with timezone configurable [\#6555](https://github.com/apache/arrow-rs/issues/6555)
+- Add `record_batch!` macro for easy record batch creation [\#6553](https://github.com/apache/arrow-rs/issues/6553) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support `Binary` --\> `Utf8View` casting [\#6531](https://github.com/apache/arrow-rs/issues/6531) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - `downcast_primitive_array` and `downcast_dictionary_array` are not hygienic wrt imports [\#6400](https://github.com/apache/arrow-rs/issues/6400) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implement interleave\_record\_batch [\#6731](https://github.com/apache/arrow-rs/pull/6731) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([waynexia](https://github.com/waynexia))
+- feat: `record_batch!` macro [\#6588](https://github.com/apache/arrow-rs/pull/6588) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([ByteBaker](https://github.com/ByteBaker))
 
 **Fixed bugs:**
 
 - Signed decimal e-notation parsing bug [\#6728](https://github.com/apache/arrow-rs/issues/6728) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add support for Utf8View -\> numeric in can\_cast\_types [\#6715](https://github.com/apache/arrow-rs/issues/6715)
 - IPC file writer produces incorrect footer when not preserving dict ID [\#6710](https://github.com/apache/arrow-rs/issues/6710) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet from\_thrift\_helper incorrectly checks index [\#6693](https://github.com/apache/arrow-rs/issues/6693) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Primitive REPEATED fields not contained in LIST annotated groups aren't read as lists by record reader [\#6648](https://github.com/apache/arrow-rs/issues/6648) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -67,6 +71,7 @@
 - Fix signed decimal e-notation parsing [\#6729](https://github.com/apache/arrow-rs/pull/6729) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gruuya](https://github.com/gruuya))
 - Clean up some arrow-flight tests and duplicated code [\#6725](https://github.com/apache/arrow-rs/pull/6725) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([itsjunetime](https://github.com/itsjunetime))
 - Update PR template section about API breaking changes [\#6723](https://github.com/apache/arrow-rs/pull/6723) ([findepi](https://github.com/findepi))
+- Support for casting `StringViewArray` to `DecimalArray` [\#6720](https://github.com/apache/arrow-rs/pull/6720) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tlm365](https://github.com/tlm365))
 - File writer preserve dict bug [\#6711](https://github.com/apache/arrow-rs/pull/6711) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([brancz](https://github.com/brancz))
 - Add filter\_kernel benchmark for run array [\#6706](https://github.com/apache/arrow-rs/pull/6706) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([delamarch3](https://github.com/delamarch3))
 - Fix string view ILIKE checks with NULL values [\#6705](https://github.com/apache/arrow-rs/pull/6705) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([findepi](https://github.com/findepi))
@@ -79,6 +84,7 @@
 - Reimplement `PartialEq` of `GenericByteViewArray` compares by logical value [\#6689](https://github.com/apache/arrow-rs/pull/6689) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tlm365](https://github.com/tlm365))
 - feat: expose known\_schema from FlightDataEncoder [\#6688](https://github.com/apache/arrow-rs/pull/6688) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([nathanielc](https://github.com/nathanielc))
 - Update hashbrown requirement from 0.14.2 to 0.15.1 [\#6684](https://github.com/apache/arrow-rs/pull/6684) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Support Duration in JSON Reader [\#6683](https://github.com/apache/arrow-rs/pull/6683) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([simonvandel](https://github.com/simonvandel))
 - Check predicate and values are the same length for run end array filter safety [\#6675](https://github.com/apache/arrow-rs/pull/6675) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([delamarch3](https://github.com/delamarch3))
 - \[ffi\] Fix arrow-array null\_count error during conversion from C to Rust [\#6674](https://github.com/apache/arrow-rs/pull/6674) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([adbmal](https://github.com/adbmal))
 - Support `Utf8View` for `bit_length` kernel [\#6671](https://github.com/apache/arrow-rs/pull/6671) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([austin362667](https://github.com/austin362667))
