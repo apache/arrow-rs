@@ -131,7 +131,7 @@ jobs:
           cargo update -p url --precise 2.5.0
       - name: Check all packages
         run: |
-          find . -name Cargo.toml | while read -r dir
+          find . -mindepth 2 -name Cargo.toml | while read -r dir
           do
             echo "Checking package '$dir'"
             cargo msrv verify --manifest-path "$dir" || exit 1
