@@ -133,7 +133,7 @@ jobs:
         run: |
           find . -name Cargo.toml | while read -r dir
           do
-            cargo msrv --log-target stdout verify --manifest-path "$dir" || exit1
+            cargo msrv --log-target stdout verify --manifest-path "$dir" || exit 1
           done
       # If no packages are using the workspace's rust-version, then it's out of date
       - name: Verify workspace rust-version is used
