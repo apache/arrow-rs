@@ -1087,12 +1087,16 @@ mod tests {
             ))],
         );
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("a"), None, Some("b")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("a"), None, Some("b")]);
         struct_builder.append(true);
 
         let arr1 = struct_builder.finish();
 
-        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0).unwrap().append_value(vec![Some("c"), None, Some("d")]);
+        struct_builder.field_builder::<ListBuilder<GenericByteDictionaryBuilder<UInt16Type,GenericStringType<i32>>>>(0)
+            .unwrap()
+            .append_value(vec![Some("c"), None, Some("d")]);
         struct_builder.append(true);
 
         let arr2 = struct_builder.finish();
@@ -1300,6 +1304,11 @@ mod tests {
         .into_iter()
         .collect::<UnionFields>();
 
+        let mut field_types = union_fields.iter().map(|(_, field)| field.data_type());
+        let dict_list_ty = field_types.next().unwrap();
+        let struct_ty = field_types.next().unwrap();
+        let string_ty = field_types.next().unwrap();
+
         let struct_fields = vec![Field::new_list(
             "dict_list",
             Field::new_dictionary("item", DataType::UInt16, DataType::Utf8, true),
@@ -1318,9 +1327,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                Arc::new(arr1) as Arc<dyn Array>,
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                Arc::new(arr1),
+                new_null_array(struct_ty, 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1336,9 +1345,9 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
                 Arc::new(arr2),
-                new_null_array(union_fields.iter().nth(2).unwrap().1.data_type(), 1),
+                new_null_array(string_ty, 1),
             ],
         )
         .unwrap();
@@ -1349,8 +1358,8 @@ mod tests {
             type_id_buffer,
             None,
             vec![
-                new_null_array(union_fields.iter().next().unwrap().1.data_type(), 1),
-                new_null_array(union_fields.iter().nth(1).unwrap().1.data_type(), 1),
+                new_null_array(dict_list_ty, 1),
+                new_null_array(struct_ty, 1),
                 Arc::new(StringArray::from(vec!["e"])),
             ],
         )
@@ -1577,17 +1586,8 @@ mod tests {
         batch: &RecordBatch,
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
-        let data_gen = IpcDataGenerator::default();
-        let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
-
-        let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, options)
-            .expect("DictionaryTracker configured above to not error on replacement");
-
-        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-        let flight_batch = encoded_batch.into();
-
-        (flight_dictionaries, flight_batch)
+        #[allow(deprecated)]
+        crate::utils::flight_data_from_arrow_batch(batch, options)
     }
 
     #[test]
@@ -1741,7 +1741,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 160).await;
+        verify_encoded_split(batch, 48).await;
     }
 
     #[tokio::test]

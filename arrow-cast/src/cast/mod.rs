@@ -184,8 +184,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
         // decimal to string
         (Decimal128(_, _) | Decimal256(_, _), Utf8View | Utf8 | LargeUtf8) => true,
-        // Utf8 to decimal
-        (Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
+        // string to decimal
+        (Utf8View | Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
+
         (Struct(from_fields), Struct(to_fields)) => {
             from_fields.len() == to_fields.len() &&
                 from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
@@ -230,7 +231,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
-        (Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
+        (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
         (_, Utf8View) => from_type.is_numeric(),
 
@@ -1064,7 +1065,7 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
-                Utf8 => cast_string_to_decimal::<Decimal128Type, i32>(
+                Utf8View | Utf8 => cast_string_to_decimal::<Decimal128Type, i32>(
                     array,
                     *precision,
                     *scale,
@@ -1153,7 +1154,7 @@ pub fn cast_with_options(
                     *scale,
                     cast_options,
                 ),
-                Utf8 => cast_string_to_decimal::<Decimal256Type, i32>(
+                Utf8View | Utf8 => cast_string_to_decimal::<Decimal256Type, i32>(
                     array,
                     *precision,
                     *scale,
@@ -3757,6 +3758,41 @@ mod tests {
         assert!(!c.is_valid(2));
         assert_eq!(8, c.value(3));
         assert!(!c.is_valid(4));
+    }
+
+    #[test]
+    fn test_cast_utf8view_to_i32() {
+        let array = StringViewArray::from(vec!["5", "6", "seven", "8", "9.1"]);
+        let b = cast(&array, &DataType::Int32).unwrap();
+        let c = b.as_primitive::<Int32Type>();
+        assert_eq!(5, c.value(0));
+        assert_eq!(6, c.value(1));
+        assert!(!c.is_valid(2));
+        assert_eq!(8, c.value(3));
+        assert!(!c.is_valid(4));
+    }
+
+    #[test]
+    fn test_cast_utf8view_to_f32() {
+        let array = StringViewArray::from(vec!["3", "4.56", "seven", "8.9"]);
+        let b = cast(&array, &DataType::Float32).unwrap();
+        let c = b.as_primitive::<Float32Type>();
+        assert_eq!(3.0, c.value(0));
+        assert_eq!(4.56, c.value(1));
+        assert!(!c.is_valid(2));
+        assert_eq!(8.9, c.value(3));
+    }
+
+    #[test]
+    fn test_cast_utf8view_to_decimal128() {
+        let array = StringViewArray::from(vec![None, Some("4"), Some("5.6"), Some("7.89")]);
+        let arr = Arc::new(array) as ArrayRef;
+        generate_cast_test_case!(
+            &arr,
+            Decimal128Array,
+            &DataType::Decimal128(4, 2),
+            vec![None, Some(400_i128), Some(560_i128), Some(789_i128)]
+        );
     }
 
     #[test]
