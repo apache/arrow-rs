@@ -897,23 +897,26 @@ pub(crate) fn chunked_stream(
 
 pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
     let to_read = range.end - range.start;
-    file.seek(SeekFrom::Start(range.start as u64))
+    let seek_idx = file
+        .seek(SeekFrom::Start(range.start as u64))
         .context(SeekSnafu { path })?;
 
-    let mut buf = Vec::with_capacity(to_read);
-    let read = file
-        .take(to_read as u64)
-        .read_to_end(&mut buf)
-        .context(UnableToReadBytesSnafu { path })?;
-
     ensure!(
-        read == to_read,
+        seek_idx == range.end as u64,
         OutOfRangeSnafu {
             path,
             expected: to_read,
-            actual: read
+            actual: seek_idx as usize
         }
     );
+
+    let mut buf = Vec::with_capacity(to_read);
+    file.take(to_read as u64)
+        .read_to_end(&mut buf)
+        .context(UnableToReadBytesSnafu { path })?;
+
+    // The output buffer could be smaller than `to_read` bytes if the end of the range is beyond
+    // the end of the file.
     Ok(buf.into())
 }
 
@@ -1152,6 +1155,44 @@ mod tests {
             .bytes()
             .await
             .unwrap();
+        assert_eq!(&*read_data, data);
+    }
+
+    #[tokio::test]
+    async fn range_request_start_beyond_end_of_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        integration
+            .get_range(&location, 100..200)
+            .await
+            .expect_err("Should error with start range beyond end of file");
+    }
+
+    #[tokio::test]
+    async fn range_request_beyond_end_of_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        let read_data = integration.get_range(&location, 0..100).await.unwrap();
         assert_eq!(&*read_data, data);
     }
 
