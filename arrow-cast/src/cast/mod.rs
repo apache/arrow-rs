@@ -41,6 +41,7 @@ mod decimal;
 mod dictionary;
 mod list;
 mod map;
+mod runend;
 mod string;
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
@@ -51,6 +52,7 @@ use crate::cast::string::*;
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
+use runend::run_end_cast;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -138,6 +140,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
+        (RunEndEncoded(rt1, dt1), RunEndEncoded(rt2, dt2)) => can_cast_types(rt1.data_type(), rt2.data_type()) && can_cast_types(dt1.data_type(), dt2.data_type()),
+        (RunEndEncoded(_, dt), other) => dt.data_type().is_primitive() && can_cast_types(dt.data_type(), other),
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
@@ -758,6 +762,12 @@ pub fn cast_with_options(
             _ => Err(ArrowError::CastError(format!(
                 "Casting from type {from_type:?} to dictionary type {to_type:?} not supported",
             ))),
+        },
+        (RunEndEncoded(re_t, _dt), _) => match re_t.data_type() {
+            Int16 => run_end_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => run_end_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => run_end_cast::<Int64Type>(array, to_type, cast_options),
+            _ => unreachable!("invalid run end type: {:?}", re_t),
         },
         (List(_), List(to)) => cast_list_values::<i32>(array, to, cast_options),
         (LargeList(_), LargeList(to)) => cast_list_values::<i64>(array, to, cast_options),
