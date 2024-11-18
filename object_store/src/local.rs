@@ -895,11 +895,14 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
+#[allow(unused_mut)]
 pub(crate) fn read_range(
     file: &mut File,
     path: &PathBuf,
     mut range: Range<usize>,
 ) -> Result<Bytes> {
+    // On windows, range requests beyond the end of the file fail, so we shorten the range to not
+    // go beyond the end.
     #[cfg(target_os = "windows")]
     {
         let file_len = file.seek(SeekFrom::End(0))?;
