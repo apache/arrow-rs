@@ -905,7 +905,7 @@ pub(crate) fn read_range(
     // go beyond the end.
     #[cfg(target_os = "windows")]
     {
-        let file_len = file.seek(SeekFrom::End(0))?;
+        let file_len = file.seek(SeekFrom::End(0)).context(SeekSnafu { path })?;
         range = range.start..range.end.min(file_len as usize);
     }
 
