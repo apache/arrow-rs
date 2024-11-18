@@ -915,10 +915,10 @@ pub(crate) fn read_range(
         .context(SeekSnafu { path })?;
 
     ensure!(
-        seek_idx == range.end as u64,
+        seek_idx == range.start as u64,
         OutOfRangeSnafu {
             path,
-            expected: to_read,
+            expected: range.start,
             actual: seek_idx as usize
         }
     );
