@@ -895,7 +895,17 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+pub(crate) fn read_range(
+    file: &mut File,
+    path: &PathBuf,
+    mut range: Range<usize>,
+) -> Result<Bytes> {
+    #[cfg(target_os = "windows")]
+    {
+        let file_len = file.seek(SeekFrom::End(0))?;
+        range = range.start..range.end.min(file_len as usize);
+    }
+
     let to_read = range.end - range.start;
     let seek_idx = file
         .seek(SeekFrom::Start(range.start as u64))
