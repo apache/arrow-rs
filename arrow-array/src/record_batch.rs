@@ -1207,6 +1207,41 @@ mod tests {
     }
 
     #[test]
+    fn flattening() {
+        let animals: ArrayRef = Arc::new(StringArray::from(vec!["Parrot", ""]));
+        let n_legs: ArrayRef = Arc::new(Int64Array::from(vec![Some(2), Some(4)]));
+        let year: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(2022)]));
+
+        let animals_field = Arc::new(Field::new("animals", DataType::Utf8, true));
+        let n_legs_field = Arc::new(Field::new("n_legs", DataType::Int64, true));
+        let year_field = Arc::new(Field::new("year", DataType::Int64, true));
+
+        let a = Arc::new(StructArray::from(vec![
+            (animals_field.clone(), Arc::new(animals) as ArrayRef),
+            (n_legs_field.clone(), Arc::new(n_legs) as ArrayRef),
+            (year_field.clone(), Arc::new(year) as ArrayRef),
+        ]));
+        let month = Arc::new(Int64Array::from(vec![Some(4), Some(6)]));
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Struct(Fields::from(vec![
+                animals_field,
+                n_legs_field,
+                year_field,
+            ])), false),
+            Field::new("month", DataType::Int64, true)
+        ]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![
+                a,
+                month,
+            ]).expect("valid conversion");
+
+        println!("{:?}", record_batch);
+    }
+
+    #[test]
     fn project() {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
