@@ -222,11 +222,10 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
-            mutable.buffer1.extend(
-                views[start..start + len]
-                    .iter()
-                    .cycle()
-                    .map(|v| {
+            for _ in 0..n {
+                mutable
+                    .buffer1
+                    .extend(views[start..start + len].iter().map(|v| {
                         let len = *v as u32;
                         if len <= 12 {
                             return *v; // Stored inline
@@ -234,9 +233,8 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
                         let mut view = ByteView::from(*v);
                         view.buffer_index += buffer_offset;
                         view.into()
-                    })
-                    .take(n),
-            )
+                    }))
+            }
         },
     )
 }
