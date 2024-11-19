@@ -311,9 +311,27 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
 mod tests {
     use crate::temporal_conversions::{
         date64_to_datetime, split_second, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+        timestamp_s_to_date, timestamp_s_to_datetime, timestamp_s_to_time,
         timestamp_us_to_datetime, NANOSECONDS,
     };
     use chrono::DateTime;
+
+    #[test]
+    fn test_timestamp_func() {
+        let timestamp = 1234;
+        let datetime = timestamp_s_to_datetime(timestamp).unwrap();
+        let expected_date = datetime.date();
+        let expected_time = datetime.time();
+
+        assert_eq!(
+            timestamp_s_to_date(timestamp).unwrap().date(),
+            expected_date
+        );
+        assert_eq!(
+            timestamp_s_to_time(timestamp).unwrap().time(),
+            expected_time
+        );
+    }
 
     #[test]
     fn negative_input_timestamp_ns_to_datetime() {
