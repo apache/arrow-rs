@@ -723,6 +723,27 @@ impl<'a> MutableArrayData<'a> {
         self.data.len += len;
     }
 
+    /// Extends the in-progress array with multiple copies of a region of the
+    /// input arrays.
+    ///
+    /// The total number of items added will be `(end - start) * n`.
+    ///
+    /// # Arguments
+    /// * `index` - the index of array that you what to copy values from
+    /// * `start` - the start index of the chunk (inclusive)
+    /// * `end` - the end index of the chunk (exclusive)
+    /// * `n` - the number of times to copy the region
+    ///
+    /// # Panic
+    /// This function panics if there is an invalid index,
+    /// i.e. `index` >= the number of source arrays
+    /// or `end` > the length of the `index`th array
+    pub fn extend_n(&mut self, index: usize, start: usize, end: usize, n: usize) {
+        for _ in 0..n {
+            self.extend(index, start, end);
+        }
+    }
+
     /// Extends the in progress array with null elements, ignoring the input arrays.
     ///
     /// # Panics

@@ -18,16 +18,11 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    types::RunEndIndexType, Array, ArrayRef, ArrowPrimitiveType, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray, IntervalYearMonthArray,
-    PrimitiveArray, RunArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, TypedRunArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    make_array, types::RunEndIndexType, Array, ArrayRef, Int16Array, Int32Array, Int64Array,
+    PrimitiveArray, RunArray,
 };
 use arrow_buffer::ArrowNativeType;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType};
 
 use crate::cast_with_options;
@@ -118,118 +113,33 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
 
 /// Converts a run array of primitive values into a primitive array, without changing the type
 fn run_array_to_primitive<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
-    let prim = match ra.values().data_type() {
-        DataType::Int8 => typed_run_array_to_primitive(ra.downcast::<Int8Array>().unwrap()),
-        DataType::Int16 => typed_run_array_to_primitive(ra.downcast::<Int16Array>().unwrap()),
-        DataType::Int32 => typed_run_array_to_primitive(ra.downcast::<Int32Array>().unwrap()),
-        DataType::Int64 => typed_run_array_to_primitive(ra.downcast::<Int64Array>().unwrap()),
-        DataType::UInt8 => typed_run_array_to_primitive(ra.downcast::<UInt8Array>().unwrap()),
-        DataType::UInt16 => typed_run_array_to_primitive(ra.downcast::<UInt16Array>().unwrap()),
-        DataType::UInt32 => typed_run_array_to_primitive(ra.downcast::<UInt32Array>().unwrap()),
-        DataType::UInt64 => typed_run_array_to_primitive(ra.downcast::<UInt64Array>().unwrap()),
-        DataType::Float16 => typed_run_array_to_primitive(ra.downcast::<Float16Array>().unwrap()),
-        DataType::Float32 => typed_run_array_to_primitive(ra.downcast::<Float32Array>().unwrap()),
-        DataType::Float64 => typed_run_array_to_primitive(ra.downcast::<Float64Array>().unwrap()),
-        DataType::Date32 => typed_run_array_to_primitive(ra.downcast::<Date32Array>().unwrap()),
-        DataType::Date64 => typed_run_array_to_primitive(ra.downcast::<Date64Array>().unwrap()),
-        DataType::Time32(arrow_schema::TimeUnit::Second) => {
-            typed_run_array_to_primitive(ra.downcast::<Time32SecondArray>().unwrap())
-        }
-        DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
-            typed_run_array_to_primitive(ra.downcast::<Time32MillisecondArray>().unwrap())
-        }
-        DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
-            typed_run_array_to_primitive(ra.downcast::<Time64MicrosecondArray>().unwrap())
-        }
-        DataType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
-            typed_run_array_to_primitive(ra.downcast::<Time64NanosecondArray>().unwrap())
-        }
-        DataType::Decimal128(_, _) => {
-            typed_run_array_to_primitive(ra.downcast::<Decimal128Array>().unwrap())
-        }
-        DataType::Decimal256(_, _) => {
-            typed_run_array_to_primitive(ra.downcast::<Decimal256Array>().unwrap())
-        }
-        DataType::Timestamp(arrow_schema::TimeUnit::Second, _) => {
-            typed_run_array_to_primitive(ra.downcast::<TimestampSecondArray>().unwrap())
-        }
-        DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _) => {
-            typed_run_array_to_primitive(ra.downcast::<TimestampMillisecondArray>().unwrap())
-        }
-        DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
-            typed_run_array_to_primitive(ra.downcast::<TimestampMicrosecondArray>().unwrap())
-        }
-
-        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
-            typed_run_array_to_primitive(ra.downcast::<TimestampNanosecondArray>().unwrap())
-        }
-        DataType::Duration(arrow_schema::TimeUnit::Second) => {
-            typed_run_array_to_primitive(ra.downcast::<DurationSecondArray>().unwrap())
-        }
-        DataType::Duration(arrow_schema::TimeUnit::Millisecond) => {
-            typed_run_array_to_primitive(ra.downcast::<DurationMillisecondArray>().unwrap())
-        }
-        DataType::Duration(arrow_schema::TimeUnit::Microsecond) => {
-            typed_run_array_to_primitive(ra.downcast::<DurationMicrosecondArray>().unwrap())
-        }
-        DataType::Duration(arrow_schema::TimeUnit::Nanosecond) => {
-            typed_run_array_to_primitive(ra.downcast::<DurationNanosecondArray>().unwrap())
-        }
-        DataType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
-            typed_run_array_to_primitive(ra.downcast::<IntervalYearMonthArray>().unwrap())
-        }
-        DataType::Interval(arrow_schema::IntervalUnit::DayTime) => {
-            typed_run_array_to_primitive(ra.downcast::<IntervalDayTimeArray>().unwrap())
-        }
-        DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano) => {
-            typed_run_array_to_primitive(ra.downcast::<IntervalYearMonthArray>().unwrap())
-        }
-        _ => {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot convert run-end encoded array of type {:?} to primitive type",
-                ra.values().data_type()
-            )))
-        }
-    };
-
-    Ok(prim)
-}
-
-/// "Unroll" a run-end encoded array of primitive values into a primitive array.
-/// This function should be efficient for long run lenghts due to the use of
-/// Builder's `append_value_n`
-fn typed_run_array_to_primitive<R: RunEndIndexType, T: ArrowPrimitiveType>(
-    arr: TypedRunArray<R, PrimitiveArray<T>>,
-) -> ArrayRef {
-    let mut builder = PrimitiveArray::<T>::builder(
-        arr.run_ends()
-            .values()
-            .last()
-            .map(|end| end.as_usize())
-            .unwrap_or(0),
-    );
+    let array_data = ra.values().to_data();
+    let mut builder = MutableArrayData::new(vec![&array_data], false, ra.len());
 
     let mut last = 0;
-    for (run_end, val) in arr
-        .run_ends()
-        .values()
-        .iter()
-        .zip(arr.values().values().iter().copied())
-    {
+    for (idx, run_end) in ra.run_ends().values().iter().enumerate() {
         let run_end = run_end.as_usize();
         let run_length = run_end - last;
-        builder.append_value_n(val, run_length);
+        if run_length == 0 {
+            continue;
+        }
+
+        builder.extend_n(0, idx, idx + 1, run_length);
+
         last = run_end;
     }
+
+    let result = make_array(builder.freeze());
 
     // TODO: this slice could be optimized by only copying the relevant parts of
     // the array, but this might be tricky to get right because a slice can
     // start or end in the middle of a run.
-    Arc::new(builder.finish().slice(arr.offset(), arr.len()))
+    Ok(result.slice(ra.offset(), ra.len()))
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::Float64Array;
     use arrow_schema::Field;
 
     use crate::can_cast_types;
