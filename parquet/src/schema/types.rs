@@ -202,6 +202,33 @@ impl Type {
         self.get_basic_info().has_repetition()
             && self.get_basic_info().repetition() != Repetition::REQUIRED
     }
+
+    /// Returns `true` if this type is annotated as a list.
+    pub fn is_list(&self) -> bool {
+        match self.is_group() {
+            true => {
+                let basic_info = self.get_basic_info();
+                if let Some(logical_type) = basic_info.logical_type() {
+                    return logical_type == LogicalType::List;
+                }
+                basic_info.converted_type() == ConvertedType::LIST
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns `true` if this type is a group with a single child field that is `repeated`.
+    pub fn has_single_repeated_child(&self) -> bool {
+        match self.is_group() {
+            true => {
+                let children = self.get_fields();
+                children.len() == 1
+                    && children[0].get_basic_info().has_repetition()
+                    && children[0].get_basic_info().repetition() == Repetition::REPEATED
+            }
+            _ => false,
+        }
+    }
 }
 
 /// A builder for primitive types. All attributes are optional
