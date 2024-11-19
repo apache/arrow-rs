@@ -533,7 +533,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                let max_precision = (2f64.powi(8 * self.length - 1) - 1f64).log10().floor() as i32;
+                let length = self.length.checked_mul(8).unwrap_or(i32::MAX);
+                let max_precision = (2f64.powi(length - 1) - 1f64).log10().floor() as i32;
 
                 if self.precision > max_precision {
                     return Err(general_err!(
@@ -1129,6 +1130,18 @@ pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
     Ok(schema_nodes.remove(0))
 }
 
+/// Checks if the logical type is valid.
+fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
+    if let Some(LogicalType::Integer { bit_width, .. }) = *logical_type {
+        if bit_width != 8 && bit_width != 16 && bit_width != 32 && bit_width != 64 {
+            return Err(general_err!(
+                "Bit width must be 8, 16, 32, or 64 for Integer logical type"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Constructs a new Type from the `elements`, starting at index `index`.
 /// The first result is the starting index for the next Type after this one. If it is
 /// equal to `elements.len()`, then this Type is the last one.
@@ -1153,6 +1166,9 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
         .logical_type
         .as_ref()
         .map(|value| LogicalType::from(value.clone()));
+
+    check_logical_type(&logical_type)?;
+
     let field_id = elements[index].field_id;
     match elements[index].num_children {
         // From parquet-format:

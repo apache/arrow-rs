@@ -1738,12 +1738,6 @@ impl crate::thrift::TSerializable for IntType {
       bit_width: f_1.expect("auto-generated code should have checked for presence of required fields"),
       is_signed: f_2.expect("auto-generated code should have checked for presence of required fields"),
     };
-    if ret.bit_width != 8 && ret.bit_width != 16 && ret.bit_width != 32 && ret.bit_width != 64 {
-      return Err(thrift::Error::Protocol(ProtocolError::new(
-          ProtocolErrorKind::InvalidData,
-          "Bit width must be 8, 16, 32, or 64 for Integer logical type",
-      )));
-    }
     Ok(ret)
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
