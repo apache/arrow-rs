@@ -22,7 +22,7 @@ use arrow_schema::DataType;
 use criterion::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let run_ends: Vec<i32> = (1..10_000_001).collect();
+    let run_ends: Vec<i32> = (1..1_000_001).map(|x| x * 10).collect();
     let values: Vec<i32> = iter::repeat(100).take(run_ends.len()).collect();
     let ra = RunArray::try_new(&Int32Array::from(run_ends), &Int32Array::from(values)).unwrap();
 

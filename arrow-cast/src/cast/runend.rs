@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    make_array, types::RunEndIndexType, Array, ArrayRef, Int16Array, Int32Array, Int64Array,
-    PrimitiveArray, RunArray,
+    builder::ArrayBuilder, make_array, types::RunEndIndexType, Array, ArrayRef, ArrowPrimitiveType,
+    Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    PrimitiveArray, RunArray, TypedRunArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_buffer::ArrowNativeType;
+use arrow_buffer::{ArrowNativeType, NullBufferBuilder};
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType};
 
@@ -47,9 +48,11 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
             )
         })?;
 
-    match to_type {
+    let curr_value_type = ree_array.values().data_type();
+
+    match (curr_value_type, to_type) {
         // Potentially convert to a new value or run end type
-        DataType::RunEndEncoded(re_t, dt) => {
+        (_, DataType::RunEndEncoded(re_t, dt)) => {
             let values = cast_with_options(ree_array.values(), dt.data_type(), cast_options)?;
             let re = PrimitiveArray::<K>::new(ree_array.run_ends().inner().clone(), None);
             let re = cast_with_options(&re, re_t.data_type(), cast_options)?;
@@ -78,6 +81,63 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
 
             Ok(result.slice(ree_array.run_ends().offset(), ree_array.run_ends().len()))
         }
+        // We match against the native types in order to use an optimized kernel
+        (DataType::Int8, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Int8Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Int16, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Int16Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Int32, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Int32Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Int64, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Int64Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::UInt8, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<UInt8Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::UInt16, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<UInt16Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::UInt32, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<UInt32Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::UInt64, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<UInt64Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Float16, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Float16Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Float32, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Float32Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        (DataType::Float64, _) => cast_with_options(
+            &typed_run_array_to_primitive(ree_array.downcast::<Float64Array>().unwrap()),
+            to_type,
+            cast_options,
+        ),
+        // For all other types, we use an interpretation-based approach
         _ => {
             // TODO this could be somewhat inefficent, since the run encoded
             // array is initially transformed into a flat array of the same
@@ -90,7 +150,66 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
     }
 }
 
-/// Converts a run array into a flat array, without changing the type
+/// "Unroll" a run-end encoded array of primitive values into a primitive array.
+/// This function should be efficient for long run lenghts due to the use of
+/// Builder's `append_value_n`. Uses `PrimitiveBuilder`, so does not do any
+/// interpretation.
+fn typed_run_array_to_primitive<R: RunEndIndexType, T: ArrowPrimitiveType>(
+    arr: TypedRunArray<R, PrimitiveArray<T>>,
+) -> ArrayRef {
+    let mut builder = PrimitiveArray::<T>::builder(
+        arr.run_ends()
+            .values()
+            .last()
+            .map(|end| end.as_usize())
+            .unwrap_or(0),
+    );
+
+    // copy all values into the builder
+    let mut last = 0;
+    for (run_end, val) in arr
+        .run_ends()
+        .values()
+        .iter()
+        .zip(arr.values().values().iter().copied())
+    {
+        let run_end = run_end.as_usize();
+        let run_length = run_end - last;
+        builder.append_value_n(val, run_length);
+        last = run_end;
+    }
+    let mut result = builder.finish();
+
+    // if we have null values, decode them as well
+    if let Some(null_buffer) = arr.values().nulls() {
+        let mut nbb = NullBufferBuilder::new(builder.len());
+
+        let mut last = 0;
+        for (run_end, val) in arr.run_ends().values().iter().zip(null_buffer.iter()) {
+            let run_end = run_end.as_usize();
+            let run_length = run_end - last;
+            if val {
+                nbb.append_n_non_nulls(run_length);
+            } else {
+                nbb.append_n_nulls(run_length);
+            }
+
+            last = run_end;
+        }
+
+        let nb = nbb.finish();
+        result = PrimitiveArray::<T>::new(result.values().clone(), nb);
+    }
+
+    // TODO: this slice could be optimized by only copying the relevant parts of
+    // the array, but this might be tricky to get right because a slice can
+    // start or end in the middle of a run.
+    Arc::new(result.slice(arr.offset(), arr.len()))
+}
+
+/// Converts a run array into a flat array, without changing the type, by
+/// "unrolling" it. Uses `MutableArrayData`, which must use interpretation for
+/// each run.
 fn run_array_to_flat<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
     let array_data = ra.values().to_data();
     let mut builder = MutableArrayData::new(vec![&array_data], false, ra.len());
@@ -118,7 +237,7 @@ fn run_array_to_flat<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, A
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Float64Array;
+    use arrow_array::{Float64Array, StringArray};
     use arrow_schema::Field;
 
     use super::*;
@@ -134,6 +253,29 @@ mod tests {
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(result.values(), &[10, 10, 20, 20, 30]);
+    }
+
+    #[test]
+    fn test_run_end_to_string() {
+        let run_ends = vec![2, 4, 5];
+        let values = vec!["hello", "world", "test"];
+        let ree =
+            RunArray::try_new(&Int32Array::from(run_ends), &StringArray::from(values)).unwrap();
+
+        let result = cast_with_options(&ree, &DataType::Utf8, &CastOptions::default()).unwrap();
+
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+        let result: Vec<Option<&str>> = result.iter().collect();
+        assert_eq!(
+            result,
+            &[
+                Some("hello"),
+                Some("hello"),
+                Some("world"),
+                Some("world"),
+                Some("test")
+            ]
+        );
     }
 
     #[test]
