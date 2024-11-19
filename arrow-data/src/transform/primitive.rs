@@ -25,10 +25,12 @@ use super::{Extend, _MutableArrayData};
 pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend {
     let values = array.buffer::<T>(0);
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-            mutable
-                .buffer1
-                .extend_from_slice(&values[start..start + len]);
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
+            for _ in 0..n {
+                mutable
+                    .buffer1
+                    .extend_from_slice(&values[start..start + len]);
+            }
         },
     )
 }
@@ -39,10 +41,12 @@ where
 {
     let values = array.buffer::<T>(0);
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-            mutable
-                .buffer1
-                .extend(values[start..start + len].iter().map(|x| *x + offset));
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
+            for _ in 0..n {
+                mutable
+                    .buffer1
+                    .extend(values[start..start + len].iter().map(|x| *x + offset));
+            }
         },
     )
 }

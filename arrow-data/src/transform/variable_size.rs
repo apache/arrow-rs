@@ -45,16 +45,18 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimiti
     let offsets = array.buffer::<T>(0);
     let values = array.buffers()[1].as_slice();
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
             let offset_buffer = &mut mutable.buffer1;
             let values_buffer = &mut mutable.buffer2;
 
-            // this is safe due to how offset is built. See details on `get_last_offset`
-            let last_offset = unsafe { get_last_offset(offset_buffer) };
+            for _ in 0..n {
+                // this is safe due to how offset is built. See details on `get_last_offset`
+                let last_offset = unsafe { get_last_offset(offset_buffer) };
 
-            extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1]);
-            // values
-            extend_offset_values::<T>(values_buffer, offsets, values, start, len);
+                extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1]);
+                // values
+                extend_offset_values::<T>(values_buffer, offsets, values, start, len);
+            }
         },
     )
 }

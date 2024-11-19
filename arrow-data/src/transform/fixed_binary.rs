@@ -27,9 +27,11 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
 
     let values = &array.buffers()[0].as_slice()[array.offset() * size..];
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
             let buffer = &mut mutable.buffer1;
-            buffer.extend_from_slice(&values[start * size..(start + len) * size]);
+            for _ in 0..n {
+                buffer.extend_from_slice(&values[start * size..(start + len) * size]);
+            }
         },
     )
 }

@@ -40,10 +40,10 @@ mod union;
 mod utils;
 mod variable_size;
 
-type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
+type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
 // this is dynamic because different data_types influence how buffers and children are extended.
-type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
+type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize, usize) + 'a>;
 
 type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize)>;
 
@@ -75,30 +75,34 @@ impl _MutableArrayData<'_> {
 fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
-        Box::new(move |mutable, start, len| {
+        Box::new(move |mutable, start, len, n| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
-            mutable.null_count += set_bits(
-                out.as_slice_mut(),
-                bytes,
-                mutable_len,
-                nulls.offset() + start,
-                len,
-            );
+            utils::resize_for_bits(out, mutable_len + n * len);
+
+            for dest_offset in mutable_len..mutable_len + n {
+                let out = mutable.null_buffer();
+                mutable.null_count += set_bits(
+                    out.as_slice_mut(),
+                    bytes,
+                    dest_offset,
+                    nulls.offset() + start,
+                    len,
+                );
+            }
         })
     } else if use_nulls {
-        Box::new(|mutable, _, len| {
+        Box::new(|mutable, _, len, n| {
             let mutable_len = mutable.len;
             let out = mutable.null_buffer();
-            utils::resize_for_bits(out, mutable_len + len);
+            utils::resize_for_bits(out, mutable_len + n * len);
             let write_data = out.as_slice_mut();
-            (0..len).for_each(|i| {
+            (0..len * n).for_each(|i| {
                 bit_util::set_bit(write_data, mutable_len + i);
             });
         })
     } else {
-        Box::new(|_, _, _| {})
+        Box::new(|_, _, _, _| {})
     }
 }
 
@@ -217,18 +221,22 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
 fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
     let views = array.buffer::<u128>(0);
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-            mutable
-                .buffer1
-                .extend(views[start..start + len].iter().map(|v| {
-                    let len = *v as u32;
-                    if len <= 12 {
-                        return *v; // Stored inline
-                    }
-                    let mut view = ByteView::from(*v);
-                    view.buffer_index += buffer_offset;
-                    view.into()
-                }))
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
+            mutable.buffer1.extend(
+                views[start..start + len]
+                    .iter()
+                    .cycle()
+                    .map(|v| {
+                        let len = *v as u32;
+                        if len <= 12 {
+                            return *v; // Stored inline
+                        }
+                        let mut view = ByteView::from(*v);
+                        view.buffer_index += buffer_offset;
+                        view.into()
+                    })
+                    .take(n),
+            )
         },
     )
 }
@@ -717,10 +725,7 @@ impl<'a> MutableArrayData<'a> {
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
-        let len = end - start;
-        (self.extend_null_bits[index])(&mut self.data, start, len);
-        (self.extend_values[index])(&mut self.data, index, start, len);
-        self.data.len += len;
+        self.extend_n(index, start, end, 1);
     }
 
     /// Extends the in-progress array with multiple copies of a region of the
@@ -739,9 +744,14 @@ impl<'a> MutableArrayData<'a> {
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
     pub fn extend_n(&mut self, index: usize, start: usize, end: usize, n: usize) {
-        for _ in 0..n {
-            self.extend(index, start, end);
+        if n == 0 {
+            return;
         }
+
+        let len = end - start;
+        (self.extend_null_bits[index])(&mut self.data, start, len, n);
+        (self.extend_values[index])(&mut self.data, index, start, len, n);
+        self.data.len += n * len;
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
