@@ -78,41 +78,20 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
 
             Ok(result.slice(ree_array.run_ends().offset(), ree_array.run_ends().len()))
         }
-        // Convert to a primitive value
-        DataType::Date32
-        | DataType::Date64
-        | DataType::Time32(_)
-        | DataType::Time64(_)
-        | DataType::Decimal128(_, _)
-        | DataType::Decimal256(_, _)
-        | DataType::Timestamp(_, _)
-        | DataType::Duration(_)
-        | DataType::Interval(_)
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float16
-        | DataType::Float32
-        | DataType::Float64 => {
+        _ => {
             // TODO this could be somewhat inefficent, since the run encoded
-            // array is initially transformed into a primitive array of the same
+            // array is initially transformed into a flat array of the same
             // type, then casted to the (potentially) new type. For example,
             // casting a run encoded array of Float32 to Float64 will first
             // create a primitive array of Float32s, then convert that primitive
             // array to Float64.
-            cast_with_options(&run_array_to_primitive(ree_array)?, to_type, cast_options)
+            cast_with_options(&run_array_to_flat(ree_array)?, to_type, cast_options)
         }
-        _ => todo!(),
     }
 }
 
 /// Converts a run array of primitive values into a primitive array, without changing the type
-fn run_array_to_primitive<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
+fn run_array_to_flat<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
     let array_data = ra.values().to_data();
     let mut builder = MutableArrayData::new(vec![&array_data], false, ra.len());
 
@@ -142,35 +121,7 @@ mod tests {
     use arrow_array::Float64Array;
     use arrow_schema::Field;
 
-    use crate::can_cast_types;
-
     use super::*;
-
-    #[test]
-    fn test_can_cast_run_ends() {
-        let re_i64 = Arc::new(Field::new("run ends", DataType::Int64, false));
-        let re_i32 = Arc::new(Field::new("run ends", DataType::Int64, false));
-        let va_f64 = Arc::new(Field::new("values", DataType::Float64, true));
-        let va_str = Arc::new(Field::new("values", DataType::Utf8, true));
-
-        // can change run end type of non-primitive
-        assert!(can_cast_types(
-            &DataType::RunEndEncoded(re_i32.clone(), va_str.clone()),
-            &DataType::RunEndEncoded(re_i64.clone(), va_str.clone())
-        ));
-
-        // can cast from primitive type to primitive
-        assert!(can_cast_types(
-            &DataType::RunEndEncoded(re_i32.clone(), va_f64.clone()),
-            &DataType::Float64
-        ));
-
-        // cannot cast from non-primitive to flat array
-        assert!(!can_cast_types(
-            &DataType::RunEndEncoded(re_i32.clone(), va_str.clone()),
-            &DataType::Utf8
-        ));
-    }
 
     #[test]
     fn test_run_end_to_primitive() {
