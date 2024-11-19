@@ -90,7 +90,7 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
     }
 }
 
-/// Converts a run array of primitive values into a primitive array, without changing the type
+/// Converts a run array into a flat array, without changing the type
 fn run_array_to_flat<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, ArrowError> {
     let array_data = ra.values().to_data();
     let mut builder = MutableArrayData::new(vec![&array_data], false, ra.len());
@@ -134,6 +134,20 @@ mod tests {
 
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(result.values(), &[10, 10, 20, 20, 30]);
+    }
+
+    #[test]
+    fn test_run_end_to_primitive_nulls() {
+        let run_ends = vec![2, 4, 5];
+        let values = vec![Some(10), None, Some(30)];
+        let ree =
+            RunArray::try_new(&Int32Array::from(run_ends), &Int32Array::from(values)).unwrap();
+
+        let result = cast_with_options(&ree, &DataType::Int32, &CastOptions::default()).unwrap();
+
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result, vec![Some(10), Some(10), None, None, Some(30)]);
     }
 
     #[test]
