@@ -40,6 +40,18 @@ pub const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 /// Number of days between 0001-01-01 and 1970-01-01
 pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
+/// Constant from chrono crate
+///
+/// Number of days between Januari 1, 1970 and December 31, 1 BCE which we define to be day 0.
+/// 4 full leap year cycles until December 31, 1600     4 * 146097 = 584388
+/// 1 day until January 1, 1601                                           1
+/// 369 years until Januari 1, 1970                      369 * 365 = 134685
+/// of which floor(369 / 4) are leap years          floor(369 / 4) =     92
+/// except for 1700, 1800 and 1900                                       -3 +
+///                                                                  --------
+///                                                                  719163
+pub const UNIX_EPOCH_DAY: i64 = 719_163;
+
 /// converts a `i32` representing a `date32` to [`NaiveDateTime`]
 #[inline]
 pub fn date32_to_datetime(v: i32) -> Option<NaiveDateTime> {
@@ -132,6 +144,31 @@ pub fn time_to_time64ns(v: NaiveTime) -> i64 {
 #[inline]
 pub fn timestamp_s_to_datetime(v: i64) -> Option<NaiveDateTime> {
     Some(DateTime::from_timestamp(v, 0)?.naive_utc())
+}
+
+/// Similar to timestamp_s_to_datetime but only compute `date`
+#[inline]
+pub fn timestamp_s_to_date(secs: i64) -> Option<NaiveDateTime> {
+    let days = secs.div_euclid(86_400) + UNIX_EPOCH_DAY;
+    if days < i32::MIN as i64 || days > i32::MAX as i64 {
+        return None;
+    }
+    let date = NaiveDate::from_num_days_from_ce_opt(days as i32)?;
+    Some(date.and_time(NaiveTime::default()).and_utc().naive_utc())
+}
+
+/// Similar to timestamp_s_to_datetime but only compute `time`
+#[inline]
+pub fn timestamp_s_to_time(secs: i64) -> Option<NaiveDateTime> {
+    let secs = secs.rem_euclid(86_400);
+    let time = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, 0)?;
+    Some(
+        DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDateTime::new(NaiveDate::default(), time),
+            Utc,
+        )
+        .naive_utc(),
+    )
 }
 
 /// converts a `i64` representing a `timestamp(ms)` to [`NaiveDateTime`]
