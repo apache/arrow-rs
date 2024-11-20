@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{iter, sync::Arc};
 
 use arrow_array::{
-    builder::ArrayBuilder, make_array, types::RunEndIndexType, Array, ArrayRef, ArrowPrimitiveType,
-    Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    PrimitiveArray, RunArray, TypedRunArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    make_array, types::RunEndIndexType, Array, ArrayRef, ArrowPrimitiveType, Float16Array,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, PrimitiveArray,
+    RunArray, TypedRunArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{ArrowNativeType, NullBufferBuilder};
 use arrow_data::transform::MutableArrayData;
@@ -51,7 +51,8 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
     let curr_value_type = ree_array.values().data_type();
 
     match (curr_value_type, to_type) {
-        // Potentially convert to a new value or run end type
+        // Potentially convert to a new value or run end type (e.g., a RunArray
+        // to RunArray conversion)
         (_, DataType::RunEndEncoded(re_t, dt)) => {
             let values = cast_with_options(ree_array.values(), dt.data_type(), cast_options)?;
             let re = PrimitiveArray::<K>::new(ree_array.run_ends().inner().clone(), None);
@@ -156,8 +157,11 @@ pub(crate) fn run_end_cast<K: RunEndIndexType>(
 /// interpretation.
 fn typed_run_array_to_primitive<R: RunEndIndexType, T: ArrowPrimitiveType>(
     arr: TypedRunArray<R, PrimitiveArray<T>>,
-) -> ArrayRef {
-    let mut builder = PrimitiveArray::<T>::builder(
+) -> ArrayRef
+where
+    PrimitiveArray<T>: From<Vec<T::Native>>,
+{
+    let mut flattened: Vec<T::Native> = Vec::with_capacity(
         arr.run_ends()
             .values()
             .last()
@@ -175,14 +179,14 @@ fn typed_run_array_to_primitive<R: RunEndIndexType, T: ArrowPrimitiveType>(
     {
         let run_end = run_end.as_usize();
         let run_length = run_end - last;
-        builder.append_value_n(val, run_length);
+        flattened.extend(iter::repeat(val).take(run_length));
         last = run_end;
     }
-    let mut result = builder.finish();
+    let mut result = PrimitiveArray::from(flattened);
 
     // if we have null values, decode them as well
     if let Some(null_buffer) = arr.values().nulls() {
-        let mut nbb = NullBufferBuilder::new(builder.len());
+        let mut nbb = NullBufferBuilder::new(result.len());
 
         let mut last = 0;
         for (run_end, val) in arr.run_ends().values().iter().zip(null_buffer.iter()) {
@@ -237,7 +241,7 @@ fn run_array_to_flat<R: RunEndIndexType>(ra: &RunArray<R>) -> Result<ArrayRef, A
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Float64Array, StringArray};
+    use arrow_array::{cast::AsArray, types::Float64Type, StringArray};
     use arrow_schema::Field;
 
     use super::*;
@@ -315,16 +319,22 @@ mod tests {
 
         let new_re_type = Field::new("run ends", DataType::Int64, false);
         let new_va_type = Field::new("values", DataType::Float64, true);
-        let result = cast_with_options(
-            &ree,
-            &DataType::RunEndEncoded(Arc::new(new_re_type), Arc::new(new_va_type)),
-            &CastOptions::default(),
-        )
-        .unwrap();
+        let new_dt = DataType::RunEndEncoded(Arc::new(new_re_type), Arc::new(new_va_type));
+        let result = cast_with_options(&ree, &new_dt, &CastOptions::default()).unwrap();
 
         let result =
             cast_with_options(&result, &DataType::Float64, &CastOptions::default()).unwrap();
-        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.values(), &[10.0, 10.0, 20.0, 20.0, 30.0]);
+
+        // try a sliced version
+        let sliced_ree = ree.slice(1, 4);
+        let sliced_result =
+            cast_with_options(&sliced_ree, &new_dt, &CastOptions::default()).unwrap();
+        let sliced_result =
+            cast_with_options(&sliced_result, &DataType::Float64, &CastOptions::default()).unwrap();
+        let sliced_result = sliced_result.as_primitive::<Float64Type>();
+        let logical_data: Vec<f64> = sliced_result.iter().map(|x| x.unwrap()).collect();
+        assert_eq!(logical_data, vec![10.0, 20.0, 20.0, 30.0]);
     }
 }
