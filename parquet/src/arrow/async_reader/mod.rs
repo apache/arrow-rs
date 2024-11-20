@@ -158,6 +158,11 @@ pub trait AsyncFileReader: Send {
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 }
 
+/// Implements AsyncFileReader for boxed readers with an explicit lifetime 'reader.
+/// This allows Box<dyn AsyncFileReader + 'reader> to be used as an AsyncFileReader,
+/// which is needed when the boxed reader contains references with lifetimes
+/// shorter than 'static.
+
 impl<'reader> AsyncFileReader for Box<dyn AsyncFileReader + 'reader> {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
