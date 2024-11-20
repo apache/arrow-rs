@@ -20,11 +20,11 @@ use crate::ArrayData;
 
 pub(super) fn build_extend(_: &ArrayData) -> Extend {
     Box::new(
-        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize, n: usize| {
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
             mutable
                 .child_data
                 .iter_mut()
-                .for_each(|child| child.extend_n(index, start, start + len, n))
+                .for_each(|child| child.extend(index, start, start + len))
         },
     )
 }

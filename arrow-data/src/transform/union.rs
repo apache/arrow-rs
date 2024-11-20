@@ -22,18 +22,16 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend {
     let type_ids = array.buffer::<i8>(0);
 
     Box::new(
-        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize, n: usize| {
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
             // extends type_ids
-            for _ in 0..n {
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
-            }
+            mutable
+                .buffer1
+                .extend_from_slice(&type_ids[start..start + len]);
 
             mutable
                 .child_data
                 .iter_mut()
-                .for_each(|child| child.extend_n(index, start, start + len, n))
+                .for_each(|child| child.extend(index, start, start + len))
         },
     )
 }
@@ -46,28 +44,26 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
     };
 
     Box::new(
-        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize, n: usize| {
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
             // extends type_ids
-            for _ in 0..n {
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
+            mutable
+                .buffer1
+                .extend_from_slice(&type_ids[start..start + len]);
 
-                (start..start + len).for_each(|i| {
-                    let type_id = type_ids[i];
-                    let child_index = src_fields
-                        .iter()
-                        .position(|(r, _)| r == type_id)
-                        .expect("invalid union type ID");
-                    let src_offset = offsets[i] as usize;
-                    let child_data = &mut mutable.child_data[child_index];
-                    let dst_offset = child_data.len();
+            (start..start + len).for_each(|i| {
+                let type_id = type_ids[i];
+                let child_index = src_fields
+                    .iter()
+                    .position(|(r, _)| r == type_id)
+                    .expect("invalid union type ID");
+                let src_offset = offsets[i] as usize;
+                let child_data = &mut mutable.child_data[child_index];
+                let dst_offset = child_data.len();
 
-                    // Extend offsets
-                    mutable.buffer2.push(dst_offset as i32);
-                    mutable.child_data[child_index].extend(index, src_offset, src_offset + 1)
-                });
-            }
+                // Extend offsets
+                mutable.buffer2.push(dst_offset as i32);
+                mutable.child_data[child_index].extend(index, src_offset, src_offset + 1)
+            })
         },
     )
 }

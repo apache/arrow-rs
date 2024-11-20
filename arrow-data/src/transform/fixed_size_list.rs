@@ -27,11 +27,11 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
     };
 
     Box::new(
-        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize, n: usize| {
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
             mutable
                 .child_data
                 .iter_mut()
-                .for_each(|child| child.extend_n(index, start * size, (start + len) * size, n))
+                .for_each(|child| child.extend(index, start * size, (start + len) * size))
         },
     )
 }

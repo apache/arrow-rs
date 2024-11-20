@@ -22,18 +22,16 @@ use crate::ArrayData;
 pub(super) fn build_extend(array: &ArrayData) -> Extend {
     let values = array.buffers()[0].as_slice();
     Box::new(
-        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize, n: usize| {
+        move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
             let buffer = &mut mutable.buffer1;
-            resize_for_bits(buffer, mutable.len + n * len);
-            for _ in 0..n {
-                set_bits(
-                    buffer.as_slice_mut(),
-                    values,
-                    mutable.len,
-                    array.offset() + start,
-                    len,
-                );
-            }
+            resize_for_bits(buffer, mutable.len + len);
+            set_bits(
+                buffer.as_slice_mut(),
+                values,
+                mutable.len,
+                array.offset() + start,
+                len,
+            );
         },
     )
 }
