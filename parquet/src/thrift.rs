@@ -67,7 +67,7 @@ impl<'a> TCompactSliceInputProtocol<'a> {
         let mut shift = 0;
         loop {
             let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64) << shift;
+            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
             shift += 7;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
