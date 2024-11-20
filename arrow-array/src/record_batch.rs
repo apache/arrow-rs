@@ -19,8 +19,8 @@
 //! [schema](arrow_schema::Schema).
 
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
-use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaBuilder, SchemaRef};
-use std::ops::Index;
+use arrow_schema::{ArrowError, DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef};
+use std::ops::{Deref, Index};
 use std::sync::Arc;
 
 /// Trait for types that can read `RecordBatch`'s.
@@ -1207,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn flattening() {
+    fn normalize() {
         let animals: ArrayRef = Arc::new(StringArray::from(vec!["Parrot", ""]));
         let n_legs: ArrayRef = Arc::new(Int64Array::from(vec![Some(2), Some(4)]));
         let year: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(2022)]));
@@ -1224,21 +1224,23 @@ mod tests {
         let month = Arc::new(Int64Array::from(vec![Some(4), Some(6)]));
 
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Struct(Fields::from(vec![
-                animals_field,
-                n_legs_field,
-                year_field,
-            ])), false),
-            Field::new("month", DataType::Int64, true)
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![animals_field, n_legs_field, year_field])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
         ]);
+        let normalized = schema.clone().normalize(".", 0).unwrap();
+        println!("{:?}", normalized);
 
         let record_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![
-                a,
-                month,
-            ]).expect("valid conversion");
+            RecordBatch::try_new(Arc::new(schema), vec![a, month]).expect("valid conversion");
 
-        println!("{:?}", record_batch);
+        println!("Fields: {:?}", record_batch.schema().fields());
+        println!("Metadata{:?}", record_batch.columns());
+
+        //println!("{:?}", record_batch);
     }
 
     #[test]
@@ -1353,7 +1355,9 @@ mod tests {
         let metadata = vec![("foo".to_string(), "bar".to_string())]
             .into_iter()
             .collect();
+        println!("Metadata: {:?}", metadata);
         let metadata_schema = nullable_schema.as_ref().clone().with_metadata(metadata);
+        println!("Metadata schema: {:?}", metadata_schema);
         let batch = batch.with_schema(Arc::new(metadata_schema)).unwrap();
 
         // Cannot remove metadata

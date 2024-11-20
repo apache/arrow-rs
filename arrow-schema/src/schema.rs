@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::error::ArrowError;
 use crate::field::Field;
-use crate::{FieldRef, Fields};
+use crate::{DataType, FieldRef, Fields};
 
 /// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
 #[derive(Debug, Default)]
@@ -411,6 +411,91 @@ impl Schema {
     #[inline]
     pub const fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
+    }
+
+    pub fn normalize(self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
+        if max_level == 0 {
+            max_level = usize::MAX;
+        }
+        let mut new_fields: Vec<Field> = vec![];
+        for field in self.fields() {
+            match field.data_type() {
+                //DataType::List(f) => field,
+                //DataType::ListView(_) => field,
+                //DataType::FixedSizeList(_, _) => field,
+                //DataType::LargeList(_) => field,
+                //DataType::LargeListView(_) => field,
+                DataType::Struct(nested_fields) => {
+                    let field_name = field.name().as_str();
+                    new_fields = [
+                        new_fields,
+                        Self::normalizer(
+                            nested_fields.to_vec(),
+                            field_name,
+                            separator,
+                            max_level - 1,
+                        ),
+                    ]
+                    .concat();
+                }
+                //DataType::Union(_, _) => field,
+                //DataType::Dictionary(_, _) => field,
+                //DataType::Map(_, _) => field,
+                //DataType::RunEndEncoded(_, _) => field, // not sure how to support this field
+                _ => new_fields.push(Field::new(
+                    field.name(),
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )),
+            };
+        }
+        Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
+    }
+
+    fn normalizer(
+        fields: Vec<FieldRef>,
+        key_string: &str,
+        separator: &str,
+        max_level: usize,
+    ) -> Vec<Field> {
+        if max_level > 0 {
+            let mut new_fields: Vec<Field> = vec![];
+            for field in fields {
+                match field.data_type() {
+                    //DataType::List(f) => field,
+                    //DataType::ListView(_) => field,
+                    //DataType::FixedSizeList(_, _) => field,
+                    //DataType::LargeList(_) => field,
+                    //DataType::LargeListView(_) => field,
+                    DataType::Struct(nested_fields) => {
+                        let field_name = field.name().as_str();
+                        let new_key = format!("{key_string}{separator}{field_name}");
+                        new_fields = [
+                            new_fields,
+                            Self::normalizer(
+                                nested_fields.to_vec(),
+                                new_key.as_str(),
+                                separator,
+                                max_level - 1,
+                            ),
+                        ]
+                        .concat();
+                    }
+                    //DataType::Union(_, _) => field,
+                    //DataType::Dictionary(_, _) => field,
+                    //DataType::Map(_, _) => field,
+                    //DataType::RunEndEncoded(_, _) => field, // not sure how to support this field
+                    _ => new_fields.push(Field::new(
+                        format!("{key_string}{separator}{}", field.name()),
+                        field.data_type().clone(),
+                        field.is_nullable(),
+                    )),
+                };
+            }
+            new_fields
+        } else {
+            todo!()
+        }
     }
 
     /// Look up a column by name and return a immutable reference to the column along with
