@@ -25,7 +25,8 @@ mod triplet;
 
 pub use self::{
     api::{
-        Field, List, ListAccessor, Map, MapAccessor, Row, RowAccessor, RowColumnIter, RowFormatter,
+        make_row, Field, List, ListAccessor, Map, MapAccessor, Row, RowAccessor, RowColumnIter,
+        RowFormatter,
     },
     record_reader::RecordReader,
     record_writer::RecordWriter,
