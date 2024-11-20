@@ -66,12 +66,12 @@ is described in the [contributing] guide.
 Planned Release Schedule
 
 | Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
-| Oct 2024         | `53.1.0` | Minor, NO breaking API changes          |
-| Oct 2024         | `53.2.0` | Minor, NO breaking API changes          |
+|------------------|----------|-----------------------------------------|
 | Nov 2024         | `53.3.0` | Minor, NO breaking API changes          |
 | Dec 2024         | `54.0.0` | Major, potentially breaking API changes |
+| Jan 2025         | `54.1.0` | Minor, NO breaking API changes          |
+| Feb 2025         | `54.2.0` | Minor, NO breaking API changes          |
+| Mar 2025         | `55.0.0` | Major, potentially breaking API changes |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
