@@ -161,6 +161,22 @@ impl ArrayBuilder for StructBuilder {
     }
 }
 
+/// A trait for creating builders for different data types. This trait is useful to allow
+/// custom builders to be used when creating a `StructBuilder` from a set of fields.
+pub trait BuilderFactory {
+    /// Creates a builder for the given data type with the specified capacity.
+    fn make_builder(&mut self, datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder>;
+}
+
+/// A default implementation of the [`BuilderFactory`] trait that uses the `make_builder` function.
+pub struct DefaultBuilderFactory;
+
+impl BuilderFactory for DefaultBuilderFactory {
+    fn make_builder(&mut self, datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
+        make_builder_with_factory(self, datatype, capacity)
+    }
+}
+
 /// Returns a builder with capacity for `capacity` elements of datatype
 /// `DataType`.
 ///
@@ -170,6 +186,19 @@ impl ArrayBuilder for StructBuilder {
 /// See comments on [StructBuilder] for retrieving collection builders built by
 /// make_builder.
 pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
+    make_builder_with_factory(&mut DefaultBuilderFactory, datatype, capacity)
+}
+
+/// Returns a builder with capacity for `capacity` elements of datatype
+/// `DataType`.
+///
+/// This function is useful to construct arrays from an arbitrary vectors with
+/// known/expected schema.
+pub fn make_builder_with_factory<F: BuilderFactory>(
+    factory: &mut F,
+    datatype: &DataType,
+    capacity: usize,
+) -> Box<dyn ArrayBuilder> {
     use crate::builder::*;
     match datatype {
         DataType::Null => Box::new(NullBuilder::new()),
@@ -250,11 +279,11 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             Box::new(DurationNanosecondBuilder::with_capacity(capacity))
         }
         DataType::List(field) => {
-            let builder = make_builder(field.data_type(), capacity);
+            let builder = factory.make_builder(field.data_type(), capacity);
             Box::new(ListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
         }
         DataType::LargeList(field) => {
-            let builder = make_builder(field.data_type(), capacity);
+            let builder = factory.make_builder(field.data_type(), capacity);
             Box::new(LargeListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
         }
         DataType::FixedSizeList(field, size) => {
@@ -263,7 +292,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 let size: usize = size.try_into().unwrap();
                 capacity * size
             };
-            let builder = make_builder(field.data_type(), values_builder_capacity);
+            let builder = factory.make_builder(field.data_type(), values_builder_capacity);
             Box::new(
                 FixedSizeListBuilder::with_capacity(builder, size, capacity)
                     .with_field(field.clone()),
@@ -276,8 +305,8 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                     value: fields[1].name().clone(),
                     entry: field.name().clone(),
                 };
-                let key_builder = make_builder(fields[0].data_type(), capacity);
-                let value_builder = make_builder(fields[1].data_type(), capacity);
+                let key_builder = factory.make_builder(fields[0].data_type(), capacity);
+                let value_builder = factory.make_builder(fields[1].data_type(), capacity);
                 Box::new(
                     MapBuilder::with_capacity(
                         Some(map_field_names),
@@ -290,7 +319,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             }
             t => panic!("The field of Map data type {t:?} should has a child Struct field"),
         },
-        DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
+        DataType::Struct(fields) => Box::new(StructBuilder::from_fields_with_factory(fields.clone(), capacity, factory)),
         DataType::Dictionary(key_type, value_type) if **key_type == DataType::Int32 => {
             match &**value_type {
                 DataType::Utf8 => {
@@ -330,14 +359,23 @@ impl StructBuilder {
         }
     }
 
-    /// Creates a new `StructBuilder` from [`Fields`] and `capacity`
-    pub fn from_fields(fields: impl Into<Fields>, capacity: usize) -> Self {
+    /// Creates a new `StructBuilder` from [`Fields`] and `capacity` using a custom [`BuilderFactory`].
+    pub fn from_fields_with_factory<F: BuilderFactory>(
+        fields: impl Into<Fields>,
+        capacity: usize,
+        factory: &mut F,
+    ) -> Self {
         let fields = fields.into();
         let mut builders = Vec::with_capacity(fields.len());
         for field in &fields {
-            builders.push(make_builder(field.data_type(), capacity));
+            builders.push(factory.make_builder(field.data_type(), capacity));
         }
         Self::new(fields, builders)
+    }
+
+    /// Creates a new `StructBuilder` from [`Fields`] and `capacity` using the default [`BuilderFactory`].
+    pub fn from_fields(fields: impl Into<Fields>, capacity: usize) -> Self {
+        Self::from_fields_with_factory(fields, capacity, &mut DefaultBuilderFactory)
     }
 
     /// Returns a mutable reference to the child field builder at index `i`.
