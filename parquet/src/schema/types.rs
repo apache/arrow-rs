@@ -1247,10 +1247,6 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
                 if !is_root_node {
                     builder = builder.with_repetition(rep);
                 }
-            } else if !is_root_node {
-                return Err(general_err!(
-                    "Repetition level must be defined for non-root types"
-                ));
             }
             Ok((next_index, Arc::new(builder.build().unwrap())))
         }

@@ -745,11 +745,11 @@ impl<'a> InMemoryRowGroup<'a> {
                 .filter(|&(idx, (chunk, _chunk_meta))| {
                     chunk.is_none() && projection.leaf_included(idx)
                 })
-                .flat_map(|(idx, (_chunk, chunk_meta))| -> Result<Vec<Range<usize>>> {
+                .flat_map(|(idx, (_chunk, chunk_meta))| {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
                     let mut ranges = vec![];
-                    let (start, _len) = chunk_meta.byte_range()?;
+                    let (start, _len) = chunk_meta.byte_range();
                     match offset_index[idx].page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
                             ranges.push(start as usize..first.offset as usize);
@@ -760,11 +760,8 @@ impl<'a> InMemoryRowGroup<'a> {
                     ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
-                    Ok(ranges)
+                    ranges
                 })
-                .collect::<Vec<_>>()
-                .into_iter()
-                .flatten()
                 .collect();
 
             let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
@@ -782,25 +779,25 @@ impl<'a> InMemoryRowGroup<'a> {
                     }
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: self.metadata.column(idx).byte_range()?.1 as usize,
+                        length: self.metadata.column(idx).byte_range().1 as usize,
                         data: offsets.into_iter().zip(chunks.into_iter()).collect(),
                     }))
                 }
             }
         } else {
-            let fetch_ranges: Result<Vec<Range<usize>>> = self
+            let fetch_ranges = self
                 .column_chunks
                 .iter()
                 .enumerate()
                 .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
                 .map(|(idx, _chunk)| {
                     let column = self.metadata.column(idx);
-                    let (start, length) = column.byte_range()?;
-                    Ok(start as usize..(start + length) as usize)
+                    let (start, length) = column.byte_range();
+                    start as usize..(start + length) as usize
                 })
                 .collect();
 
-            let mut chunk_data = input.get_byte_ranges(fetch_ranges?).await?.into_iter();
+            let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
 
             for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
                 if chunk.is_some() || !projection.leaf_included(idx) {
@@ -809,7 +806,7 @@ impl<'a> InMemoryRowGroup<'a> {
 
                 if let Some(data) = chunk_data.next() {
                     *chunk = Some(Arc::new(ColumnChunkData::Dense {
-                        offset: self.metadata.column(idx).byte_range()?.0 as usize,
+                        offset: self.metadata.column(idx).byte_range().0 as usize,
                         data,
                     }));
                 }
@@ -1011,8 +1008,8 @@ mod tests {
         assert_eq!(async_batches, sync_batches);
 
         let requests = requests.lock().unwrap();
-        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range().unwrap();
-        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range().unwrap();
+        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range();
+        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range();
 
         assert_eq!(
             &requests[..],

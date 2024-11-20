@@ -67,17 +67,7 @@ impl<'a> TCompactSliceInputProtocol<'a> {
         let mut shift = 0;
         loop {
             let byte = self.read_byte()?;
-            let val = (byte & 0x7F) as u64;
-            let val = val.checked_shl(shift).map_or_else(
-                || {
-                    Err(thrift::Error::Protocol(thrift::ProtocolError {
-                        kind: thrift::ProtocolErrorKind::InvalidData,
-                        message: format!("cannot left-shift {} by {} bits", val, shift),
-                    }))
-                },
-                Ok,
-            )?;
-            in_progress |= val;
+            in_progress |= ((byte & 0x7F) as u64) << shift;
             shift += 7;
             if byte & 0x80 == 0 {
                 return Ok(in_progress);
@@ -117,7 +107,7 @@ macro_rules! thrift_unimplemented {
 
 impl TInputProtocol for TCompactSliceInputProtocol<'_> {
     fn read_message_begin(&mut self) -> thrift::Result<TMessageIdentifier> {
-        thrift_unimplemented!()
+        unimplemented!()
     }
 
     fn read_message_end(&mut self) -> thrift::Result<()> {
