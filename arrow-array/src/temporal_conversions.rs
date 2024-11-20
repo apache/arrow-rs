@@ -37,8 +37,6 @@ pub const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
 pub const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
 /// Number of nanoseconds in a day
 pub const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
-/// Number of days between 0001-01-01 and 1970-01-01
-pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
 /// Constant from chrono crate
 ///
