@@ -462,16 +462,22 @@ mod tests {
     }
 
     #[test]
-    fn write_large_utf8() {
+    fn write_large_utf8_and_utf8_view() {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::LargeUtf8, true),
+            Field::new("c3", DataType::Utf8View, true),
         ]);
 
         let a = StringArray::from(vec![Some("a"), None, Some("c"), Some("d"), None]);
         let b = LargeStringArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
+        let c = StringViewArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .unwrap();
 
         let mut buf = Vec::new();
         {
@@ -481,10 +487,10 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"c1":"a","c2":"a"}
-{"c2":"b"}
+            r#"{"c1":"a","c2":"a","c3":"a"}
+{"c2":"b","c3":"b"}
 {"c1":"c"}
-{"c1":"d","c2":"d"}
+{"c1":"d","c2":"d","c3":"d"}
 {}
 "#,
         );

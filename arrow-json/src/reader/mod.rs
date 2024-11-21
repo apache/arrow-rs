@@ -691,6 +691,10 @@ fn make_decoder(
         DataType::Time32(TimeUnit::Millisecond) => primitive_decoder!(Time32MillisecondType, data_type),
         DataType::Time64(TimeUnit::Microsecond) => primitive_decoder!(Time64MicrosecondType, data_type),
         DataType::Time64(TimeUnit::Nanosecond) => primitive_decoder!(Time64NanosecondType, data_type),
+        DataType::Duration(TimeUnit::Nanosecond) => primitive_decoder!(DurationNanosecondType, data_type),
+        DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
+        DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
+        DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
         DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
@@ -1328,6 +1332,37 @@ mod tests {
         test_time::<Time32SecondType>();
         test_time::<Time64MicrosecondType>();
         test_time::<Time64NanosecondType>();
+    }
+
+    fn test_duration<T: ArrowTemporalType>() {
+        let buf = r#"
+        {"a": 1, "b": "2"}
+        {"a": 3, "b": null}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", T::DATA_TYPE, true),
+            Field::new("b", T::DATA_TYPE, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col_a = batches[0].column_by_name("a").unwrap().as_primitive::<T>();
+        assert_eq!(col_a.null_count(), 0);
+        assert_eq!(col_a.values(), &[1, 3].map(T::Native::usize_as));
+
+        let col2 = batches[0].column_by_name("b").unwrap().as_primitive::<T>();
+        assert_eq!(col2.null_count(), 1);
+        assert_eq!(col2.values(), &[2, 0].map(T::Native::usize_as));
+    }
+
+    #[test]
+    fn test_durations() {
+        test_duration::<DurationNanosecondType>();
+        test_duration::<DurationMicrosecondType>();
+        test_duration::<DurationMillisecondType>();
+        test_duration::<DurationSecondType>();
     }
 
     #[test]

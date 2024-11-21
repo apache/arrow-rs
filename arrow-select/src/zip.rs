@@ -53,7 +53,7 @@ pub fn zip(
             "all arrays should have the same length".into(),
         ));
     }
-    if truthy_is_scalar && truthy.len() != 1 {
+    if falsy_is_scalar && falsy.len() != 1 {
         return Err(ArrowError::InvalidArgumentError(
             "scalar arrays must have 1 element".into(),
         ));

@@ -1012,8 +1012,11 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
+        let preserve_dict_id = self.write_options.preserve_dict_id;
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
         let schema = IpcSchemaEncoder::new()
-            .with_dictionary_tracker(&mut self.dictionary_tracker)
+            .with_dictionary_tracker(&mut dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));

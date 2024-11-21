@@ -79,6 +79,9 @@ enum Error {
     #[snafu(display("Error getting put response body: {}", source))]
     PutResponseBody { source: reqwest::Error },
 
+    #[snafu(display("Got invalid put request: {}", source))]
+    InvalidPutRequest { source: quick_xml::se::SeError },
+
     #[snafu(display("Got invalid put response: {}", source))]
     InvalidPutResponse { source: quick_xml::de::DeError },
 
@@ -495,7 +498,7 @@ impl GoogleCloudStorageClient {
         let credential = self.get_credential().await?;
 
         let data = quick_xml::se::to_string(&upload_info)
-            .context(InvalidPutResponseSnafu)?
+            .context(InvalidPutRequestSnafu)?
             // We cannot disable the escaping that transforms "/" to "&quote;" :(
             // https://github.com/tafia/quick-xml/issues/362
             // https://github.com/tafia/quick-xml/issues/350

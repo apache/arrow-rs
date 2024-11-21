@@ -89,7 +89,7 @@ pub trait AsyncFileWriter: Send {
     fn complete(&mut self) -> BoxFuture<'_, Result<()>>;
 }
 
-impl AsyncFileWriter for Box<dyn AsyncFileWriter> {
+impl<'writer> AsyncFileWriter for Box<dyn AsyncFileWriter + 'writer> {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
         self.as_mut().write(bs)
     }

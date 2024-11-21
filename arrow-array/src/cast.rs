@@ -21,6 +21,14 @@ use crate::array::*;
 use crate::types::*;
 use arrow_data::ArrayData;
 
+/// Re-export symbols needed for downcast macros
+///
+/// Name follows `serde` convention
+#[doc(hidden)]
+pub mod __private {
+    pub use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+}
+
 /// Repeats the provided pattern based on the number of comma separated identifiers
 #[doc(hidden)]
 #[macro_export]
@@ -66,28 +74,28 @@ macro_rules! repeat_pat {
 macro_rules! downcast_integer {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
-            $crate::repeat_pat!(arrow_schema::DataType::Int8, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int8, $($data_type),+) => {
                 $m!($crate::types::Int8Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Int16, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int16, $($data_type),+) => {
                 $m!($crate::types::Int16Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Int32, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int32, $($data_type),+) => {
                 $m!($crate::types::Int32Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Int64, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int64, $($data_type),+) => {
                 $m!($crate::types::Int64Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt8, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::UInt8, $($data_type),+) => {
                 $m!($crate::types::UInt8Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt16, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::UInt16, $($data_type),+) => {
                 $m!($crate::types::UInt16Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt32, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::UInt32, $($data_type),+) => {
                 $m!($crate::types::UInt32Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::UInt64, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::UInt64, $($data_type),+) => {
                 $m!($crate::types::UInt64Type $(, $args)*)
             }
             $($p => $fallback,)*
@@ -129,13 +137,13 @@ macro_rules! downcast_integer {
 macro_rules! downcast_run_end_index {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
-            $crate::repeat_pat!(arrow_schema::DataType::Int16, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int16, $($data_type),+) => {
                 $m!($crate::types::Int16Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Int32, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int32, $($data_type),+) => {
                 $m!($crate::types::Int32Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Int64, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Int64, $($data_type),+) => {
                 $m!($crate::types::Int64Type $(, $args)*)
             }
             $($p => $fallback,)*
@@ -172,34 +180,34 @@ macro_rules! downcast_run_end_index {
 macro_rules! downcast_temporal {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Time32($crate::cast::__private::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Time32($crate::cast::__private::TimeUnit::Millisecond), $($data_type),+) => {
                 $m!($crate::types::Time32MillisecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Time64($crate::cast::__private::TimeUnit::Microsecond), $($data_type),+) => {
                 $m!($crate::types::Time64MicrosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Time64($crate::cast::__private::TimeUnit::Nanosecond), $($data_type),+) => {
                 $m!($crate::types::Time64NanosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Date32, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Date32, $($data_type),+) => {
                 $m!($crate::types::Date32Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Date64, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Date64, $($data_type),+) => {
                 $m!($crate::types::Date64Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Timestamp($crate::cast::__private::TimeUnit::Second, _), $($data_type),+) => {
                 $m!($crate::types::TimestampSecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Timestamp($crate::cast::__private::TimeUnit::Millisecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampMillisecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Timestamp($crate::cast::__private::TimeUnit::Microsecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampMicrosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Timestamp($crate::cast::__private::TimeUnit::Nanosecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampNanosecondType $(, $args)*)
             }
             $($p => $fallback,)*
@@ -284,40 +292,40 @@ macro_rules! downcast_primitive {
     ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
         $crate::downcast_integer! {
             $($data_type),+ => ($m $(, $args)*),
-            $crate::repeat_pat!(arrow_schema::DataType::Float16, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Float16, $($data_type),+) => {
                 $m!($crate::types::Float16Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Float32, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Float32, $($data_type),+) => {
                 $m!($crate::types::Float32Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Float64, $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Float64, $($data_type),+) => {
                 $m!($crate::types::Float64Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Decimal128(_, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal128(_, _), $($data_type),+) => {
                 $m!($crate::types::Decimal128Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Decimal256(_, _), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal256(_, _), $($data_type),+) => {
                 $m!($crate::types::Decimal256Type $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::YearMonth), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Interval($crate::cast::__private::IntervalUnit::YearMonth), $($data_type),+) => {
                 $m!($crate::types::IntervalYearMonthType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::DayTime), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Interval($crate::cast::__private::IntervalUnit::DayTime), $($data_type),+) => {
                 $m!($crate::types::IntervalDayTimeType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Interval($crate::cast::__private::IntervalUnit::MonthDayNano), $($data_type),+) => {
                 $m!($crate::types::IntervalMonthDayNanoType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Second), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Duration($crate::cast::__private::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::DurationSecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Millisecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Duration($crate::cast::__private::TimeUnit::Millisecond), $($data_type),+) => {
                 $m!($crate::types::DurationMillisecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Microsecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Duration($crate::cast::__private::TimeUnit::Microsecond), $($data_type),+) => {
                 $m!($crate::types::DurationMicrosecondType $(, $args)*)
             }
-            $crate::repeat_pat!(arrow_schema::DataType::Duration(arrow_schema::TimeUnit::Nanosecond), $($data_type),+) => {
+            $crate::repeat_pat!($crate::cast::__private::DataType::Duration($crate::cast::__private::TimeUnit::Nanosecond), $($data_type),+) => {
                 $m!($crate::types::DurationNanosecondType $(, $args)*)
             }
             _ => {
@@ -462,7 +470,7 @@ macro_rules! downcast_dictionary_array {
 
     ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
-            arrow_schema::DataType::Dictionary(k, _) => {
+            $crate::cast::__private::DataType::Dictionary(k, _) => {
                 $crate::downcast_integer! {
                     k.as_ref() => ($crate::downcast_dictionary_array_helper, $values, $e),
                     k => unreachable!("unsupported dictionary key type: {}", k)
@@ -564,7 +572,7 @@ macro_rules! downcast_run_array {
 
     ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
-            arrow_schema::DataType::RunEndEncoded(k, _) => {
+            $crate::cast::__private::DataType::RunEndEncoded(k, _) => {
                 $crate::downcast_run_end_index! {
                     k.data_type() => ($crate::downcast_run_array_helper, $values, $e),
                     k => unreachable!("unsupported run end index type: {}", k)
@@ -779,18 +787,13 @@ pub trait AsArray: private::Sealed {
     }
 
     /// Downcast this to a [`StringViewArray`] returning `None` if not possible
-    fn as_string_view(&self) -> &StringViewArray {
-        self.as_byte_view_opt().expect("string view array")
-    }
-
-    /// Downcast this to a [`StringViewArray`] returning `None` if not possible
     fn as_string_view_opt(&self) -> Option<&StringViewArray> {
         self.as_byte_view_opt()
     }
 
-    /// Downcast this to a [`StringViewArray`] returning `None` if not possible
-    fn as_binary_view(&self) -> &BinaryViewArray {
-        self.as_byte_view_opt().expect("binary view array")
+    /// Downcast this to a [`StringViewArray`] panicking if not possible
+    fn as_string_view(&self) -> &StringViewArray {
+        self.as_byte_view_opt().expect("string view array")
     }
 
     /// Downcast this to a [`BinaryViewArray`] returning `None` if not possible
@@ -798,13 +801,18 @@ pub trait AsArray: private::Sealed {
         self.as_byte_view_opt()
     }
 
-    /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
-    fn as_byte_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
-        self.as_byte_view_opt().expect("byte view array")
+    /// Downcast this to a [`BinaryViewArray`] panicking if not possible
+    fn as_binary_view(&self) -> &BinaryViewArray {
+        self.as_byte_view_opt().expect("binary view array")
     }
 
     /// Downcast this to a [`GenericByteViewArray`] returning `None` if not possible
     fn as_byte_view_opt<T: ByteViewType>(&self) -> Option<&GenericByteViewArray<T>>;
+
+    /// Downcast this to a [`GenericByteViewArray`] panicking if not possible
+    fn as_byte_view<T: ByteViewType>(&self) -> &GenericByteViewArray<T> {
+        self.as_byte_view_opt().expect("byte view array")
+    }
 
     /// Downcast this to a [`StructArray`] returning `None` if not possible
     fn as_struct_opt(&self) -> Option<&StructArray>;

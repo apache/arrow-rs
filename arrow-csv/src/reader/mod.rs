@@ -2592,6 +2592,22 @@ mod tests {
     }
 
     #[test]
+    fn test_record_length_mismatch() {
+        let csv = "\
+        a,b,c\n\
+        1,2,3\n\
+        4,5\n\
+        6,7,8";
+        let mut read = Cursor::new(csv.as_bytes());
+        let result = Format::default()
+            .with_header(true)
+            .infer_schema(&mut read, None);
+        assert!(result.is_err());
+        // Include line number in the error message to help locate and fix the issue
+        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 2 records, found 3 records at line 3");
+    }
+
+    #[test]
     fn test_comment() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int8, false),
