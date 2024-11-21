@@ -317,8 +317,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
-        // TODO this is not necessarily perfect default implementation, since null_count() and logical_null_count() are not always equivalent
-        self.null_count() != 0
+        self.logical_null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
