@@ -161,7 +161,7 @@ pub fn from_thrift(
                 if let Some(min) = min {
                     if min.len() < len {
                         return Err(ParquetError::General(
-                            "Insufficient bytes to parse max statistic".to_string(),
+                            "Insufficient bytes to parse min statistic".to_string(),
                         ));
                     }
                 }
