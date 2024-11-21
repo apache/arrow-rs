@@ -799,6 +799,46 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_with_signed_payload_request_payer() {
+        let client = Client::new();
+
+        // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        // method = 'GET'
+        // service = 'ec2'
+        // host = 'ec2.amazonaws.com'
+        // region = 'us-east-1'
+        // endpoint = 'https://ec2.amazonaws.com'
+        // request_parameters = ''
+        let date = DateTime::parse_from_rfc3339("2022-08-06T18:01:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut request = client
+            .request(Method::GET, "https://ec2.amazon.com/")
+            .build()
+            .unwrap();
+
+        let signer = AwsAuthorizer {
+            date: Some(date),
+            credential: &credential,
+            service: "ec2",
+            region: "us-east-1",
+            sign_payload: true,
+            token_header: None,
+            request_payer: true,
+        };
+
+        signer.authorize(&mut request, None);
+        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d")
+    }
+
+    #[test]
     fn test_sign_with_unsigned_payload() {
         let client = Client::new();
 
@@ -874,6 +914,48 @@ mod tests {
                 X-Amz-Expires=86400&\
                 X-Amz-SignedHeaders=host&\
                 X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn signed_get_url_request_payer() {
+        // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2013-05-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let authorizer = AwsAuthorizer {
+            date: Some(date),
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+            token_header: None,
+            sign_payload: false,
+            request_payer: true,
+        };
+
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+
+        assert_eq!(
+            url,
+            Url::parse(
+                "https://examplebucket.s3.amazonaws.com/test.txt?\
+                X-Amz-Algorithm=AWS4-HMAC-SHA256&\
+                X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&\
+                X-Amz-Date=20130524T000000Z&\
+                X-Amz-Expires=86400&\
+                X-Amz-SignedHeaders=host&\
+                x-amz-request-payer=requester&\
+                X-Amz-Signature=9ad7c781cc30121f199b47d35ed3528473e4375b63c5d91cd87c927803e4e00a"
             )
             .unwrap()
         );
