@@ -1855,7 +1855,6 @@ mod tests {
         let schema = Arc::new(parse_message_type(schema).unwrap());
 
         // Write Parquet file to buffer
-        //let mut buffer = std::fs::File::create("/Users/seidl/map_no_value.pq").unwrap();
         let mut buffer: Vec<u8> = Vec::new();
         let mut file_writer =
             SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
