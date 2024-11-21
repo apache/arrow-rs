@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::{FileReader, RowGroupReader};
 use crate::record::{
-    api::{make_list, make_map, make_row, Field, Row},
+    api::{make_list, make_map, Field, Row},
     triplet::TripletIter,
 };
 use crate::schema::types::{ColumnPath, SchemaDescPtr, SchemaDescriptor, Type, TypePtr};
@@ -413,7 +413,7 @@ impl Reader {
                 for reader in readers {
                     fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
-                Ok(make_row(fields))
+                Ok(Row::new(fields))
             }
             _ => panic!("Cannot call read() on {self}"),
         }
@@ -448,7 +448,7 @@ impl Reader {
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
-                let row = make_row(fields);
+                let row = Row::new(fields);
                 Field::Group(row)
             }
             Reader::RepeatedReader(_, def_level, rep_level, ref mut reader) => {
@@ -840,7 +840,7 @@ mod tests {
     macro_rules! row {
         ($($e:tt)*) => {
             {
-                make_row(vec![$($e)*])
+                Row::new(vec![$($e)*])
             }
         }
     }

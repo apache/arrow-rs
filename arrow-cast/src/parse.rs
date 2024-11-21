@@ -497,6 +497,10 @@ parser_primitive!(Int64Type);
 parser_primitive!(Int32Type);
 parser_primitive!(Int16Type);
 parser_primitive!(Int8Type);
+parser_primitive!(DurationNanosecondType);
+parser_primitive!(DurationMicrosecondType);
+parser_primitive!(DurationMillisecondType);
+parser_primitive!(DurationSecondType);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
@@ -841,19 +845,20 @@ pub fn parse_decimal<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
-    let (bs, negative) = match bs.first() {
-        Some(b'-') => (&bs[1..], true),
-        Some(b'+') => (&bs[1..], false),
-        _ => (bs, false),
+    let (signed, negative) = match bs.first() {
+        Some(b'-') => (true, true),
+        Some(b'+') => (true, false),
+        _ => (false, false),
     };
 
-    if bs.is_empty() {
+    if bs.is_empty() || signed && bs.len() == 1 {
         return Err(ArrowError::ParseError(format!(
             "can't parse the string value {s} to decimal"
         )));
     }
 
-    let mut bs = bs.iter().enumerate();
+    // Iterate over the raw input bytes, skipping the sign if any
+    let mut bs = bs.iter().enumerate().skip(signed as usize);
 
     let mut is_e_notation = false;
 
@@ -2678,6 +2683,21 @@ mod tests {
                 "1.016744e-320",
                 0i128,
                 15,
+            ),
+            (
+                "-1e3",
+                -1000000000i128,
+                6,
+            ),
+            (
+                "+1e3",
+                1000000000i128,
+                6,
+            ),
+            (
+                "-1e31",
+                -10000000000000000000000000000000000000i128,
+                6,
             ),
         ];
         for (s, i, scale) in edge_tests_128 {

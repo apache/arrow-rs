@@ -431,17 +431,17 @@ where
     R::Native: AddAssign,
 {
     let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
-    let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
     let mut start = 0u64;
-    let mut i = 0;
+    let mut j = 0;
     let mut count = R::default_value();
     let filter_values = predicate.filter.values();
+    let run_ends = run_ends.inner();
 
-    for mut end in run_ends.inner().into_iter().map(|i| (*i).into() as u64) {
+    let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
         let mut keep = false;
-
+        let mut end = run_ends[i].into() as u64;
         let difference = end.saturating_sub(filter_values.len() as u64);
         end -= difference;
 
@@ -450,23 +450,18 @@ where
             count += R::Native::from(pred);
             keep |= pred
         }
-
         // this is to avoid branching
-        new_run_ends[i] = count;
-        i += keep as usize;
+        new_run_ends[j] = count;
+        j += keep as usize;
 
-        values_filter.append(keep);
         start = end;
-    }
+        keep
+    })
+    .into();
 
-    new_run_ends.truncate(i);
-
-    if values_filter.is_empty() {
-        new_run_ends.clear();
-    }
+    new_run_ends.truncate(j);
 
     let values = array.values();
-    let pred = BooleanArray::new(values_filter.finish(), None);
     let values = filter(&values, &pred)?;
 
     let run_ends = PrimitiveArray::<R>::new(new_run_ends.into(), None);
@@ -522,14 +517,14 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
