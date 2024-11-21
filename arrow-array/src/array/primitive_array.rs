@@ -2296,7 +2296,7 @@ mod tests {
         ];
         let array_data = ArrayData::builder(DataType::Decimal128(38, 6))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);
