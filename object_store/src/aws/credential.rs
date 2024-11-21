@@ -101,11 +101,14 @@ pub struct AwsAuthorizer<'a> {
     region: &'a str,
     token_header: Option<HeaderName>,
     sign_payload: bool,
+    request_payer: bool,
 }
 
 static DATE_HEADER: HeaderName = HeaderName::from_static("x-amz-date");
 static HASH_HEADER: HeaderName = HeaderName::from_static("x-amz-content-sha256");
 static TOKEN_HEADER: HeaderName = HeaderName::from_static("x-amz-security-token");
+static REQUEST_PAYER_HEADER: HeaderName = HeaderName::from_static("x-amz-request-payer");
+static REQUEST_PAYER_HEADER_VALUE: HeaderValue = HeaderValue::from_static("requester");
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
@@ -118,6 +121,7 @@ impl<'a> AwsAuthorizer<'a> {
             date: None,
             sign_payload: true,
             token_header: None,
+            request_payer: false,
         }
     }
 
@@ -131,6 +135,14 @@ impl<'a> AwsAuthorizer<'a> {
     /// Overrides the header name for security tokens, defaults to `x-amz-security-token`
     pub(crate) fn with_token_header(mut self, header: HeaderName) -> Self {
         self.token_header = Some(header);
+        self
+    }
+
+    /// Set whether to include requester pays headers
+    ///
+    /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+    pub fn with_request_payer(mut self, request_payer: bool) -> Self {
+        self.request_payer = request_payer;
         self
     }
 
@@ -180,6 +192,15 @@ impl<'a> AwsAuthorizer<'a> {
         let header_digest = HeaderValue::from_str(&digest).unwrap();
         request.headers_mut().insert(&HASH_HEADER, header_digest);
 
+        if self.request_payer {
+            // For DELETE, GET, HEAD, POST, and PUT requests, include x-amz-request-payer :
+            // requester in the header
+            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+            request
+                .headers_mut()
+                .insert(&REQUEST_PAYER_HEADER, REQUEST_PAYER_HEADER_VALUE.clone());
+        }
+
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
 
         let scope = self.scope(date);
@@ -225,6 +246,13 @@ impl<'a> AwsAuthorizer<'a> {
             .append_pair("X-Amz-Date", &date.format("%Y%m%dT%H%M%SZ").to_string())
             .append_pair("X-Amz-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Amz-SignedHeaders", "host");
+
+        if self.request_payer {
+            // For signed URLs, include x-amz-request-payer=requester in the request
+            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+            url.query_pairs_mut()
+                .append_pair("x-amz-request-payer", "requester");
+        }
 
         // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
         // using credentials sourced from the STS service.
@@ -763,6 +791,7 @@ mod tests {
             region: "us-east-1",
             sign_payload: true,
             token_header: None,
+            request_payer: false,
         };
 
         signer.authorize(&mut request, None);
@@ -802,6 +831,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: false,
+            request_payer: false,
         };
 
         authorizer.authorize(&mut request, None);
@@ -828,6 +858,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: false,
+            request_payer: false,
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
@@ -880,6 +911,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: true,
+            request_payer: false,
         };
 
         authorizer.authorize(&mut request, None);
