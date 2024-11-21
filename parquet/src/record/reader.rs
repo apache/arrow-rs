@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::{FileReader, RowGroupReader};
 use crate::record::{
-    api::{make_list, make_map, make_row, Field, Row},
+    api::{make_list, make_map, Field, Row},
     triplet::TripletIter,
 };
 use crate::schema::types::{ColumnPath, SchemaDescPtr, SchemaDescriptor, Type, TypePtr};
@@ -138,7 +138,17 @@ impl TreeBuilder {
                 .column_descr_ptr();
             let col_reader = row_group_reader.get_column_reader(orig_index)?;
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
-            Reader::PrimitiveReader(field, Box::new(column))
+            let reader = Reader::PrimitiveReader(field.clone(), Box::new(column));
+            if repetition == Repetition::REPEATED {
+                Reader::RepeatedReader(
+                    field,
+                    curr_def_level - 1,
+                    curr_rep_level - 1,
+                    Box::new(reader),
+                )
+            } else {
+                reader
+            }
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
@@ -389,7 +399,7 @@ impl Reader {
                 for reader in readers {
                     fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
-                Ok(make_row(fields))
+                Ok(Row::new(fields))
             }
             _ => panic!("Cannot call read() on {self}"),
         }
@@ -424,7 +434,7 @@ impl Reader {
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
-                let row = make_row(fields);
+                let row = Row::new(fields);
                 Field::Group(row)
             }
             Reader::RepeatedReader(_, def_level, rep_level, ref mut reader) => {
@@ -816,7 +826,7 @@ mod tests {
     macro_rules! row {
         ($($e:tt)*) => {
             {
-                make_row(vec![$($e)*])
+                Row::new(vec![$($e)*])
             }
         }
     }
@@ -1685,6 +1695,131 @@ mod tests {
             )],
         ];
 
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_tree_reader_handle_primitive_repeated_fields_with_no_annotation() {
+        // In this test the REPEATED fields are primitives
+        let rows = test_file_reader_rows("repeated_primitive_no_list.parquet", None).unwrap();
+        let expected_rows = vec![
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["foo", "zero", "one", "two"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["foo", "zero", "one", "two"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![Field::Int(4)]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![Field::Int(4)]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["five", "six", "seven", "eight"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["five", "six", "seven", "eight"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+        ];
         assert_eq!(rows, expected_rows);
     }
 

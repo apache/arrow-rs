@@ -1134,7 +1134,7 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
 
-    if index > elements.len() {
+    if index >= elements.len() {
         return Err(general_err!(
             "Index out of bound, index = {}, len = {}",
             index,

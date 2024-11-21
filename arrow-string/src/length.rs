@@ -137,6 +137,15 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             let list = array.as_string::<i64>();
             Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
+        DataType::Utf8View => {
+            let list = array.as_string_view();
+            let values = list
+                .views()
+                .iter()
+                .map(|view| (*view as i32).wrapping_mul(8))
+                .collect();
+            Ok(Arc::new(Int32Array::new(values, array.nulls().cloned())))
+        }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
             Ok(bit_length_impl::<Int32Type>(list.offsets(), list.nulls()))
@@ -462,6 +471,35 @@ mod tests {
             })
     }
 
+    #[test]
+    fn bit_length_test_utf8view() {
+        bit_length_cases()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let string_array = StringViewArray::from(input);
+                let result = bit_length(&string_array).unwrap();
+                assert_eq!(len, result.len());
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+                expected.iter().enumerate().for_each(|(i, value)| {
+                    assert_eq!(*value, result.value(i));
+                });
+            })
+    }
+
+    #[test]
+    fn bit_length_null_utf8view() {
+        bit_length_null_cases()
+            .into_iter()
+            .for_each(|(input, len, expected)| {
+                let array = StringArray::from(input);
+                let result = bit_length(&array).unwrap();
+                assert_eq!(len, result.len());
+                let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+                let expected: Int32Array = expected.into();
+                assert_eq!(&expected, result);
+            })
+    }
     #[test]
     fn bit_length_binary() {
         let value: Vec<&[u8]> = vec![b"one", &[0xff, 0xf8], b"three"];

@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
-use memchr::memchr2;
+use memchr::memchr3;
 use memchr::memmem::Finder;
 use regex::{Regex, RegexBuilder};
 use std::iter::zip;
@@ -44,16 +45,12 @@ impl<'a> Predicate<'a> {
     pub fn like(pattern: &'a str) -> Result<Self, ArrowError> {
         if !contains_like_pattern(pattern) {
             Ok(Self::Eq(pattern))
-        } else if pattern.ends_with('%')
-            && !pattern.ends_with("\\%")
-            && !contains_like_pattern(&pattern[..pattern.len() - 1])
-        {
+        } else if pattern.ends_with('%') && !contains_like_pattern(&pattern[..pattern.len() - 1]) {
             Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
         } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
             Ok(Self::EndsWith(&pattern[1..]))
         } else if pattern.starts_with('%')
             && pattern.ends_with('%')
-            && !pattern.ends_with("\\%")
             && !contains_like_pattern(&pattern[1..pattern.len() - 1])
         {
             Ok(Self::contains(&pattern[1..pattern.len() - 1]))
@@ -114,30 +111,21 @@ impl<'a> Predicate<'a> {
             Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
                 haystack.eq_ignore_ascii_case(v) != negate
             }),
-            Predicate::Contains(finder) => {
-                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
-                        string_view_array
-                            .bytes_iter()
-                            .map(|haystack| finder.find(haystack).is_some() != negate)
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    BooleanArray::from_unary(array, |haystack| {
-                        finder.find(haystack.as_bytes()).is_some() != negate
-                    })
-                }
-            }
+            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
+                finder.find(haystack.as_bytes()).is_some() != negate
+            }),
             Predicate::StartsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_kernel) != negate
@@ -146,7 +134,8 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IStartsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
@@ -157,7 +146,8 @@ impl<'a> Predicate<'a> {
                                 ) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
@@ -166,14 +156,16 @@ impl<'a> Predicate<'a> {
             }
             Predicate::EndsWith(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
                                 equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         ends_with(haystack, v, equals_kernel) != negate
@@ -182,7 +174,8 @@ impl<'a> Predicate<'a> {
             }
             Predicate::IEndsWithAscii(v) => {
                 if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
-                    BooleanArray::from(
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
                         string_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
@@ -193,7 +186,8 @@ impl<'a> Predicate<'a> {
                                 ) != negate
                             })
                             .collect::<Vec<_>>(),
-                    )
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
                         ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
@@ -239,7 +233,7 @@ fn equals_kernel((n, h): (&u8, &u8)) -> bool {
 }
 
 fn equals_ignore_ascii_case_kernel((n, h): (&u8, &u8)) -> bool {
-    n.to_ascii_lowercase() == h.to_ascii_lowercase()
+    n.eq_ignore_ascii_case(h)
 }
 
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
@@ -264,12 +258,16 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
         match c {
             '\\' => {
                 match chars_iter.peek() {
-                    Some(next) if is_like_pattern(*next) => {
-                        result.push(*next);
+                    Some(&next) => {
+                        if regex_syntax::is_meta_character(next) {
+                            result.push('\\');
+                        }
+                        result.push(next);
                         // Skipping the next char as it is already appended
                         chars_iter.next();
                     }
-                    _ => {
+                    None => {
+                        // Trailing backslash in the pattern. E.g. PostgreSQL and Trino treat it as an error, but e.g. Snowflake treats it as a literal backslash
                         result.push('\\');
                         result.push('\\');
                     }
@@ -303,12 +301,8 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
         })
 }
 
-fn is_like_pattern(c: char) -> bool {
-    c == '%' || c == '_'
-}
-
 fn contains_like_pattern(pattern: &str) -> bool {
-    memchr2(b'%', b'_', pattern.as_bytes()).is_some()
+    memchr3(b'%', b'_', b'\\', pattern.as_bytes()).is_some()
 }
 
 #[cfg(test)]
@@ -316,51 +310,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_replace_start_end_percent() {
-        let a_eq = "%foobar%";
-        let expected = "foobar";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
+    fn test_regex_like() {
+        let test_cases = [
+            // %..%
+            (r"%foobar%", r"foobar"),
+            // ..%..
+            (r"foo%bar", r"^foo.*bar$"),
+            // .._..
+            (r"foo_bar", r"^foo.bar$"),
+            // escaped wildcards
+            (r"\%\_", r"^%_$"),
+            // escaped non-wildcard
+            (r"\a", r"^a$"),
+            // escaped escape and wildcard
+            (r"\\%", r"^\\"),
+            // escaped escape and non-wildcard
+            (r"\\a", r"^\\a$"),
+            // regex meta character
+            (r".", r"^\.$"),
+            (r"$", r"^\$$"),
+            (r"\\", r"^\\$"),
+        ];
 
-    #[test]
-    fn test_replace_middle_percent() {
-        let a_eq = "foo%bar";
-        let expected = "^foo.*bar$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_underscore() {
-        let a_eq = "foo_bar";
-        let expected = "^foo.bar$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_leave_like_meta_chars() {
-        let a_eq = "\\%\\_";
-        let expected = "^%_$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_with_multiple_escape_chars() {
-        let a_eq = "\\\\%";
-        let expected = "^\\\\%$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
-    }
-
-    #[test]
-    fn test_replace_like_wildcards_escape_regex_meta_char() {
-        let a_eq = ".";
-        let expected = "^\\.$";
-        let r = regex_like(a_eq, false).unwrap();
-        assert_eq!(r.to_string(), expected);
+        for (like_pattern, expected_regexp) in test_cases {
+            let r = regex_like(like_pattern, false).unwrap();
+            assert_eq!(r.to_string(), expected_regexp);
+        }
     }
 
     #[test]

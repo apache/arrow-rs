@@ -33,14 +33,18 @@ use std::sync::Arc;
 
 use super::ByteArrayType;
 
-/// [Variable-size Binary View Layout]: An array of variable length bytes view arrays.
+/// [Variable-size Binary View Layout]: An array of variable length bytes views.
+///
+/// This array type is used to store variable length byte data (e.g. Strings, Binary)
+/// and has efficient operations such as `take`, `filter`, and comparison.
 ///
 /// [Variable-size Binary View Layout]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-view-layout
 ///
-/// This is different from [`GenericByteArray`] as it stores both an offset and
-/// length meaning that take / filter operations can be implemented without
-/// copying the underlying data. In addition, it stores an inlined prefix which
-/// can be used to speed up comparisons.
+/// This is different from [`GenericByteArray`], which also stores variable
+/// length byte data, as it represents strings with an offset and length. `take`
+/// and `filter` like operations are implemented by manipulating the "views"
+/// (`u128`) without modifying the bytes. Each view also stores an inlined
+/// prefix which speed up comparisons.
 ///
 /// # See Also
 ///
@@ -49,12 +53,6 @@ use super::ByteArrayType;
 /// * [`ByteView`] to interpret `u128`s layout of the views.
 ///
 /// [`ByteView`]: arrow_data::ByteView
-///
-/// # Notes
-///
-/// Comparing two `GenericByteViewArray` using PartialEq compares by structure,
-/// not by value. as there are many different buffer layouts to represent the
-/// same data (e.g. different offsets, different buffer sizes, etc).
 ///
 /// # Layout: "views" and buffers
 ///
@@ -85,6 +83,52 @@ use super::ByteArrayType;
 /// * Strings with length > 12: The first four bytes are stored inline in the
 ///   view and the entire string is stored in one of the buffers. See [`ByteView`]
 ///   to access the fields of the these views.
+///
+/// As with other arrays, the optimized kernels in [`arrow_compute`] are likely
+/// the easiest and fastest way to work with this data. However, it is possible
+/// to access the views and buffers directly for more control.
+///
+/// For example
+///
+/// ```rust
+/// # use arrow_array::StringViewArray;
+/// # use arrow_array::Array;
+/// use arrow_data::ByteView;
+/// let array = StringViewArray::from(vec![
+///   "hello",
+///   "this string is longer than 12 bytes",
+///   "this string is also longer than 12 bytes"
+/// ]);
+///
+/// // ** Examine the first view (short string) **
+/// assert!(array.is_valid(0)); // Check for nulls
+/// let short_view: u128 = array.views()[0]; // "hello"
+/// // get length of the string
+/// let len = short_view as u32;
+/// assert_eq!(len, 5); // strings less than 12 bytes are stored in the view
+/// // SAFETY: `view` is a valid view
+/// let value = unsafe {
+///   StringViewArray::inline_value(&short_view, len as usize)
+/// };
+/// assert_eq!(value, b"hello");
+///
+/// // ** Examine the third view (long string) **
+/// assert!(array.is_valid(12)); // Check for nulls
+/// let long_view: u128 = array.views()[2]; // "this string is also longer than 12 bytes"
+/// let len = long_view as u32;
+/// assert_eq!(len, 40); // strings longer than 12 bytes are stored in the buffer
+/// let view = ByteView::from(long_view); // use ByteView to access the fields
+/// assert_eq!(view.length, 40);
+/// assert_eq!(view.buffer_index, 0);
+/// assert_eq!(view.offset, 35); // data starts after the first long string
+/// // Views for long strings store a 4 byte prefix
+/// let prefix = view.prefix.to_le_bytes();
+/// assert_eq!(&prefix, b"this");
+/// let value = array.value(2); // get the string value (see `value` implementation for how to access the bytes directly)
+/// assert_eq!(value, "this string is also longer than 12 bytes");
+/// ```
+///
+/// [`arrow_compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
 /// than they must point into a valid buffer. However, they can be out of order,
@@ -132,16 +176,6 @@ impl<T: ByteViewType + ?Sized> Clone for GenericByteViewArray<T> {
             nulls: self.nulls.clone(),
             phantom: Default::default(),
         }
-    }
-}
-
-// PartialEq
-impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
-    fn eq(&self, other: &Self) -> bool {
-        other.data_type.eq(&self.data_type)
-            && other.views.eq(&self.views)
-            && other.buffers.eq(&self.buffers)
-            && other.nulls.eq(&self.nulls)
     }
 }
 
@@ -549,6 +583,11 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
         self.nulls.as_ref()
     }
 
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         let mut sum = self.buffers.iter().map(|b| b.capacity()).sum::<usize>();
         sum += self.views.inner().capacity();
@@ -694,6 +733,8 @@ where
 
 /// A [`GenericByteViewArray`] of `[u8]`
 ///
+/// See [`GenericByteViewArray`] for format and layout details.
+///
 /// # Example
 /// ```
 /// use arrow_array::BinaryViewArray;
@@ -732,6 +773,8 @@ impl From<Vec<Option<&[u8]>>> for BinaryViewArray {
 }
 
 /// A [`GenericByteViewArray`] that stores utf8 data
+///
+/// See [`GenericByteViewArray`] for format and layout details.
 ///
 /// # Example
 /// ```
@@ -1004,6 +1047,6 @@ mod tests {
         };
         assert_eq!(array1, array1.clone());
         assert_eq!(array2, array2.clone());
-        assert_ne!(array1, array2);
+        assert_eq!(array1, array2);
     }
 }

@@ -50,6 +50,10 @@ use num::{One, Zero};
 ///
 /// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
+/// Note that this kernel, similar to other kernels in this crate,
+/// will avoid allocating where not necessary. Consequently
+/// the returned array may share buffers with the inputs
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)

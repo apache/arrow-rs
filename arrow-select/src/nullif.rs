@@ -22,10 +22,25 @@ use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
-/// Copies original array, setting validity bit to false if a secondary comparison
-/// boolean array is set to true
+/// Returns a new array with the same values and the validity bit to false where
+/// the corresponding element of`right` is true.
 ///
-/// Typically used to implement NULLIF.
+/// This can be used to implement SQL `NULLIF`
+///
+/// # Example
+/// ```
+/// # use arrow_array::{Int32Array, BooleanArray};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_array::types::Int32Type;
+/// # use arrow_select::nullif::nullif;
+/// // input is [null, 8, 1, 9]
+/// let a = Int32Array::from(vec![None, Some(8), Some(1), Some(9)]);
+/// // use nullif to set index 1 to null
+/// let bool_array = BooleanArray::from(vec![Some(false), Some(true), Some(false), None]);
+/// let nulled = nullif(&a, &bool_array).unwrap();
+/// // The resulting array is [null, null, 1, 9]
+/// assert_eq!(nulled.as_primitive(), &Int32Array::from(vec![None, None, Some(1), Some(9)]));
+/// ```
 pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let left_data = left.to_data();
 

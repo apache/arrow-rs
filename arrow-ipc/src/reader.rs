@@ -1395,7 +1395,7 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator};
+    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
     use super::*;
 
@@ -1700,6 +1700,41 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         assert_eq!(batch, roundtrip_ipc(&batch));
+    }
+
+    #[test]
+    fn test_roundtrip_nested_dict_no_preserve_dict_id() {
+        let inner: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
+
+        let array = Arc::new(inner) as ArrayRef;
+
+        let dctfield = Arc::new(Field::new("dict", array.data_type().clone(), false));
+
+        let s = StructArray::from(vec![(dctfield, array)]);
+        let struct_array = Arc::new(s) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "struct",
+            struct_array.data_type().clone(),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = crate::writer::FileWriter::try_new_with_options(
+            &mut buf,
+            batch.schema_ref(),
+            IpcWriteOptions::default().with_preserve_dict_id(false),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
+
+        assert_eq!(batch, reader.next().unwrap().unwrap());
     }
 
     fn check_union_with_builder(mut builder: UnionBuilder) {

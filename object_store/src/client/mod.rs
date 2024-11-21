@@ -774,7 +774,7 @@ mod cloud {
         }
 
         /// Override the minimum remaining TTL for a cached token to be used
-        #[cfg(feature = "aws")]
+        #[cfg(any(feature = "aws", feature = "gcp"))]
         pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self

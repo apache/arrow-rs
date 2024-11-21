@@ -596,6 +596,10 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
         self.run_array.logical_nulls()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.run_array.logical_null_count()
+    }
+
     fn is_nullable(&self) -> bool {
         self.run_array.is_nullable()
     }
