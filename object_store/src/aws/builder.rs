@@ -862,7 +862,7 @@ impl AmazonS3Builder {
 
     /// Set whether to charge requester for bucket operations.
     ///
-    /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html>
     pub fn with_request_payer(mut self, enabled: bool) -> Self {
         self.request_payer = ConfigValue::Parsed(enabled);
         self

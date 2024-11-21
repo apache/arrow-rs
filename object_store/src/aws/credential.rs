@@ -140,7 +140,7 @@ impl<'a> AwsAuthorizer<'a> {
 
     /// Set whether to include requester pays headers
     ///
-    /// https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html>
     pub fn with_request_payer(mut self, request_payer: bool) -> Self {
         self.request_payer = request_payer;
         self
