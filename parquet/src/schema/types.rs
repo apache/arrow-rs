@@ -204,7 +204,7 @@ impl Type {
     }
 
     /// Returns `true` if this type is annotated as a list.
-    pub fn is_list(&self) -> bool {
+    pub(crate) fn is_list(&self) -> bool {
         if self.is_group() {
             let basic_info = self.get_basic_info();
             if let Some(logical_type) = basic_info.logical_type() {
@@ -216,7 +216,7 @@ impl Type {
     }
 
     /// Returns `true` if this type is a group with a single child field that is `repeated`.
-    pub fn has_single_repeated_child(&self) -> bool {
+    pub(crate) fn has_single_repeated_child(&self) -> bool {
         if self.is_group() {
             let children = self.get_fields();
             return children.len() == 1
