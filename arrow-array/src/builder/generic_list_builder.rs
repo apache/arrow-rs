@@ -49,7 +49,6 @@ use std::sync::Arc;
 /// builder.append(true);
 ///
 /// // Null
-/// builder.values().append_value("?"); // irrelevant
 /// builder.append(false);
 ///
 /// // [D]
@@ -70,15 +69,14 @@ use std::sync::Arc;
 ///   array.values().as_ref(),
 ///   &StringArray::from(vec![
 ///     Some("A"), Some("B"), Some("C"),
-///     Some("?"), Some("D"), None,
-///     Some("F")
+///     Some("D"), None, Some("F")
 ///   ])
 /// );
 ///
 /// // Offsets are indexes into the values array
 /// assert_eq!(
 ///   array.value_offsets(),
-///   &[0, 3, 3, 4, 5, 7]
+///   &[0, 3, 3, 3, 4, 6]
 /// );
 /// ```
 ///
