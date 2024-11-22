@@ -76,7 +76,7 @@ fn main() {
     let array_data = ArrayData::builder(DataType::Utf8)
         .len(3)
         .add_buffer(Buffer::from(offsets.to_byte_slice()))
-        .add_buffer(Buffer::from(&values[..]))
+        .add_buffer(Buffer::from(&values))
         .null_bit_buffer(Some(Buffer::from([0b00000101])))
         .build()
         .unwrap();
