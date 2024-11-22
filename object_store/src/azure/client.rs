@@ -31,7 +31,7 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
+use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
@@ -83,7 +83,7 @@ pub(crate) enum Error {
     BulkDeleteRequest { source: crate::client::retry::Error },
 
     #[snafu(display("Error receiving bulk delete request body: {}", source))]
-    BulkDeleteRequestBody { source: multer::Error },
+    BulkDeleteRequestBody { source: reqwest::Error },
 
     #[snafu(display(
         "Bulk delete request failed due to invalid input: {} (code: {})",
@@ -370,44 +370,86 @@ fn parse_multipart_response_boundary(response: &Response) -> Result<String> {
     Ok(boundary)
 }
 
-async fn parse_blob_batch_delete_response(
-    batch_response: Response,
+fn invalid_response(msg: &str) -> Error {
+    Error::InvalidBulkDeleteResponse {
+        reason: msg.to_string(),
+    }
+}
+
+#[derive(Debug)]
+struct MultipartField {
+    headers: HeaderMap,
+    content: Bytes
+}
+
+fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<MultipartField>> {
+    let start_marker = [b"--", boundary, b"\r\n"].concat();
+    let next_marker = &start_marker[..start_marker.len() - 2];
+    let end_marker = [b"--", boundary, b"--\r\n"].concat();
+
+    // There should be at most 256 responses per batch
+    let mut fields = Vec::with_capacity(256);
+    let mut remaining: &[u8] = body.as_ref();
+    loop {
+        remaining = remaining
+            .strip_prefix(start_marker.as_slice())
+            .ok_or_else(|| {
+                invalid_response("missing start marker for field")
+            })?;
+
+        // The documentation only mentions two headers for fields, we leave some extra margin
+        let mut scratch = [httparse::EMPTY_HEADER; 10];
+        let mut headers = HeaderMap::new();
+        match httparse::parse_headers(remaining, &mut scratch) {
+            Ok(httparse::Status::Complete((pos, headers_slice))) => {
+                remaining = &remaining[pos..];
+                for header in headers_slice {
+                    headers.insert(
+                        HeaderName::from_bytes(header.name.as_bytes()).expect("valid"),
+                        HeaderValue::from_bytes(header.value).expect("valid")
+                    );
+                }
+            }
+            _ => {
+                return Err(invalid_response("unable to parse field headers").into())
+            }
+        };
+
+        let next_pos = remaining
+            .windows(next_marker.len())
+            .position(|window| window == next_marker)
+            .ok_or_else(|| invalid_response("early EOF while seeking to next boundary"))?;
+
+        fields.push(MultipartField {
+            headers,
+            content: body.slice_ref(&remaining[..next_pos])
+        });
+
+        remaining = &remaining[next_pos..];
+
+        if remaining == end_marker
+            || remaining == &end_marker[..end_marker.len() - 2] // Missing final CRLF
+        {
+            break;
+        }
+    }
+    Ok(fields)
+}
+
+async fn parse_blob_batch_delete_body(
+    batch_body: Bytes,
+    boundary: String,
     paths: &[Path],
 ) -> Result<Vec<Result<Path>>> {
-    let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
-        reason: msg.to_string(),
-    };
-
-    let boundary = parse_multipart_response_boundary(&batch_response)?;
-
-    let stream = batch_response.bytes_stream();
-
-    let mut multipart = multer::Multipart::new(stream, boundary);
 
     let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
 
-    let mut part_response_buffer = Vec::with_capacity(2048);
-
-    while let Some(mut part) = multipart
-        .next_field()
-        .await
-        .context(BulkDeleteRequestBodySnafu {})?
-    {
-        let id = part
-            .headers()
+    for field in parse_multipart_body_fields(batch_body, boundary.as_bytes())? {
+        let id = field
+            .headers
             .get("content-id")
             .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
             .and_then(|v| v.parse::<usize>().ok());
-
-        part_response_buffer.clear();
-
-        while let Some(bytes) = part.chunk().await.context(BulkDeleteRequestBodySnafu {})? {
-            part_response_buffer.extend_from_slice(&bytes);
-        }
-
-        // We add this extra CRLF because multer will unconditionally skip it even for requests with
-        // an empty body.
-        part_response_buffer.extend_from_slice(b"\r\n");
 
         // Parse part response headers
         // Documentation mentions 5 headers and states that other standard HTTP headers
@@ -416,7 +458,7 @@ async fn parse_blob_batch_delete_response(
         // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
         let mut headers = [httparse::EMPTY_HEADER; 48];
         let mut part_response = httparse::Response::new(&mut headers);
-        match part_response.parse(&part_response_buffer) {
+        match part_response.parse(&field.content) {
             Ok(httparse::Status::Complete(_)) => {}
             _ => return Err(invalid_response("unable to parse response").into()),
         };
@@ -634,7 +676,8 @@ impl AzureClient {
         let credential = self.get_credential().await?;
 
         // https://www.ietf.org/rfc/rfc2046
-        let boundary = format!("batch_{}", uuid::Uuid::new_v4());
+        let random_bytes = rand::random::<[u8; 16]>(); // 128 bits
+        let boundary = format!("batch_{}", BASE64_STANDARD_NO_PAD.encode(&random_bytes));
 
         let body_bytes = self.build_bulk_delete_body(&boundary, &paths, &credential);
 
@@ -656,7 +699,12 @@ impl AzureClient {
             .await
             .context(BulkDeleteRequestSnafu {})?;
 
-        let results = parse_blob_batch_delete_response(batch_response, &paths).await?;
+        let boundary = parse_multipart_response_boundary(&batch_response)?;
+
+        let batch_body = batch_response.bytes().await
+            .context(BulkDeleteRequestBodySnafu {})?;
+
+        let results = parse_blob_batch_delete_body(batch_body, boundary, &paths).await?;
 
         Ok(results)
     }
@@ -1365,7 +1413,7 @@ Authorization: Bearer static-token\r
     }
 
     #[tokio::test]
-    async fn test_parse_blob_batch_delete_response() {
+    async fn test_parse_blob_batch_delete_body() {
         let response_body = b"--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed\r
 Content-Type: application/http\r
 Content-ID: 0\r
@@ -1414,9 +1462,12 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
             .unwrap()
             .into();
 
+        let boundary = parse_multipart_response_boundary(&response).unwrap();
+        let body = response.bytes().await.unwrap();
+
         let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];
 
-        let results = parse_blob_batch_delete_response(response, paths)
+        let results = parse_blob_batch_delete_body(body, boundary, paths)
             .await
             .unwrap();
 
