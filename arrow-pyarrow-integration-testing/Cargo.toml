@@ -34,4 +34,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 arrow = { path = "../arrow", features = ["pyarrow"] }
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }

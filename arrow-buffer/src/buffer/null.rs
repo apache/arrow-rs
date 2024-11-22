@@ -235,6 +235,12 @@ impl From<&[bool]> for NullBuffer {
     }
 }
 
+impl<const N: usize> From<&[bool; N]> for NullBuffer {
+    fn from(value: &[bool; N]) -> Self {
+        value[..].into()
+    }
+}
+
 impl From<Vec<bool>> for NullBuffer {
     fn from(value: Vec<bool>) -> Self {
         BooleanBuffer::from(value).into()

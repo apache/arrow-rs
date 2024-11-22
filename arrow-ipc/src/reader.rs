@@ -1778,7 +1778,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_struct_empty_fields() {
-        let nulls = NullBuffer::from(&[true, true, false][..]);
+        let nulls = NullBuffer::from(&[true, true, false]);
         let rb = RecordBatch::try_from_iter([(
             "",
             Arc::new(StructArray::new_empty_fields(nulls.len(), Some(nulls))) as _,
