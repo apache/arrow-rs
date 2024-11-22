@@ -15,20 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::marker::PhantomData;
-use std::sync::Arc;
-
+use crate::builder::ArrayBuilder;
+use crate::types::bytes::ByteArrayNativeType;
+use crate::types::{BinaryViewType, ByteViewType, StringViewType};
+use crate::{ArrayRef, GenericByteViewArray};
 use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
-
-use crate::builder::ArrayBuilder;
-use crate::types::bytes::ByteArrayNativeType;
-use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use std::any::Any;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -88,6 +86,9 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
     phantom: PhantomData<T>,
+    /// temporary space used by [`ByteViewFormatter`]
+    /// to avoid extra allocations
+    temp_buffer: Option<String>,
 }
 
 impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
@@ -108,6 +109,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             },
             string_tracker: None,
             phantom: Default::default(),
+            temp_buffer: None,
         }
     }
 
@@ -281,7 +283,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String length exceeds `u32::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
-        let v: &[u8] = value.as_ref().as_ref();
+        // SAFETY: the value is a valid native type (e.g. `&str` or `&[u8]`)
+        unsafe { self.append_bytes(value.as_ref().as_ref()) }
+    }
+
+    /// Appends a &str into the builder
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    #[inline]
+    pub fn append_str(&mut self, value: &str) {
+        // SAFETY: UTF8 bytes are valid for both string and binaary
+        unsafe { self.append_bytes(value.as_bytes()) }
+    }
+
+    /// Appends bytes into this builder.
+    ///
+    /// Safety: caller must ensure value is a valid native type (e.g. valid
+    /// UTF-8 for `StringViewType`).
+    unsafe fn append_bytes(&mut self, v: &[u8]) {
         let length: u32 = v.len().try_into().unwrap();
         if length <= 12 {
             let mut view_buffer = [0; 16];
@@ -406,6 +429,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         };
         buffer_size + in_progress + tracker + views + null
     }
+
+    /// Return a structure that implements `std::fmt::Write` to write stirngs
+    /// directly to the builder. See example on [`StringViewBuilder`]
+    pub fn formatter(&mut self) -> ByteViewFormatter<'_, T> {
+        ByteViewFormatter::new(self)
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {
@@ -466,21 +495,58 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 /// Array builder for [`StringViewArray`][crate::StringViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
-/// [`GenericByteViewBuilder::append_null`] as normal.
+/// [`GenericByteViewBuilder::append_null`].
 ///
-/// # Example
+/// Calling [`Self::formatter`] returns a object that implements
+/// [`std::fmt::Write`] which allows using [`std::fmt::Display`] with standard
+/// Rust idioms like `write!` and `writeln!` to write data directly to the
+/// builder without additional intermediate allocations.
+///
+/// # Example writing strings with `append_value`
 /// ```
 /// # use arrow_array::builder::StringViewBuilder;
 /// # use arrow_array::StringViewArray;
 /// let mut builder = StringViewBuilder::new();
-/// builder.append_value("hello");
-/// builder.append_null();
-/// builder.append_value("world");
+/// builder.append_value("hello"); // row 0 is a value
+/// builder.append_null();         // row 1 is null
+/// builder.append_value("world"); // row 2 is a value
 /// let array = builder.finish();
 ///
 /// let expected = vec![Some("hello"), None, Some("world")];
 /// let actual: Vec<_> = array.iter().collect();
 /// assert_eq!(expected, actual);
+/// ```
+///
+/// /// # Example incrementally writing strings using [`Self::formatter`] and `write!`
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::StringViewBuilder;
+/// # use arrow_array::Array;
+/// let mut builder = StringViewBuilder::new();
+/// // Write data in multiple `write!` calls
+/// let mut formatter = builder.formatter();
+/// write!(formatter, "foo").unwrap();
+/// write!(formatter, "bar").unwrap();
+/// // Dropping the formatter writes the value to the builder
+/// drop(formatter);
+///
+/// // Write second value with a single write call.
+/// // This does not require any new allocations.
+/// let mut formatter = builder.formatter();
+/// write!(formatter, "v2").unwrap();
+/// // finish the value by dropping the formatter
+/// drop(formatter);
+///
+/// // Note that simply creating a formatter creates a new value
+/// // even if no data is written
+/// let mut formatter = builder.formatter();
+/// drop(formatter);
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobar");
+/// assert_eq!(array.value(1), "v2");
+/// assert_eq!(array.value(2), "");
+/// assert_eq!(array.len(), 3);
 /// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
@@ -488,6 +554,9 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
 /// [`GenericByteViewBuilder::append_null`] as normal.
+///
+/// Similarly to [`StringViewBuilder`], calling [`Self::formatter`] returns a
+/// object that implements [`std::fmt::Write`].
 ///
 /// # Example
 /// ```
@@ -504,6 +573,23 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// assert_eq!(expected, actual);
 /// ```
 ///
+/// # Example incrementally writing strings using [`Self::formatter`] and `write!`
+/// (See [`StringViewBuilder`] for more details)
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::BinaryViewBuilder;
+/// # use arrow_array::Array;
+/// let mut builder = BinaryViewBuilder::new();
+/// // Write data in multiple `write!` calls
+/// let mut formatter = builder.formatter();
+/// write!(formatter, "foo").unwrap();
+/// write!(formatter, "bar").unwrap();
+/// // Dropping the formatter writes the value to the builder
+/// drop(formatter);
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), b"foobar");
+/// ```
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
 
 /// Creates a view from a fixed length input (the compiler can generate
@@ -550,6 +636,56 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
             };
             view.as_u128()
         }
+    }
+}
+
+/// See [GenericByteViewBuilder::formatter] for more details
+#[derive(Debug)]
+pub struct ByteViewFormatter<'a, T>
+where
+    T: ByteViewType + ?Sized,
+{
+    /// reference to the builder
+    inner: &'a mut GenericByteViewBuilder<T>,
+    /// buffer where the in progress string is written
+    buffer: String,
+}
+
+impl<'a, T> ByteViewFormatter<'a, T>
+where
+    T: ByteViewType + ?Sized,
+{
+    fn new(inner: &'a mut GenericByteViewBuilder<T>) -> Self {
+        let buffer = match std::mem::take(&mut inner.temp_buffer) {
+            Some(mut buffer) => {
+                buffer.clear();
+                buffer
+            }
+            None => String::new(),
+        };
+
+        Self { inner, buffer }
+    }
+}
+
+impl<'a, T> std::fmt::Write for ByteViewFormatter<'a, T>
+where
+    T: ByteViewType + ?Sized,
+{
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.buffer.write_str(s)
+    }
+}
+
+/// When a StringViewWriter is dropped, it writes the the value to the StringViewBuilder
+impl<'a, T> Drop for ByteViewFormatter<'a, T>
+where
+    T: ByteViewType + ?Sized,
+{
+    fn drop(&mut self) {
+        self.inner.append_str(&self.buffer);
+        // save the buffer to avoid an allocation on subsequent writes
+        self.inner.temp_buffer = Some(std::mem::take(&mut self.buffer));
     }
 }
 
