@@ -517,14 +517,14 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }

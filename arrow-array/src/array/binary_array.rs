@@ -358,7 +358,7 @@ mod tests {
         let values = b"helloparquet";
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(12)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(values))
             .build()
             .unwrap();
         let offsets = [0, 5, 5, 12].map(|n| O::from_usize(n).unwrap());
@@ -415,7 +415,7 @@ mod tests {
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(15)
             .offset(5)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(values))
             .build()
             .unwrap();
 
@@ -460,7 +460,7 @@ mod tests {
         let values = b"HelloArrow";
         let child_data = ArrayData::builder(DataType::UInt8)
             .len(10)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(values))
             .null_bit_buffer(Some(Buffer::from_slice_ref([0b1010101010])))
             .build()
             .unwrap();

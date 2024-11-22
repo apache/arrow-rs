@@ -136,7 +136,8 @@ impl Signer for AmazonS3 {
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region);
+        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
+            .with_request_payer(self.client.config.request_payer);
 
         let path_url = self.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {

@@ -240,6 +240,14 @@ pub enum AzureConfigKey {
     /// - `authority_id`
     AuthorityId,
 
+    /// Authority host used in oauth flows
+    ///
+    /// Supported keys:
+    /// - `azure_storage_authority_host`
+    /// - `azure_authority_host`
+    /// - `authority_host`
+    AuthorityHost,
+
     /// Shared access signature.
     ///
     /// The signature is expected to be percent-encoded, much like they are provided
@@ -383,6 +391,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::ClientId => "azure_storage_client_id",
             Self::ClientSecret => "azure_storage_client_secret",
             Self::AuthorityId => "azure_storage_tenant_id",
+            Self::AuthorityHost => "azure_storage_authority_host",
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
@@ -427,6 +436,9 @@ impl FromStr for AzureConfigKey {
             | "azure_authority_id"
             | "tenant_id"
             | "authority_id" => Ok(Self::AuthorityId),
+            "azure_storage_authority_host" | "azure_authority_host" | "authority_host" => {
+                Ok(Self::AuthorityHost)
+            }
             "azure_storage_sas_key" | "azure_storage_sas_token" | "sas_key" | "sas_token" => {
                 Ok(Self::SasKey)
             }
@@ -556,6 +568,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::ClientId => self.client_id = Some(value.into()),
             AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
             AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
+            AzureConfigKey::AuthorityHost => self.authority_host = Some(value.into()),
             AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
             AzureConfigKey::Token => self.bearer_token = Some(value.into()),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
@@ -602,6 +615,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::ClientId => self.client_id.clone(),
             AzureConfigKey::ClientSecret => self.client_secret.clone(),
             AzureConfigKey::AuthorityId => self.tenant_id.clone(),
+            AzureConfigKey::AuthorityHost => self.authority_host.clone(),
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
