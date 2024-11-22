@@ -379,7 +379,7 @@ fn invalid_response(msg: &str) -> Error {
 #[derive(Debug)]
 struct MultipartField {
     headers: HeaderMap,
-    content: Bytes
+    content: Bytes,
 }
 
 fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<MultipartField>> {
@@ -393,9 +393,7 @@ fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<Multi
     loop {
         remaining = remaining
             .strip_prefix(start_marker.as_slice())
-            .ok_or_else(|| {
-                invalid_response("missing start marker for field")
-            })?;
+            .ok_or_else(|| invalid_response("missing start marker for field"))?;
 
         // The documentation only mentions two headers for fields, we leave some extra margin
         let mut scratch = [httparse::EMPTY_HEADER; 10];
@@ -406,13 +404,11 @@ fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<Multi
                 for header in headers_slice {
                     headers.insert(
                         HeaderName::from_bytes(header.name.as_bytes()).expect("valid"),
-                        HeaderValue::from_bytes(header.value).expect("valid")
+                        HeaderValue::from_bytes(header.value).expect("valid"),
                     );
                 }
             }
-            _ => {
-                return Err(invalid_response("unable to parse field headers").into())
-            }
+            _ => return Err(invalid_response("unable to parse field headers").into()),
         };
 
         let next_pos = remaining
@@ -422,14 +418,13 @@ fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<Multi
 
         fields.push(MultipartField {
             headers,
-            content: body.slice_ref(&remaining[..next_pos])
+            content: body.slice_ref(&remaining[..next_pos]),
         });
 
         remaining = &remaining[next_pos..];
 
-        if remaining == end_marker
-            || remaining == &end_marker[..end_marker.len() - 2] // Missing final CRLF
-        {
+        // Support missing final CRLF
+        if remaining == end_marker || remaining == &end_marker[..end_marker.len() - 2] {
             break;
         }
     }
@@ -441,7 +436,6 @@ async fn parse_blob_batch_delete_body(
     boundary: String,
     paths: &[Path],
 ) -> Result<Vec<Result<Path>>> {
-
     let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
 
     for field in parse_multipart_body_fields(batch_body, boundary.as_bytes())? {
@@ -677,7 +671,7 @@ impl AzureClient {
 
         // https://www.ietf.org/rfc/rfc2046
         let random_bytes = rand::random::<[u8; 16]>(); // 128 bits
-        let boundary = format!("batch_{}", BASE64_STANDARD_NO_PAD.encode(&random_bytes));
+        let boundary = format!("batch_{}", BASE64_STANDARD_NO_PAD.encode(random_bytes));
 
         let body_bytes = self.build_bulk_delete_body(&boundary, &paths, &credential);
 
@@ -701,7 +695,9 @@ impl AzureClient {
 
         let boundary = parse_multipart_response_boundary(&batch_response)?;
 
-        let batch_body = batch_response.bytes().await
+        let batch_body = batch_response
+            .bytes()
+            .await
             .context(BulkDeleteRequestBodySnafu {})?;
 
         let results = parse_blob_batch_delete_body(batch_body, boundary, &paths).await?;
