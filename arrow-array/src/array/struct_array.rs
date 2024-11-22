@@ -239,12 +239,6 @@ impl StructArray {
         &self.fields
     }
 
-    /// Returns child array refs of the struct array
-    #[deprecated(note = "Use columns().to_vec()")]
-    pub fn columns_ref(&self) -> Vec<ArrayRef> {
-        self.columns().to_vec()
-    }
-
     /// Return field names in this struct array
     pub fn column_names(&self) -> Vec<&str> {
         match self.data_type() {
