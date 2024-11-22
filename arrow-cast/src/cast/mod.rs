@@ -5223,6 +5223,7 @@ mod tests {
 
     // Cast Timestamp to Utf8View is not supported yet
     // TODO: Implement casting from Timestamp to Utf8View
+    // https://github.com/apache/arrow-rs/issues/6734
     macro_rules! assert_cast_timestamp_to_string {
         ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
             let out = cast(&$array, &$datatype).unwrap();
