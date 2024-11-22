@@ -202,6 +202,7 @@ pub(crate) struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
+    pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
 }
 
@@ -249,7 +250,8 @@ impl<'a> SessionCredential<'a> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
         let mut authorizer =
             AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
-                .with_sign_payload(self.config.sign_payload);
+                .with_sign_payload(self.config.sign_payload)
+                .with_request_payer(self.config.request_payer);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
