@@ -466,21 +466,49 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 /// Array builder for [`StringViewArray`][crate::StringViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
-/// [`GenericByteViewBuilder::append_null`] as normal.
+/// [`GenericByteViewBuilder::append_null`].
 ///
-/// # Example
+/// This builder also implements [`std::fmt::Write`] with any written data
+/// included in the next appended value. This allows using [`std::fmt::Display`]
+/// with standard Rust idioms like `write!` and `writeln!` to write data
+/// directly to the builder without intermediate allocations.
+///
+/// # Example writing strings with `append_value`
 /// ```
 /// # use arrow_array::builder::StringViewBuilder;
 /// # use arrow_array::StringViewArray;
 /// let mut builder = StringViewBuilder::new();
-/// builder.append_value("hello");
-/// builder.append_null();
-/// builder.append_value("world");
+/// builder.append_value("hello"); // row 0 is a value
+/// builder.append_null();         // row 1 is null
+/// builder.append_value("world"); // row 2 is a value
 /// let array = builder.finish();
 ///
 /// let expected = vec![Some("hello"), None, Some("world")];
 /// let actual: Vec<_> = array.iter().collect();
 /// assert_eq!(expected, actual);
+/// ```
+///
+/// /// # Example incrementally writing strings with `std::fmt::Write`
+/// ```
+/// # use std::fmt::Write;
+/// # use arrow_array::builder::StringViewBuilder;
+/// let mut builder = StringViewBuilder::new();
+///
+/// // Write data in multiple `write!` calls
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
+/// // The next call to append_value finishes the current string
+/// // including all previously written strings.
+/// builder.append_value("baz");
+///
+/// // Write second value with a single write call
+/// write!(builder, "v2").unwrap();
+/// // finish the value by calling append_value with an empty string
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobarbaz");
+/// assert_eq!(array.value(1), "v2");
 /// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
