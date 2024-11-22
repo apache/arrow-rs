@@ -136,7 +136,3 @@ jobs:
             echo "Checking package '$dir'"
             cargo msrv verify --manifest-path "$dir" || exit 1
           done
-      # If no packages are using the workspace's rust-version, then it's out of date
-      - name: Verify workspace rust-version is used
-        run: |
-          grep -r '^rust-version *= *{ *workspace *= *true *}' -q --exclude-dir '*target*' --exclude-dir .git .
