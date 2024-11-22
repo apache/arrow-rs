@@ -827,7 +827,7 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
-    use crate::data_type::{Int32Type, Int64Type};
+    use crate::data_type::Int64Type;
     use crate::file::reader::SerializedFileReader;
     use crate::file::writer::SerializedFileWriter;
     use crate::record::api::RowAccessor;
@@ -1838,69 +1838,31 @@ mod tests {
 
     #[test]
     fn test_map_no_value() {
-        let schema = "
-            message spark_schema {
-                REQUIRED group my_map (MAP) {
-                    REPEATED group key_value {
-                        REQUIRED INT32 key;
-                    }
-                }
-                REQUIRED group my_list (LIST) {
-                    REPEATED group list {
-                        REQUIRED INT32 element;
-                    }
-                }
-            }
-            ";
-        let schema = Arc::new(parse_message_type(schema).unwrap());
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let rows = test_file_reader_rows("map_no_value.parquet", None).unwrap();
 
-        // Write Parquet file to buffer
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut file_writer =
-            SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
-        let mut row_group_writer = file_writer.next_row_group().unwrap();
-
-        // Write column my_map.key_value.key
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int32Type>()
-            .write_batch(
-                &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-                Some(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
-                Some(&[0, 1, 1, 0, 1, 1, 0, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        // Write column my_list.list.element
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<Int32Type>()
-            .write_batch(
-                &[1, 2, 3, 4, 5, 6, 7, 8, 9],
-                Some(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
-                Some(&[0, 1, 1, 0, 1, 1, 0, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        // Finalize Parquet file
-        row_group_writer.close().unwrap();
-        file_writer.close().unwrap();
-        assert_eq!(&buffer[0..4], b"PAR1");
-
-        // Read Parquet file from buffer
-        let file_reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
-        let rows: Vec<_> = file_reader
-            .get_row_iter(None)
-            .unwrap()
-            .map(|row| row.unwrap())
-            .collect();
-
-        // the two columns should be equivalent lists by this point
+        // the my_map_no_v and my_list columns should be equivalent lists by this point
         for row in rows {
             let cols = row.into_columns();
-            assert_eq!(cols[0].1, cols[1].1);
+            assert_eq!(cols[1].1, cols[2].1);
         }
     }
 
