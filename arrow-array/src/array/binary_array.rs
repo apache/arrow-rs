@@ -25,7 +25,7 @@ pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<Off
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     /// Get the data type of the array.
-    #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
+    #[deprecated(since = "20.0.0", note = "please use `Self::DATA_TYPE` instead")]
     pub const fn get_data_type() -> DataType {
         Self::DATA_TYPE
     }

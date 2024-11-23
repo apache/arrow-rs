@@ -669,7 +669,7 @@ impl<T: Datelike> ChronoDateExt for T {
 ///
 /// Note that the offset is function of time and can vary depending on whether daylight savings is
 /// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
-#[deprecated(note = "Use arrow_array::timezone::Tz instead")]
+#[deprecated(since = "26.0.0", note = "Use arrow_array::timezone::Tz instead")]
 pub fn using_chrono_tz_and_utc_naive_date_time(
     tz: &str,
     utc: NaiveDateTime,

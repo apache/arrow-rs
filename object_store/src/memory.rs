@@ -469,7 +469,7 @@ impl InMemory {
     }
 
     /// Creates a clone of the store
-    #[deprecated(note = "Use fork() instead")]
+    #[deprecated(since = "44.0.0", note = "Use fork() instead")]
     pub async fn clone(&self) -> Self {
         self.fork()
     }

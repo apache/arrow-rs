@@ -257,7 +257,7 @@ impl WriterBuilder {
     }
 
     /// Set whether to write headers
-    #[deprecated(note = "Use Self::with_header")]
+    #[deprecated(since = "39.0.0", note = "Use Self::with_header")]
     #[doc(hidden)]
     pub fn has_headers(mut self, has_headers: bool) -> Self {
         self.has_header = has_headers;
@@ -398,7 +398,7 @@ impl WriterBuilder {
     }
 
     /// Use RFC3339 format for date/time/timestamps (default)
-    #[deprecated(note = "Use WriterBuilder::default()")]
+    #[deprecated(since = "39.0.0", note = "Use WriterBuilder::default()")]
     pub fn with_rfc3339(mut self) -> Self {
         self.date_format = None;
         self.datetime_format = None;

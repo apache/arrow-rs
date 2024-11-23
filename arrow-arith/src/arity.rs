@@ -104,7 +104,7 @@ where
 }
 
 /// Applies an infallible unary function to an array with primitive values.
-#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
+#[deprecated(since = "46.0.0", note = "Use arrow_array::AnyDictionaryArray")]
 pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,
@@ -130,7 +130,7 @@ where
 }
 
 /// Applies a fallible unary function to an array with primitive values.
-#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
+#[deprecated(since = "46.0.0", note = "Use arrow_array::AnyDictionaryArray")]
 pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
 where
     T: ArrowPrimitiveType,

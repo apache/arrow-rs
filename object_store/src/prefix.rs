@@ -27,7 +27,7 @@ use crate::{
 };
 
 #[doc(hidden)]
-#[deprecated(note = "Use PrefixStore")]
+#[deprecated(since = "36.0.0", note = "Use PrefixStore")]
 pub type PrefixObjectStore<T> = PrefixStore<T>;
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.

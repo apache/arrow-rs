@@ -237,6 +237,7 @@ impl FixedSizeBinaryArray {
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
     #[deprecated(
+        since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
     )]
     pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>

@@ -384,7 +384,7 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 /// # Safety
 /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
-#[deprecated(note = "Use FFI_ArrowArrayStream::new")]
+#[deprecated(since = "50.0.0", note = "Use FFI_ArrowArrayStream::new")]
 pub unsafe fn export_reader_into_raw(
     reader: Box<dyn RecordBatchReader + Send>,
     out_stream: *mut FFI_ArrowArrayStream,

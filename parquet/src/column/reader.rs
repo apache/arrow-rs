@@ -197,7 +197,7 @@ where
     ///
     /// `values` will be contiguously populated with the non-null values. Note that if the column
     /// is not required, this may be less than either `batch_size` or the number of levels read
-    #[deprecated(note = "Use read_records")]
+    #[deprecated(since = "42.0.0", note = "Use read_records")]
     pub fn read_batch(
         &mut self,
         batch_size: usize,

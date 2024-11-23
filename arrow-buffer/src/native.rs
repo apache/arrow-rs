@@ -92,7 +92,7 @@ pub trait ArrowNativeType:
     /// Convert native type from i32.
     ///
     /// Returns `None` if [`Self`] is not `i32`
-    #[deprecated(note = "please use `Option::Some` instead")]
+    #[deprecated(since = "24.0.0", note = "please use `Option::Some` instead")]
     fn from_i32(_: i32) -> Option<Self> {
         None
     }
@@ -100,7 +100,7 @@ pub trait ArrowNativeType:
     /// Convert native type from i64.
     ///
     /// Returns `None` if [`Self`] is not `i64`
-    #[deprecated(note = "please use `Option::Some` instead")]
+    #[deprecated(since = "24.0.0", note = "please use `Option::Some` instead")]
     fn from_i64(_: i64) -> Option<Self> {
         None
     }
@@ -108,7 +108,7 @@ pub trait ArrowNativeType:
     /// Convert native type from i128.
     ///
     /// Returns `None` if [`Self`] is not `i128`
-    #[deprecated(note = "please use `Option::Some` instead")]
+    #[deprecated(since = "24.0.0", note = "please use `Option::Some` instead")]
     fn from_i128(_: i128) -> Option<Self> {
         None
     }

@@ -1481,7 +1481,7 @@ def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
     /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
+    #[deprecated(since = "26.0.0", note = "Use with_timezone_opt instead")]
     pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
     where
         Self: From<Vec<i64>>,
@@ -1490,7 +1490,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
     }
 
     /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
+    #[deprecated(since = "26.0.0", note = "Use with_timezone_opt instead")]
     pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
     where
         Self: From<Vec<Option<i64>>>,
