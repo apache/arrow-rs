@@ -153,7 +153,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
+            // TODO: add self.file_decryption_properties
+            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
+                &buf, None,
+            )?))
         }
         .boxed()
     }

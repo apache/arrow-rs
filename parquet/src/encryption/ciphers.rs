@@ -226,6 +226,7 @@ pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ord
     Ok(aad)
 }
 
+#[derive(Clone)]
 pub struct FileDecryptionProperties {
     footer_key: Option<Vec<u8>>
 }
