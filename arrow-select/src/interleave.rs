@@ -22,9 +22,15 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_buffer::{
+    ArrowNativeType, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
+    ScalarBuffer,
+};
 use arrow_data::transform::MutableArrayData;
+use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
+use builder::{ArrayBuilder, GenericByteViewBuilder};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -97,6 +103,8 @@ pub fn interleave(
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
         DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
+        DataType::BinaryView => interleave_views::<BinaryViewType>(values, indices),
+        DataType::Utf8View => interleave_views::<StringViewType>(values, indices),
         DataType::Dictionary(k, _) => downcast_integer! {
             k.as_ref() => (dict_helper, values, indices),
             _ => unreachable!("illegal dictionary key type {k}")
@@ -228,6 +236,39 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         }
     }
     let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
+    Ok(Arc::new(array))
+}
+
+fn interleave_views<T: ByteViewType>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, GenericByteViewArray<T>>::new(values, indices);
+    let mut views_builder = BufferBuilder::new(indices.len());
+    let mut buffers = Vec::with_capacity(values[0].len());
+
+    let mut buffer_lookup = HashMap::new();
+    for (array_idx, value_idx) in indices {
+        let array = interleaved.arrays[*array_idx];
+        let raw_view = array.views().get(*value_idx).unwrap();
+        let view = ByteView::from(*raw_view);
+
+        if view.length <= 12 {
+            views_builder.append(*raw_view);
+            continue;
+        }
+        // value is big enough to be in a variadic buffer
+        let new_buffer_idx: &mut u32 = buffer_lookup
+            .entry((*array_idx, view.buffer_index))
+            .or_insert_with(|| {
+                buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
+                (buffers.len() - 1) as u32
+            });
+        views_builder.append(view.with_buffer_index(*new_buffer_idx).into());
+    }
+
+    let array =
+        GenericByteViewArray::<T>::try_new(views_builder.into(), buffers, interleaved.nulls)?;
     Ok(Arc::new(array))
 }
 
