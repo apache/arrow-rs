@@ -539,6 +539,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
+    /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`] and [`FileDecryptionProperties`]
     pub fn try_new_with_decryption(
         reader: T,
         options: ArrowReaderOptions,
@@ -569,6 +570,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -577,7 +579,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
     /// #
-    /// let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
+    /// let metadata = ArrowReaderMetadata::load(&file, Default::default(), None).unwrap();
     /// let mut a = ParquetRecordBatchReaderBuilder::new_with_metadata(file.clone(), metadata.clone()).build().unwrap();
     /// let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata).build().unwrap();
     ///
@@ -804,6 +806,9 @@ impl ParquetRecordBatchReader {
             .build()
     }
 
+    /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader and [`FileDecryptionProperties`]
+    ///
+    /// Note: this is needed when the parquet file is encrypted
     pub fn try_new_with_decryption<T: ChunkReader + 'static>(
         reader: T,
         batch_size: usize,

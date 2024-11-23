@@ -171,7 +171,7 @@ pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, -1, -1, -1)
 }
 
-pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i32,
+fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i32,
                      column_ordinal: i32, page_ordinal: i32) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
