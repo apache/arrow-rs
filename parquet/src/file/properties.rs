@@ -57,6 +57,8 @@ pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
+/// Default value for [`WriterProperties::offset_index_disabled`]
+pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 
 /// Parquet writer version.
 ///
@@ -332,6 +334,20 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
 
+    /// Returns `true` if offset index writing is disabled for a column.
+    pub fn offset_index_disabled(&self, col: &ColumnPath) -> bool {
+        // If writing column indexes, then this cannot be true.
+        if self.statistics_enabled(col) == EnabledStatistics::Page {
+            return false;
+        }
+
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.offset_index_disabled())
+            .or_else(|| self.default_column_properties.offset_index_disabled())
+            .unwrap_or(DEFAULT_OFFSET_INDEX_DISABLED)
+    }
+
     /// Returns the [`BloomFilterProperties`] for the given column
     ///
     /// Returns `None` if bloom filter is disabled
@@ -560,6 +576,21 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets whether the writing of offset indexes is disabled for all columns (defaults to `false`).
+    ///
+    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
+    ///
+    /// Note: As the offset indexes are useful for accessing data by row number,
+    /// they are always written by default, regardless of whether other statistics
+    /// are enabled. Disabling these statistics may result in a degradation in read
+    /// performance, so use this option with care.
+    /// [`Page`]: EnabledStatistics::Page
+    pub fn set_offset_index_disabled(mut self, value: bool) -> Self {
+        self.default_column_properties
+            .set_offset_index_disabled(value);
+        self
+    }
+
     /// Sets if bloom filter is enabled by default for all columns (defaults to `false`).
     ///
     /// # Notes
@@ -661,6 +692,22 @@ impl WriterPropertiesBuilder {
     /// Takes precedence over [`Self::set_max_statistics_size`].
     pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
         self.get_mut_props(col).set_max_statistics_size(value);
+        self
+    }
+
+    /// Sets whether the writing of offset indexes is disabled for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_offset_index_disabled`].
+    ///
+    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
+    ///
+    /// Note: As the offset indexes are useful for accessing data by row number,
+    /// they are always written by default, regardless of whether other statistics
+    /// are enabled. Disabling these statistics may result in a degradation in read
+    /// performance, so use this option with care.
+    /// [`Page`]: EnabledStatistics::Page
+    pub fn set_column_offset_index_disabled(mut self, col: ColumnPath, value: bool) -> Self {
+        self.get_mut_props(col).set_offset_index_disabled(value);
         self
     }
 
@@ -827,6 +874,7 @@ struct ColumnProperties {
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
+    offset_index_disabled: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
 }
@@ -866,6 +914,11 @@ impl ColumnProperties {
     /// Sets max size for statistics for this column.
     fn set_max_statistics_size(&mut self, value: usize) {
         self.max_statistics_size = Some(value);
+    }
+
+    /// Sets whether the writing of offset indexes is disabled for this column.
+    pub fn set_offset_index_disabled(&mut self, value: bool) {
+        self.offset_index_disabled = Some(value);
     }
 
     /// If `value` is `true`, sets bloom filter properties to default values if not previously set,
@@ -930,6 +983,11 @@ impl ColumnProperties {
     /// Returns optional max size in bytes for statistics.
     fn max_statistics_size(&self) -> Option<usize> {
         self.max_statistics_size
+    }
+
+    /// Returns whether writing of the offset index is disabled.
+    fn offset_index_disabled(&self) -> Option<bool> {
+        self.offset_index_disabled
     }
 
     /// Returns the bloom filter properties, or `None` if not enabled

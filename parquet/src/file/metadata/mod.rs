@@ -1535,6 +1535,7 @@ pub struct OffsetIndexBuilder {
     first_row_index_array: Vec<i64>,
     unencoded_byte_array_data_bytes_array: Option<Vec<i64>>,
     current_first_row_index: i64,
+    enabled: bool,
 }
 
 impl Default for OffsetIndexBuilder {
@@ -1552,7 +1553,18 @@ impl OffsetIndexBuilder {
             first_row_index_array: Vec::new(),
             unencoded_byte_array_data_bytes_array: None,
             current_first_row_index: 0,
+            enabled: true,
         }
+    }
+
+    /// Disable writing of offset indexes.
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+
+    /// Indicate if writing of the offset indexes is enabled.
+    pub fn enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Append the row count of the next page.
