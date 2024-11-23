@@ -413,7 +413,9 @@ impl Schema {
         &self.metadata
     }
 
-    pub fn normalize(self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
+    /// Returns a new schema, normalized based on the max_level
+    /// This carries metadata from the parent schema over as well
+    pub fn normalize(&self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
         if max_level == 0 {
             max_level = usize::MAX;
         }
@@ -462,11 +464,11 @@ impl Schema {
             let mut new_fields: Vec<Field> = vec![];
             for field in fields {
                 match field.data_type() {
-                    //DataType::List(f) => field,
-                    //DataType::ListView(_) => field,
-                    //DataType::FixedSizeList(_, _) => field,
-                    //DataType::LargeList(_) => field,
-                    //DataType::LargeListView(_) => field,
+                    //DataType::List(f) => ,
+                    //DataType::ListView(_) => ,
+                    //DataType::FixedSizeList(_, _) => ,
+                    //DataType::LargeList(_) => ,
+                    //DataType::LargeListView(_) => ,
                     DataType::Struct(nested_fields) => {
                         let field_name = field.name().as_str();
                         let new_key = format!("{key_string}{separator}{field_name}");

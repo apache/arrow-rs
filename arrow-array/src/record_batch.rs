@@ -18,8 +18,9 @@
 //! A two-dimensional batch of column-oriented data with a defined
 //! [schema](arrow_schema::Schema).
 
+use std::collections::{BinaryHeap, VecDeque};
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
-use arrow_schema::{ArrowError, DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef};
 use std::ops::{Deref, Index};
 use std::sync::Arc;
 
@@ -403,7 +404,59 @@ impl RecordBatch {
         )
     }
 
-    /// Returns the number of columns in the record batch.
+    /// Normalize a semi-structured RecordBatch into a flat table
+    /// If max_level is 0, normalizes all levels.
+    pub fn normalize(&self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
+        if max_level == 0 {
+            max_level = usize::MAX;
+        }
+        if self.num_rows() == 0 {
+            // No data, only need to normalize the schema
+            return Ok(Self::new_empty(Arc::new(self.schema.normalize(separator, max_level)?)));
+        }
+        let mut queue: VecDeque<(usize, &Arc<dyn Array>, &FieldRef)> = VecDeque::new();
+
+        // push fields
+        for (c, f) in self.columns.iter().zip(self.schema().fields()) {
+            queue.push_front((0, c, f));
+        }
+
+        while !queue.is_empty() {
+            match queue.pop_front() {
+                Some((depth, c, f)) => {
+                    match f.data_type() {
+                        //DataType::List(f) => field,
+                        //DataType::ListView(_) => field,
+                        //DataType::FixedSizeList(_, _) => field,
+                        //DataType::LargeList(_) => field,
+                        //DataType::LargeListView(_) => field,
+                        DataType::Struct(nested_fields) => {
+                            let field_name = f.name().as_str();
+                            /*new_fields = [
+                                new_fields,
+                                Self::normalizer(
+                                    nested_fields.to_vec(),
+                                    field_name,
+                                    separator,
+                                    max_level - 1,
+                                ),
+                            ]
+                                .concat();*/
+                        }
+                        //DataType::Union(_, _) => field,
+                        //DataType::Dictionary(_, _) => field,
+                        //DataType::Map(_, _) => field,
+                        //DataType::RunEndEncoded(_, _) => field, // not sure how to support this field
+                        _ => queue.push_front((0, c, f)),
+                    }
+                },
+                None => break,
+            };
+        }
+        todo!()
+    }
+
+        /// Returns the number of columns in the record batch.
     ///
     /// # Example
     ///
@@ -1215,6 +1268,7 @@ mod tests {
         let animals_field = Arc::new(Field::new("animals", DataType::Utf8, true));
         let n_legs_field = Arc::new(Field::new("n_legs", DataType::Int64, true));
         let year_field = Arc::new(Field::new("year", DataType::Int64, true));
+
 
         let a = Arc::new(StructArray::from(vec![
             (animals_field.clone(), Arc::new(animals) as ArrayRef),
