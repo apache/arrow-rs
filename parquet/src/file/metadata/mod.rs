@@ -190,7 +190,7 @@ impl ParquetMetaData {
 
     /// Creates Parquet metadata from file metadata, a list of row
     /// group metadata, and the column index structures.
-    #[deprecated(note = "Use ParquetMetaDataBuilder")]
+    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataBuilder")]
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
@@ -231,7 +231,7 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    #[deprecated(note = "Use Self::column_index")]
+    #[deprecated(since = "39.0.0", note = "Use Self::column_index")]
     pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
         self.column_index.as_ref()
     }
@@ -247,7 +247,7 @@ impl ParquetMetaData {
     }
 
     /// Returns the offset index for this file if loaded
-    #[deprecated(note = "Use Self::offset_index")]
+    #[deprecated(since = "39.0.0", note = "Use Self::offset_index")]
     pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_index.as_ref()
     }

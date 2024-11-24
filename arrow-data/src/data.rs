@@ -32,7 +32,7 @@ use crate::{equal, validate_binary_view, validate_string_view};
 
 /// A collection of [`Buffer`]
 #[doc(hidden)]
-#[deprecated(note = "Use [Buffer]")]
+#[deprecated(since = "46.0.0", note = "Use [Buffer]")]
 pub type Buffers<'a> = &'a [Buffer];
 
 #[inline]

@@ -408,7 +408,7 @@ impl Format {
 /// reader cursor offset.
 ///
 /// The inferred schema will always have each field set as nullable.
-#[deprecated(note = "Use Format::infer_schema")]
+#[deprecated(since = "39.0.0", note = "Use Format::infer_schema")]
 #[allow(deprecated)]
 pub fn infer_file_schema<R: Read + Seek>(
     mut reader: R,
@@ -429,7 +429,7 @@ pub fn infer_file_schema<R: Read + Seek>(
 /// not set, all records are read to infer the schema.
 ///
 /// Return inferred schema and number of records used for inference.
-#[deprecated(note = "Use Format::infer_schema")]
+#[deprecated(since = "39.0.0", note = "Use Format::infer_schema")]
 pub fn infer_reader_schema<R: Read>(
     reader: R,
     delimiter: u8,
@@ -1102,7 +1102,7 @@ impl ReaderBuilder {
     }
 
     /// Set whether the CSV file has headers
-    #[deprecated(note = "Use with_header")]
+    #[deprecated(since = "39.0.0", note = "Use with_header")]
     #[doc(hidden)]
     pub fn has_header(mut self, has_header: bool) -> Self {
         self.format.header = has_header;

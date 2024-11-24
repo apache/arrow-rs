@@ -120,7 +120,7 @@ impl MutableBuffer {
 
     /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
     #[inline]
-    #[deprecated(note = "Use From<Vec<T>>")]
+    #[deprecated(since = "46.0.0", note = "Use From<Vec<T>>")]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
         Self::from(vec)
     }

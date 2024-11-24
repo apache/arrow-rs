@@ -265,7 +265,7 @@ fn compare_struct(
     Ok(f)
 }
 
-#[deprecated(note = "Use make_comparator")]
+#[deprecated(since = "52.0.0", note = "Use make_comparator")]
 #[doc(hidden)]
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
     make_comparator(left, right, SortOptions::default())

@@ -167,7 +167,7 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
 /// The returned vec would be of size k where k is cardinality of the sorted values; Consecutive
 /// values will be connected: (a, b) and (b, c), where start = 0 and end = n for the first and last
 /// range.
-#[deprecated(note = "Use partition")]
+#[deprecated(since = "46.0.0", note = "Use partition")]
 pub fn lexicographical_partition_ranges(
     columns: &[SortColumn],
 ) -> Result<impl Iterator<Item = Range<usize>> + '_, ArrowError> {

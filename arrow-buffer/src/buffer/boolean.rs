@@ -102,7 +102,7 @@ impl BooleanBuffer {
     ///
     /// Panics if `i >= self.len()`
     #[inline]
-    #[deprecated(note = "use BooleanBuffer::value")]
+    #[deprecated(since = "36.0.0", note = "use BooleanBuffer::value")]
     pub fn is_set(&self, i: usize) -> bool {
         self.value(i)
     }
