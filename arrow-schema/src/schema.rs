@@ -419,14 +419,9 @@ impl Schema {
         if max_level == 0 {
             max_level = usize::MAX;
         }
-        let mut new_fields: Vec<Field> = vec![];
+        let mut new_fields: Vec<FieldRef> = vec![];
         for field in self.fields() {
             match field.data_type() {
-                //DataType::List(f) => field,
-                //DataType::ListView(_) => field,
-                //DataType::FixedSizeList(_, _) => field,
-                //DataType::LargeList(_) => field,
-                //DataType::LargeListView(_) => field,
                 DataType::Struct(nested_fields) => {
                     let field_name = field.name().as_str();
                     new_fields = [
@@ -440,15 +435,11 @@ impl Schema {
                     ]
                     .concat();
                 }
-                //DataType::Union(_, _) => field,
-                //DataType::Dictionary(_, _) => field,
-                //DataType::Map(_, _) => field,
-                //DataType::RunEndEncoded(_, _) => field, // not sure how to support this field
-                _ => new_fields.push(Field::new(
+                _ => new_fields.push(Arc::new(Field::new(
                     field.name(),
                     field.data_type().clone(),
                     field.is_nullable(),
-                )),
+                ))),
             };
         }
         Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
@@ -459,16 +450,11 @@ impl Schema {
         key_string: &str,
         separator: &str,
         max_level: usize,
-    ) -> Vec<Field> {
+    ) -> Vec<FieldRef> {
+        let mut new_fields: Vec<FieldRef> = vec![];
         if max_level > 0 {
-            let mut new_fields: Vec<Field> = vec![];
             for field in fields {
                 match field.data_type() {
-                    //DataType::List(f) => ,
-                    //DataType::ListView(_) => ,
-                    //DataType::FixedSizeList(_, _) => ,
-                    //DataType::LargeList(_) => ,
-                    //DataType::LargeListView(_) => ,
                     DataType::Struct(nested_fields) => {
                         let field_name = field.name().as_str();
                         let new_key = format!("{key_string}{separator}{field_name}");
@@ -483,21 +469,23 @@ impl Schema {
                         ]
                         .concat();
                     }
-                    //DataType::Union(_, _) => field,
-                    //DataType::Dictionary(_, _) => field,
-                    //DataType::Map(_, _) => field,
-                    //DataType::RunEndEncoded(_, _) => field, // not sure how to support this field
-                    _ => new_fields.push(Field::new(
+                    _ => new_fields.push(Arc::new(Field::new(
                         format!("{key_string}{separator}{}", field.name()),
                         field.data_type().clone(),
                         field.is_nullable(),
-                    )),
+                    ))),
                 };
             }
-            new_fields
         } else {
-            todo!()
+            for field in fields {
+                new_fields.push(Arc::new(Field::new(
+                    format!("{key_string}{separator}{}", field.name()),
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                )));
+            }
         }
+        new_fields
     }
 
     /// Look up a column by name and return a immutable reference to the column along with
