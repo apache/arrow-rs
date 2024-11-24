@@ -22,14 +22,10 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
-    ScalarBuffer,
-};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
-use builder::{ArrayBuilder, GenericByteViewBuilder};
 use std::collections::HashMap;
 use std::sync::Arc;
 
