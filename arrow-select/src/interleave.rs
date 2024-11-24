@@ -502,10 +502,10 @@ mod tests {
     #[test]
     fn test_interleave_views() {
         let values = StringArray::from_iter_values(["hello", "world", "foo", "bar", "baz"]);
-        let view_a = StringViewArray::try_from(&values).unwrap();
+        let view_a = StringViewArray::from(&values);
 
         let values = StringArray::from_iter_values(["test", "data", "more", "views", "here"]);
-        let view_b = StringViewArray::try_from(&values).unwrap();
+        let view_b = StringViewArray::from(&values);
 
         let indices = &[
             (0, 2), // "foo"
@@ -548,10 +548,10 @@ mod tests {
     #[test]
     fn test_interleave_views_with_nulls() {
         let values = StringArray::from_iter([Some("hello"), None, Some("foo"), Some("bar"), None]);
-        let view_a = StringViewArray::try_from(&values).unwrap();
+        let view_a = StringViewArray::from(&values);
 
         let values = StringArray::from_iter([Some("test"), Some("data"), None, None, Some("here")]);
-        let view_b = StringViewArray::try_from(&values).unwrap();
+        let view_b = StringViewArray::from(&values);
 
         let indices = &[
             (0, 1), // null
