@@ -296,7 +296,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String length exceeds `u32::MAX`
     #[inline]
     pub fn append_str(&mut self, value: &str) {
-        // SAFETY: UTF8 bytes are valid for both string and binaary
+        // SAFETY: UTF8 bytes are valid for both string and binary
         unsafe { self.append_bytes(value.as_bytes()) }
     }
 
@@ -430,7 +430,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         buffer_size + in_progress + tracker + views + null
     }
 
-    /// Return a structure that implements `std::fmt::Write` to write stirngs
+    /// Return a structure that implements `std::fmt::Write` to write strings
     /// directly to the builder. See example on [`StringViewBuilder`]
     pub fn formatter(&mut self) -> ByteViewFormatter<'_, T> {
         ByteViewFormatter::new(self)
@@ -677,7 +677,7 @@ where
     }
 }
 
-/// When a StringViewWriter is dropped, it writes the the value to the StringViewBuilder
+/// When a StringViewWriter is dropped, it writes the value to the StringViewBuilder
 impl<'a, T> Drop for ByteViewFormatter<'a, T>
 where
     T: ByteViewType + ?Sized,
