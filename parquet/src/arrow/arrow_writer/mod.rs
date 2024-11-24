@@ -1743,7 +1743,7 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap();
+        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
 
         let page_locations = offset_indexes[0].page_locations.clone();
 

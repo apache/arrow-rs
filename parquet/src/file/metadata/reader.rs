@@ -303,7 +303,6 @@ impl ParquetMetaDataReader {
 
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
-            self.empty_page_indexes();
             return Ok(());
         };
 
@@ -475,20 +474,6 @@ impl ParquetMetaDataReader {
             metadata.set_offset_index(Some(index));
         }
         Ok(())
-    }
-
-    /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
-    ///
-    /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
-    fn empty_page_indexes(&mut self) {
-        let metadata = self.metadata.as_mut().unwrap();
-        let num_row_groups = metadata.num_row_groups();
-        if self.column_index {
-            metadata.set_column_index(Some(vec![vec![]; num_row_groups]));
-        }
-        if self.offset_index {
-            metadata.set_offset_index(Some(vec![vec![]; num_row_groups]));
-        }
     }
 
     fn range_for_page_index(&self) -> Option<Range<usize>> {
