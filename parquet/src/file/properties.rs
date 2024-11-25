@@ -159,6 +159,7 @@ pub struct WriterProperties {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
+    offset_index_disabled: bool,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
@@ -241,6 +242,22 @@ impl WriterProperties {
     /// Returns `created_by` string.
     pub fn created_by(&self) -> &str {
         &self.created_by
+    }
+
+    /// Returns `true` if offset index writing is disabled.
+    pub fn offset_index_disabled(&self) -> bool {
+        // If page statistics are to be collected, then do not disable the offset indexes.
+        let default_page_stats_enabled =
+            self.default_column_properties.statistics_enabled() == Some(EnabledStatistics::Page);
+        let column_page_stats_enabled = self
+            .column_properties
+            .iter()
+            .any(|path_props| path_props.1.statistics_enabled() == Some(EnabledStatistics::Page));
+        if default_page_stats_enabled || column_page_stats_enabled {
+            return false;
+        }
+
+        self.offset_index_disabled
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
@@ -334,20 +351,6 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
 
-    /// Returns `true` if offset index writing is disabled for a column.
-    pub fn offset_index_disabled(&self, col: &ColumnPath) -> bool {
-        // If writing column indexes, then this cannot be true.
-        if self.statistics_enabled(col) == EnabledStatistics::Page {
-            return false;
-        }
-
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.offset_index_disabled())
-            .or_else(|| self.default_column_properties.offset_index_disabled())
-            .unwrap_or(DEFAULT_OFFSET_INDEX_DISABLED)
-    }
-
     /// Returns the [`BloomFilterProperties`] for the given column
     ///
     /// Returns `None` if bloom filter is disabled
@@ -371,6 +374,7 @@ pub struct WriterPropertiesBuilder {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
+    offset_index_disabled: bool,
     key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
@@ -391,6 +395,7 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
+            offset_index_disabled: DEFAULT_OFFSET_INDEX_DISABLED,
             key_value_metadata: None,
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
@@ -411,6 +416,7 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
+            offset_index_disabled: self.offset_index_disabled,
             key_value_metadata: self.key_value_metadata,
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
@@ -512,6 +518,20 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets whether the writing of offset indexes is disabled (defaults to `false`).
+    ///
+    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
+    ///
+    /// Note: As the offset indexes are useful for accessing data by row number,
+    /// they are always written by default, regardless of whether other statistics
+    /// are enabled. Disabling these statistics may result in a degradation in read
+    /// performance, so use this option with care.
+    /// [`Page`]: EnabledStatistics::Page
+    pub fn set_offset_index_disabled(mut self, value: bool) -> Self {
+        self.offset_index_disabled = value;
+        self
+    }
+
     /// Sets "key_value_metadata" property (defaults to `None`).
     pub fn set_key_value_metadata(mut self, value: Option<Vec<KeyValue>>) -> Self {
         self.key_value_metadata = value;
@@ -573,21 +593,6 @@ impl WriterPropertiesBuilder {
     pub fn set_max_statistics_size(mut self, value: usize) -> Self {
         self.default_column_properties
             .set_max_statistics_size(value);
-        self
-    }
-
-    /// Sets whether the writing of offset indexes is disabled for all columns (defaults to `false`).
-    ///
-    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
-    ///
-    /// Note: As the offset indexes are useful for accessing data by row number,
-    /// they are always written by default, regardless of whether other statistics
-    /// are enabled. Disabling these statistics may result in a degradation in read
-    /// performance, so use this option with care.
-    /// [`Page`]: EnabledStatistics::Page
-    pub fn set_offset_index_disabled(mut self, value: bool) -> Self {
-        self.default_column_properties
-            .set_offset_index_disabled(value);
         self
     }
 
@@ -692,22 +697,6 @@ impl WriterPropertiesBuilder {
     /// Takes precedence over [`Self::set_max_statistics_size`].
     pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
         self.get_mut_props(col).set_max_statistics_size(value);
-        self
-    }
-
-    /// Sets whether the writing of offset indexes is disabled for a specific column.
-    ///
-    /// Takes precedence over [`Self::set_offset_index_disabled`].
-    ///
-    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
-    ///
-    /// Note: As the offset indexes are useful for accessing data by row number,
-    /// they are always written by default, regardless of whether other statistics
-    /// are enabled. Disabling these statistics may result in a degradation in read
-    /// performance, so use this option with care.
-    /// [`Page`]: EnabledStatistics::Page
-    pub fn set_column_offset_index_disabled(mut self, col: ColumnPath, value: bool) -> Self {
-        self.get_mut_props(col).set_offset_index_disabled(value);
         self
     }
 
@@ -874,7 +863,6 @@ struct ColumnProperties {
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
-    offset_index_disabled: Option<bool>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
 }
@@ -914,11 +902,6 @@ impl ColumnProperties {
     /// Sets max size for statistics for this column.
     fn set_max_statistics_size(&mut self, value: usize) {
         self.max_statistics_size = Some(value);
-    }
-
-    /// Sets whether the writing of offset indexes is disabled for this column.
-    pub fn set_offset_index_disabled(&mut self, value: bool) {
-        self.offset_index_disabled = Some(value);
     }
 
     /// If `value` is `true`, sets bloom filter properties to default values if not previously set,
@@ -983,11 +966,6 @@ impl ColumnProperties {
     /// Returns optional max size in bytes for statistics.
     fn max_statistics_size(&self) -> Option<usize> {
         self.max_statistics_size
-    }
-
-    /// Returns whether writing of the offset index is disabled.
-    fn offset_index_disabled(&self) -> Option<bool> {
-        self.offset_index_disabled
     }
 
     /// Returns the bloom filter properties, or `None` if not enabled

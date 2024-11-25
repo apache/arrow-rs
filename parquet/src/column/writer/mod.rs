@@ -396,7 +396,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // Disable offset_index_builder if requested by user.
         let mut offset_index_builder = OffsetIndexBuilder::new();
-        if props.offset_index_disabled(descr.path()) {
+        if props.offset_index_disabled() {
             offset_index_builder.disable()
         }
 
