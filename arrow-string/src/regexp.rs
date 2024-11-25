@@ -447,8 +447,7 @@ pub fn regexp_match(
 
         if regex.is_none() {
             return Ok(new_null_array(
-                &DataType::List(Arc::new(Field::new(
-                    "item",
+                &DataType::List(Arc::new(Field::new_list_field(
                     array.data_type().clone(),
                     true,
                 ))),

@@ -722,7 +722,7 @@ mod tests_to_then_from_ffi {
 
         // Construct a list array from the above two
         let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::Int32, false),
+            Field::new_list_field(DataType::Int32, false),
         ));
 
         let list_data = ArrayData::builder(list_data_type)
@@ -1481,7 +1481,7 @@ mod tests_from_ffi {
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
         let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
             .len(8)
             .add_buffer(value_offsets)

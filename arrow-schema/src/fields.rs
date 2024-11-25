@@ -496,7 +496,12 @@ mod tests {
                 Field::new("floats", DataType::Struct(floats.clone()), true),
                 true,
             ),
-            Field::new_fixed_size_list("f", Field::new("item", DataType::Int32, false), 3, false),
+            Field::new_fixed_size_list(
+                "f",
+                Field::new_list_field(DataType::Int32, false),
+                3,
+                false,
+            ),
             Field::new_map(
                 "g",
                 "entries",

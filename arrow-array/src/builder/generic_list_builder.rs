@@ -297,7 +297,7 @@ where
 
         let field = match &self.field {
             Some(f) => f.clone(),
-            None => Arc::new(Field::new("item", values.data_type().clone(), true)),
+            None => Arc::new(Field::new_list_field(values.data_type().clone(), true)),
         };
 
         GenericListArray::new(field, offsets, values, nulls)
@@ -314,7 +314,7 @@ where
 
         let field = match &self.field {
             Some(f) => f.clone(),
-            None => Arc::new(Field::new("item", values.data_type().clone(), true)),
+            None => Arc::new(Field::new_list_field(values.data_type().clone(), true)),
         };
 
         GenericListArray::new(field, offsets, values, nulls)
@@ -584,7 +584,7 @@ mod tests {
     fn test_boxed_list_list_array_builder() {
         // This test is same as `test_list_list_array_builder` but uses boxed builders.
         let values_builder = make_builder(
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             10,
         );
         test_boxed_generic_list_generic_list_array_builder::<i32>(values_builder);
@@ -594,7 +594,7 @@ mod tests {
     fn test_boxed_large_list_large_list_array_builder() {
         // This test is same as `test_list_list_array_builder` but uses boxed builders.
         let values_builder = make_builder(
-            &DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true))),
+            &DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true))),
             10,
         );
         test_boxed_generic_list_generic_list_array_builder::<i64>(values_builder);
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Non-nullable field of ListArray \\\"item\\\" cannot contain nulls")]
     fn test_checks_nullability() {
-        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1), None]);
         builder.finish();
@@ -798,7 +798,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "ListArray expected data type Int64 got Int32")]
     fn test_checks_data_type() {
-        let field = Arc::new(Field::new("item", DataType::Int64, false));
+        let field = Arc::new(Field::new_list_field(DataType::Int64, false));
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1)]);
         builder.finish();

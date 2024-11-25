@@ -849,7 +849,7 @@ pub mod tests {
     fn test_struct() {
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
-            Field::new_list("b", Field::new("item", DataType::Int32, true), true),
+            Field::new_list("b", Field::new_list_field(DataType::Int32, true), true),
         ]);
 
         let a = Int32Array::from(vec![Some(1), Some(2), None, None]);

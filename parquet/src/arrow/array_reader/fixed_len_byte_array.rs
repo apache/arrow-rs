@@ -508,8 +508,7 @@ mod tests {
         );
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new(
-            "item",
+        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new_list_field(
             decimals.data_type().clone(),
             false,
         ))))

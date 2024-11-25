@@ -382,11 +382,9 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt8,
-            false,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt8, false),
+        ));
 
         // [None, Some("Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -430,11 +428,9 @@ mod tests {
 
         // It is possible to create a null struct containing a non-nullable child
         // see https://github.com/apache/arrow-rs/pull/3244 for details
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt8,
-            true,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt8, true),
+        ));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -468,11 +464,9 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt16,
-            false,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt16, false),
+        ));
 
         let array_data = ArrayData::builder(data_type)
             .len(2)

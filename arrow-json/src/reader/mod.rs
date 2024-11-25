@@ -1754,12 +1754,12 @@ mod tests {
         assert_eq!(&DataType::Int64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
             b.1.data_type()
         );
         let c = schema.column_with_name("c").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
             c.1.data_type()
         );
         let d = schema.column_with_name("d").unwrap();
@@ -1798,7 +1798,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
             true,
         )]));
 
@@ -1822,9 +1822,8 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new(
-                "item",
-                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(
+                DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
                 true,
             ))),
             true,

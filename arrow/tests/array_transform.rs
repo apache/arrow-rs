@@ -600,7 +600,7 @@ fn test_list_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
         8,
         None,
         0,
@@ -677,7 +677,7 @@ fn test_list_nulls_append() {
     let list_value_offsets =
         Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
         12,
         Some(Buffer::from(&[0b11011011, 0b1110])),
         0,
@@ -940,7 +940,7 @@ fn test_list_of_strings_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0, 3, 5, 6, 9, 10, 13]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
         6,
         None,
         0,
@@ -1141,7 +1141,7 @@ fn test_fixed_size_list_append() {
         Some(12),
     ]);
     let expected_fixed_size_list_data = ArrayData::try_new(
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt16, true)), 2),
+        DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt16, true)), 2),
         12,
         Some(Buffer::from(&[0b11011101, 0b101])),
         0,
