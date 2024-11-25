@@ -39,7 +39,6 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
-num = { version = "0.4", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [dev-dependencies]
