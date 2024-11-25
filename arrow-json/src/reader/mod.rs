@@ -246,13 +246,6 @@ impl ReaderBuilder {
 
     /// Sets if the decoder should coerce primitive values (bool and number) into string
     /// when the Schema's column is Utf8 or LargeUtf8.
-    #[deprecated(since = "39.0.0", note = "Use with_coerce_primitive")]
-    pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
-        self.with_coerce_primitive(coerce_primitive)
-    }
-
-    /// Sets if the decoder should coerce primitive values (bool and number) into string
-    /// when the Schema's column is Utf8 or LargeUtf8.
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,

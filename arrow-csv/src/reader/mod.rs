@@ -136,7 +136,7 @@ use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
 
 use crate::map_csv_error;
@@ -397,51 +397,6 @@ impl Format {
         }
         builder.build()
     }
-}
-
-/// Infer the schema of a CSV file by reading through the first n records of the file,
-/// with `max_read_records` controlling the maximum number of records to read.
-///
-/// If `max_read_records` is not set, the whole file is read to infer its schema.
-///
-/// Return inferred schema and number of records used for inference. This function does not change
-/// reader cursor offset.
-///
-/// The inferred schema will always have each field set as nullable.
-#[deprecated(since = "39.0.0", note = "Use Format::infer_schema")]
-#[allow(deprecated)]
-pub fn infer_file_schema<R: Read + Seek>(
-    mut reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.stream_position()?;
-    let r = infer_reader_schema(&mut reader, delimiter, max_read_records, has_header)?;
-    // return the reader seek back to the start
-    reader.seek(SeekFrom::Start(saved_offset))?;
-    Ok(r)
-}
-
-/// Infer schema of CSV records provided by struct that implements `Read` trait.
-///
-/// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
-/// not set, all records are read to infer the schema.
-///
-/// Return inferred schema and number of records used for inference.
-#[deprecated(since = "39.0.0", note = "Use Format::infer_schema")]
-pub fn infer_reader_schema<R: Read>(
-    reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let format = Format {
-        delimiter: Some(delimiter),
-        header: has_header,
-        ..Default::default()
-    };
-    format.infer_schema(reader, max_read_records)
 }
 
 /// Infer schema from a list of CSV files by reading through first n records
@@ -1101,14 +1056,6 @@ impl ReaderBuilder {
         }
     }
 
-    /// Set whether the CSV file has headers
-    #[deprecated(since = "39.0.0", note = "Use with_header")]
-    #[doc(hidden)]
-    pub fn has_header(mut self, has_header: bool) -> Self {
-        self.format.header = has_header;
-        self
-    }
-
     /// Set whether the CSV file has a header
     pub fn with_header(mut self, has_header: bool) -> Self {
         self.format.header = has_header;
@@ -1236,7 +1183,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;

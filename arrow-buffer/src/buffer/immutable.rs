@@ -278,14 +278,6 @@ impl Buffer {
         BitChunks::new(self.as_slice(), offset, len)
     }
 
-    /// Returns the number of 1-bits in this buffer.
-    #[deprecated(since = "27.0.0", note = "use count_set_bits_offset instead")]
-    pub fn count_set_bits(&self) -> usize {
-        let len_in_bits = self.len() * 8;
-        // self.offset is already taken into consideration by the bit_chunks implementation
-        self.count_set_bits_offset(0, len_in_bits)
-    }
-
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {

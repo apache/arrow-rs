@@ -468,12 +468,6 @@ impl InMemory {
         Self { storage }
     }
 
-    /// Creates a clone of the store
-    #[deprecated(since = "44.0.0", note = "Use fork() instead")]
-    pub async fn clone(&self) -> Self {
-        self.fork()
-    }
-
     async fn entry(&self, location: &Path) -> Result<Entry> {
         let storage = self.storage.read();
         let value = storage
