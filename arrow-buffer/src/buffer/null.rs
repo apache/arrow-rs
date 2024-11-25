@@ -130,6 +130,16 @@ impl NullBuffer {
         self.buffer.is_empty()
     }
 
+    /// Free up unused memory.
+    #[inline]
+    #[must_use]
+    pub fn shrink_to_fit(self) -> Self {
+        Self {
+            buffer: self.buffer.shrink_to_fit(),
+            null_count: self.null_count,
+        }
+    }
+
     /// Returns the null count for this [`NullBuffer`]
     #[inline]
     pub fn null_count(&self) -> usize {

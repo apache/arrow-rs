@@ -136,6 +136,18 @@ where
         self.len == 0
     }
 
+    /// Free up unused memory.
+    #[inline]
+    #[must_use]
+    pub fn shrink_to_fit(self) -> Self {
+        Self {
+            // TODO: we could shrink even more in the case where we are a small sub-slice of the full buffer
+            run_ends: self.run_ends.shrink_to_fit(),
+            len: self.len,
+            offset: self.offset,
+        }
+    }
+
     /// Returns the values of this [`RunEndBuffer`] not including any offset
     #[inline]
     pub fn values(&self) -> &[E] {

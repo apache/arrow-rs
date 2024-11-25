@@ -125,6 +125,18 @@ impl BooleanBuffer {
         self.len == 0
     }
 
+    /// Free up unused memory.
+    #[inline]
+    #[must_use]
+    pub fn shrink_to_fit(self) -> Self {
+        Self {
+            // TODO: we could shrink even more in the case where we are a small sub-slice of the full buffer
+            buffer: self.buffer.shrink_to_fit(),
+            offset: self.offset,
+            len: self.len,
+        }
+    }
+
     /// Returns the boolean value at index `i`.
     ///
     /// # Panics
