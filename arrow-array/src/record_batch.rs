@@ -1349,10 +1349,10 @@ mod tests {
             (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
         ]));
 
-        /*let exclamation_field = Arc::new(StructArray::from(vec![
+        let exclamation_field = Arc::new(StructArray::from(vec![
             (one.clone(), Arc::new(one_field.clone()) as ArrayRef),
             (two.clone(), Arc::new(two_field.clone()) as ArrayRef),
-        ]));*/
+        ]));
 
         let schema = Schema::new(vec![exclamation.clone()]);
         /*let normalized = RecordBatch::try_new(Arc::new(schema), vec![exclamation_field])
@@ -1509,9 +1509,7 @@ mod tests {
         let metadata = vec![("foo".to_string(), "bar".to_string())]
             .into_iter()
             .collect();
-        println!("Metadata: {:?}", metadata);
         let metadata_schema = nullable_schema.as_ref().clone().with_metadata(metadata);
-        println!("Metadata schema: {:?}", metadata_schema);
         let batch = batch.with_schema(Arc::new(metadata_schema)).unwrap();
 
         // Cannot remove metadata
