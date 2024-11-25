@@ -1606,7 +1606,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, false)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, false)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1672,7 +1672,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, true)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1739,7 +1739,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, true)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1904,7 +1904,8 @@ mod tests {
         // Construct offsets
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -2222,7 +2223,7 @@ mod tests {
     fn test_take_fixed_size_list_null_indices() {
         let indices = Int32Array::from_iter([Some(0), None]);
         let values = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
-        let arr_field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let arr_field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
         let values = FixedSizeListArray::try_new(arr_field, 2, values, None).unwrap();
 
         let r = take(&values, &indices, None).unwrap();

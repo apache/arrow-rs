@@ -1869,7 +1869,7 @@ mod tests {
     async fn test_nested_skip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("col_1", DataType::UInt64, false),
-            Field::new_list("col_2", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list("col_2", Field::new_list_field(DataType::Utf8, true), true),
         ]));
 
         // Default writer properties

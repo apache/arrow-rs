@@ -40,7 +40,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 /// # use arrow_schema::{DataType, Field};
 /// # use std::sync::Arc;
 /// // create a new list of 32-bit signed integers directly
-/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// // Create the same list type with constructor
 /// let list_data_type2 = DataType::new_list(DataType::Int32, true);
 /// assert_eq!(list_data_type, list_data_type2);
@@ -837,21 +837,21 @@ mod tests {
     #[test]
     fn test_list_datatype_equality() {
         // tests that list type equality is checked while ignoring list names
-        let list_a = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_a = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_b = DataType::List(Arc::new(Field::new("array", DataType::Int32, true)));
-        let list_c = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
-        let list_d = DataType::List(Arc::new(Field::new("item", DataType::UInt32, true)));
+        let list_c = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_d = DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true)));
         assert!(list_a.equals_datatype(&list_b));
         assert!(!list_a.equals_datatype(&list_c));
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(list_a.clone(), false)), 3);
         let list_f =
             DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            Arc::new(Field::new_list_field(DataType::FixedSizeBinary(3), true)),
             3,
         );
         assert!(list_e.equals_datatype(&list_f));

@@ -1665,7 +1665,7 @@ mod tests {
                 Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
                 Field::new_list(
                     "c21",
-                    Field::new("item", DataType::Boolean, true)
+                    Field::new_list_field(DataType::Boolean, true)
                         .with_metadata(meta(&[("Key", "Bar"), (PARQUET_FIELD_ID_META_KEY, "5")])),
                     false,
                 )
@@ -1673,7 +1673,7 @@ mod tests {
                 Field::new(
                     "c22",
                     DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Boolean, true)),
+                        Arc::new(Field::new_list_field(DataType::Boolean, true)),
                         5,
                     ),
                     false,
@@ -1682,8 +1682,7 @@ mod tests {
                     "c23",
                     Field::new_large_list(
                         "inner",
-                        Field::new(
-                            "item",
+                        Field::new_list_field(
                             DataType::Struct(
                                 vec![
                                     Field::new("a", DataType::Int16, true),
@@ -1728,8 +1727,7 @@ mod tests {
                     "c34",
                     Field::new_list(
                         "inner",
-                        Field::new(
-                            "item",
+                        Field::new_list_field(
                             DataType::Struct(
                                 vec![
                                     Field::new("a", DataType::Int16, true),
@@ -1762,7 +1760,7 @@ mod tests {
                         .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "8")])),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true)
+                        Field::new_list_field(DataType::Utf8, true)
                             .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "10")])),
                         true,
                     )
@@ -1777,7 +1775,7 @@ mod tests {
                     Field::new("my_key", DataType::Utf8, false),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true)
+                        Field::new_list_field(DataType::Utf8, true)
                             .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "11")])),
                         true,
                     ),

@@ -150,7 +150,7 @@ mod tests {
                 Field::new("c21", DataType::Interval(IntervalUnit::MonthDayNano), false),
                 Field::new(
                     "c22",
-                    DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
                     false,
                 ),
                 Field::new(
