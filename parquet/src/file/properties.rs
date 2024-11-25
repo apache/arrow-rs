@@ -526,6 +526,7 @@ impl WriterPropertiesBuilder {
     /// they are always written by default, regardless of whether other statistics
     /// are enabled. Disabling these statistics may result in a degradation in read
     /// performance, so use this option with care.
+    ///
     /// [`Page`]: EnabledStatistics::Page
     pub fn set_offset_index_disabled(mut self, value: bool) -> Self {
         self.offset_index_disabled = value;
