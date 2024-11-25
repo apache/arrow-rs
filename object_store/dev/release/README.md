@@ -27,11 +27,11 @@ This file documents the release process for the `object_store` crate.
 At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
 
 As we are still in an early phase, we use the 0.x version scheme. If any code has 
-been merged to master that has a breaking API change, as defined in [Rust RFC 1105]
+been merged to main that has a breaking API change, as defined in [Rust RFC 1105]
 the minor version number is incremented changed (e.g. `0.3.0` to `0.4.0`). 
 Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
-[Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
+[Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/main/text/1105-api-evolution.md
 # Release Mechanics
 
 ## Process Overview
@@ -45,14 +45,14 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/object_store/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
 
 ## Prepare CHANGELOG and version:
 
-Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
+Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
 Note  this process is done in the `object_store` directory. See [#6227] for an example
 
@@ -90,7 +90,7 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-Merge this PR to `master` prior to the next step.
+Merge this PR to `main` prior to the next step.
 
 ## Prepare release candidate tarball
 
