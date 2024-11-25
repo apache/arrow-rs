@@ -858,7 +858,7 @@ impl ColumnProperties {
         self.dictionary_enabled = Some(enabled);
     }
 
-    /// Sets whether or not statistics are enabled for this column.
+    /// Sets the statistics level for this column.
     fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
     }
@@ -921,8 +921,8 @@ impl ColumnProperties {
         self.dictionary_enabled
     }
 
-    /// Returns `Some(true)` if statistics are enabled for this column, if disabled then
-    /// returns `Some(false)`. If result is `None`, then no setting has been provided.
+    /// Returns optional statistics level requested for this column. If result is `None`,
+    /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
     }
