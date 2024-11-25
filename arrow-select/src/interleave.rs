@@ -501,10 +501,22 @@ mod tests {
 
     #[test]
     fn test_interleave_views() {
-        let values = StringArray::from_iter_values(["hello", "world", "foo", "bar", "baz"]);
+        let values = StringArray::from_iter_values([
+            "hello",
+            "world_long_string_not_inlined",
+            "foo",
+            "bar",
+            "baz",
+        ]);
         let view_a = StringViewArray::from(&values);
 
-        let values = StringArray::from_iter_values(["test", "data", "more", "views", "here"]);
+        let values = StringArray::from_iter_values([
+            "test",
+            "data",
+            "more_long_string_not_inlined",
+            "views",
+            "here",
+        ]);
         let view_b = StringViewArray::from(&values);
 
         let indices = &[
@@ -512,16 +524,20 @@ mod tests {
             (1, 0), // "test"
             (0, 4), // "baz"
             (1, 3), // "views"
-            (0, 1), // "world"
+            (0, 1), // "world_long_string_not_inlined"
         ];
 
         // Test specialized implementation
         let values = interleave(&[&view_a, &view_b], indices).unwrap();
         let result = values.as_string_view();
+        assert_eq!(result.data_buffers().len(), 1);
 
         // Test fallback implementation
         let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
         let fallback_result = fallback.as_string_view();
+        // as of commit 97055631, assertion below, commented out to not block future improvements, passes:
+        // note that fallback_result has 2 buffers, but only one long enough string to warrant a buffer
+        // assert_eq!(fallback_result.data_buffers().len(), 2);
 
         // Convert to strings for easier assertion
         let collected: Vec<_> = result.iter().map(|x| x.map(|s| s.to_string())).collect();
@@ -540,23 +556,35 @@ mod tests {
                 Some("test".to_string()),
                 Some("baz".to_string()),
                 Some("views".to_string()),
-                Some("world".to_string()),
+                Some("world_long_string_not_inlined".to_string()),
             ]
         );
     }
 
     #[test]
     fn test_interleave_views_with_nulls() {
-        let values = StringArray::from_iter([Some("hello"), None, Some("foo"), Some("bar"), None]);
+        let values = StringArray::from_iter([
+            Some("hello"),
+            None,
+            Some("foo_long_string_not_inlined"),
+            Some("bar"),
+            None,
+        ]);
         let view_a = StringViewArray::from(&values);
 
-        let values = StringArray::from_iter([Some("test"), Some("data"), None, None, Some("here")]);
+        let values = StringArray::from_iter([
+            Some("test"),
+            Some("data_long_string_not_inlined"),
+            None,
+            None,
+            Some("here"),
+        ]);
         let view_b = StringViewArray::from(&values);
 
         let indices = &[
             (0, 1), // null
             (1, 2), // null
-            (0, 2), // "foo"
+            (0, 2), // "foo_long_string_not_inlined"
             (1, 3), // null
             (0, 4), // null
         ];
@@ -564,6 +592,7 @@ mod tests {
         // Test specialized implementation
         let values = interleave(&[&view_a, &view_b], indices).unwrap();
         let result = values.as_string_view();
+        assert_eq!(result.data_buffers().len(), 1);
 
         // Test fallback implementation
         let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
@@ -581,7 +610,13 @@ mod tests {
 
         assert_eq!(
             &collected,
-            &[None, None, Some("foo".to_string()), None, None,]
+            &[
+                None,
+                None,
+                Some("foo_long_string_not_inlined".to_string()),
+                None,
+                None,
+            ]
         );
     }
 }
