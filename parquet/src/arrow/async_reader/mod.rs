@@ -159,7 +159,7 @@ pub trait AsyncFileReader: Send {
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
-impl<'reader> AsyncFileReader for Box<dyn AsyncFileReader + 'reader> {
+impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
