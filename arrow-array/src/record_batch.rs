@@ -1349,10 +1349,10 @@ mod tests {
             (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
         ]));
 
-        let exclamation_field = Arc::new(StructArray::from(vec![
+        /*let exclamation_field = Arc::new(StructArray::from(vec![
             (one.clone(), Arc::new(one_field.clone()) as ArrayRef),
             (two.clone(), Arc::new(two_field.clone()) as ArrayRef),
-        ]));
+        ]));*/
 
         let schema = Schema::new(vec![exclamation.clone()]);
         /*let normalized = RecordBatch::try_new(Arc::new(schema), vec![exclamation_field])
