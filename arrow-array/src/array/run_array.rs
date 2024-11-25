@@ -330,6 +330,14 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         self.run_ends.is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            run_ends: self.run_ends.clone().shrink_to_fit(),
+            values: self.values.shrink_to_fit(),
+        })
+    }
+
     fn offset(&self) -> usize {
         self.run_ends.offset()
     }
@@ -582,6 +590,10 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn is_empty(&self) -> bool {
         self.run_array.is_empty()
+    }
+
+    fn shrink_to_fit(&self) -> ArrayRef {
+        unimplemented!("shrink_to_fit cannot be implemented for TypedRunArray")
     }
 
     fn offset(&self) -> usize {

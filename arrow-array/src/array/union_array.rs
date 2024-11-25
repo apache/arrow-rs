@@ -744,6 +744,19 @@ impl Array for UnionArray {
         self.type_ids.is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            type_ids: self.type_ids.clone().shrink_to_fit(),
+            offsets: self.offsets.clone().map(|o| o.shrink_to_fit()),
+            fields: self
+                .fields
+                .iter()
+                .map(|option| option.as_ref().map(|n| n.shrink_to_fit()))
+                .collect(),
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

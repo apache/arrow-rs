@@ -364,6 +364,15 @@ impl Array for StructArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            len: self.len,
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+            fields: self.fields.iter().map(|n| n.shrink_to_fit()).collect(),
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

@@ -453,6 +453,15 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            value_offsets: self.value_offsets.clone().shrink_to_fit(),
+            value_data: self.value_data.clone().shrink_to_fit(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

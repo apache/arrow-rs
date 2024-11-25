@@ -603,6 +603,16 @@ impl Array for FixedSizeBinaryArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            value_data: self.value_data.clone().shrink_to_fit(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+            len: self.len,
+            value_length: self.value_length,
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

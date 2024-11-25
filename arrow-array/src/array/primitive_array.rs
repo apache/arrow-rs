@@ -1152,6 +1152,14 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            values: self.values.clone().shrink_to_fit(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

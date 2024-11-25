@@ -720,6 +720,21 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            keys: self
+                .keys
+                .shrink_to_fit()
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .unwrap()
+                .clone(),
+            values: self.values.shrink_to_fit(),
+            is_ordered: self.is_ordered,
+        })
+    }
+
     fn offset(&self) -> usize {
         self.keys.offset()
     }
@@ -872,6 +887,10 @@ impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V
 
     fn is_empty(&self) -> bool {
         self.dictionary.is_empty()
+    }
+
+    fn shrink_to_fit(&self) -> ArrayRef {
+        unimplemented!("shrink_to_fit cannot be implemented for TypedDictionaryArray")
     }
 
     fn offset(&self) -> usize {

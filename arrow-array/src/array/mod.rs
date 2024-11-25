@@ -167,6 +167,10 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Frees up unused memory.
+    #[must_use]
+    fn shrink_to_fit(&self) -> ArrayRef;
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -365,6 +369,10 @@ impl Array for ArrayRef {
         self.as_ref().is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        self.as_ref().shrink_to_fit()
+    }
+
     fn offset(&self) -> usize {
         self.as_ref().offset()
     }
@@ -433,6 +441,9 @@ impl<T: Array> Array for &T {
 
     fn is_empty(&self) -> bool {
         T::is_empty(self)
+    }
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(T::shrink_to_fit(self))
     }
 
     fn offset(&self) -> usize {

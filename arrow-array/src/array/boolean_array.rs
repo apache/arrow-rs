@@ -308,6 +308,13 @@ impl Array for BooleanArray {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            values: self.values.clone().shrink_to_fit(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+        })
+    }
+
     fn offset(&self) -> usize {
         self.values.offset()
     }

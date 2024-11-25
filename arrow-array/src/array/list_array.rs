@@ -485,6 +485,15 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self {
+            data_type: self.data_type.clone(),
+            nulls: self.nulls.clone().map(|n| n.shrink_to_fit()),
+            values: self.values.shrink_to_fit(),
+            value_offsets: self.value_offsets.clone().shrink_to_fit(),
+        })
+    }
+
     fn offset(&self) -> usize {
         0
     }

@@ -105,6 +105,10 @@ impl Array for NullArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&self) -> ArrayRef {
+        Arc::new(Self { len: self.len })
+    }
+
     fn offset(&self) -> usize {
         0
     }
