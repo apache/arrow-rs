@@ -773,6 +773,87 @@ mod tests {
     }
 
     #[test]
+    fn normalize() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![
+                    Arc::new(Field::new("animals", DataType::Utf8, true)),
+                    Arc::new(Field::new("n_legs", DataType::Int64, true)),
+                    Arc::new(Field::new("year", DataType::Int64, true)),
+                ])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
+        ])
+        .normalize(".", 0)
+        .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("a.animals", DataType::Utf8, true),
+            Field::new("a.n_legs", DataType::Int64, true),
+            Field::new("a.year", DataType::Int64, true),
+            Field::new("month", DataType::Int64, true),
+        ]);
+
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn normalize_nested() {
+        let a = Arc::new(Field::new("a", DataType::Utf8, true));
+        let b = Arc::new(Field::new("b", DataType::Int64, false));
+        let c = Arc::new(Field::new("c", DataType::Int64, true));
+
+        let d = Arc::new(Field::new("d", DataType::Utf8, true));
+        let e = Arc::new(Field::new("e", DataType::Int64, false));
+        let f = Arc::new(Field::new("f", DataType::Int64, true));
+
+        let one = Arc::new(Field::new(
+            "1",
+            DataType::Struct(Fields::from(vec![a.clone(), b.clone(), c.clone()])),
+            false,
+        ));
+        let two = Arc::new(Field::new(
+            "2",
+            DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+            true,
+        ));
+
+        let exclamation = Arc::new(Field::new(
+            "!",
+            DataType::Struct(Fields::from(vec![one, two])),
+            false,
+        ));
+
+        let normalize_all = Schema::new(vec![exclamation.clone()])
+            .normalize(".", 0)
+            .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("!.1.a", DataType::Utf8, true),
+            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.c", DataType::Int64, true),
+            Field::new("!.2.d", DataType::Utf8, true),
+            Field::new("!.2.e", DataType::Int64, false),
+            Field::new("!.2.f", DataType::Int64, true),
+        ]);
+
+        assert_eq!(normalize_all, expected);
+
+        let normalize_depth_one = Schema::new(vec![exclamation])
+            .normalize(".", 1)
+            .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("!.1", DataType::Struct(Fields::from(vec![a, b, c])), false),
+            Field::new("!.2", DataType::Struct(Fields::from(vec![d, e, f])), true),
+        ]);
+
+        assert_eq!(normalize_depth_one, expected);
+    }
+
+    #[test]
     #[should_panic(
         expected = "Unable to get field named \\\"nickname\\\". Valid fields: [\\\"first_name\\\", \\\"last_name\\\", \\\"address\\\", \\\"interests\\\"]"
     )]
