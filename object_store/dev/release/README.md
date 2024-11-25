@@ -31,7 +31,7 @@ been merged to main that has a breaking API change, as defined in [Rust RFC 1105
 the minor version number is incremented changed (e.g. `0.3.0` to `0.4.0`). 
 Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
-[Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/main/text/1105-api-evolution.md
+[Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
 # Release Mechanics
 
 ## Process Overview
