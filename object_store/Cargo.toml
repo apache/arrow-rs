@@ -67,6 +67,7 @@ aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = []
+experimental-azure-list-offset = []
 
 [dev-dependencies] # In alphabetical order
 futures-test = "0.3"
