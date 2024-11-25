@@ -517,6 +517,7 @@ mod tests {
             (0.1, 1000000, 5772541),
             (0.01, 1000000, 9681526),
             (0.001, 1000000, 14607697),
+            #[cfg(target_pointer_width = "64")]
             (1e-50, 1_000_000_000_000, 14226231280773240832),
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);

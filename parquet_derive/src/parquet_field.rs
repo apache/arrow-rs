@@ -841,6 +841,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn test_generating_a_simple_writer_snippet() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ABoringStruct {
@@ -868,6 +869,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn test_generating_a_simple_reader_snippet() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ABoringStruct {

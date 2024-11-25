@@ -106,16 +106,18 @@ mod tests {
     use super::*;
 
     use chrono::SubsecRound;
-    use std::{env, fs, io::Write, sync::Arc};
+    use std::{env, fs, io::Write};
 
     use parquet::{
         file::writer::SerializedFileWriter,
         record::{RecordReader, RecordWriter},
-        schema::parser::parse_message_type,
     };
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn test_parquet_derive_hello() {
+        use parquet::schema::parser::parse_message_type;
+        use std::sync::Arc;
         let file = get_temp_file("test_parquet_derive_hello", &[]);
 
         // The schema is not required, but this tests that the generated

@@ -665,9 +665,18 @@ mod tests {
         );
 
         let err = v.try_append_view(0, u32::MAX, 1).unwrap_err();
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(err.to_string(), "Invalid argument error: Range 4294967295..4294967295 out of bounds for block of length 17");
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(err.to_string(), "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17");
 
         let err = v.try_append_view(0, 1, u32::MAX).unwrap_err();
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Range 1..4294967295 out of bounds for block of length 17"
+        );
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Range 1..4294967296 out of bounds for block of length 17"

@@ -1058,6 +1058,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn size_should_not_regress() {
         assert_eq!(std::mem::size_of::<DataType>(), 24);
     }
