@@ -934,7 +934,7 @@ mod tests {
         let mut decoder = FlightDataDecoder::new(encoder);
         let expected_schema = Schema::new(vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )]);
 
@@ -1038,7 +1038,7 @@ mod tests {
             "struct",
             vec![Field::new_list(
                 "dict_list",
-                Field::new("item", DataType::Utf8, true),
+                Field::new_list_field(DataType::Utf8, true),
                 true,
             )],
             true,
@@ -1218,12 +1218,16 @@ mod tests {
 
         let hydrated_struct_fields = vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )];
 
         let hydrated_union_fields = vec![
-            Field::new_list("dict_list", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list(
+                "dict_list",
+                Field::new_list_field(DataType::Utf8, true),
+                true,
+            ),
             Field::new_struct("struct", hydrated_struct_fields.clone(), true),
             Field::new("string", DataType::Utf8, true),
         ];

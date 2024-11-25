@@ -1004,7 +1004,7 @@ fn get_inode(metadata: &Metadata) -> u64 {
 
 #[cfg(not(unix))]
 /// On platforms where an inode isn't available, fallback to just relying on size and mtime
-fn get_inode(metadata: &Metadata) -> u64 {
+fn get_inode(_metadata: &Metadata) -> u64 {
     0
 }
 
@@ -1060,7 +1060,10 @@ mod tests {
     use std::fs;
 
     use futures::TryStreamExt;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::TempDir;
+
+    #[cfg(target_family = "unix")]
+    use tempfile::NamedTempFile;
 
     use crate::integration::*;
 
@@ -1248,6 +1251,7 @@ mod tests {
         fs.list_with_delimiter(None).await.unwrap();
     }
 
+    #[cfg(target_family = "unix")]
     async fn check_list(integration: &LocalFileSystem, prefix: Option<&Path>, expected: &[&str]) {
         let result: Vec<_> = integration.list(prefix).try_collect().await.unwrap();
 

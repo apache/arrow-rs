@@ -3636,7 +3636,7 @@ mod tests {
         let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = cast(
             &array,
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -3660,7 +3660,7 @@ mod tests {
         let array = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]);
         let b = cast(
             &array,
-            &DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
         )
         .unwrap();
         assert_eq!(5, b.len());
@@ -3688,7 +3688,7 @@ mod tests {
         let array = array.slice(2, 4);
         let b = cast(
             &array,
-            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
         )
         .unwrap();
         assert_eq!(4, b.len());
@@ -4009,7 +4009,7 @@ mod tests {
 
         // Construct a list array from the above two
         // [[0,0,0], [-1, -2, -1], [2, 100000000]]
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4020,7 +4020,7 @@ mod tests {
 
         let cast_array = cast(
             &list_array,
-            &DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::UInt16, true))),
         )
         .unwrap();
 
@@ -4060,7 +4060,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 9]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -4071,8 +4071,7 @@ mod tests {
 
         let actual = cast(
             &list_array,
-            &DataType::List(Arc::new(Field::new(
-                "item",
+            &DataType::List(Arc::new(Field::new_list_field(
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
             ))),
@@ -4082,11 +4081,10 @@ mod tests {
         let expected = cast(
             &cast(
                 &list_array,
-                &DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                &DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             )
             .unwrap(),
-            &DataType::List(Arc::new(Field::new(
-                "item",
+            &DataType::List(Arc::new(Field::new_list_field(
                 DataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
             ))),
@@ -7119,12 +7117,12 @@ mod tests {
         cast_from_null_to_other(&data_type);
 
         // Cast null from and to list
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
-        let data_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         cast_from_null_to_other(&data_type);
         let data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 4);
         cast_from_null_to_other(&data_type);
 
         // Cast null from and to dictionary
@@ -7241,11 +7239,11 @@ mod tests {
         assert_eq!(actual.data_type(), to_array.data_type());
 
         let invalid_target =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Binary, true)), 2);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Binary, true)), 2);
         assert!(!can_cast_types(from_array.data_type(), &invalid_target));
 
         let invalid_size =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float16, true)), 5);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Float16, true)), 5);
         assert!(!can_cast_types(from_array.data_type(), &invalid_size));
     }
 
@@ -7398,7 +7396,7 @@ mod tests {
             [(Some([Some(5)]))],
             1,
         )) as ArrayRef;
-        let to_field_inner = Arc::new(Field::new("item", DataType::Float32, false));
+        let to_field_inner = Arc::new(Field::new_list_field(DataType::Float32, false));
         let to_field = Arc::new(Field::new(
             "dummy",
             DataType::FixedSizeList(to_field_inner.clone(), 1),
@@ -7488,7 +7486,7 @@ mod tests {
         // 4. Nulls that are correctly sized (same as target list size)
 
         // Non-null case
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let values = vec![
             Some(vec![Some(1), Some(2), Some(3)]),
             Some(vec![Some(4), Some(5), Some(6)]),
@@ -7564,7 +7562,7 @@ mod tests {
 
         let res = cast_with_options(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
             &CastOptions {
                 safe: false,
                 ..Default::default()
@@ -7578,7 +7576,7 @@ mod tests {
         // too short and truncate lists that are too long.
         let res = cast(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
         )
         .unwrap();
         let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
@@ -7600,7 +7598,7 @@ mod tests {
         ])) as ArrayRef;
         let res = cast_with_options(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3),
             &CastOptions {
                 safe: false,
                 ..Default::default()
@@ -7625,7 +7623,7 @@ mod tests {
         )) as ArrayRef;
         let actual = cast(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2),
         )
         .unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
@@ -7648,14 +7646,14 @@ mod tests {
         )) as ArrayRef;
         let actual = cast(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 2),
         )
         .unwrap();
         assert_eq!(expected.as_ref(), actual.as_ref());
 
         let res = cast_with_options(
             array.as_ref(),
-            &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int16, true)), 2),
+            &DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int16, true)), 2),
             &CastOptions {
                 safe: false,
                 ..Default::default()
@@ -7667,7 +7665,7 @@ mod tests {
 
     #[test]
     fn test_cast_list_to_fsl_empty() {
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let array = new_empty_array(&DataType::List(field.clone()));
 
         let target_type = DataType::FixedSizeList(field.clone(), 3);
@@ -7690,7 +7688,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7714,7 +7712,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -7733,7 +7731,7 @@ mod tests {
             .unwrap();
 
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 4);
         let list_data = ArrayData::builder(list_data_type)
             .len(2)
             .add_child_data(value_data)
@@ -7751,7 +7749,7 @@ mod tests {
             .unwrap();
 
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 4);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 4);
         let list_data = ArrayData::builder(list_data_type)
             .len(2)
             .add_child_data(value_data)
@@ -8013,7 +8011,7 @@ mod tests {
         let array1 = make_list_array().slice(1, 2);
         let array2 = Arc::new(make_list_array()) as ArrayRef;
 
-        let dt = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        let dt = DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let out1 = cast(&array1, &dt).unwrap();
         let out2 = cast(&array2, &dt).unwrap();
 
@@ -8026,7 +8024,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         let value_data = str_array.into_data();
 
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)

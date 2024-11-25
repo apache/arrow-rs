@@ -271,8 +271,13 @@ impl Visitor {
             return Err(arrow_err!("Child of map field must be repeated"));
         }
 
+        // According to the specification the values are optional (#1642).
+        // In this case, return the keys as a list.
+        if map_key_value.get_fields().len() == 1 {
+            return self.visit_list(map_type, context);
+        }
+
         if map_key_value.get_fields().len() != 2 {
-            // According to the specification the values are optional (#1642)
             return Err(arrow_err!(
                 "Child of map field must have two children, found {}",
                 map_key_value.get_fields().len()

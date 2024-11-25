@@ -1026,10 +1026,14 @@ mod tests {
                 Field::new("utf8_view", DataType::Utf8View, false),
                 Field::new("binary", DataType::Binary, false),
                 Field::new("binary_view", DataType::BinaryView, false),
-                Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
+                Field::new_list(
+                    "list[u8]",
+                    Field::new_list_field(DataType::UInt8, false),
+                    true,
+                ),
                 Field::new_fixed_size_list(
                     "fixed_size_list[u8]",
-                    Field::new("item", DataType::UInt8, false),
+                    Field::new_list_field(DataType::UInt8, false),
                     2,
                     true,
                 ),

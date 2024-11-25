@@ -117,6 +117,9 @@ impl Hash for Field {
 }
 
 impl Field {
+    /// Default list member field name
+    pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
+
     /// Creates a new field with the given name, type, and nullability
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         Field {
@@ -144,7 +147,7 @@ impl Field {
     /// );
     /// ```
     pub fn new_list_field(data_type: DataType, nullable: bool) -> Self {
-        Self::new("item", data_type, nullable)
+        Self::new(Self::LIST_FIELD_DEFAULT_NAME, data_type, nullable)
     }
 
     /// Creates a new field that has additional dictionary information

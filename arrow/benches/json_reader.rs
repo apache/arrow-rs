@@ -102,22 +102,22 @@ fn small_bench_list(c: &mut Criterion) {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "c1",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
             true,
         ),
         Field::new(
             "c2",
-            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
             true,
         ),
         Field::new(
             "c3",
-            DataType::List(Arc::new(Field::new("item", DataType::UInt32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
             true,
         ),
         Field::new(
             "c4",
-            DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
             true,
         ),
     ]));

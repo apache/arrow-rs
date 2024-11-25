@@ -118,13 +118,6 @@ impl MutableBuffer {
         Self { data, len, layout }
     }
 
-    /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
-    #[inline]
-    #[deprecated(note = "Use From<Vec<T>>")]
-    pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        Self::from(vec)
-    }
-
     /// Allocates a new [MutableBuffer] from given `Bytes`.
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {

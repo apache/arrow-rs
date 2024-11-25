@@ -275,7 +275,7 @@ impl Fields {
     /// assert_eq!(fields.remove(1), Field::new("b", DataType::Int8, false).into());
     /// assert_eq!(fields.len(), 2);
     /// ```
-    #[deprecated(note = "Use SchemaBuilder::remove")]
+    #[deprecated(since = "50.0.0", note = "Use SchemaBuilder::remove")]
     #[doc(hidden)]
     pub fn remove(&mut self, index: usize) -> FieldRef {
         let mut builder = SchemaBuilder::from(Fields::from(&*self.0));
@@ -496,7 +496,12 @@ mod tests {
                 Field::new("floats", DataType::Struct(floats.clone()), true),
                 true,
             ),
-            Field::new_fixed_size_list("f", Field::new("item", DataType::Int32, false), 3, false),
+            Field::new_fixed_size_list(
+                "f",
+                Field::new_list_field(DataType::Int32, false),
+                3,
+                false,
+            ),
             Field::new_map(
                 "g",
                 "entries",

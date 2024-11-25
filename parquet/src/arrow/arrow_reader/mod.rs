@@ -1542,8 +1542,7 @@ mod tests {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new(
-            "item",
+        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new_list_field(
             decimals.data_type().clone(),
             false,
         ))))
@@ -2874,7 +2873,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "emptylist",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Null, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Null, true))),
             true,
         );
 
@@ -3346,7 +3345,7 @@ mod tests {
     fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Int32, true))),
             true,
         )]));
 
@@ -3584,9 +3583,7 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            // FIXME: this test will fail when metadata parsing returns `None` for missing page
-            // indexes. https://github.com/apache/arrow-rs/issues/6447
-            assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(builder.metadata().offset_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);
@@ -3905,7 +3902,7 @@ mod tests {
     fn test_list_selection() {
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new("item", ArrowDataType::Utf8, true),
+            Field::new_list_field(ArrowDataType::Utf8, true),
             false,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -3961,7 +3958,11 @@ mod tests {
         let mut rng = thread_rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new_list("item", Field::new("item", ArrowDataType::Int32, true), true),
+            Field::new_list(
+                Field::LIST_FIELD_DEFAULT_NAME,
+                Field::new_list_field(ArrowDataType::Int32, true),
+                true,
+            ),
             true,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -4064,5 +4065,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/map_no_value.parquet");
+        let file = File::open(path).unwrap();
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 3);
+        // my_map_no_v and my_list columns should now be equivalent
+        let c0 = out.column(1).as_list::<i32>();
+        let c1 = out.column(2).as_list::<i32>();
+        assert_eq!(c0.len(), c1.len());
+        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 }
