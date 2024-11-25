@@ -167,6 +167,9 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Frees up unused memory.
+    fn shrink_to_fit(&mut self) {}
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -363,6 +366,16 @@ impl Array for ArrayRef {
 
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
+    }
+
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // TODO(emilk): clone the contents and shrink that.
+            // This can be accomplished if we add `trait Array { fn clone(&self) -> Box<Array>>; }`.
+            // Or we clone using `let clone = self.slice(0, self.len());` and hope that the returned `ArrayRef` is not shared.
+        }
     }
 
     fn offset(&self) -> usize {

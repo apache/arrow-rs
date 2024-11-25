@@ -72,6 +72,12 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         buffer.slice_with_length(byte_offset, byte_len).into()
     }
 
+    /// Free up unused memory.
+    #[inline]
+    pub fn shrink_to_fit(&mut self) {
+        self.buffer.shrink_to_fit();
+    }
+
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self::new(self.buffer.clone(), offset, len)

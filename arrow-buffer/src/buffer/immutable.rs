@@ -167,6 +167,17 @@ impl Buffer {
         self.data.capacity()
     }
 
+    /// Shrinks the capacity of the buffer as much as possible, freeing unused memory.
+    ///
+    /// The capacity of the returned buffer will be the same as [`Self::len`].
+    ///
+    /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    pub fn shrink_to_fit(&mut self) {
+        if self.len() < self.capacity() {
+            *self = Self::from_vec(self.as_slice().to_vec())
+        }
+    }
+
     /// Returns whether the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -552,6 +563,22 @@ mod tests {
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
         assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
+    }
+
+    #[test]
+    fn test_shrink_to_fit() {
+        let original = Buffer::from(&[1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.len(), 7);
+        assert_eq!(original.capacity(), 64);
+
+        let slice = original.slice(3);
+        assert_eq!(slice.len(), 4);
+        assert_eq!(slice.capacity(), 64);
+
+        let mut shrunk = slice.clone();
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.len(), 4);
+        assert_eq!(shrunk.capacity(), 4);
     }
 
     #[test]
