@@ -63,7 +63,7 @@ pub struct IpcWriteOptions {
     /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
-    /// Defaults to `true`
+    /// Defaults to `false`
     preserve_dict_id: bool,
 }
 
@@ -112,7 +112,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
-                preserve_dict_id: true,
+                preserve_dict_id: false,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -125,7 +125,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
-                        preserve_dict_id: true,
+                        preserve_dict_id: false,
                     })
                 }
             }
@@ -161,7 +161,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 }
@@ -785,7 +785,7 @@ impl DictionaryTracker {
             written: HashMap::new(),
             dict_ids: Vec::new(),
             error_on_replacement,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 
