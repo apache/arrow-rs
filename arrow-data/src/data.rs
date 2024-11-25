@@ -30,11 +30,6 @@ use std::sync::Arc;
 
 use crate::{equal, validate_binary_view, validate_string_view};
 
-/// A collection of [`Buffer`]
-#[doc(hidden)]
-#[deprecated(since = "46.0.0", note = "Use [Buffer]")]
-pub type Buffers<'a> = &'a [Buffer];
-
 #[inline]
 pub(crate) fn contains_nulls(
     null_bit_buffer: Option<&NullBuffer>,

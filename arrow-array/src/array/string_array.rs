@@ -17,18 +17,12 @@
 
 use crate::types::GenericStringType;
 use crate::{GenericBinaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::ArrowError;
 
 /// A [`GenericByteArray`] for storing `str`
 pub type GenericStringArray<OffsetSize> = GenericByteArray<GenericStringType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
-    /// Get the data type of the array.
-    #[deprecated(since = "20.0.0", note = "please use `Self::DATA_TYPE` instead")]
-    pub const fn get_data_type() -> DataType {
-        Self::DATA_TYPE
-    }
-
     /// Returns the number of `Unicode Scalar Value` in the string at index `i`.
     /// # Performance
     /// This function has `O(n)` time complexity where `n` is the string length.
@@ -167,7 +161,7 @@ mod tests {
     use crate::Array;
     use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
-    use arrow_schema::Field;
+    use arrow_schema::{DataType, Field};
     use std::sync::Arc;
 
     #[test]

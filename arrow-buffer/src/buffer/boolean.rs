@@ -96,17 +96,6 @@ impl BooleanBuffer {
         BitChunks::new(self.values(), self.offset, self.len)
     }
 
-    /// Returns `true` if the bit at index `i` is set
-    ///
-    /// # Panics
-    ///
-    /// Panics if `i >= self.len()`
-    #[inline]
-    #[deprecated(since = "36.0.0", note = "use BooleanBuffer::value")]
-    pub fn is_set(&self, i: usize) -> bool {
-        self.value(i)
-    }
-
     /// Returns the offset of this [`BooleanBuffer`] in bits
     #[inline]
     pub fn offset(&self) -> usize {

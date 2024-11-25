@@ -324,12 +324,6 @@ pub trait ArrowTimestampType: ArrowTemporalType<Native = i64> {
     /// The [`TimeUnit`] of this timestamp.
     const UNIT: TimeUnit;
 
-    /// Returns the `TimeUnit` of this timestamp.
-    #[deprecated(since = "36.0.0", note = "Use Self::UNIT")]
-    fn get_time_unit() -> TimeUnit {
-        Self::UNIT
-    }
-
     /// Creates a ArrowTimestampType::Native from the provided [`NaiveDateTime`]
     ///
     /// See [`DataType::Timestamp`] for more information on timezone handling
