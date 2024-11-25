@@ -62,7 +62,7 @@ Note  this process is done in the `object_store` directory. See [#6227] for an e
 # NOTE: Run commands in object_store sub directory (not main repo checkout)
 # cd object_store
 
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
@@ -82,7 +82,7 @@ export CHANGELOG_GITHUB_TOKEN=<TOKEN>
 # Commit changes
 git commit -a -m 'Create changelog'
 
-# push changes to fork and create a PR to master
+# push changes to fork and create a PR to main
 git push
 ```
 
@@ -109,7 +109,7 @@ Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version> apache/main
 # push tag to apache
 git push apache <version>
 ```
@@ -170,7 +170,7 @@ The vote will be open for at least 72 hours.
 [1]: https://github.com/apache/arrow-rs/tree/b945b15de9085f5961a478d4f35b0c5c3427e248
 [2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-0.11.1-rc1
 [3]: https://github.com/apache/arrow-rs/blob/b945b15de9085f5961a478d4f35b0c5c3427e248/object_store/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/master/object_store/dev/release/verify-release-candidate.sh
+[4]: https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/verify-release-candidate.sh
 ```
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.

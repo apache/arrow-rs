@@ -217,13 +217,13 @@ cargo bench -p arrow-cast --bench parse_time
 To set the baseline for your benchmarks, use the --save-baseline flag:
 
 ```bash
-git checkout master
+git checkout main
 
-cargo bench --bench parse_time -- --save-baseline master
+cargo bench --bench parse_time -- --save-baseline main
 
 git checkout feature
 
-cargo bench --bench parse_time -- --baseline master
+cargo bench --bench parse_time -- --baseline main
 ```
 
 ## Git Pre-Commit Hook

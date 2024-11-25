@@ -58,7 +58,7 @@ Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the 
 Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
@@ -115,7 +115,7 @@ Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version> apache/main
 # push tag to apache
 git push apache <version>
 ```
