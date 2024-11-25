@@ -217,11 +217,15 @@ impl TreeBuilder {
                         Repetition::REPEATED,
                         "Invalid map type: {field:?}"
                     );
-                    assert_eq!(
-                        key_value_type.get_fields().len(),
-                        2,
-                        "Invalid map type: {field:?}"
-                    );
+                    // Parquet spec allows no value. In that case treat as a list. #1642
+                    if key_value_type.get_fields().len() != 1 {
+                        // If not a list, then there can only be 2 fields in the struct
+                        assert_eq!(
+                            key_value_type.get_fields().len(),
+                            2,
+                            "Invalid map type: {field:?}"
+                        );
+                    }
 
                     path.push(String::from(key_value_type.name()));
 
@@ -239,25 +243,35 @@ impl TreeBuilder {
                         row_group_reader,
                     )?;
 
-                    let value_type = &key_value_type.get_fields()[1];
-                    let value_reader = self.reader_tree(
-                        value_type.clone(),
-                        path,
-                        curr_def_level + 1,
-                        curr_rep_level + 1,
-                        paths,
-                        row_group_reader,
-                    )?;
+                    if key_value_type.get_fields().len() == 1 {
+                        path.pop();
+                        Reader::RepeatedReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                        )
+                    } else {
+                        let value_type = &key_value_type.get_fields()[1];
+                        let value_reader = self.reader_tree(
+                            value_type.clone(),
+                            path,
+                            curr_def_level + 1,
+                            curr_rep_level + 1,
+                            paths,
+                            row_group_reader,
+                        )?;
 
-                    path.pop();
+                        path.pop();
 
-                    Reader::KeyValueReader(
-                        field,
-                        curr_def_level,
-                        curr_rep_level,
-                        Box::new(key_reader),
-                        Box::new(value_reader),
-                    )
+                        Reader::KeyValueReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                            Box::new(value_reader),
+                        )
+                    }
                 }
                 // A repeated field that is neither contained by a `LIST`- or
                 // `MAP`-annotated group nor annotated by `LIST` or `MAP`
@@ -1472,8 +1486,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid map type")]
-    fn test_file_reader_rows_invalid_map_type() {
+    fn test_file_reader_rows_nested_map_type() {
         let schema = "
       message spark_schema {
         OPTIONAL group a (MAP) {
@@ -1834,6 +1847,36 @@ mod tests {
             ],
         ];
         assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let rows = test_file_reader_rows("map_no_value.parquet", None).unwrap();
+
+        // the my_map_no_v and my_list columns should be equivalent lists by this point
+        for row in rows {
+            let cols = row.into_columns();
+            assert_eq!(cols[1].1, cols[2].1);
+        }
     }
 
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {

@@ -1480,24 +1480,6 @@ def_numeric_from_vec!(TimestampMicrosecondType);
 def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<i64>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<Option<i64>>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
     /// Returns the timezone of this array if any
     pub fn timezone(&self) -> Option<&str> {
         match self.data_type() {
@@ -2296,7 +2278,7 @@ mod tests {
         ];
         let array_data = ArrayData::builder(DataType::Decimal128(38, 6))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);

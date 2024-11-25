@@ -188,26 +188,10 @@ impl WriterProperties {
     /// Returns data page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
-    #[deprecated(since = "41.0.0", note = "Use data_page_size_limit")]
-    pub fn data_pagesize_limit(&self) -> usize {
-        self.data_page_size_limit
-    }
-
-    /// Returns data page size limit.
-    ///
-    /// Note: this is a best effort limit based on the write batch size
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
     pub fn data_page_size_limit(&self) -> usize {
         self.data_page_size_limit
-    }
-
-    /// Returns dictionary page size limit.
-    ///
-    /// Note: this is a best effort limit based on the write batch size
-    #[deprecated(since = "41.0.0", note = "Use dictionary_page_size_limit")]
-    pub fn dictionary_pagesize_limit(&self) -> usize {
-        self.dictionary_page_size_limit
     }
 
     /// Returns dictionary page size limit.
@@ -433,16 +417,6 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum size of a data page in bytes.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    #[deprecated(since = "41.0.0", note = "Use set_data_page_size_limit")]
-    pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
-        self.data_page_size_limit = value;
-        self
-    }
-
     /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`).
     ///
     /// The parquet writer will attempt to limit the sizes of each
@@ -468,16 +442,6 @@ impl WriterPropertiesBuilder {
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         self.data_page_row_count_limit = value;
-        self
-    }
-
-    /// Sets best effort maximum dictionary page size, in bytes.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    #[deprecated(since = "41.0.0", note = "Use set_dictionary_page_size_limit")]
-    pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
-        self.dictionary_page_size_limit = value;
         self
     }
 

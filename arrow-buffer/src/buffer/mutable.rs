@@ -118,13 +118,6 @@ impl MutableBuffer {
         Self { data, len, layout }
     }
 
-    /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
-    #[inline]
-    #[deprecated(note = "Use From<Vec<T>>")]
-    pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        Self::from(vec)
-    }
-
     /// Allocates a new [MutableBuffer] from given `Bytes`.
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {
@@ -329,15 +322,6 @@ impl MutableBuffer {
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.data.as_ptr()
-    }
-
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `into` from the trait `Into`."
-    )]
-    /// Freezes this buffer and return an immutable version of it.
-    pub fn freeze(self) -> Buffer {
-        self.into_buffer()
     }
 
     #[inline]

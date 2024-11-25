@@ -69,7 +69,7 @@ pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     const DATA_TYPE: DataType;
 
     /// Returns the byte width of this primitive type.
-    #[deprecated(note = "Use ArrowNativeType::get_byte_width")]
+    #[deprecated(since = "52.0.0", note = "Use ArrowNativeType::get_byte_width")]
     fn get_byte_width() -> usize {
         std::mem::size_of::<Self::Native>()
     }
@@ -323,12 +323,6 @@ impl ArrowTemporalType for DurationNanosecondType {}
 pub trait ArrowTimestampType: ArrowTemporalType<Native = i64> {
     /// The [`TimeUnit`] of this timestamp.
     const UNIT: TimeUnit;
-
-    /// Returns the `TimeUnit` of this timestamp.
-    #[deprecated(note = "Use Self::UNIT")]
-    fn get_time_unit() -> TimeUnit {
-        Self::UNIT
-    }
 
     /// Creates a ArrowTimestampType::Native from the provided [`NaiveDateTime`]
     ///

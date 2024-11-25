@@ -1331,7 +1331,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
@@ -1355,7 +1355,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let expected = ArrayData::builder(list_data_type)
             .len(2)
             .add_buffer(value_offsets)

@@ -1771,7 +1771,7 @@ mod tests {
     #[test]
     fn test_writer_fixed_size_list() {
         let size = 3;
-        let field = FieldRef::new(Field::new("item", DataType::Int32, true));
+        let field = FieldRef::new(Field::new_list_field(DataType::Int32, true));
         let schema = SchemaRef::new(Schema::new(vec![Field::new(
             "list",
             DataType::FixedSizeList(field, size),
