@@ -246,7 +246,7 @@ struct SessionCredential<'a> {
     config: &'a S3Config,
 }
 
-impl<'a> SessionCredential<'a> {
+impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
         let mut authorizer =
             AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)

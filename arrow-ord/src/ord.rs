@@ -394,7 +394,7 @@ pub fn make_comparator(
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
     use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
