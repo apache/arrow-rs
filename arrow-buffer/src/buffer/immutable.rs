@@ -173,7 +173,15 @@ impl Buffer {
     ///
     /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
     pub fn shrink_to_fit(&mut self) {
-        if self.len() < self.capacity() {
+        let desired_capacity = self.len();
+        if desired_capacity < self.capacity() {
+            if let Some(bytes) = Arc::get_mut(&mut self.data) {
+                if bytes.try_realloc(desired_capacity).is_ok() {
+                    return;
+                }
+            }
+
+            // Fallback:
             *self = Self::from_vec(self.as_slice().to_vec())
         }
     }

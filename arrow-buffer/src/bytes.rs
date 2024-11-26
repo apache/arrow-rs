@@ -96,6 +96,30 @@ impl Bytes {
         }
     }
 
+    /// Try to reallocate the underlying memory region to a new size (smaller or larger).
+    ///
+    /// Only works for bytes allocated with the standard allocator.
+    /// Returns `Err` if the memory was allocated with a custom allocator,
+    /// or the call to `realloc` failed, for whatever reason.
+    /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
+    pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+        if let Deallocation::Standard(old_layout) = self.deallocation {
+            if let Ok(new_layout) = std::alloc::Layout::from_size_align(new_len, old_layout.align())
+            {
+                let new_ptr =
+                    unsafe { std::alloc::realloc(self.ptr.as_mut(), old_layout, new_len) };
+                if let Some(ptr) = NonNull::new(new_ptr) {
+                    self.ptr = ptr;
+                    self.len = new_len;
+                    self.deallocation = Deallocation::Standard(new_layout);
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(())
+    }
+
     #[inline]
     pub(crate) fn deallocation(&self) -> &Deallocation {
         &self.deallocation
