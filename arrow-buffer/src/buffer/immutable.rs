@@ -167,22 +167,23 @@ impl Buffer {
         self.data.capacity()
     }
 
-    /// Shrinks the capacity of the buffer as much as possible, freeing unused memory.
+    /// Tried to shrink the capacity of the buffer as much as possible, freeing unused memory.
     ///
-    /// The capacity of the returned buffer will be the same as [`Self::len`].
+    /// If the buffer is shared, this is a no-op.
+    ///
+    /// If the memory was allocated with a custom allocator, this is a no-op.
     ///
     /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    ///
+    /// The memory region will be reallocated using `std::alloc::realloc`.
     pub fn shrink_to_fit(&mut self) {
         let desired_capacity = self.len();
         if desired_capacity < self.capacity() {
             if let Some(bytes) = Arc::get_mut(&mut self.data) {
-                if bytes.try_realloc(desired_capacity).is_ok() {
-                    return;
-                }
+                // We can sefely ignore errors.
+                // We are best-effort, and if the realloc fails, we still have the old size.
+                bytes.try_realloc(desired_capacity).ok();
             }
-
-            // Fallback:
-            *self = Self::from_vec(self.as_slice().to_vec())
         }
     }
 
