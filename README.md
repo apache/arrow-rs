@@ -19,8 +19,6 @@
 
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow-rs/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-rs?branch=master)
-
 Welcome to the [Rust][rust] implementation of [Apache Arrow], the popular in-memory columnar format.
 
 This repo contains the following main components:
@@ -58,7 +56,7 @@ breaking API changes) at most once a quarter, and release incremental minor
 versions in the intervening months. See [this ticket] for more details.
 
 To keep our maintenance burden down, we do regularly scheduled releases (major
-and minor) from the `master` branch. How we handle PRs with breaking API changes
+and minor) from the `main` branch. How we handle PRs with breaking API changes
 is described in the [contributing] guide.
 
 [contributing]: CONTRIBUTING.md#breaking-changes
