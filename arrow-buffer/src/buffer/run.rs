@@ -137,7 +137,6 @@ where
     }
 
     /// Free up unused memory.
-    #[inline]
     pub fn shrink_to_fit(&mut self) {
         // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
         self.run_ends.shrink_to_fit();

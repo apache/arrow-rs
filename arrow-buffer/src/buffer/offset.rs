@@ -134,7 +134,6 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     }
 
     /// Free up unused memory.
-    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.0.shrink_to_fit();
     }

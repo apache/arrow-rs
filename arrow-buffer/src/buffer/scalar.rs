@@ -73,7 +73,6 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     }
 
     /// Free up unused memory.
-    #[inline]
     pub fn shrink_to_fit(&mut self) {
         self.buffer.shrink_to_fit();
     }
