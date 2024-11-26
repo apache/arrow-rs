@@ -170,10 +170,7 @@ impl ObjectStore for AmazonS3 {
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
-            (
-                PutMode::Create,
-                Some(S3ConditionalPut::ETagMatch | S3ConditionalPut::ETagPutIfNotExists),
-            ) => {
+            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
@@ -197,7 +194,6 @@ impl ObjectStore for AmazonS3 {
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
                 match put {
-                    S3ConditionalPut::ETagPutIfNotExists => Err(Error::NotImplemented),
                     S3ConditionalPut::ETagMatch => {
                         match request
                             .header(&IF_MATCH, etag.as_str())
@@ -505,6 +501,7 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
+        let test_conditional_put = config.conditional_put.is_some();
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -535,9 +532,8 @@ mod tests {
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }
-        if let Some(conditional_put) = &config.conditional_put {
-            let supports_update = !matches!(conditional_put, S3ConditionalPut::ETagPutIfNotExists);
-            put_opts(&integration, supports_update).await;
+        if test_conditional_put {
+            put_opts(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled

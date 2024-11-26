@@ -164,7 +164,7 @@ jobs:
       - name: Run object_store tests (AWS native conditional put)
         run: cargo test --features=aws
         env:
-          AWS_CONDITIONAL_PUT: etag-put-if-not-exists
+          AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
 
       - name: GCS Output
