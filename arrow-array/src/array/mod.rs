@@ -371,13 +371,12 @@ impl Array for ArrayRef {
         self.as_ref().is_empty()
     }
 
+    /// For shared buffers, this is a no-op.
     fn shrink_to_fit(&mut self) {
         if let Some(slf) = Arc::get_mut(self) {
             slf.shrink_to_fit();
         } else {
-            // TODO(emilk): clone the contents and shrink that.
-            // This can be accomplished if we add `trait Array { fn clone(&self) -> Box<Array>>; }`.
-            // Or we clone using `let clone = self.slice(0, self.len());` and hope that the returned `ArrayRef` is not shared.
+            // We ignore shared buffers.
         }
     }
 
