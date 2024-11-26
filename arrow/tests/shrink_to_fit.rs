@@ -71,9 +71,12 @@ fn bytes_used(array: ArrayRef) -> usize {
 
 // --- Memory tracking ---
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering::Relaxed},
-    Arc,
+use std::{
+    alloc::Layout,
+    sync::{
+        atomic::{AtomicUsize, Ordering::Relaxed},
+        Arc,
+    },
 };
 
 static LIVE_BYTES_GLOBAL: AtomicUsize = AtomicUsize::new(0);
@@ -96,16 +99,18 @@ pub static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator {
 // We just do book-keeping and then let another allocator do all the actual work.
 unsafe impl std::alloc::GlobalAlloc for TrackingAllocator {
     #[allow(clippy::let_and_return)]
-    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        LIVE_BYTES_IN_THREAD.with(|bytes| bytes.fetch_add(layout.size(), Relaxed));
-        LIVE_BYTES_GLOBAL.fetch_add(layout.size(), Relaxed);
-
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY:
         // Just deferring
-        unsafe { self.allocator.alloc(layout) }
+        let ptr = unsafe { self.allocator.alloc(layout) };
+        if !ptr.is_null() {
+            LIVE_BYTES_IN_THREAD.with(|bytes| bytes.fetch_add(layout.size(), Relaxed));
+            LIVE_BYTES_GLOBAL.fetch_add(layout.size(), Relaxed);
+        }
+        ptr
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         LIVE_BYTES_IN_THREAD.with(|bytes| bytes.fetch_sub(layout.size(), Relaxed));
         LIVE_BYTES_GLOBAL.fetch_sub(layout.size(), Relaxed);
 
@@ -113,6 +118,9 @@ unsafe impl std::alloc::GlobalAlloc for TrackingAllocator {
         // Just deferring
         unsafe { self.allocator.dealloc(ptr, layout) };
     }
+
+    // No need to override `alloc_zeroed` or `realloc`,
+    // since they both by default just defer to `alloc` and `dealloc`.
 }
 
 fn live_bytes_local() -> usize {
