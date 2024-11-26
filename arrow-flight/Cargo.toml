@@ -61,11 +61,11 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = ["arrow-arith", "arrow-data", "arrow-ord", "arrow-row", "arrow-select", "arrow-string", "once_cell"]
+flight-sql-experimental = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell"]
 tls = ["tonic/tls"]
 
 # Enable CLI tools
-cli = ["anyhow", "arrow-array/chrono-tz", "arrow-cast/prettyprint", "clap", "tracing-log", "tracing-subscriber", "tonic/tls-webpki-roots"]
+cli = ["dep:anyhow", "arrow-array/chrono-tz", "arrow-cast/prettyprint", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "tonic/tls-webpki-roots"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
