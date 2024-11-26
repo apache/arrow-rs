@@ -575,7 +575,9 @@ mod tests {
         assert_eq!(slice.len(), 4);
         assert_eq!(slice.capacity(), 64);
 
-        let mut shrunk = slice.clone();
+        drop(original);
+
+        let mut shrunk = slice;
         shrunk.shrink_to_fit();
         assert_eq!(shrunk.len(), 4);
         assert_eq!(shrunk.capacity(), 4);
