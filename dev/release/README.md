@@ -27,7 +27,7 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
-If any code has been merged to master that has a breaking API change, as defined
+If any code has been merged to main that has a breaking API change, as defined
 in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
@@ -46,19 +46,19 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
 
 ## Prepare CHANGELOG and version:
 
-Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
+Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
 Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
@@ -96,7 +96,7 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-Merge this PR to `master` prior to the next step.
+Merge this PR to `main` prior to the next step.
 
 ## Prepare release candidate tarball
 
@@ -115,7 +115,7 @@ Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version> apache/main
 # push tag to apache
 git push apache <version>
 ```
