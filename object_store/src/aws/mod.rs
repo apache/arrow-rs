@@ -199,7 +199,25 @@ impl ObjectStore for AmazonS3 {
                 match put {
                     S3ConditionalPut::ETagPutIfNotExists => Err(Error::NotImplemented),
                     S3ConditionalPut::ETagMatch => {
-                        request.header(&IF_MATCH, etag.as_str()).do_put().await
+                        match request
+                            .header(&IF_MATCH, etag.as_str())
+                            // Real S3 will occasionally report 409 Conflict
+                            // if there are concurrent `If-Match` requests
+                            // in flight, so we need to be prepared to retry
+                            // 409 responses.
+                            .retry_on_conflict(true)
+                            .do_put()
+                            .await
+                        {
+                            // Real S3 reports NotFound rather than PreconditionFailed when the
+                            // object doesn't exist. Convert to PreconditionFailed for
+                            // consistency with R2. This also matches what the HTTP spec
+                            // says the behavior should be.
+                            Err(Error::NotFound { path, source }) => {
+                                Err(Error::Precondition { path, source })
+                            }
+                            r => r,
+                        }
                     }
                     S3ConditionalPut::Dynamo(d) => {
                         d.conditional_op(&self.client, location, Some(&etag), move || {
