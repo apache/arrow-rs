@@ -41,7 +41,7 @@ fn test_shrink_to_fit_after_concat() {
     );
     assert!(
         bytes_allocated_by_this_thread <= expected_len + expected_len / 100,
-        "We shouldn't have more than 1% memory overhead. In fact, we are using {bytes_allocated_by_this_thread}B of memory for {expected_len}B of data"
+        "We shouldn't have more than 1% memory overhead. In fact, we are using {bytes_allocated_by_this_thread} B of memory for {expected_len} B of data"
     );
 }
 

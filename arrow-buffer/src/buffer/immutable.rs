@@ -581,15 +581,25 @@ mod tests {
         assert_eq!(original.capacity(), 64);
 
         let slice = original.slice(3);
+        drop(original); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
         assert_eq!(slice.len(), 4);
         assert_eq!(slice.capacity(), 64);
-
-        drop(original);
 
         let mut shrunk = slice;
         shrunk.shrink_to_fit();
         assert_eq!(shrunk.len(), 4);
         assert_eq!(shrunk.capacity(), 4);
+
+        // Test that we can handle empty slices:
+        let empty_slice = shrunk.slice(4);
+        drop(shrunk); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(empty_slice.len(), 0);
+        assert_eq!(empty_slice.capacity(), 4);
+
+        let mut shrunk_empty = empty_slice;
+        shrunk_empty.shrink_to_fit();
+        assert_eq!(shrunk_empty.len(), 0);
+        assert_eq!(shrunk_empty.capacity(), 1); // `Buffer` and `Bytes` doesn't support 0-capacity, so we shrink to 1
     }
 
     #[test]
