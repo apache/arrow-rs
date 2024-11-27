@@ -359,6 +359,19 @@ impl Reader {
     /// <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
     ///   #backward-compatibility-rules
     fn is_element_type(repeated_type: &Type) -> bool {
+        // For legacy 2-level list types whose element type is a 2-level list
+        //
+        //    // ARRAY<ARRAY<INT>> (nullable list, non-null elements)
+        //    optional group my_list (LIST) {
+        //      repeated group array (LIST) {
+        //        repeated int32 array;
+        //      };
+        //    }
+        //
+        if repeated_type.is_list() || repeated_type.has_single_repeated_child() {
+            return false;
+        }
+
         // For legacy 2-level list types with primitive element type, e.g.:
         //
         //    // ARRAY<INT> (nullable list, non-null elements)
@@ -1881,5 +1894,22 @@ mod tests {
         let row_group_reader = file_reader.get_row_group(0).unwrap();
         let iter = row_group_reader.get_row_iter(schema)?;
         Ok(iter.map(|row| row.unwrap()).collect())
+    }
+
+    #[test]
+    fn test_read_old_nested_list() {
+        let rows = test_file_reader_rows("old_list_structure.parquet", None).unwrap();
+        let expected_rows = vec![row![(
+            "a".to_string(),
+            Field::ListInternal(make_list(
+                [
+                    make_list([1, 2].map(Field::Int).to_vec()),
+                    make_list([3, 4].map(Field::Int).to_vec())
+                ]
+                .map(Field::ListInternal)
+                .to_vec()
+            ))
+        ),]];
+        assert_eq!(rows, expected_rows);
     }
 }

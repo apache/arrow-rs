@@ -453,15 +453,21 @@ impl Visitor {
             };
         }
 
+        // test to see if the repeated field is a struct or one-tuple
         let items = repeated_field.get_fields();
         if items.len() != 1
-            || repeated_field.name() == "array"
-            || repeated_field.name() == format!("{}_tuple", list_type.name())
+            || (!repeated_field.is_list()
+                && !repeated_field.has_single_repeated_child()
+                && (repeated_field.name() == "array"
+                    || repeated_field.name() == format!("{}_tuple", list_type.name())))
         {
-            // If the repeated field is a group with multiple fields, then its type is the element type and elements are required.
+            // If the repeated field is a group with multiple fields, then its type is the element
+            // type and elements are required.
             //
-            // If the repeated field is a group with one field and is named either array or uses the LIST-annotated group's name
-            // with _tuple appended then the repeated type is the element type and elements are required.
+            // If the repeated field is a group with one field and is named either array or uses
+            // the LIST-annotated group's name with _tuple appended then the repeated type is the
+            // element type and elements are required. But this rule only applies if the
+            // repeated field is not annotated, and the single child field is not `repeated`.
             let context = VisitorContext {
                 rep_level: context.rep_level,
                 def_level,
