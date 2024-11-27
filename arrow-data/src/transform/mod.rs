@@ -27,6 +27,7 @@ use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num::Integer;
+use std::collections::HashMap;
 use std::mem;
 
 mod boolean;
@@ -214,7 +215,7 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
 }
 
 /// Builds an extend that adds `buffer_offset` to any buffer indices encountered
-fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
+fn build_extend_view(array: &ArrayData, buffer_lookup: Vec<usize>) -> Extend {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -226,7 +227,7 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
                         return *v; // Stored inline
                     }
                     let mut view = ByteView::from(*v);
-                    view.buffer_index += buffer_offset;
+                    view.buffer_index = buffer_lookup[view.buffer_index as usize] as u32;
                     view.into()
                 }))
         },
@@ -627,13 +628,19 @@ impl<'a> MutableArrayData<'a> {
             _ => (None, false),
         };
 
-        let variadic_data_buffers = match &data_type {
-            DataType::BinaryView | DataType::Utf8View => arrays
-                .iter()
-                .flat_map(|x| x.buffers().iter().skip(1))
-                .map(Buffer::clone)
-                .collect(),
-            _ => vec![],
+        let (variadic_data_buffers, buffer_to_idx) = match &data_type {
+            DataType::BinaryView | DataType::Utf8View => {
+                let mut buffer_to_idx = HashMap::new();
+                let mut variadic_buffers = Vec::new();
+                for buffer in arrays.iter().flat_map(|x| x.buffers().iter().skip(1)) {
+                    buffer_to_idx.entry(buffer.as_ptr()).or_insert_with(|| {
+                        variadic_buffers.push(buffer.clone());
+                        variadic_buffers.len() - 1
+                    });
+                }
+                (variadic_buffers, buffer_to_idx)
+            }
+            _ => (vec![], HashMap::new()),
         };
 
         let extend_nulls = build_extend_nulls(data_type);
@@ -668,20 +675,19 @@ impl<'a> MutableArrayData<'a> {
 
                 extend_values.expect("MutableArrayData::new is infallible")
             }
-            DataType::BinaryView | DataType::Utf8View => {
-                let mut next_offset = 0u32;
-                arrays
-                    .iter()
-                    .map(|arr| {
-                        let num_data_buffers = (arr.buffers().len() - 1) as u32;
-                        let offset = next_offset;
-                        next_offset = next_offset
-                            .checked_add(num_data_buffers)
-                            .expect("view buffer index overflow");
-                        build_extend_view(arr, offset)
-                    })
-                    .collect()
-            }
+            DataType::BinaryView | DataType::Utf8View => arrays
+                .iter()
+                .map(|arr| {
+                    let arr_to_res_buffer_idx: Vec<_> = arr
+                        .buffers()
+                        .iter()
+                        .skip(1)
+                        .map(|buf| *buffer_to_idx.get(&buf.as_ptr()).unwrap())
+                        .collect();
+
+                    build_extend_view(arr, arr_to_res_buffer_idx)
+                })
+                .collect(),
             _ => arrays.iter().map(|array| build_extend(array)).collect(),
         };
 
