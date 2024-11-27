@@ -1429,8 +1429,14 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let start_offset = offset_slice.first().unwrap();
     let end_offset = offset_slice.last().unwrap();
 
-    let offsets: Buffer = match start_offset.as_usize() {
-        0 => Buffer::from_slice_ref(offset_slice),
+    let offsets = match start_offset.as_usize() {
+        0 => {
+            let size = size_of::<O>();
+            offsets.slice_with_length(
+                data.offset() * size,
+                (data.offset() + data.len() + 1) * size,
+            )
+        }
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
 
