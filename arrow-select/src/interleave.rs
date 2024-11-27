@@ -241,7 +241,7 @@ fn interleave_views<T: ByteViewType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteViewArray<T>>::new(values, indices);
     let mut views_builder = BufferBuilder::new(indices.len());
-    let mut buffers = Vec::with_capacity(values[0].len());
+    let mut buffers = Vec::new();
 
     let mut buffer_lookup = HashMap::new();
     for (array_idx, value_idx) in indices {
@@ -263,8 +263,9 @@ fn interleave_views<T: ByteViewType>(
         views_builder.append(view.with_buffer_index(*new_buffer_idx).into());
     }
 
-    let array =
-        GenericByteViewArray::<T>::try_new(views_builder.into(), buffers, interleaved.nulls)?;
+    let array = unsafe {
+        GenericByteViewArray::<T>::new_unchecked(views_builder.into(), buffers, interleaved.nulls)
+    };
     Ok(Arc::new(array))
 }
 
@@ -535,9 +536,8 @@ mod tests {
         // Test fallback implementation
         let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
         let fallback_result = fallback.as_string_view();
-        // as of commit 97055631, assertion below, commented out to not block future improvements, passes:
         // note that fallback_result has 2 buffers, but only one long enough string to warrant a buffer
-        // assert_eq!(fallback_result.data_buffers().len(), 2);
+        assert_eq!(fallback_result.data_buffers().len(), 2);
 
         // Convert to strings for easier assertion
         let collected: Vec<_> = result.iter().map(|x| x.map(|s| s.to_string())).collect();
