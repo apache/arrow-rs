@@ -543,7 +543,7 @@ impl WriterPropertiesBuilder {
     ///
     /// Note: As the offset indexes are useful for accessing data by row number,
     /// they are always written by default, regardless of whether other statistics
-    /// are enabled. Disabling these statistics may result in a degradation in read
+    /// are enabled. Disabling this metadata may result in a degradation in read
     /// performance, so use this option with care.
     ///
     /// [`Page`]: EnabledStatistics::Page
