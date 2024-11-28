@@ -71,45 +71,123 @@ pub fn zip(
     // fill with falsy values
 
     // keep track of how much is filled
+    match (truthy_is_scalar, falsy_is_scalar) {
+        (true, true) => zip_both_scalar(mask, &mut mutable),
+        (true, false) => zip_truthy_scalar_falsy_array(mask, &mut mutable),
+        (false, true) => zip_truthy_array_falsy_scalar(mask, &mut mutable),
+        (false, false) => zip_both_array(mask, &mut mutable)
+    };
+
+    let data = mutable.freeze();
+    Ok(make_array(data))
+}
+
+fn zip_both_scalar(mask: &BooleanArray, mutable: &mut MutableArrayData) {
+    // keep track of how much is filled
     let mut filled = 0;
 
     SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
-            if falsy_is_scalar {
-                for _ in filled..start {
-                    // Copy the first item from the 'falsy' array into the output buffer.
-                    mutable.extend(1, 0, 1);
-                }
-            } else {
-                mutable.extend(1, filled, start);
-            }
-        }
-        // fill with truthy values
-        if truthy_is_scalar {
-            for _ in start..end {
-                // Copy the first item from the 'truthy' array into the output buffer.
-                mutable.extend(0, 0, 1);
-            }
-        } else {
-            mutable.extend(0, start, end);
-        }
-        filled = end;
-    });
-    // the remaining part is falsy
-    if filled < mask.len() {
-        if falsy_is_scalar {
-            for _ in filled..mask.len() {
+            for _ in filled..start {
                 // Copy the first item from the 'falsy' array into the output buffer.
                 mutable.extend(1, 0, 1);
             }
-        } else {
-            mutable.extend(1, filled, mask.len());
+        }
+        // fill with truthy values
+        for _ in start..end {
+            // Copy the first item from the 'truthy' array into the output buffer.
+            mutable.extend(0, 0, 1);
+        }
+
+        filled = end;
+    });
+
+
+
+    // the remaining part is falsy
+    if filled < mask.len() {
+        for _ in filled..mask.len() {
+            // Copy the first item from the 'falsy' array into the output buffer.
+            mutable.extend(1, 0, 1);
         }
     }
+}
 
-    let data = mutable.freeze();
-    Ok(make_array(data))
+fn zip_truthy_scalar_falsy_array(mask: &BooleanArray, mutable: &mut MutableArrayData) {
+    // keep track of how much is filled
+    let mut filled = 0;
+
+
+    SlicesIterator::new(mask).for_each(|(start, end)| {
+        // the gap needs to be filled with falsy values
+        if start > filled {
+            mutable.extend(1, filled, start);
+        }
+
+        // fill with truthy values
+        for _ in start..end {
+            // Copy the first item from the 'truthy' array into the output buffer.
+            mutable.extend(0, 0, 1);
+        }
+
+        filled = end;
+    });
+
+    // the remaining part is falsy
+    if filled < mask.len() {
+        mutable.extend(1, filled, mask.len());
+    }
+}
+
+fn zip_truthy_array_falsy_scalar(mask: &BooleanArray, mutable: &mut MutableArrayData) {
+    // keep track of how much is filled
+    let mut filled = 0;
+
+    SlicesIterator::new(mask).for_each(|(start, end)| {
+        // the gap needs to be filled with falsy values
+        if start > filled {
+            for _ in filled..start {
+                // Copy the first item from the 'falsy' array into the output buffer.
+                mutable.extend(1, 0, 1);
+            }
+        }
+
+        // fill with truthy values
+        mutable.extend(0, start, end);
+
+        filled = end;
+    });
+
+
+    // the remaining part is falsy
+    if filled < mask.len() {
+        for _ in filled..mask.len() {
+            // Copy the first item from the 'falsy' array into the output buffer.
+            mutable.extend(1, 0, 1);
+        }
+    }
+}
+
+fn zip_both_array(mask: &BooleanArray, mutable: &mut MutableArrayData) {
+    let mut filled = 0;
+
+    SlicesIterator::new(mask).for_each(|(start, end)| {
+        // the gap needs to be filled with falsy values
+        if start > filled {
+            mutable.extend(1, start, end);
+        }
+
+        // fill with truthy values
+        mutable.extend(0, start, end);
+
+        filled = end;
+    });
+
+    // the remaining part is falsy
+    if filled < mask.len() {
+        mutable.extend(1, filled, mask.len());
+    }
 }
 
 #[cfg(test)]
