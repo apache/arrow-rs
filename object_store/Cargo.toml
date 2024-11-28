@@ -41,7 +41,7 @@ percent-encoding = "2.1"
 snafu = { version = "0.8", default-features = false, features = ["std", "rust_1_61"] }
 tracing = { version = "0.1" }
 url = "2.2"
-walkdir = "2"
+walkdir = { version = "2", optional = true }
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
@@ -61,8 +61,10 @@ httparse = { version = "1.8.0", default-features = false, features = ["std"], op
 nix = { version = "0.29.0", features = ["fs"] }
 
 [features]
+default = ["fs"]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "base64", "rand", "ring"]
 azure = ["cloud", "httparse"]
+fs = ["walkdir"]
 gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud", "md-5"]
 http = ["cloud"]
