@@ -155,7 +155,7 @@ fn zip_both_array(mask: &BooleanArray, mutable: &mut MutableArrayData) {
     SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
-            mutable.extend(1, start, end);
+            mutable.extend(1, filled, start);
         }
 
         // fill with truthy values
