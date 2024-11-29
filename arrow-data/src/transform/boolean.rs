@@ -98,13 +98,6 @@ pub struct BooleanMutableArrayData<'a> {
 
 impl<'a> BooleanMutableArrayData {
     // function that extends `[start..start+len]` to the mutable array.
-    // this is dynamic because different data_types influence how buffers and children are extended.
-    // type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
-
-    /// function used to extend output array with values from input arrays.
-    ///
-    /// This function's lifetime is bound to the input arrays because it reads
-    /// values from them.
     fn extend_values(&mut self, array_index: usize, start: usize, len: usize) {
         let array = self.arrays[array_index];
         let values = array.buffers()[0].as_slice();
@@ -145,6 +138,17 @@ impl<'a> SpecializedMutableArrayData<'a> for BooleanMutableArrayData<'a> {
     /// Thus, if `use_nulls` is `false`, calling
     /// [crate::transform::MutableArrayData::extend_nulls] should not be used.
     fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
+
+        // TODO - instead change array to be of specific type like Boolean array
+        for a in arrays.iter() {
+            assert_eq!(
+                &Boolean,
+                a.data_type(),
+                // TODO - update error message
+                "Arrays with inconsistent types passed to MutableArrayData"
+            )
+        }
+
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
         let use_nulls = use_nulls | arrays.iter().any(|array| array.null_count() > 0);

@@ -23,7 +23,6 @@ use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num::Integer;
 use std::mem;
-pub use traits::SpecializedMutableArrayData;
 use crate::transform::utils::{_MutableArrayData, build_extend_null_bits};
 
 mod boolean;
@@ -38,97 +37,16 @@ mod utils;
 mod variable_size;
 mod traits;
 
+pub use traits::SpecializedMutableArrayData;
+pub use boolean::BooleanMutableArrayData;
+pub use fixed_binary::FixedBinaryMutableArrayData;
+
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
 // this is dynamic because different data_types influence how buffers and children are extended.
 type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
 
 type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize)>;
-
-
-/// Efficiently create an [ArrayData] from one or more existing [ArrayData]s by
-/// copying chunks.
-///
-/// The main use case of this struct is to perform unary operations to arrays of
-/// arbitrary types, such as `filter` and `take`.
-///
-/// # Example
-/// ```
-/// use arrow_buffer::Buffer;
-/// use arrow_data::ArrayData;
-/// use arrow_data::transform::{MutableArrayData, SpecializedMutableArrayData};
-/// use arrow_schema::DataType;
-/// fn i32_array(values: &[i32]) -> ArrayData {
-///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
-/// }
-/// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
-/// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
-/// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
-/// let capacity = 3 * std::mem::size_of::<i32>();
-/// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
-/// // Copy the first 3 elements from arr1
-/// mutable.extend(0, 0, 3);
-/// // Copy the last 3 elements from arr2
-/// mutable.extend(1, 2, 4);
-/// // Complete the MutableArrayData into a new ArrayData
-/// let frozen = mutable.freeze();
-/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
-/// ```
-pub struct MutableArrayData<'a> {
-    /// Input arrays: the data being read FROM.
-    ///
-    /// Note this is "dead code" because all actual references to the arrays are
-    /// stored in closures for extending values and nulls.
-    #[allow(dead_code)]
-    arrays: Vec<&'a ArrayData>,
-
-    /// In progress output array: The data being written TO
-    ///
-    /// Note these fields are in a separate struct, [_MutableArrayData], as they
-    /// cannot be in [MutableArrayData] itself due to mutability invariants (interior
-    /// mutability): [MutableArrayData] contains a function that can only mutate
-    /// [_MutableArrayData], not [MutableArrayData] itself
-    data: _MutableArrayData<'a>,
-
-    /// The child data of the `Array` in Dictionary arrays.
-    ///
-    /// This is not stored in `_MutableArrayData` because these values are
-    /// constant and only needed at the end, when freezing [_MutableArrayData].
-    dictionary: Option<ArrayData>,
-
-    /// Variadic data buffers referenced by views.
-    ///
-    /// Note this this is not stored in `_MutableArrayData` because these values
-    /// are constant and only needed at the end, when freezing
-    /// [_MutableArrayData]
-    variadic_data_buffers: Vec<Buffer>,
-
-    /// function used to extend output array with values from input arrays.
-    ///
-    /// This function's lifetime is bound to the input arrays because it reads
-    /// values from them.
-    extend_values: Vec<Extend<'a>>,
-
-    /// function used to extend the output array with nulls from input arrays.
-    ///
-    /// This function's lifetime is bound to the input arrays because it reads
-    /// nulls from it.
-    extend_null_bits: Vec<ExtendNullBits<'a>>,
-
-    /// function used to extend the output array with null elements.
-    ///
-    /// This function is independent of the arrays and therefore has no lifetime.
-    extend_nulls: ExtendNulls,
-}
-
-impl<'a> std::fmt::Debug for MutableArrayData<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        // ignores the closures.
-        f.debug_struct("MutableArrayData")
-            .field("data", &self.data)
-            .finish()
-    }
-}
 
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
@@ -292,6 +210,92 @@ fn preallocate_offset_and_binary_buffer<Offset: ArrowNativeType + Integer>(
         buffer,
         MutableBuffer::new(binary_size * mem::size_of::<u8>()),
     ]
+}
+
+
+/// Efficiently create an [ArrayData] from one or more existing [ArrayData]s by
+/// copying chunks.
+///
+/// The main use case of this struct is to perform unary operations to arrays of
+/// arbitrary types, such as `filter` and `take`.
+///
+/// # Example
+/// ```
+/// use arrow_buffer::Buffer;
+/// use arrow_data::ArrayData;
+/// use arrow_data::transform::{MutableArrayData, SpecializedMutableArrayData};
+/// use arrow_schema::DataType;
+/// fn i32_array(values: &[i32]) -> ArrayData {
+///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
+/// }
+/// let arr1  = i32_array(&[1, 2, 3, 4, 5]);
+/// let arr2  = i32_array(&[6, 7, 8, 9, 10]);
+/// // Create a mutable array for copying values from arr1 and arr2, with a capacity for 6 elements
+/// let capacity = 3 * std::mem::size_of::<i32>();
+/// let mut mutable = MutableArrayData::new(vec![&arr1, &arr2], false, 10);
+/// // Copy the first 3 elements from arr1
+/// mutable.extend(0, 0, 3);
+/// // Copy the last 3 elements from arr2
+/// mutable.extend(1, 2, 4);
+/// // Complete the MutableArrayData into a new ArrayData
+/// let frozen = mutable.freeze();
+/// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
+/// ```
+pub struct MutableArrayData<'a> {
+    // TODO - can have specific array instead?
+    /// Input arrays: the data being read FROM.
+    ///
+    /// Note this is "dead code" because all actual references to the arrays are
+    /// stored in closures for extending values and nulls.
+    #[allow(dead_code)]
+    arrays: Vec<&'a ArrayData>,
+
+    /// In progress output array: The data being written TO
+    ///
+    /// Note these fields are in a separate struct, [_MutableArrayData], as they
+    /// cannot be in [MutableArrayData] itself due to mutability invariants (interior
+    /// mutability): [MutableArrayData] contains a function that can only mutate
+    /// [_MutableArrayData], not [MutableArrayData] itself
+    data: _MutableArrayData<'a>,
+
+    /// The child data of the `Array` in Dictionary arrays.
+    ///
+    /// This is not stored in `_MutableArrayData` because these values are
+    /// constant and only needed at the end, when freezing [_MutableArrayData].
+    dictionary: Option<ArrayData>,
+
+    /// Variadic data buffers referenced by views.
+    ///
+    /// Note this this is not stored in `_MutableArrayData` because these values
+    /// are constant and only needed at the end, when freezing
+    /// [_MutableArrayData]
+    variadic_data_buffers: Vec<Buffer>,
+
+    /// function used to extend output array with values from input arrays.
+    ///
+    /// This function's lifetime is bound to the input arrays because it reads
+    /// values from them.
+    extend_values: Vec<Extend<'a>>,
+
+    /// function used to extend the output array with nulls from input arrays.
+    ///
+    /// This function's lifetime is bound to the input arrays because it reads
+    /// nulls from it.
+    extend_null_bits: Vec<ExtendNullBits<'a>>,
+
+    /// function used to extend the output array with null elements.
+    ///
+    /// This function is independent of the arrays and therefore has no lifetime.
+    extend_nulls: ExtendNulls,
+}
+
+impl<'a> std::fmt::Debug for MutableArrayData<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // ignores the closures.
+        f.debug_struct("MutableArrayData")
+            .field("data", &self.data)
+            .finish()
+    }
 }
 
 /// Define capacities to pre-allocate for child data or data buffers.
