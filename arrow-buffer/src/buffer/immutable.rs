@@ -614,7 +614,7 @@ mod tests {
         let mut shrunk_empty = empty_slice;
         shrunk_empty.shrink_to_fit();
         assert_eq!(shrunk_empty.as_slice(), &[]);
-        assert_eq!(shrunk_empty.capacity(), 1); // NOTE: `Buffer` and `Bytes` doesn't support 0-capacity
+        assert_eq!(shrunk_empty.capacity(), 0);
     }
 
     #[test]

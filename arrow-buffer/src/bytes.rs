@@ -24,6 +24,7 @@ use std::ptr::NonNull;
 use std::{fmt::Debug, fmt::Formatter};
 
 use crate::alloc::Deallocation;
+use crate::buffer::dangling_ptr;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
@@ -104,20 +105,29 @@ impl Bytes {
     /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
     pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
         if let Deallocation::Standard(old_layout) = self.deallocation {
-            let new_len = new_len.max(1); // realloc requires a non-zero size
             if old_layout.size() == new_len {
                 return Ok(()); // Nothing to do
             }
+
             if let Ok(new_layout) = std::alloc::Layout::from_size_align(new_len, old_layout.align())
             {
                 let old_ptr = self.ptr.as_ptr();
-                // SAFETY: the call to `realloc` is safe if all of the following holds (from https://doc.rust-lang.org/stable/std/alloc/trait.GlobalAlloc.html#method.realloc):
-                // * `old_ptr` must be currently allocated via this allocator (guaranteed by the invariant/contract of `Bytes`)
-                // * `old_layout` must be the same layout that was used to allocate that block of memory (same)
-                // * `new_len` must be greater than zero (ensured by the `max` call earlier)
-                // * `new_len`, when rounded up to the nearest multiple of `layout.align()`, must not overflow `isize` (guaranteed by the success of `Layout::from_size_align`)
-                let new_ptr = unsafe { std::alloc::realloc(old_ptr, old_layout, new_len) };
-                if let Some(ptr) = NonNull::new(new_ptr) {
+
+                let new_ptr = match new_layout.size() {
+                    0 => {
+                        // SAFETY: Verified that old_layout.size != new_len (0)
+                        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), old_layout) };
+                        Some(dangling_ptr())
+                    }
+                    // SAFETY: the call to `realloc` is safe if all the following hold (from https://doc.rust-lang.org/stable/std/alloc/trait.GlobalAlloc.html#method.realloc):
+                    // * `old_ptr` must be currently allocated via this allocator (guaranteed by the invariant/contract of `Bytes`)
+                    // * `old_layout` must be the same layout that was used to allocate that block of memory (same)
+                    // * `new_len` must be greater than zero
+                    // * `new_len`, when rounded up to the nearest multiple of `layout.align()`, must not overflow `isize` (guaranteed by the success of `Layout::from_size_align`)
+                    _ => NonNull::new(unsafe { std::alloc::realloc(old_ptr, old_layout, new_len) }),
+                };
+
+                if let Some(ptr) = new_ptr {
                     self.ptr = ptr;
                     self.len = new_len;
                     self.deallocation = Deallocation::Standard(new_layout);

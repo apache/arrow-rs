@@ -468,7 +468,7 @@ impl MutableBuffer {
 }
 
 #[inline]
-fn dangling_ptr() -> NonNull<u8> {
+pub(crate) fn dangling_ptr() -> NonNull<u8> {
     // SAFETY: ALIGNMENT is a non-zero usize which is then casted
     // to a *mut T. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
