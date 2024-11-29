@@ -43,3 +43,8 @@ mod interval;
 pub use interval::*;
 
 mod arith;
+
+#[cfg(feature = "pool")]
+mod pool;
+#[cfg(feature = "pool")]
+pub use pool::*;

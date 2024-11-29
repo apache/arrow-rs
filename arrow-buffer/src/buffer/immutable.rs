@@ -349,6 +349,12 @@ impl Buffer {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.length == other.length
     }
+
+    /// Register this [`Buffer`] with the provided [`MemoryPool`], replacing any prior assignment
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn crate::MemoryPool) {
+        self.data.claim(pool)
+    }
 }
 
 /// Note that here we deliberately do not implement
