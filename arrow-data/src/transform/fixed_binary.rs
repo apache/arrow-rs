@@ -82,7 +82,7 @@ pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
 /// let frozen = mutable.freeze();
 /// assert_eq!(frozen, i32_array(&[1, 2, 3, 8, 9, 10]));
 /// ```
-pub struct FixedBinaryMutableArrayData<'a> {
+pub struct FixedSizeBinaryMutableArrayData<'a> {
     /// Input arrays: the data being read FROM.
     ///
     /// Note this is "dead code" because all actual references to the arrays are
@@ -105,17 +105,17 @@ pub struct FixedBinaryMutableArrayData<'a> {
     extend_null_bits: Vec<ExtendNullBits<'a>>,
 }
 
-impl<'a> std::fmt::Debug for FixedBinaryMutableArrayData<'a> {
+impl<'a> std::fmt::Debug for FixedSizeBinaryMutableArrayData<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // ignores the closures.
-        f.debug_struct("FixedBinaryMutableArrayData")
+        f.debug_struct("FixedSizeBinaryMutableArrayData")
             .field("data", &self.data)
             .finish()
     }
 }
 
 
-impl<'a> FixedBinaryMutableArrayData<'a> {
+impl<'a> FixedSizeBinaryMutableArrayData<'a> {
     // function that extends `[start..start+len]` to the mutable array.
     fn extend_values(&mut self, array_index: usize, start: usize, len: usize) {
         let array = self.arrays[array_index];
@@ -196,7 +196,7 @@ impl<'a> FixedBinaryMutableArrayData<'a> {
     }
 }
 
-impl<'a> SpecializedMutableArrayData<'a> for FixedBinaryMutableArrayData<'a> {
+impl<'a> SpecializedMutableArrayData<'a> for FixedSizeBinaryMutableArrayData<'a> {
     /// Returns a new [crate::transform::MutableArrayData] with capacity to `capacity` slots and
     /// specialized to create an [ArrayData] from multiple `arrays`.
     ///

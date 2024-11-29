@@ -39,7 +39,7 @@ mod traits;
 
 pub use traits::SpecializedMutableArrayData;
 pub use boolean::BooleanMutableArrayData;
-pub use fixed_binary::FixedBinaryMutableArrayData;
+pub use fixed_binary::FixedSizeBinaryMutableArrayData;
 
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
