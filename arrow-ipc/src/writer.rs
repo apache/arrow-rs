@@ -23,6 +23,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
