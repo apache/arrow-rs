@@ -370,7 +370,7 @@ pub enum DataType {
     ///
     /// In a field with Map type, the field has a child Struct field, which then
     /// has two children: key type and the second the value type. The names of the
-    /// child fields may be respectively "entries", "key", and "value", but this is
+    /// child fields may be respectively "key_value", "key", and "value", but this is
     /// not enforced.
     Map(FieldRef, bool),
     /// A run-end encoding (REE) is a variation of run-length encoding (RLE). These

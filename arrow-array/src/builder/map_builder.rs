@@ -78,9 +78,9 @@ pub struct MapFieldNames {
 impl Default for MapFieldNames {
     fn default() -> Self {
         Self {
-            entry: "entries".to_string(),
-            key: "keys".to_string(),
-            value: "values".to_string(),
+            entry: "key_value".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
         }
     }
 }
