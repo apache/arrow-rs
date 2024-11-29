@@ -164,9 +164,21 @@ jobs:
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Clippy arrow-buffer with all features
-        run: cargo clippy -p arrow-buffer --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-buffer
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-data with all features
-        run: cargo clippy -p arrow-data --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-data
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-schema
         run: |
           mod=arrow-schema
@@ -184,28 +196,106 @@ jobs:
           cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
           cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-select with all features
-        run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-select
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-cast with all features
-        run: cargo clippy -p arrow-cast --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-cast
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-ipc with all features
-        run: cargo clippy -p arrow-ipc --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-ipc
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-csv with all features
-        run: cargo clippy -p arrow-csv --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-csv
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-json with all features
-        run: cargo clippy -p arrow-json --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-json
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-avro with all features
-        run: cargo clippy -p arrow-avro --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-avro
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-string with all features
-        run: cargo clippy -p arrow-string --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-string
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-ord with all features
-        run: cargo clippy -p arrow-ord --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-ord
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-arith with all features
-        run: cargo clippy -p arrow-arith --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-arith
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-row with all features
-        run: cargo clippy -p arrow-row --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-row
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow with all features
-        run: cargo clippy -p arrow --all-features --all-targets -- -D warnings
+        run: |
+          mod=arrow
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-integration-test with all features
-        run: cargo clippy -p arrow-integration-test --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-integration-test
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-integration-testing with all features
-        run: cargo clippy -p arrow-integration-testing --all-targets --all-features -- -D warnings
+        run: |
+          mod=arrow-integration-testing
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
