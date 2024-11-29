@@ -17,6 +17,10 @@
 
 use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
 use num::{CheckedAdd, Integer};
+use arrow_buffer::bit_mask::set_bits;
+use arrow_schema::DataType;
+use crate::ArrayData;
+use crate::transform::{utils, ExtendNullBits, MutableArrayData};
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
@@ -55,6 +59,62 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *offsets.get_unchecked(offsets.len() - 1)
+}
+
+
+/// A mutable [ArrayData] that knows how to freeze itself into an [ArrayData].
+/// This is just a data container.
+#[derive(Debug)]
+pub(super) struct _MutableArrayData<'a> {
+    pub data_type: DataType,
+    pub null_count: usize,
+
+    pub len: usize,
+    pub null_buffer: Option<MutableBuffer>,
+
+    // arrow specification only allows up to 3 buffers (2 ignoring the nulls above).
+    // Thus, we place them in the stack to avoid bound checks and greater data locality.
+    pub buffer1: MutableBuffer,
+    pub buffer2: MutableBuffer,
+    pub child_data: Vec<MutableArrayData<'a>>,
+}
+
+impl<'a> _MutableArrayData<'a> {
+    pub(super) fn null_buffer(&mut self) -> &mut MutableBuffer {
+        self.null_buffer
+            .as_mut()
+            .expect("MutableArrayData not nullable")
+    }
+}
+
+pub(super) fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
+    if let Some(nulls) = array.nulls() {
+        let bytes = nulls.validity();
+        Box::new(move |mutable, start, len| {
+            let mutable_len = mutable.len;
+            let out = mutable.null_buffer();
+            utils::resize_for_bits(out, mutable_len + len);
+            mutable.null_count += set_bits(
+                out.as_slice_mut(),
+                bytes,
+                mutable_len,
+                nulls.offset() + start,
+                len,
+            );
+        })
+    } else if use_nulls {
+        Box::new(|mutable, _, len| {
+            let mutable_len = mutable.len;
+            let out = mutable.null_buffer();
+            utils::resize_for_bits(out, mutable_len + len);
+            let write_data = out.as_slice_mut();
+            (0..len).for_each(|i| {
+                bit_util::set_bit(write_data, mutable_len + i);
+            });
+        })
+    } else {
+        Box::new(|_, _, _| {})
+    }
 }
 
 #[cfg(test)]
