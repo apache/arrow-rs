@@ -169,8 +169,14 @@ jobs:
         run: cargo clippy -p arrow-data --all-targets --all-features -- -D warnings
       - name: Clippy arrow-schema with all features
         run: cargo clippy -p arrow-schema --all-targets --all-features -- -D warnings
-      - name: Clippy arrow-array with all features
-        run: cargo clippy -p arrow-array --all-targets --all-features -- -D warnings
+      - name: Clippy arrow-array
+        run: |
+          mod=arrow-array
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
       - name: Clippy arrow-select with all features
         run: cargo clippy -p arrow-select --all-targets --all-features -- -D warnings
       - name: Clippy arrow-cast with all features
