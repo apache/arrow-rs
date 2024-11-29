@@ -23,6 +23,7 @@ use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num::Integer;
 use std::mem;
+pub use traits::SpecializedMutableArrayData;
 
 mod boolean;
 mod fixed_binary;
@@ -34,6 +35,7 @@ mod structure;
 mod union;
 mod utils;
 mod variable_size;
+mod traits;
 
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
@@ -107,7 +109,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 /// ```
 /// use arrow_buffer::Buffer;
 /// use arrow_data::ArrayData;
-/// use arrow_data::transform::MutableArrayData;
+/// use arrow_data::transform::{MutableArrayData, SpecializedMutableArrayData};
 /// use arrow_schema::DataType;
 /// fn i32_array(values: &[i32]) -> ArrayData {
 ///   ArrayData::try_new(DataType::Int32, 5, None, 0, vec![Buffer::from_slice_ref(values)], vec![]).unwrap()
@@ -377,22 +379,6 @@ pub enum Capacities {
 }
 
 impl<'a> MutableArrayData<'a> {
-    /// Returns a new [MutableArrayData] with capacity to `capacity` slots and
-    /// specialized to create an [ArrayData] from multiple `arrays`.
-    ///
-    /// # Arguments
-    /// * `arrays` - the source arrays to copy from
-    /// * `use_nulls` - a flag used to optimize insertions
-    ///   - `false` if the only source of nulls are the arrays themselves
-    ///   - `true` if the user plans to call [MutableArrayData::extend_nulls].
-    /// * capacity - the preallocated capacity of the output array, in bytes
-    ///
-    /// Thus, if `use_nulls` is `false`, calling
-    /// [MutableArrayData::extend_nulls] should not be used.
-    pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
-        Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
-    }
-
     /// Similar to [MutableArrayData::new], but lets users define the
     /// preallocated capacities of the array with more granularity.
     ///
@@ -699,6 +685,24 @@ impl<'a> MutableArrayData<'a> {
             extend_nulls,
         }
     }
+}
+
+impl<'a> SpecializedMutableArrayData<'a> for MutableArrayData<'a> {
+    /// Returns a new [MutableArrayData] with capacity to `capacity` slots and
+    /// specialized to create an [ArrayData] from multiple `arrays`.
+    ///
+    /// # Arguments
+    /// * `arrays` - the source arrays to copy from
+    /// * `use_nulls` - a flag used to optimize insertions
+    ///   - `false` if the only source of nulls are the arrays themselves
+    ///   - `true` if the user plans to call [MutableArrayData::extend_nulls].
+    /// * capacity - the preallocated capacity of the output array, in bytes
+    ///
+    /// Thus, if `use_nulls` is `false`, calling
+    /// [MutableArrayData::extend_nulls] should not be used.
+    fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
+        Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
+    }
 
     /// Extends the in progress array with a region of the input arrays
     ///
@@ -711,7 +715,7 @@ impl<'a> MutableArrayData<'a> {
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `end` > the length of the `index`th array
-    pub fn extend(&mut self, index: usize, start: usize, end: usize) {
+    fn extend(&mut self, index: usize, start: usize, end: usize) {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
         (self.extend_values[index])(&mut self.data, index, start, len);
@@ -723,7 +727,7 @@ impl<'a> MutableArrayData<'a> {
     /// # Panics
     ///
     /// Panics if [`MutableArrayData`] not created with `use_nulls` or nullable source arrays
-    pub fn extend_nulls(&mut self, len: usize) {
+    fn extend_nulls(&mut self, len: usize) {
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
@@ -734,31 +738,31 @@ impl<'a> MutableArrayData<'a> {
 
     /// Returns the current length
     #[inline]
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.data.len
     }
 
     /// Returns true if len is 0
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.data.len == 0
     }
 
     /// Returns the current null count
     #[inline]
-    pub fn null_count(&self) -> usize {
+    fn null_count(&self) -> usize {
         self.data.null_count
     }
 
     /// Creates a [ArrayData] from the in progress array, consuming `self`.
-    pub fn freeze(self) -> ArrayData {
+    fn freeze(self) -> ArrayData {
         unsafe { self.into_builder().build_unchecked() }
     }
 
     /// Consume self and returns the in progress array as [`ArrayDataBuilder`].
     ///
     /// This is useful for extending the default behavior of MutableArrayData.
-    pub fn into_builder(self) -> ArrayDataBuilder {
+    fn into_builder(self) -> ArrayDataBuilder {
         let data = self.data;
 
         let buffers = match data.data_type {
