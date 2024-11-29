@@ -701,7 +701,7 @@ impl<'a> MutableArrayData<'a> {
     }
 
     /// Extends the in progress array with a region of the input arrays
-    /// 
+    ///
     /// For extending scalar value, use [MutableArrayData::extend_scalar].
     ///
     /// # Arguments
@@ -731,7 +731,7 @@ impl<'a> MutableArrayData<'a> {
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
     /// or `start` + `count`  > the length of the `index`th array
-    /// 
+    ///
     pub fn extend_scalar(&mut self, index: usize, scalar_index: usize, count: usize) {
         let extend_null_fn = &self.extend_null_bits[index];
         let extend_value_fn = &self.extend_values[index];
