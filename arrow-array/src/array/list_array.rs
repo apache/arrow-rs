@@ -485,6 +485,14 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }

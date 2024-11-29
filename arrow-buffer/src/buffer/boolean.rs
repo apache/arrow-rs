@@ -118,6 +118,12 @@ impl BooleanBuffer {
         self.len == 0
     }
 
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
+        self.buffer.shrink_to_fit();
+    }
+
     /// Returns the boolean value at index `i`.
     ///
     /// # Panics

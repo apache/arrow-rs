@@ -167,6 +167,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Shrinks the capacity of any exclusively owned buffer as much as possible
+    ///
+    /// Shared or externally allocated buffers will be ignored, and
+    /// any buffer offsets will be preserved.
+    fn shrink_to_fit(&mut self) {}
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -363,6 +369,15 @@ impl Array for ArrayRef {
 
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
+    }
+
+    /// For shared buffers, this is a no-op.
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // We ignore shared buffers.
+        }
     }
 
     fn offset(&self) -> usize {
