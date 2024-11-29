@@ -733,15 +733,13 @@ impl<'a> MutableArrayData<'a> {
     /// or `start` + `count`  > the length of the `index`th array
     /// 
     pub fn extend_scalar(&mut self, index: usize, scalar_index: usize, count: usize) {
-        let f = &self.extend_null_bits[index];
+        let extend_null_fn = &self.extend_null_bits[index];
+        let extend_value_fn = &self.extend_values[index];
         for _ in 0..count {
-            f(&mut self.data, scalar_index, 1);
+            extend_null_fn(&mut self.data, scalar_index, 1);
+            extend_value_fn(&mut self.data, index, scalar_index, 1);
+            self.data.len += 1;
         }
-        let f = &self.extend_values[index];
-        for _ in 0..count {
-            f(&mut self.data, index, scalar_index, 1);
-        }
-        self.data.len += count;
     }
 
     /// Extends the in progress array with null elements, ignoring the input arrays.
