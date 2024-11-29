@@ -40,6 +40,7 @@ mod traits;
 pub use traits::SpecializedMutableArrayData;
 pub use boolean::BooleanMutableArrayData;
 pub use fixed_binary::FixedSizeBinaryMutableArrayData;
+pub use fixed_size_list::FixedSizeListMutableArrayData;
 
 type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
@@ -297,6 +298,7 @@ impl<'a> std::fmt::Debug for MutableArrayData<'a> {
             .finish()
     }
 }
+
 
 /// Define capacities to pre-allocate for child data or data buffers.
 #[derive(Debug, Clone)]
