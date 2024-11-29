@@ -744,6 +744,17 @@ impl Array for UnionArray {
         self.type_ids.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.type_ids.shrink_to_fit();
+        if let Some(offsets) = &mut self.offsets {
+            offsets.shrink_to_fit();
+        }
+        for array in self.fields.iter_mut().flatten() {
+            array.shrink_to_fit();
+        }
+        self.fields.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }

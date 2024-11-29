@@ -133,6 +133,11 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(out.into())
     }
 
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.0.shrink_to_fit();
+    }
+
     /// Returns the inner [`ScalarBuffer`]
     pub fn inner(&self) -> &ScalarBuffer<O> {
         &self.0

@@ -167,6 +167,41 @@ impl Buffer {
         self.data.capacity()
     }
 
+    /// Tried to shrink the capacity of the buffer as much as possible, freeing unused memory.
+    ///
+    /// If the buffer is shared, this is a no-op.
+    ///
+    /// If the memory was allocated with a custom allocator, this is a no-op.
+    ///
+    /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    ///
+    /// The memory region will be reallocated using `std::alloc::realloc`.
+    pub fn shrink_to_fit(&mut self) {
+        let offset = self.ptr_offset();
+        let is_empty = self.is_empty();
+        let desired_capacity = if is_empty {
+            0
+        } else {
+            // For realloc to work, we cannot free the elements before the offset
+            offset + self.len()
+        };
+        if desired_capacity < self.capacity() {
+            if let Some(bytes) = Arc::get_mut(&mut self.data) {
+                if bytes.try_realloc(desired_capacity).is_ok() {
+                    // Realloc complete - update our pointer into `bytes`:
+                    self.ptr = if is_empty {
+                        bytes.as_ptr()
+                    } else {
+                        // SAFETY: we kept all elements leading up to the offset
+                        unsafe { bytes.as_ptr().add(offset) }
+                    }
+                } else {
+                    // Failure to reallocate is fine; we just failed to free up memory.
+                }
+            }
+        }
+    }
+
     /// Returns whether the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -560,6 +595,34 @@ mod tests {
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
         assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
+    }
+
+    #[test]
+    fn test_shrink_to_fit() {
+        let original = Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.capacity(), 64);
+
+        let slice = original.slice_with_length(2, 3);
+        drop(original); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(slice.as_slice(), &[2, 3, 4]);
+        assert_eq!(slice.capacity(), 64);
+
+        let mut shrunk = slice;
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.as_slice(), &[2, 3, 4]);
+        assert_eq!(shrunk.capacity(), 5); // shrink_to_fit is allowed to keep the elements before the offset
+
+        // Test that we can handle empty slices:
+        let empty_slice = shrunk.slice_with_length(1, 0);
+        drop(shrunk); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(empty_slice.as_slice(), &[]);
+        assert_eq!(empty_slice.capacity(), 5);
+
+        let mut shrunk_empty = empty_slice;
+        shrunk_empty.shrink_to_fit();
+        assert_eq!(shrunk_empty.as_slice(), &[]);
+        assert_eq!(shrunk_empty.capacity(), 1); // NOTE: `Buffer` and `Bytes` doesn't support 0-capacity
     }
 
     #[test]
