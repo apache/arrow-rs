@@ -701,11 +701,6 @@ impl<'a> SpecializedMutableArrayData<'a> for MutableArrayData<'a> {
         self.data.null_count
     }
 
-    /// Creates a [ArrayData] from the in progress array, consuming `self`.
-    fn freeze(self) -> ArrayData {
-        unsafe { self.into_builder().build_unchecked() }
-    }
-
     /// Consume self and returns the in progress array as [`ArrayDataBuilder`].
     ///
     /// This is useful for extending the default behavior of MutableArrayData.

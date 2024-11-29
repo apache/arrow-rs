@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{ArrayData, ArrayDataBuilder};
+use super::{ArrayData, ArrayDataBuilder, MutableArrayData};
 use std::fmt::Debug;
 
 // TODO - ADD COMMENT and update comments
@@ -64,7 +64,9 @@ pub trait SpecializedMutableArrayData<'a>: Debug {
     fn null_count(&self) -> usize;
 
     /// Creates a [ArrayData] from the in progress array, consuming `self`.
-    fn freeze(self) -> ArrayData;
+    fn freeze(self) -> ArrayData {
+        unsafe { self.into_builder().build_unchecked() }
+    }
 
     /// Consume self and returns the in progress array as [`ArrayDataBuilder`].
     ///
