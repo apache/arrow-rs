@@ -52,8 +52,12 @@ impl BooleanBuffer {
     /// This method will panic if `buffer` is not large enough
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let total_len = offset.saturating_add(len);
-        let bit_len = buffer.len().saturating_mul(8);
-        assert!(total_len <= bit_len);
+        let buffer_len = buffer.len();
+        let bit_len = buffer_len.saturating_mul(8);
+        assert!(
+            total_len <= bit_len,
+            "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
+        );
         Self {
             buffer,
             offset,
