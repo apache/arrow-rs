@@ -64,6 +64,7 @@ impl RecordDecoder {
         Ok(cursor.position())
     }
 
+    /// Flush the decoded records into a [`RecordBatch`]
     pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let arrays = self
             .fields
@@ -155,6 +156,7 @@ impl Decoder {
         })
     }
 
+    /// Append a null record
     fn append_null(&mut self) {
         match self {
             Self::Null(count) => *count += 1,
@@ -176,6 +178,7 @@ impl Decoder {
         }
     }
 
+    /// Decode a single record from `buf`
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         match self {
             Self::Null(x) => *x += 1,
@@ -216,6 +219,7 @@ impl Decoder {
         Ok(())
     }
 
+    /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         Ok(match self {
             Self::Nullable(_, n, e) => e.flush(n.finish())?,
