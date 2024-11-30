@@ -702,7 +702,7 @@ impl<'a> MutableArrayData<'a> {
 
     /// Extends the in progress array with a region of the input arrays
     ///
-    /// For extending scalar value, use [MutableArrayData::extend_scalar].
+    /// For extending scalar value, use [MutableArrayData::extend_n].
     ///
     /// # Arguments
     /// * `index` - the index of array that you what to copy values from
@@ -732,7 +732,7 @@ impl<'a> MutableArrayData<'a> {
     /// i.e. `index` >= the number of source arrays
     /// or `start` + `count`  > the length of the `index`th array
     ///
-    pub fn extend_scalar(&mut self, index: usize, scalar_index: usize, count: usize) {
+    pub fn extend_n(&mut self, index: usize, scalar_index: usize, count: usize) {
         let extend_null_fn = &self.extend_null_bits[index];
         let extend_value_fn = &self.extend_values[index];
         for _ in 0..count {

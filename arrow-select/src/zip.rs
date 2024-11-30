@@ -89,10 +89,10 @@ fn zip_both_scalar(mask: &BooleanArray, mutable: &mut MutableArrayData) {
     SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
-            mutable.extend_scalar(1, 0, start - filled);
+            mutable.extend_n(1, 0, start - filled);
         }
         // fill with truthy values
-        mutable.extend_scalar(0, 0, end - start);
+        mutable.extend_n(0, 0, end - start);
 
         filled = end;
     });
@@ -100,7 +100,7 @@ fn zip_both_scalar(mask: &BooleanArray, mutable: &mut MutableArrayData) {
     // the remaining part is falsy
     if filled < mask.len() {
         // Copy the first item from the 'falsy' array into the output buffer.
-        mutable.extend_scalar(1, 0, mask.len() - filled);
+        mutable.extend_n(1, 0, mask.len() - filled);
     }
 }
 
@@ -115,7 +115,7 @@ fn zip_truthy_scalar_falsy_array(mask: &BooleanArray, mutable: &mut MutableArray
         }
 
         // fill with truthy values
-        mutable.extend_scalar(0, 0, end - start);
+        mutable.extend_n(0, 0, end - start);
 
         filled = end;
     });
@@ -133,7 +133,7 @@ fn zip_truthy_array_falsy_scalar(mask: &BooleanArray, mutable: &mut MutableArray
     SlicesIterator::new(mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
-            mutable.extend_scalar(1, 0, start - filled);
+            mutable.extend_n(1, 0, start - filled);
         }
 
         // fill with truthy values
@@ -145,7 +145,7 @@ fn zip_truthy_array_falsy_scalar(mask: &BooleanArray, mutable: &mut MutableArray
     // the remaining part is falsy
     if filled < mask.len() {
         // Copy the first item from the 'falsy' array into the output buffer.
-        mutable.extend_scalar(1, 0, mask.len() - filled);
+        mutable.extend_n(1, 0, mask.len() - filled);
     }
 }
 
