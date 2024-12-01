@@ -67,9 +67,8 @@ pub(crate) fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
 #[inline]
 fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
     let mut in_progress = 0_u64;
-    for idx in 0..9 {
-        let b = buf[idx] as u64;
-        in_progress += b << (7 * idx);
+    for (idx, b) in buf.into_iter().take(9).enumerate() {
+        in_progress += (b as u64) << (7 * idx);
         if b < 0x80 {
             return Some((in_progress, idx + 1));
         }
