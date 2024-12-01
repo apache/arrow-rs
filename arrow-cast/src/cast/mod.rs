@@ -3743,20 +3743,19 @@ mod tests {
     fn test_cast_float_to_utf8view() {
         let inputs = vec![
             Arc::new(Float16Array::from(vec![
-                Some(f16::from_f64(1.0)),
-                Some(f16::from_f64(2.0)),
+                Some(f16::from_f64(1.5)),
+                Some(f16::from_f64(2.5)),
+                None,
             ])) as ArrayRef,
-            Arc::new(Float32Array::from(vec![Some(8.64), Some(9.81), None])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![Some(8.64), Some(9.81), None])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![Some(1.5), Some(2.5), None])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(1.5), Some(2.5), None])) as ArrayRef,
         ];
 
-        let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
-            Some("8.64"),
-            Some("9.81"),
-            None,
-        ]));
+        let expected: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("1.5"), Some("2.5"), None]));
 
         for array in inputs {
+            println!("type: {}", array.data_type());
             assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
             let arr = cast(&array, &DataType::Utf8View).unwrap();
             assert_eq!(expected.as_ref(), arr.as_ref());
