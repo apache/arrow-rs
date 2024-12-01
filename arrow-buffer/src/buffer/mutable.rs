@@ -467,10 +467,13 @@ impl MutableBuffer {
     }
 }
 
+/// Creates a non-null pointer with alignment of [`ALIGNMENT`]
+///
+/// This is similar to [`NonNull::dangling`]
 #[inline]
-fn dangling_ptr() -> NonNull<u8> {
-    // SAFETY: ALIGNMENT is a non-zero usize which is then casted
-    // to a *mut T. Therefore, `ptr` is not null and the conditions for
+pub(crate) fn dangling_ptr() -> NonNull<u8> {
+    // SAFETY: ALIGNMENT is a non-zero usize which is then cast
+    // to a *mut u8. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
     #[cfg(miri)]
     {
