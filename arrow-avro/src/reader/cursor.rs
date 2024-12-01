@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::reader::vlq::read_varint;
 use arrow_schema::ArrowError;
 
 /// A wrapper around a byte slice, providing low-level decoding for Avro
@@ -57,46 +58,26 @@ impl<'a> AvroCursor<'a> {
         Ok(self.get_u8()? != 0)
     }
 
+    pub(crate) fn read_vlq(&mut self) -> Result<u64, ArrowError> {
+        let (val, offset) = read_varint(self.buf)
+            .ok_or_else(|| ArrowError::ParseError("bad varint".to_string()))?;
+        self.buf = &self.buf[offset..];
+        Ok(val)
+    }
+
     #[inline]
     pub(crate) fn get_int(&mut self) -> Result<i32, ArrowError> {
-        let mut in_progress = 0;
-        let mut shift = 0;
-
-        while let Some(byte) = self.buf.first().copied() {
-            self.buf = &self.buf[1..];
-            in_progress |= ((byte & 0x7F) as u32) << shift;
-            shift += 7;
-            if byte & 0x80 == 0 {
-                let val = in_progress;
-                in_progress = 0;
-                shift = 0;
-                return Ok((val >> 1) as i32 ^ -((val & 1) as i32));
-            }
-        }
-        Err(ArrowError::ParseError(
-            "Unexpected EOF reading int".to_string(),
-        ))
+        let varint = self.read_vlq()?;
+        let val: u32 = varint
+            .try_into()
+            .map_err(|_| ArrowError::ParseError("varint overflow".to_string()))?;
+        Ok((val >> 1) as i32 ^ -((val & 1) as i32))
     }
 
     #[inline]
     pub(crate) fn get_long(&mut self) -> Result<i64, ArrowError> {
-        let mut in_progress = 0;
-        let mut shift = 0;
-
-        while let Some(byte) = self.buf.first().copied() {
-            self.buf = &self.buf[1..];
-            in_progress |= ((byte & 0x7F) as u64) << shift;
-            shift += 7;
-            if byte & 0x80 == 0 {
-                let val = in_progress;
-                in_progress = 0;
-                shift = 0;
-                return Ok((val >> 1) as i64 ^ -((val & 1) as i64));
-            }
-        }
-        Err(ArrowError::ParseError(
-            "Unexpected EOF reading long".to_string(),
-        ))
+        let val = self.read_vlq()?;
+        Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
     pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8], ArrowError> {
