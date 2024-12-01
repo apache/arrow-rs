@@ -23,6 +23,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
@@ -63,7 +64,7 @@ pub struct IpcWriteOptions {
     /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
-    /// Defaults to `true`
+    /// Defaults to `false`
     preserve_dict_id: bool,
 }
 
@@ -112,7 +113,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
-                preserve_dict_id: true,
+                preserve_dict_id: false,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -125,7 +126,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
-                        preserve_dict_id: true,
+                        preserve_dict_id: false,
                     })
                 }
             }
@@ -161,7 +162,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 }
@@ -785,7 +786,7 @@ impl DictionaryTracker {
             written: HashMap::new(),
             dict_ids: Vec::new(),
             error_on_replacement,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 
@@ -1430,7 +1431,13 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let end_offset = offset_slice.last().unwrap();
 
     let offsets = match start_offset.as_usize() {
-        0 => offsets.clone(),
+        0 => {
+            let size = size_of::<O>();
+            offsets.slice_with_length(
+                data.offset() * size,
+                (data.offset() + data.len() + 1) * size,
+            )
+        }
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
 
@@ -2517,6 +2524,36 @@ mod tests {
         ls.finish()
     }
 
+    fn generate_nested_list_data_starting_at_zero<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls =
+            GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(UInt32Builder::new()));
+
+        for _i in 0..999 {
+            ls.values().append(true);
+            ls.append(true);
+        }
+
+        for j in 0..10 {
+            for value in [j, j, j, j] {
+                ls.values().values().append_value(value);
+            }
+            ls.values().append(true)
+        }
+        ls.append(true);
+
+        for i in 0..9_000 {
+            for j in 0..10 {
+                for value in [i + j, i + j, i + j, i + j] {
+                    ls.values().values().append_value(value);
+                }
+                ls.values().append(true)
+            }
+            ls.append(true);
+        }
+
+        ls.finish()
+    }
+
     fn generate_map_array_data() -> MapArray {
         let keys_builder = UInt32Builder::new();
         let values_builder = UInt32Builder::new();
@@ -2606,6 +2643,19 @@ mod tests {
 
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    #[test]
+    fn encode_nested_lists_starting_at_zero() {
+        let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
+        let list_field = Field::new("val", DataType::List(inner_list_field), true);
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let values = Arc::new(generate_nested_list_data_starting_at_zero::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        roundtrip_ensure_sliced_smaller(in_batch, 1);
     }
 
     #[test]
