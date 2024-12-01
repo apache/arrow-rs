@@ -38,6 +38,30 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     Ok(Arc::new(builder.finish()))
 }
 
+pub(crate) fn value_to_string_view(
+    array: &dyn Array,
+    options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+    let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
+    let nulls = array.nulls();
+    // buffer to avoid reallocating on each value
+    // TODO: replace with write to builder after https://github.com/apache/arrow-rs/issues/6373
+    let mut buffer = String::new();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            true => builder.append_null(),
+            false => {
+                // write to buffer first and then copy into target array
+                buffer.clear();
+                formatter.value(i).write(&mut buffer)?;
+                builder.append_value(&buffer)
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Parse UTF-8
 pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     array: &dyn Array,
