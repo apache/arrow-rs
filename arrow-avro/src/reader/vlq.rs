@@ -61,9 +61,9 @@ pub(crate) fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
 }
 
 /// Based on
-/// - https://github.com/tokio-rs/prost/blob/master/prost/src/encoding/varint.rs#L71
-/// - https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.cc#L365-L406
-/// - https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358
+/// - <https://github.com/tokio-rs/prost/blob/master/prost/src/encoding/varint.rs#L71>
+/// - <https://github.com/google/protobuf/blob/3.3.x/src/google/protobuf/io/coded_stream.cc#L365-L406>
+/// - <https://github.com/protocolbuffers/protobuf-go/blob/v1.27.1/encoding/protowire/wire.go#L358>
 #[inline]
 fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
     let mut in_progress = 0_u64;
