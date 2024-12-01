@@ -467,7 +467,6 @@ impl MutableBuffer {
     }
 }
 
-
 /// Creates a non-null pointer with alignment of [`ALIGNMENT`]
 ///
 /// This is similar to [`NonNull::dangling`]
