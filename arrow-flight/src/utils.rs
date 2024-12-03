@@ -27,30 +27,6 @@ use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 
-/// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
-/// and a `FlightData` representing the bytes of the batch's values
-#[deprecated(
-    since = "30.0.0",
-    note = "Use IpcDataGenerator directly with DictionaryTracker to avoid re-sending dictionaries"
-)]
-pub fn flight_data_from_arrow_batch(
-    batch: &RecordBatch,
-    options: &IpcWriteOptions,
-) -> (Vec<FlightData>, FlightData) {
-    let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
-
-    let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, options)
-        .expect("DictionaryTracker configured above to not error on replacement");
-
-    let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-    let flight_batch = encoded_batch.into();
-
-    (flight_dictionaries, flight_batch)
-}
-
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
 pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBatch>, ArrowError> {
     let schema = flight_data.first().ok_or_else(|| {
