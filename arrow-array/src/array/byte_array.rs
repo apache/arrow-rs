@@ -453,6 +453,14 @@ impl<T: ByteArrayType> Array for GenericByteArray<T> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.value_offsets.shrink_to_fit();
+        self.value_data.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }

@@ -290,6 +290,7 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_on_conflict: bool,
     retry_error_body: bool,
 }
 
@@ -315,6 +316,13 @@ impl<'a> Request<'a> {
 
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
+        Self {
+            retry_on_conflict,
+            ..self
+        }
     }
 
     pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
@@ -412,6 +420,7 @@ impl<'a> Request<'a> {
         self.builder
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
+            .retry_on_conflict(self.retry_on_conflict)
             .idempotent(self.idempotent)
             .retry_error_body(self.retry_error_body)
             .payload(self.payload)
@@ -448,6 +457,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_on_conflict: false,
             retry_error_body: false,
         }
     }

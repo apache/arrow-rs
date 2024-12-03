@@ -1586,12 +1586,29 @@ mod tests {
         hydrate_dictionaries(&batch, batch.schema()).expect("failed to optimize");
     }
 
-    pub fn make_flight_data(
+    fn make_flight_data(
         batch: &RecordBatch,
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
-        #[allow(deprecated)]
-        crate::utils::flight_data_from_arrow_batch(batch, options)
+        flight_data_from_arrow_batch(batch, options)
+    }
+
+    fn flight_data_from_arrow_batch(
+        batch: &RecordBatch,
+        options: &IpcWriteOptions,
+    ) -> (Vec<FlightData>, FlightData) {
+        let data_gen = IpcDataGenerator::default();
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+
+        let (encoded_dictionaries, encoded_batch) = data_gen
+            .encoded_batch(batch, &mut dictionary_tracker, options)
+            .expect("DictionaryTracker configured above to not error on replacement");
+
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_batch = encoded_batch.into();
+
+        (flight_dictionaries, flight_batch)
     }
 
     #[test]

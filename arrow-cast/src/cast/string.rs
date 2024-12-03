@@ -38,6 +38,30 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     Ok(Arc::new(builder.finish()))
 }
 
+pub(crate) fn value_to_string_view(
+    array: &dyn Array,
+    options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+    let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
+    let nulls = array.nulls();
+    // buffer to avoid reallocating on each value
+    // TODO: replace with write to builder after https://github.com/apache/arrow-rs/issues/6373
+    let mut buffer = String::new();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            true => builder.append_null(),
+            false => {
+                // write to buffer first and then copy into target array
+                buffer.clear();
+                formatter.value(i).write(&mut buffer)?;
+                builder.append_value(&buffer)
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Parse UTF-8
 pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     array: &dyn Array,
@@ -344,19 +368,14 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
     }
 }
 
-/// Casts Utf8 to Boolean
-pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
-    from: &dyn Array,
+/// Casts string to boolean
+fn cast_string_to_boolean<'a, StrArray>(
+    array: &StrArray,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    OffsetSize: OffsetSizeTrait,
+    StrArray: StringArrayType<'a>,
 {
-    let array = from
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .unwrap();
-
     let output_array = array
         .iter()
         .map(|value| match value {
@@ -377,4 +396,28 @@ where
         .collect::<Result<BooleanArray, _>>()?;
 
     Ok(Arc::new(output_array))
+}
+
+pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let array = from
+        .as_any()
+        .downcast_ref::<GenericStringArray<OffsetSize>>()
+        .unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
+}
+
+pub(crate) fn cast_utf8view_to_boolean(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = from.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
 }

@@ -182,8 +182,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Decimal128(_, _) | Decimal256(_, _), UInt8 | UInt16 | UInt32 | UInt64) |
         // decimal to signed numeric
         (Decimal128(_, _) | Decimal256(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64) => true,
-        // decimal to Utf8
-        (Decimal128(_, _) | Decimal256(_, _), Utf8 | LargeUtf8) => true,
+        // decimal to string
+        (Decimal128(_, _) | Decimal256(_, _), Utf8View | Utf8 | LargeUtf8) => true,
         // string to decimal
         (Utf8View | Utf8 | LargeUtf8, Decimal128(_, _) | Decimal256(_, _)) => true,
         (Struct(from_fields), Struct(to_fields)) => {
@@ -197,13 +197,18 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (_, Boolean) => {
-            DataType::is_integer(from_type) ||
-                DataType::is_floating(from_type)
+            DataType::is_integer(from_type)
+                || DataType::is_floating(from_type)
+                || from_type == &Utf8View
                 || from_type == &Utf8
                 || from_type == &LargeUtf8
         }
         (Boolean, _) => {
-            DataType::is_integer(to_type) || DataType::is_floating(to_type) || to_type == &Utf8 || to_type == &LargeUtf8
+            DataType::is_integer(to_type)
+                || DataType::is_floating(to_type)
+                || to_type == &Utf8View
+                || to_type == &Utf8
+                || to_type == &LargeUtf8
         }
 
         (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
@@ -232,6 +237,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
         (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
+        (_, Utf8View) => from_type.is_numeric(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
 
@@ -917,6 +923,7 @@ pub fn cast_with_options(
                 Float64 => cast_decimal_to_float::<Decimal128Type, Float64Type, _>(array, |x| {
                     x as f64 / 10_f64.powi(*scale as i32)
                 }),
+                Utf8View => value_to_string_view(array, cast_options),
                 Utf8 => value_to_string::<i32>(array, cast_options),
                 LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
@@ -982,6 +989,7 @@ pub fn cast_with_options(
                 Float64 => cast_decimal_to_float::<Decimal256Type, Float64Type, _>(array, |x| {
                     x.to_f64().unwrap() / 10_f64.powi(*scale as i32)
                 }),
+                Utf8View => value_to_string_view(array, cast_options),
                 Utf8 => value_to_string::<i32>(array, cast_options),
                 LargeUtf8 => value_to_string::<i64>(array, cast_options),
                 Null => Ok(new_null_array(to_type, array.len())),
@@ -1197,6 +1205,7 @@ pub fn cast_with_options(
             Float16 => cast_numeric_to_bool::<Float16Type>(array),
             Float32 => cast_numeric_to_bool::<Float32Type>(array),
             Float64 => cast_numeric_to_bool::<Float64Type>(array),
+            Utf8View => cast_utf8view_to_boolean(array, cast_options),
             Utf8 => cast_utf8_to_boolean::<i32>(array, cast_options),
             LargeUtf8 => cast_utf8_to_boolean::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
@@ -1215,6 +1224,7 @@ pub fn cast_with_options(
             Float16 => cast_bool_to_numeric::<Float16Type>(array, cast_options),
             Float32 => cast_bool_to_numeric::<Float32Type>(array, cast_options),
             Float64 => cast_bool_to_numeric::<Float64Type>(array, cast_options),
+            Utf8View => value_to_string_view(array, cast_options),
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
@@ -1462,6 +1472,9 @@ pub fn cast_with_options(
         (BinaryView, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
+        (from_type, Utf8View) if from_type.is_numeric() => {
+            value_to_string_view(array, cast_options)
+        }
         (from_type, LargeUtf8) if from_type.is_primitive() => {
             value_to_string::<i64>(array, cast_options)
         }
@@ -3708,6 +3721,55 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_int_to_utf8view() {
+        let inputs = vec![
+            Arc::new(Int8Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(Int16Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(UInt8Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(UInt16Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(UInt32Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+            Arc::new(UInt64Array::from(vec![None, Some(8), Some(9), Some(10)])) as ArrayRef,
+        ];
+        let expected: ArrayRef = Arc::new(StringViewArray::from(vec![
+            None,
+            Some("8"),
+            Some("9"),
+            Some("10"),
+        ]));
+
+        for array in inputs {
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
+            let arr = cast(&array, &DataType::Utf8View).unwrap();
+            assert_eq!(expected.as_ref(), arr.as_ref());
+        }
+    }
+
+    #[test]
+    fn test_cast_float_to_utf8view() {
+        let inputs = vec![
+            Arc::new(Float16Array::from(vec![
+                Some(f16::from_f64(1.5)),
+                Some(f16::from_f64(2.5)),
+                None,
+            ])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![Some(1.5), Some(2.5), None])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![Some(1.5), Some(2.5), None])) as ArrayRef,
+        ];
+
+        let expected: ArrayRef =
+            Arc::new(StringViewArray::from(vec![Some("1.5"), Some("2.5"), None]));
+
+        for array in inputs {
+            println!("type: {}", array.data_type());
+            assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
+            let arr = cast(&array, &DataType::Utf8View).unwrap();
+            assert_eq!(expected.as_ref(), arr.as_ref());
+        }
+    }
+
+    #[test]
     fn test_cast_utf8_to_i32() {
         let array = StringArray::from(vec!["5", "6", "seven", "8", "9.1"]);
         let b = cast(&array, &DataType::Int32).unwrap();
@@ -3786,6 +3848,14 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_utf8view_to_bool() {
+        let strings = StringViewArray::from(vec!["true", "false", "invalid", " Y ", ""]);
+        let casted = cast(&strings, &DataType::Boolean).unwrap();
+        let expected = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), None]);
+        assert_eq!(*as_boolean_array(&casted), expected);
+    }
+
+    #[test]
     fn test_cast_with_options_utf8_to_bool() {
         let strings = StringArray::from(vec!["true", "false", "invalid", " Y ", ""]);
         let casted = cast_with_options(
@@ -3813,6 +3883,16 @@ mod tests {
         let c = b.as_primitive::<Int32Type>();
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
+        assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_to_utf8view() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let b = cast(&array, &DataType::Utf8View).unwrap();
+        let c = b.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!("true", c.value(0));
+        assert_eq!("false", c.value(1));
         assert!(!c.is_valid(2));
     }
 
@@ -5178,41 +5258,46 @@ mod tests {
         assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
+    // Cast Timestamp to Utf8View is not supported yet
+    // TODO: Implement casting from Timestamp to Utf8View
+    // https://github.com/apache/arrow-rs/issues/6734
+    macro_rules! assert_cast_timestamp_to_string {
+        ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
+            let out = cast(&$array, &$datatype).unwrap();
+            let actual = out
+                .as_any()
+                .downcast_ref::<$output_array_type>()
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(actual, $expected);
+        }};
+        ($array:expr, $datatype:expr, $output_array_type: ty, $options:expr, $expected:expr) => {{
+            let out = cast_with_options(&$array, &$datatype, &$options).unwrap();
+            let actual = out
+                .as_any()
+                .downcast_ref::<$output_array_type>()
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(actual, $expected);
+        }};
+    }
+
     #[test]
     fn test_cast_timestamp_to_strings() {
         // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
         let array =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-        let out = cast(&array, &DataType::Utf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19T00:00:03.005"),
-                Some("2018-12-25T00:00:02.001"),
-                None
-            ]
-        );
-        let out = cast(&array, &DataType::LargeUtf8).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19T00:00:03.005"),
-                Some("2018-12-25T00:00:02.001"),
-                None
-            ]
-        );
+        let expected = vec![
+            Some("1997-05-19T00:00:03.005"),
+            Some("2018-12-25T00:00:02.001"),
+            None,
+        ];
+
+        // assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::Utf8, StringArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
 
     #[test]
@@ -5225,73 +5310,53 @@ mod tests {
                 .with_timestamp_format(Some(ts_format))
                 .with_timestamp_tz_format(Some(ts_format)),
         };
+
         // "2018-12-25T00:00:02.001", "1997-05-19T00:00:03.005", None
         let array_without_tz =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None]);
-        let out = cast_with_options(&array_without_tz, &DataType::Utf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 00:00:03.005000"),
-                Some("2018-12-25 00:00:02.001000"),
-                None
-            ]
+        let expected = vec![
+            Some("1997-05-19 00:00:03.005000"),
+            Some("2018-12-25 00:00:02.001000"),
+            None,
+        ];
+        // assert_cast_timestamp_to_string!(array_without_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::Utf8,
+            StringArray,
+            cast_options,
+            expected
         );
-        let out =
-            cast_with_options(&array_without_tz, &DataType::LargeUtf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 00:00:03.005000"),
-                Some("2018-12-25 00:00:02.001000"),
-                None
-            ]
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
         );
 
         let array_with_tz =
             TimestampMillisecondArray::from(vec![Some(864000003005), Some(1545696002001), None])
                 .with_timezone(tz.to_string());
-        let out = cast_with_options(&array_with_tz, &DataType::Utf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 05:45:03.005000"),
-                Some("2018-12-25 05:45:02.001000"),
-                None
-            ]
+        let expected = vec![
+            Some("1997-05-19 05:45:03.005000"),
+            Some("2018-12-25 05:45:02.001000"),
+            None,
+        ];
+        // assert_cast_timestamp_to_string!(array_with_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::Utf8,
+            StringArray,
+            cast_options,
+            expected
         );
-        let out = cast_with_options(&array_with_tz, &DataType::LargeUtf8, &cast_options).unwrap();
-        let out = out
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            out,
-            vec![
-                Some("1997-05-19 05:45:03.005000"),
-                Some("2018-12-25 05:45:02.001000"),
-                None
-            ]
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
         );
     }
 
@@ -9146,7 +9211,31 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_decimal_to_utf8() {
+    fn test_cast_decimal_to_string() {
+        assert!(can_cast_types(
+            &DataType::Decimal128(10, 4),
+            &DataType::Utf8View
+        ));
+        assert!(can_cast_types(
+            &DataType::Decimal256(38, 10),
+            &DataType::Utf8View
+        ));
+
+        macro_rules! assert_decimal_values {
+            ($array:expr) => {
+                let c = $array;
+                assert_eq!("1123.454", c.value(0));
+                assert_eq!("2123.456", c.value(1));
+                assert_eq!("-3123.453", c.value(2));
+                assert_eq!("-3123.456", c.value(3));
+                assert_eq!("0.000", c.value(4));
+                assert_eq!("0.123", c.value(5));
+                assert_eq!("1234.567", c.value(6));
+                assert_eq!("-1234.567", c.value(7));
+                assert!(c.is_null(8));
+            };
+        }
+
         fn test_decimal_to_string<IN: ArrowPrimitiveType, OffsetSize: OffsetSizeTrait>(
             output_type: DataType,
             array: PrimitiveArray<IN>,
@@ -9154,18 +9243,19 @@ mod tests {
             let b = cast(&array, &output_type).unwrap();
 
             assert_eq!(b.data_type(), &output_type);
-            let c = b.as_string::<OffsetSize>();
-
-            assert_eq!("1123.454", c.value(0));
-            assert_eq!("2123.456", c.value(1));
-            assert_eq!("-3123.453", c.value(2));
-            assert_eq!("-3123.456", c.value(3));
-            assert_eq!("0.000", c.value(4));
-            assert_eq!("0.123", c.value(5));
-            assert_eq!("1234.567", c.value(6));
-            assert_eq!("-1234.567", c.value(7));
-            assert!(c.is_null(8));
+            match b.data_type() {
+                DataType::Utf8View => {
+                    let c = b.as_string_view();
+                    assert_decimal_values!(c);
+                }
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    let c = b.as_string::<OffsetSize>();
+                    assert_decimal_values!(c);
+                }
+                _ => (),
+            }
         }
+
         let array128: Vec<Option<i128>> = vec![
             Some(1123454),
             Some(2123456),
@@ -9177,22 +9267,33 @@ mod tests {
             Some(-123456789),
             None,
         ];
+        let array256: Vec<Option<i256>> = array128
+            .iter()
+            .map(|num| num.map(i256::from_i128))
+            .collect();
 
-        let array256: Vec<Option<i256>> = array128.iter().map(|v| v.map(i256::from_i128)).collect();
-
-        test_decimal_to_string::<arrow_array::types::Decimal128Type, i32>(
+        test_decimal_to_string::<Decimal128Type, i32>(
+            DataType::Utf8View,
+            create_decimal_array(array128.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<Decimal128Type, i32>(
             DataType::Utf8,
             create_decimal_array(array128.clone(), 7, 3).unwrap(),
         );
-        test_decimal_to_string::<arrow_array::types::Decimal128Type, i64>(
+        test_decimal_to_string::<Decimal128Type, i64>(
             DataType::LargeUtf8,
             create_decimal_array(array128, 7, 3).unwrap(),
         );
-        test_decimal_to_string::<arrow_array::types::Decimal256Type, i32>(
+
+        test_decimal_to_string::<Decimal256Type, i32>(
+            DataType::Utf8View,
+            create_decimal256_array(array256.clone(), 7, 3).unwrap(),
+        );
+        test_decimal_to_string::<Decimal256Type, i32>(
             DataType::Utf8,
             create_decimal256_array(array256.clone(), 7, 3).unwrap(),
         );
-        test_decimal_to_string::<arrow_array::types::Decimal256Type, i64>(
+        test_decimal_to_string::<Decimal256Type, i64>(
             DataType::LargeUtf8,
             create_decimal256_array(array256, 7, 3).unwrap(),
         );
