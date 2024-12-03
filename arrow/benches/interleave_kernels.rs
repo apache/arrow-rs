@@ -78,12 +78,12 @@ fn add_benchmark(c: &mut Criterion) {
     let sparse_dict = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
 
     let cases: &[(&str, &dyn Array)] = &[
-        // ("i32(0.0)", &i32),
-        // ("i32(0.5)", &i32_opt),
-        // ("str(20, 0.0)", &string),
-        // ("str(20, 0.5)", &string_opt),
-        // ("dict(20, 0.0)", &dict),
-        // ("dict_sparse(20, 0.0)", &sparse_dict),
+        ("i32(0.0)", &i32),
+        ("i32(0.5)", &i32_opt),
+        ("str(20, 0.0)", &string),
+        ("str(20, 0.5)", &string_opt),
+        ("dict(20, 0.0)", &dict),
+        ("dict_sparse(20, 0.0)", &sparse_dict),
         ("string_view(0.5, 50, true)", &string_view),
     ];
 
@@ -100,14 +100,14 @@ fn add_benchmark(c: &mut Criterion) {
         }
     }
 
-    // for len in [100, 1024, 2048] {
-    //     bench_values(
-    //         c,
-    //         &format!("interleave dict_distinct {len}"),
-    //         100,
-    //         &[&dict, &sparse_dict],
-    //     );
-    // }
+    for len in [100, 1024, 2048] {
+        bench_values(
+            c,
+            &format!("interleave dict_distinct {len}"),
+            100,
+            &[&dict, &sparse_dict],
+        );
+    }
 }
 
 criterion_group!(benches, add_benchmark);
