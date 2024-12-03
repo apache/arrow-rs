@@ -578,34 +578,23 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 } else {
                     field.name()
                 };
+
                 // If coercing then ensure struct fields are named "key" and "value"
-                let field_vec = if coerce_types
-                    && (struct_fields[0].name() != PARQUET_KEY_FIELD_NAME
-                        || struct_fields[1].name() != PARQUET_VALUE_FIELD_NAME)
-                {
-                    let key = struct_fields[0]
-                        .as_ref()
-                        .clone()
-                        .with_name(PARQUET_KEY_FIELD_NAME);
-                    let val = struct_fields[1]
-                        .as_ref()
-                        .clone()
-                        .with_name(PARQUET_VALUE_FIELD_NAME);
-                    vec![
-                        Arc::new(arrow_to_parquet_type(&key, coerce_types)?),
-                        Arc::new(arrow_to_parquet_type(&val, coerce_types)?),
-                    ]
-                } else {
-                    vec![
-                        Arc::new(arrow_to_parquet_type(&struct_fields[0], coerce_types)?),
-                        Arc::new(arrow_to_parquet_type(&struct_fields[1], coerce_types)?),
-                    ]
+                let fix_map_field = |name: &str, fld: &Arc<Field>| -> Result<Arc<Type>> {
+                    if coerce_types && fld.name() != name {
+                        let f = fld.as_ref().clone().with_name(name);
+                        Ok(Arc::new(arrow_to_parquet_type(&f, coerce_types)?))
+                    } else {
+                        Ok(Arc::new(arrow_to_parquet_type(fld, coerce_types)?))
+                    }
                 };
+                let key_field = fix_map_field(PARQUET_KEY_FIELD_NAME, &struct_fields[0])?;
+                let val_field = fix_map_field(PARQUET_VALUE_FIELD_NAME, &struct_fields[1])?;
 
                 Type::group_type_builder(name)
                     .with_fields(vec![Arc::new(
                         Type::group_type_builder(map_struct_name)
-                            .with_fields(field_vec)
+                            .with_fields(vec![key_field, val_field])
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
