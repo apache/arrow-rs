@@ -637,9 +637,13 @@ impl S3Client {
         &self,
         location: &Path,
         opts: PutMultipartOpts,
+        checksum: bool,
     ) -> Result<MultipartId> {
-        let response = self
-            .request(Method::POST, location)
+        let mut req = self.request(Method::POST, location);
+        if checksum {
+            req = req.header("x-amz-checksum-algorithm", "SHA256");
+        }
+        let response = req
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
@@ -666,9 +670,13 @@ impl S3Client {
     ) -> Result<PartId> {
         let is_copy = matches!(data, PutPartPayload::Copy(_));
         let part = (part_idx + 1).to_string();
+        let config = S3Config {
+            checksum: Some(Checksum::SHA256),
+            ..self.config.clone()
+        };
 
         let mut request = self
-            .request(Method::PUT, path)
+            .request_with_config(Method::PUT, path, &config)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .idempotent(true);
 

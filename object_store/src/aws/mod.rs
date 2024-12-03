@@ -231,7 +231,7 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<Box<dyn MultipartUpload>> {
-        let upload_id = self.client.create_multipart(location, opts).await?;
+        let upload_id = self.client.create_multipart(location, opts, true).await?;
 
         Ok(Box::new(S3MultiPartUpload {
             part_idx: 0,
@@ -315,7 +315,7 @@ impl ObjectStore for AmazonS3 {
             Some(S3CopyIfNotExists::Multipart) => {
                 let upload_id = self
                     .client
-                    .create_multipart(to, PutMultipartOpts::default())
+                    .create_multipart(to, PutMultipartOpts::default(), false)
                     .await?;
 
                 let res = async {
@@ -443,7 +443,7 @@ impl MultipartUpload for S3MultiPartUpload {
 impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
-            .create_multipart(path, PutMultipartOpts::default())
+            .create_multipart(path, PutMultipartOpts::default(), true)
             .await
     }
 
