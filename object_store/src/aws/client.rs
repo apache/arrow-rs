@@ -29,7 +29,7 @@ use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
-    InitiateMultipartUploadResult, ListResponse,
+    InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
@@ -690,8 +690,13 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
+        let checksum = response
+            .headers()
+            .get("x-amz-checksum-sha256")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
 
-        let content_id = match is_copy {
+        let e_tag = match is_copy {
             false => get_etag(response.headers()).context(MetadataSnafu)?,
             true => {
                 let response = response
@@ -703,6 +708,10 @@ impl S3Client {
                 response.e_tag
             }
         };
+
+        let meta = PartMetadata { e_tag, checksum };
+        let content_id = quick_xml::se::to_string(&meta).unwrap();
+
         Ok(PartId { content_id })
     }
 
