@@ -368,19 +368,14 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
     }
 }
 
-/// Casts Utf8 to Boolean
-pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
-    from: &dyn Array,
+/// Casts string to boolean
+fn cast_string_to_boolean<'a, StrArray>(
+    array: &StrArray,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    OffsetSize: OffsetSizeTrait,
+    StrArray: StringArrayType<'a>,
 {
-    let array = from
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .unwrap();
-
     let output_array = array
         .iter()
         .map(|value| match value {
@@ -401,4 +396,28 @@ where
         .collect::<Result<BooleanArray, _>>()?;
 
     Ok(Arc::new(output_array))
+}
+
+pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let array = from
+        .as_any()
+        .downcast_ref::<GenericStringArray<OffsetSize>>()
+        .unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
+}
+
+pub(crate) fn cast_utf8view_to_boolean(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = from.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
 }
