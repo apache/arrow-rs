@@ -979,8 +979,9 @@ mod tests {
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
@@ -1826,23 +1827,34 @@ mod tests {
 
     #[test]
     fn test_uniform_encryption() {
-        let path = format!(
-            "{}/uniform_encryption.parquet.encrypted",
-            arrow::util::test_util::parquet_test_data(),
-        );
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
         let file = File::open(path).unwrap();
-        // todo
+
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        // todo
         let decryption_properties = Some(
             ciphers::FileDecryptionProperties::builder()
                 .with_footer_key(key_code.to_vec())
                 .build(),
         );
-        let record_reader =
-            ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties)
-                .unwrap();
-        // todo check contents
+
+        let metadata = ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.clone()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(file_metadata.created_by().unwrap(), "parquet-cpp-arrow version 14.0.0-SNAPSHOT");
+
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+            assert_eq!(rg.total_byte_size(), 4172);
+        });
+
+        // todo: decrypting data
+        // let record_reader =
+        //     ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties)
+        //         .unwrap();
     }
 
     #[test]
