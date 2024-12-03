@@ -186,7 +186,7 @@ impl From<DeleteError> for Error {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct S3Config {
     pub region: String,
     pub endpoint: Option<String>,
@@ -455,6 +455,27 @@ impl S3Client {
             payload: None,
             payload_sha256: None,
             config: &self.config,
+            use_session_creds: true,
+            idempotent: false,
+            retry_on_conflict: false,
+            retry_error_body: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn request_with_config<'a>(
+        &'a self,
+        method: Method,
+        path: &'a Path,
+        config: &'a S3Config,
+    ) -> Request<'a> {
+        let url = self.config.path_url(path);
+        Request {
+            path,
+            builder: self.client.request(method, url),
+            payload: None,
+            payload_sha256: None,
+            config,
             use_session_creds: true,
             idempotent: false,
             retry_on_conflict: false,
