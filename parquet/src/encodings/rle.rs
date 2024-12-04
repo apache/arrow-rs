@@ -369,17 +369,17 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBytes>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: FromBytes + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
 
         let mut values_read = 0;
         while values_read < buffer.len() {
             if self.rle_left > 0 {
                 let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
+                let repeated_value =
+                    T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
                 for i in 0..num_values {
-                    let repeated_value =
-                        T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
-                    buffer[values_read + i] = repeated_value;
+                    buffer[values_read + i] = repeated_value.clone();
                 }
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
