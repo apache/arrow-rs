@@ -287,22 +287,7 @@ impl WriterProperties {
         self.statistics_truncate_length
     }
 
-    /// Returns whether `coerce_types` is enabled (defaults to `false`).
-    ///
-    /// Some Arrow types do not have a corresponding Parquet logical type.
-    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
-    /// Also, for [`List`] and [`Map`] types, Parquet expects certain schema elements
-    /// to have specific names to be considered fully compliant.
-    /// Writers have the option to coerce these types and names to match those required
-    /// by the Parquet specification.
-    /// This type coercion allows for meaningful representations that do not require
-    /// downstream readers to consider the embedded Arrow schema, and can allow for greater
-    /// compatibility with other Parquet implementations. However, type
-    /// coercion also prevents the data from being losslessly round-tripped. This method
-    /// returns `true` if type coercion enabled.
-    ///
-    /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-    /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+    /// Returns `true` if type coercion is enabled.
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
     }
@@ -795,9 +780,22 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to enable/disable type coercion.
-    /// Takes precedence over globally defined settings. See [`WriterProperties::coerce_types`]
-    /// for more information.
+    /// Sets flag to control if type coercion is enabled (defaults to `false`).
+    ///
+    /// # Notes
+    /// Some Arrow types do not have a corresponding Parquet logical type.
+    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
+    /// Also, for [`List`] and [`Map`] types, Parquet expects certain schema elements
+    /// to have specific names to be considered fully compliant.
+    /// Writers have the option to coerce these types and names to match those required
+    /// by the Parquet specification.
+    /// This type coercion allows for meaningful representations that do not require
+    /// downstream readers to consider the embedded Arrow schema, and can allow for greater
+    /// compatibility with other Parquet implementations. However, type
+    /// coercion also prevents the data from being losslessly round-tripped.
+    ///
+    /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+    /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
         self
