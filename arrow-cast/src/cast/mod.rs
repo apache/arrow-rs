@@ -9827,4 +9827,72 @@ mod tests {
             "Cast non-nullable to non-nullable struct field returning null should fail",
         );
     }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_same_scale(){
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal128(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+        let mut options = CastOptions::default();
+        options.safe = false;
+
+        let result = cast_with_options(&array, &output_type, &options);
+
+        assert_eq!(result.unwrap_err().to_string(),
+                   "InvalidArgumentError(123456789 is too large to store in a Decimal128 of precision 6. Max is 999999)");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_lower_scale(){
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 4);
+        let output_type = DataType::Decimal128(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+        let mut options = CastOptions::default();
+        options.safe = false;
+
+        let result = cast_with_options(&array, &output_type, &options);
+
+        assert_eq!(result.unwrap_err().to_string(),
+                   "InvalidArgumentError(123456789 is too large to store in a Decimal128 of precision 6. Max is 999999)");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_greater_scale(){
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal128(6, 3);
+        assert!(can_cast_types(&input_type, &output_type));
+        let mut options = CastOptions::default();
+        options.safe = false;
+
+        let result = cast_with_options(&array, &output_type, &options);
+
+        assert_eq!(result.unwrap_err().to_string(),
+                   "InvalidArgumentError(123456789 is too large to store in a Decimal128 of precision 6. Max is 999999)");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_diff_type(){
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal256(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+        let mut options = CastOptions::default();
+        options.safe = false;
+
+       let result = cast_with_options(&array, &output_type, &options);
+
+        assert_eq!(result.unwrap_err().to_string(),
+                   "InvalidArgumentError(123456789 is too large to store in a Decimal256 of precision 6. Max is 999999)");
+    }
 }
