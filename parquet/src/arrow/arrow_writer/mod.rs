@@ -1088,6 +1088,7 @@ mod tests {
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
+    use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
@@ -2493,84 +2494,22 @@ mod tests {
 
     #[test]
     fn list_and_map_coerced_names() {
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        let list_data_type =
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type.clone())
-            .len(3)
-            .add_buffer(value_offsets.clone())
-            .add_child_data(value_data.clone())
-            .build()
-            .unwrap();
-        let list_array = ListArray::from(list_data);
-
-        // Construct keys and values
-        let key_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from([0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build()
-            .unwrap();
-        let value_data = ArrayData::builder(DataType::UInt32)
-            .len(8)
-            .add_buffer(Buffer::from(
-                [0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
-            ))
-            .null_bit_buffer(Some(Buffer::from(&[0b11010110])))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
-
-        let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
-        let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
-        let entry_struct = StructArray::from(vec![
-            (keys_field.clone(), make_array(key_data)),
-            (values_field.clone(), make_array(value_data)),
-        ]);
-
-        // Construct a map array from the above two
-        let map_data_type = DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                entry_struct.data_type().clone(),
-                false,
-            )),
+        // Create map and list with non-Parquet naming
+        let list_field =
+            Field::new_list("my_list", Field::new("item", DataType::Int32, false), false);
+        let map_field = Field::new_map(
+            "my_map",
+            "entries",
+            Field::new("keys", DataType::Int32, false),
+            Field::new("values", DataType::Int32, true),
             false,
+            true,
         );
-        let map_data = ArrayData::builder(map_data_type)
-            .len(3)
-            .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.into_data())
-            .build()
-            .unwrap();
-        let map_array = MapArray::from(map_data);
 
-        // Create Arrow schema with non-Parquet naming
-        let arrow_fields = vec![
-            Field::new_list("my_list", Field::new("item", DataType::Int32, false), false),
-            Field::new_map(
-                "my_map",
-                "entries",
-                keys_field.as_ref().clone(),
-                values_field.as_ref().clone(),
-                false,
-                true,
-            ),
-        ];
-        let arrow_schema = Arc::new(Schema::new(arrow_fields));
+        let list_array = create_random_array(&list_field, 100, 0.0, 0.0).unwrap();
+        let map_array = create_random_array(&map_field, 100, 0.0, 0.0).unwrap();
+
+        let arrow_schema = Arc::new(Schema::new(vec![list_field, map_field]));
 
         // Write data to Parquet but coerce names to match spec
         let props = Some(WriterProperties::builder().set_coerce_types(true).build());
@@ -2578,11 +2517,7 @@ mod tests {
         let mut writer =
             ArrowWriter::try_new(file.try_clone().unwrap(), arrow_schema.clone(), props).unwrap();
 
-        let batch = RecordBatch::try_new(
-            arrow_schema,
-            vec![Arc::new(list_array), Arc::new(map_array)],
-        )
-        .unwrap();
+        let batch = RecordBatch::try_new(arrow_schema, vec![list_array, map_array]).unwrap();
         writer.write(&batch).unwrap();
         let file_metadata = writer.close().unwrap();
 
