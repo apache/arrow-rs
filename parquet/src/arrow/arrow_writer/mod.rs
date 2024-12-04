@@ -2492,6 +2492,122 @@ mod tests {
     }
 
     #[test]
+    fn list_and_map_coerced_names() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
+
+        // Construct a list array from the above two
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = ListArray::from(list_data);
+
+        // Construct keys and values
+        let key_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from([0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .build()
+            .unwrap();
+        let value_data = ArrayData::builder(DataType::UInt32)
+            .len(8)
+            .add_buffer(Buffer::from(
+                [0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
+            ))
+            .null_bit_buffer(Some(Buffer::from(&[0b11010110])))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let entry_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
+
+        let keys_field = Arc::new(Field::new("keys", DataType::Int32, false));
+        let values_field = Arc::new(Field::new("values", DataType::UInt32, true));
+        let entry_struct = StructArray::from(vec![
+            (keys_field.clone(), make_array(key_data)),
+            (values_field.clone(), make_array(value_data)),
+        ]);
+
+        // Construct a map array from the above two
+        let map_data_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                false,
+            )),
+            false,
+        );
+        let map_data = ArrayData::builder(map_data_type)
+            .len(3)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.into_data())
+            .build()
+            .unwrap();
+        let map_array = MapArray::from(map_data);
+
+        // Create Arrow schema with non-Parquet naming
+        let arrow_fields = vec![
+            Field::new_list("my_list", Field::new("item", DataType::Int32, false), false),
+            Field::new_map(
+                "my_map",
+                "entries",
+                keys_field.as_ref().clone(),
+                values_field.as_ref().clone(),
+                false,
+                true,
+            ),
+        ];
+        let arrow_schema = Arc::new(Schema::new(arrow_fields));
+
+        // Write data to Parquet but coerce names to match spec
+        let props = Some(WriterProperties::builder().set_coerce_types(true).build());
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), arrow_schema.clone(), props).unwrap();
+
+        let batch = RecordBatch::try_new(
+            arrow_schema,
+            vec![Arc::new(list_array), Arc::new(map_array)],
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        // Coerced name of "item" should be "element"
+        assert_eq!(file_metadata.schema[3].name, "element");
+        // Coerced name of "entries" should be "key_value"
+        assert_eq!(file_metadata.schema[5].name, "key_value");
+        // Coerced name of "keys" should be "key"
+        assert_eq!(file_metadata.schema[6].name, "key");
+        // Coerced name of "values" should be "value"
+        assert_eq!(file_metadata.schema[7].name, "value");
+
+        // Double check schema after reading from the file
+        let reader = SerializedFileReader::new(file).unwrap();
+        let file_schema = reader.metadata().file_metadata().schema();
+        let fields = file_schema.get_fields();
+        let list_field = &fields[0].get_fields()[0];
+        assert_eq!(list_field.get_fields()[0].name(), "element");
+        let map_field = &fields[1].get_fields()[0];
+        assert_eq!(map_field.name(), "key_value");
+        assert_eq!(map_field.get_fields()[0].name(), "key");
+        assert_eq!(map_field.get_fields()[1].name(), "value");
+    }
+
+    #[test]
     fn fallback_flush_data_page() {
         //tests if the Fallback::flush_data_page clears all buffers correctly
         let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
