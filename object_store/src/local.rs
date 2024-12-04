@@ -40,7 +40,7 @@ use crate::{
     util::InvalidGetRange,
     Attributes, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    TransferConfig, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -1021,29 +1021,6 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     })
 }
 
-/// Configuration for download transfer settings.
-#[derive(Debug, Clone, Copy)]
-pub struct DownloadTransferConfig {
-    /// The maximum number of concurrent chunks to download.
-    pub max_concurrent_chunks: usize,
-    /// The maximum number of bytes to buffer in memory for the download.
-    /// If `None`, defaults to the value of `max_concurrent_chunks`.
-    pub chunk_queue_size: Option<usize>,
-    /// The maximum number of retries for downloading a chunk.
-    pub max_retries: Option<usize>,
-}
-
-/// Default implementation for `DownloadTransferConfig`.
-impl Default for DownloadTransferConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent_chunks: 1,
-            chunk_queue_size: Some(2),
-            max_retries: None,
-        }
-    }
-}
-
 /// Downloads a single chunk from the object store.
 ///
 /// # Arguments
@@ -1186,10 +1163,10 @@ pub async fn download(
     location: &Path,
     opts: GetOptions,
     mut file: std::fs::File,
-    transfer_opts: Option<&DownloadTransferConfig>,
+    transfer_opts: Option<&TransferConfig>,
 ) -> Result<u64> {
     let req = store.get_opts(&location, opts.clone()).await?;
-    let transfer_opts = *transfer_opts.unwrap_or(&DownloadTransferConfig::default());
+    let transfer_opts = *transfer_opts.unwrap_or(&TransferConfig::default());
     let concurrent_tasks = transfer_opts.max_concurrent_chunks;
     let channel_size = transfer_opts.chunk_queue_size.unwrap_or(concurrent_tasks);
     let mut written_bytes: u64 = 0;
