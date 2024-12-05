@@ -286,16 +286,7 @@ impl WriterProperties {
         self.statistics_truncate_length
     }
 
-    /// Should the writer coerce types to parquet native types.
-    ///
-    /// Setting this option to `true` will result in parquet files that can be
-    /// read by more readers, but may lose precision for arrow types such as
-    /// [`DataType::Date64`] which have no direct corresponding Parquet type.
-    ///
-    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
-    ///
-    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
-    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowToParquetSchemaConverter::with_coerce_types
+    /// Returns `true` if type coercion is enabled.
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
     }
@@ -788,8 +779,16 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to enable/disable type coercion.
-    /// Takes precedence over globally defined settings.
+    /// Should the writer coerce types to parquet native types (defaults to `false`).
+    ///
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but may lose precision for arrow types such as
+    /// [`DataType::Date64`] which have no direct corresponding Parquet type.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowToParquetSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
         self
