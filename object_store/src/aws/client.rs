@@ -619,7 +619,11 @@ impl S3Client {
     ) -> Result<MultipartId> {
         let mut reqquest = self.request(Method::POST, location);
         if let Some(algorithm) = self.config.checksum {
-            reqquest = reqquest.header(ALGORITHM, &algorithm.to_string().to_uppercase());
+            match algorithm {
+                Checksum::SHA256 => {
+                    reqquest = reqquest.header(ALGORITHM, "SHA256");
+                }
+            }
         }
         let response = reqquest
             .query(&[("uploads", "")])
