@@ -26,7 +26,7 @@ fn gen_fsl(len: usize, value_len: usize) -> FixedSizeListArray {
     let values = Arc::new(Int32Array::from(
         (0..len).map(|_| rng.gen::<i32>()).collect::<Vec<_>>(),
     ));
-    let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+    let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
     FixedSizeListArray::new(field, value_len as i32, values, None)
 }
 

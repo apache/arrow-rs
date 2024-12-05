@@ -59,7 +59,7 @@ The `parquet` crate provides the following features which may be enabled in your
 - `lz4` (default) - support for parquet using `lz4` compression
 - `zstd` (default) - support for parquet using `zstd` compression
 - `snap` (default) - support for parquet using `snappy` compression
-- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/main/parquet/src/bin)
 - `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
 

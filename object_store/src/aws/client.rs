@@ -202,6 +202,7 @@ pub(crate) struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
+    pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
 }
 
@@ -245,11 +246,12 @@ struct SessionCredential<'a> {
     config: &'a S3Config,
 }
 
-impl<'a> SessionCredential<'a> {
+impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
         let mut authorizer =
             AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
-                .with_sign_payload(self.config.sign_payload);
+                .with_sign_payload(self.config.sign_payload)
+                .with_request_payer(self.config.request_payer);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
@@ -288,6 +290,7 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_on_conflict: bool,
     retry_error_body: bool,
 }
 
@@ -313,6 +316,13 @@ impl<'a> Request<'a> {
 
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
+        Self {
+            retry_on_conflict,
+            ..self
+        }
     }
 
     pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
@@ -410,6 +420,7 @@ impl<'a> Request<'a> {
         self.builder
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
+            .retry_on_conflict(self.retry_on_conflict)
             .idempotent(self.idempotent)
             .retry_error_body(self.retry_error_body)
             .payload(self.payload)
@@ -446,6 +457,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_on_conflict: false,
             retry_error_body: false,
         }
     }

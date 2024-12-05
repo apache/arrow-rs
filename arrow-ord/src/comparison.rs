@@ -821,7 +821,7 @@ mod tests {
         .into_data();
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 6, 9]);
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)

@@ -130,6 +130,11 @@ impl NullBuffer {
         self.buffer.is_empty()
     }
 
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.buffer.shrink_to_fit();
+    }
+
     /// Returns the null count for this [`NullBuffer`]
     #[inline]
     pub fn null_count(&self) -> usize {
@@ -232,6 +237,12 @@ impl From<BooleanBuffer> for NullBuffer {
 impl From<&[bool]> for NullBuffer {
     fn from(value: &[bool]) -> Self {
         BooleanBuffer::from(value).into()
+    }
+}
+
+impl<const N: usize> From<&[bool; N]> for NullBuffer {
+    fn from(value: &[bool; N]) -> Self {
+        value[..].into()
     }
 }
 

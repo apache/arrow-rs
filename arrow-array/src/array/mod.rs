@@ -167,6 +167,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Shrinks the capacity of any exclusively owned buffer as much as possible
+    ///
+    /// Shared or externally allocated buffers will be ignored, and
+    /// any buffer offsets will be preserved.
+    fn shrink_to_fit(&mut self) {}
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -317,8 +323,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
-        // TODO this is not necessarily perfect default implementation, since null_count() and logical_null_count() are not always equivalent
-        self.null_count() != 0
+        self.logical_null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -364,6 +369,15 @@ impl Array for ArrayRef {
 
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
+    }
+
+    /// For shared buffers, this is a no-op.
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // We ignore shared buffers.
+        }
     }
 
     fn offset(&self) -> usize {
@@ -912,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -970,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_null_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);

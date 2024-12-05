@@ -180,11 +180,11 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let schema = match options.schema_root {
-            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s)?,
-            None => arrow_to_parquet_schema(&arrow_schema)?,
-        };
         let mut props = options.properties;
+        let schema = match options.schema_root {
+            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s, props.coerce_types())?,
+            None => arrow_to_parquet_schema(&arrow_schema, props.coerce_types())?,
+        };
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -549,8 +549,8 @@ impl ArrowColumnChunk {
 /// ]));
 ///
 /// // Compute the parquet schema
-/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref()).unwrap();
 /// let props = Arc::new(WriterProperties::default());
+/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref(), props.coerce_types()).unwrap();
 ///
 /// // Create writers for each of the leaf columns
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
@@ -858,6 +858,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
+                ArrowDataType::Date64 => {
+                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+
+                    let array = array.as_primitive::<Int64Type>();
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Int64 => {
                     let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
@@ -1194,7 +1200,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             true,
         )]);
 
@@ -1206,8 +1212,7 @@ mod tests {
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))
@@ -1234,7 +1239,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             false,
         )]);
 
@@ -1246,8 +1251,7 @@ mod tests {
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))
@@ -1365,12 +1369,12 @@ mod tests {
         let struct_field_f = Arc::new(Field::new("f", DataType::Float32, true));
         let struct_field_g = Arc::new(Field::new_list(
             "g",
-            Field::new("item", DataType::Int16, true),
+            Field::new_list_field(DataType::Int16, true),
             false,
         ));
         let struct_field_h = Arc::new(Field::new_list(
             "h",
-            Field::new("item", DataType::Int16, false),
+            Field::new_list_field(DataType::Int16, false),
             true,
         ));
         let struct_field_e = Arc::new(Field::new_struct(
@@ -1743,7 +1747,7 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap();
+        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
 
         let page_locations = offset_indexes[0].page_locations.clone();
 
@@ -2377,7 +2381,7 @@ mod tests {
 
     #[test]
     fn null_list_single_column() {
-        let null_field = Field::new("item", DataType::Null, true);
+        let null_field = Field::new_list_field(DataType::Null, true);
         let list_field = Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
@@ -2385,8 +2389,7 @@ mod tests {
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 0, 0, 2].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Null,
             true,
         ))))
@@ -2415,8 +2418,7 @@ mod tests {
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))

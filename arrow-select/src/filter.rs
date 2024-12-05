@@ -517,14 +517,14 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
@@ -1331,7 +1331,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
@@ -1355,7 +1355,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let expected = ArrayData::builder(list_data_type)
             .len(2)
             .add_buffer(value_offsets)

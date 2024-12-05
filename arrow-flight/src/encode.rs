@@ -934,7 +934,7 @@ mod tests {
         let mut decoder = FlightDataDecoder::new(encoder);
         let expected_schema = Schema::new(vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )]);
 
@@ -1038,7 +1038,7 @@ mod tests {
             "struct",
             vec![Field::new_list(
                 "dict_list",
-                Field::new("item", DataType::Utf8, true),
+                Field::new_list_field(DataType::Utf8, true),
                 true,
             )],
             true,
@@ -1218,12 +1218,16 @@ mod tests {
 
         let hydrated_struct_fields = vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )];
 
         let hydrated_union_fields = vec![
-            Field::new_list("dict_list", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list(
+                "dict_list",
+                Field::new_list_field(DataType::Utf8, true),
+                true,
+            ),
             Field::new_struct("struct", hydrated_struct_fields.clone(), true),
             Field::new("string", DataType::Utf8, true),
         ];
@@ -1582,12 +1586,29 @@ mod tests {
         hydrate_dictionaries(&batch, batch.schema()).expect("failed to optimize");
     }
 
-    pub fn make_flight_data(
+    fn make_flight_data(
         batch: &RecordBatch,
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
-        #[allow(deprecated)]
-        crate::utils::flight_data_from_arrow_batch(batch, options)
+        flight_data_from_arrow_batch(batch, options)
+    }
+
+    fn flight_data_from_arrow_batch(
+        batch: &RecordBatch,
+        options: &IpcWriteOptions,
+    ) -> (Vec<FlightData>, FlightData) {
+        let data_gen = IpcDataGenerator::default();
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+
+        let (encoded_dictionaries, encoded_batch) = data_gen
+            .encoded_batch(batch, &mut dictionary_tracker, options)
+            .expect("DictionaryTracker configured above to not error on replacement");
+
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_batch = encoded_batch.into();
+
+        (flight_dictionaries, flight_batch)
     }
 
     #[test]
@@ -1741,7 +1762,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 160).await;
+        verify_encoded_split(batch, 48).await;
     }
 
     #[tokio::test]

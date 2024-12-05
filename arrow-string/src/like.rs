@@ -18,12 +18,15 @@
 //! Provide SQL's LIKE operators for Arrow's string arrays
 
 use crate::predicate::Predicate;
+
 use arrow_array::cast::AsArray;
 use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
-use iterator::ArrayIter;
+
 use std::sync::Arc;
+
+pub use arrow_array::StringArrayType;
 
 #[derive(Debug)]
 enum Op {
@@ -147,39 +150,6 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid string operation: {l_t} {op} {r_t}"
         ))),
-    }
-}
-
-/// A trait for Arrow String Arrays, currently three types are supported:
-/// - `StringArray`
-/// - `LargeStringArray`
-/// - `StringViewArray`
-///
-/// This trait helps to abstract over the different types of string arrays
-/// so that we don't need to duplicate the implementation for each type.
-pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    /// Returns true if all data within this string array is ASCII
-    fn is_ascii(&self) -> bool;
-    /// Constructs a new iterator
-    fn iter(&self) -> ArrayIter<Self>;
-}
-
-impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
-    fn is_ascii(&self) -> bool {
-        GenericStringArray::<O>::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<O>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn is_ascii(&self) -> bool {
-        StringViewArray::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
     }
 }
 
