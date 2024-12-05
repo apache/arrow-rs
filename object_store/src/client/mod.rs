@@ -671,6 +671,8 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
+        builder = builder.no_gzip();
+
         builder
             .https_only(!self.allow_http.get()?)
             .build()
