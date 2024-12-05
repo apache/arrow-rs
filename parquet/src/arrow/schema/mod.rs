@@ -1590,7 +1590,10 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, true).unwrap();
+        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+            .with_coerce_types(true)
+            .build()
+            .unwrap();
         assert_eq!(
             parquet_schema.columns().len(),
             converted_arrow_schema.columns().len()
@@ -1614,7 +1617,10 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, false).unwrap();
+        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+            .with_coerce_types(false)
+            .build()
+            .unwrap();
         assert_eq!(
             parquet_schema.columns().len(),
             converted_arrow_schema.columns().len()
