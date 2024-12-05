@@ -154,6 +154,7 @@ where
 // Only support one type of decimal cast operations
 pub(crate) fn cast_decimal_to_decimal_same_type<T>(
     array: &PrimitiveArray<T>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -163,8 +164,10 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let array: PrimitiveArray<T> = if input_scale <= output_scale {
-            // input_scale <= output_scale
+    let array: PrimitiveArray<T> =
+        if input_scale == output_scale && input_precision <= output_precision {
+            array.clone()
+        } else if input_scale < output_scale {
             // the scale doesn't change, but precision may change and cause overflow
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
@@ -174,14 +177,14 @@ where
                 cast_options,
             )?
         } else {
-           convert_to_smaller_scale_decimal::<T, T>(
+            convert_to_smaller_scale_decimal::<T, T>(
                 array,
                 input_scale,
                 output_precision,
                 output_scale,
                 cast_options,
             )?
-    };
+        };
 
     Ok(Arc::new(array.with_precision_and_scale(
         output_precision,

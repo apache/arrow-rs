@@ -824,18 +824,20 @@ pub fn cast_with_options(
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
             cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
-        (Decimal128(_, s1), Decimal128(p2, s2)) => {
+        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(_, s1), Decimal256(p2, s2)) => {
+        (Decimal256(p1, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal256Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
@@ -2683,7 +2685,10 @@ mod tests {
         let array = create_decimal_array(array, 10, 0).unwrap();
         let result_safe = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result_safe.is_ok());
-        let options = CastOptions { safe: false, ..Default::default() };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal128(2, 2), &options);
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
@@ -9837,10 +9842,13 @@ mod tests {
         let output_type = DataType::Decimal128(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
 
-        let options = CastOptions { safe: false, ..Default::default() };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456789 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
     }
 
     #[test]
@@ -9852,10 +9860,13 @@ mod tests {
         let output_type = DataType::Decimal128(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
 
-        let options = CastOptions { safe: false, ..Default::default() };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456789 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
     }
 
     #[test]
@@ -9867,7 +9878,10 @@ mod tests {
         let output_type = DataType::Decimal128(6, 3);
         assert!(can_cast_types(&input_type, &output_type));
 
-        let options = CastOptions { safe: false, ..Default::default() };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
                    "Invalid argument error: 1234567890 is too large to store in a Decimal128 of precision 6. Max is 999999");
@@ -9882,7 +9896,10 @@ mod tests {
         let output_type = DataType::Decimal256(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
 
-        let options = CastOptions { safe: false, ..Default::default() };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
                    "Invalid argument error: 123456789 is too large to store in a Decimal256 of precision 6. Max is 999999");
