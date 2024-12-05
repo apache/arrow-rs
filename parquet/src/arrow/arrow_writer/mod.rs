@@ -30,12 +30,10 @@ use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
-use super::schema::{
-    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
-    arrow_to_parquet_schema_with_root, decimal_length_from_precision,
-};
+use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::arrow::ArrowToParquetSchemaConverter;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
@@ -181,10 +179,12 @@ impl<W: Write + Send> ArrowWriter<W> {
         options: ArrowWriterOptions,
     ) -> Result<Self> {
         let mut props = options.properties;
-        let schema = match options.schema_root {
-            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s, props.coerce_types())?,
-            None => arrow_to_parquet_schema(&arrow_schema, props.coerce_types())?,
-        };
+        let mut converter = ArrowToParquetSchemaConverter::new(&arrow_schema)
+            .with_coerce_types(props.coerce_types());
+        if let Some(s) = &options.schema_root {
+            converter = converter.schema_root(s);
+        }
+        let schema = converter.build()?;
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -538,7 +538,7 @@ impl ArrowColumnChunk {
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
-/// # use parquet::arrow::arrow_to_parquet_schema;
+/// # use parquet::arrow::ArrowToParquetSchemaConverter;
 /// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers};
 /// # use parquet::file::properties::WriterProperties;
 /// # use parquet::file::writer::SerializedFileWriter;
@@ -550,7 +550,10 @@ impl ArrowColumnChunk {
 ///
 /// // Compute the parquet schema
 /// let props = Arc::new(WriterProperties::default());
-/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref(), props.coerce_types()).unwrap();
+/// let parquet_schema = ArrowToParquetSchemaConverter::new(schema.as_ref())
+///   .with_coerce_types(props.coerce_types())
+///   .build()
+///   .unwrap();
 ///
 /// // Create writers for each of the leaf columns
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();

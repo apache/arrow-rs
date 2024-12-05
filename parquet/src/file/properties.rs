@@ -16,14 +16,13 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
-use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc};
-
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
+use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc};
 
 /// Default value for [`WriterProperties::data_page_size_limit`]
 pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
@@ -287,15 +286,16 @@ impl WriterProperties {
         self.statistics_truncate_length
     }
 
-    /// Returns `coerce_types` boolean
+    /// Should the writer coerce types to parquet native types.
     ///
-    /// Some Arrow types do not have a corresponding Parquet logical type.
-    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
-    /// Writers have the option to coerce these into native Parquet types. Type
-    /// coercion allows for meaningful representations that do not require
-    /// downstream readers to consider the embedded Arrow schema. However, type
-    /// coercion also prevents the data from being losslessly round-tripped. This method
-    /// returns `true` if type coercion enabled.
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but may lose precision for arrow types such as
+    /// [`DataType::Date64`] which have no direct corresponding Parquet type.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowToParquetSchemaConverter::with_coerce_types
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
     }
