@@ -1088,6 +1088,7 @@ mod tests {
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
+    use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
@@ -2489,6 +2490,56 @@ mod tests {
 
         let values = Arc::new(s);
         one_column_roundtrip(values, false);
+    }
+
+    #[test]
+    fn list_and_map_coerced_names() {
+        // Create map and list with non-Parquet naming
+        let list_field =
+            Field::new_list("my_list", Field::new("item", DataType::Int32, false), false);
+        let map_field = Field::new_map(
+            "my_map",
+            "entries",
+            Field::new("keys", DataType::Int32, false),
+            Field::new("values", DataType::Int32, true),
+            false,
+            true,
+        );
+
+        let list_array = create_random_array(&list_field, 100, 0.0, 0.0).unwrap();
+        let map_array = create_random_array(&map_field, 100, 0.0, 0.0).unwrap();
+
+        let arrow_schema = Arc::new(Schema::new(vec![list_field, map_field]));
+
+        // Write data to Parquet but coerce names to match spec
+        let props = Some(WriterProperties::builder().set_coerce_types(true).build());
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), arrow_schema.clone(), props).unwrap();
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![list_array, map_array]).unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        // Coerced name of "item" should be "element"
+        assert_eq!(file_metadata.schema[3].name, "element");
+        // Coerced name of "entries" should be "key_value"
+        assert_eq!(file_metadata.schema[5].name, "key_value");
+        // Coerced name of "keys" should be "key"
+        assert_eq!(file_metadata.schema[6].name, "key");
+        // Coerced name of "values" should be "value"
+        assert_eq!(file_metadata.schema[7].name, "value");
+
+        // Double check schema after reading from the file
+        let reader = SerializedFileReader::new(file).unwrap();
+        let file_schema = reader.metadata().file_metadata().schema();
+        let fields = file_schema.get_fields();
+        let list_field = &fields[0].get_fields()[0];
+        assert_eq!(list_field.get_fields()[0].name(), "element");
+        let map_field = &fields[1].get_fields()[0];
+        assert_eq!(map_field.name(), "key_value");
+        assert_eq!(map_field.get_fields()[0].name(), "key");
+        assert_eq!(map_field.get_fields()[1].name(), "value");
     }
 
     #[test]

@@ -303,6 +303,11 @@ pub fn decimal_length_from_precision(precision: u8) -> usize {
 
 /// Convert an arrow field to a parquet `Type`
 fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
+    const PARQUET_LIST_ELEMENT_NAME: &str = "element";
+    const PARQUET_MAP_STRUCT_NAME: &str = "key_value";
+    const PARQUET_KEY_FIELD_NAME: &str = "key";
+    const PARQUET_VALUE_FIELD_NAME: &str = "value";
+
     let name = field.name().as_str();
     let repetition = if field.is_nullable() {
         Repetition::OPTIONAL
@@ -527,10 +532,18 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_id(id)
             .build(),
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
+            let field_ref = if coerce_types && f.name() != PARQUET_LIST_ELEMENT_NAME {
+                // Ensure proper naming per the Parquet specification
+                let ff = f.as_ref().clone().with_name(PARQUET_LIST_ELEMENT_NAME);
+                Arc::new(arrow_to_parquet_type(&ff, coerce_types)?)
+            } else {
+                Arc::new(arrow_to_parquet_type(f, coerce_types)?)
+            };
+
             Type::group_type_builder(name)
                 .with_fields(vec![Arc::new(
                     Type::group_type_builder("list")
-                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f, coerce_types)?)])
+                        .with_fields(vec![field_ref])
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
@@ -559,13 +572,29 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         }
         DataType::Map(field, _) => {
             if let DataType::Struct(struct_fields) = field.data_type() {
+                // If coercing then set inner struct name to "key_value"
+                let map_struct_name = if coerce_types {
+                    PARQUET_MAP_STRUCT_NAME
+                } else {
+                    field.name()
+                };
+
+                // If coercing then ensure struct fields are named "key" and "value"
+                let fix_map_field = |name: &str, fld: &Arc<Field>| -> Result<Arc<Type>> {
+                    if coerce_types && fld.name() != name {
+                        let f = fld.as_ref().clone().with_name(name);
+                        Ok(Arc::new(arrow_to_parquet_type(&f, coerce_types)?))
+                    } else {
+                        Ok(Arc::new(arrow_to_parquet_type(fld, coerce_types)?))
+                    }
+                };
+                let key_field = fix_map_field(PARQUET_KEY_FIELD_NAME, &struct_fields[0])?;
+                let val_field = fix_map_field(PARQUET_VALUE_FIELD_NAME, &struct_fields[1])?;
+
                 Type::group_type_builder(name)
                     .with_fields(vec![Arc::new(
-                        Type::group_type_builder(field.name())
-                            .with_fields(vec![
-                                Arc::new(arrow_to_parquet_type(&struct_fields[0], coerce_types)?),
-                                Arc::new(arrow_to_parquet_type(&struct_fields[1], coerce_types)?),
-                            ])
+                        Type::group_type_builder(map_struct_name)
+                            .with_fields(vec![key_field, val_field])
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
@@ -1418,6 +1447,75 @@ mod tests {
         ];
 
         assert_eq!(arrow_fields, converted_arrow_fields);
+    }
+
+    #[test]
+    fn test_coerced_map_list() {
+        // Create Arrow schema with non-Parquet naming
+        let arrow_fields = vec![
+            Field::new_list(
+                "my_list",
+                Field::new("item", DataType::Boolean, true),
+                false,
+            ),
+            Field::new_map(
+                "my_map",
+                "entries",
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
+                false,
+                true,
+            ),
+        ];
+        let arrow_schema = Schema::new(arrow_fields);
+
+        // Create Parquet schema with coerced names
+        let message_type = "
+        message parquet_schema {
+            REQUIRED GROUP my_list (LIST) {
+                REPEATED GROUP list {
+                    OPTIONAL BOOLEAN element;
+                }
+            }
+            OPTIONAL GROUP my_map (MAP) {
+                REPEATED GROUP key_value {
+                    REQUIRED BINARY key (STRING);
+                    OPTIONAL INT32 value;
+                }
+            }
+        }
+        ";
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, true).unwrap();
+        assert_eq!(
+            parquet_schema.columns().len(),
+            converted_arrow_schema.columns().len()
+        );
+
+        // Create Parquet schema without coerced names
+        let message_type = "
+        message parquet_schema {
+            REQUIRED GROUP my_list (LIST) {
+                REPEATED GROUP list {
+                    OPTIONAL BOOLEAN item;
+                }
+            }
+            OPTIONAL GROUP my_map (MAP) {
+                REPEATED GROUP entries {
+                    REQUIRED BINARY keys (STRING);
+                    OPTIONAL INT32 values;
+                }
+            }
+        }
+        ";
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema, false).unwrap();
+        assert_eq!(
+            parquet_schema.columns().len(),
+            converted_arrow_schema.columns().len()
+        );
     }
 
     #[test]
