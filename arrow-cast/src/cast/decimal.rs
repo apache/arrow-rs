@@ -111,20 +111,13 @@ where
         O::Native::from_decimal(adjusted)
     };
 
-    Ok(match cast_options.safe {
-        true => {
-            array.unary_opt(|x| {
-                 f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision))
-            })
-        }
-        false => {
-            array.try_unary(|x| {
-                f(x).ok_or_else(|| error(x))
-                    .and_then(|v|{
-                        O:: validate_decimal_precision(v, output_precision).map(|_| v)
-                    })
-            })?
-        }
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
@@ -146,23 +139,15 @@ where
         .unwrap()
         .pow_checked((output_scale - input_scale) as u32)?;
 
-    let f = |x|
-        O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+    let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
-    Ok(match cast_options.safe {
-        true => {
-            array.unary_opt(|x| {
-                f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision))
-            })
-        }
-        false => {
-            array.try_unary(|x| {
-                 f(x).ok_or_else(|| error(x))
-                    .and_then(|v|{
-                        O:: validate_decimal_precision(v, output_precision).map(|_| v)
-                })
-            })?
-        }
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
@@ -178,8 +163,7 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
-        Ordering::Equal | Ordering::Less => {
+    let array: PrimitiveArray<T> = if input_scale <= output_scale {
             // input_scale <= output_scale
             // the scale doesn't change, but precision may change and cause overflow
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
@@ -189,14 +173,14 @@ where
                 output_scale,
                 cast_options,
             )?
-        }
-        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )?
+        } else {
+           convert_to_smaller_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
     };
 
     Ok(Arc::new(array.with_precision_and_scale(
