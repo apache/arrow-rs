@@ -1340,10 +1340,11 @@ mod tests {
         ]));
 
         // Normalize top level
-        let normalized = RecordBatch::try_new(Arc::new(schema.clone()), vec![exclamation_field.clone()])
-            .expect("valid conversion")
-            .normalize(".", 1)
-            .expect("valid normalization");
+        let normalized =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![exclamation_field.clone()])
+                .expect("valid conversion")
+                .normalize(".", 1)
+                .expect("valid normalization");
 
         let expected = RecordBatch::try_from_iter_with_nullable(vec![
             (
