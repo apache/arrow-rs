@@ -273,10 +273,10 @@ pub struct ArrowToParquetSchemaConverter<'a> {
     /// Should we Coerce arrow types to compatible Parquet types?
     ///
     /// See docs on [Self::with_coerce_types]`
-    coerce_types: bool
+    coerce_types: bool,
 }
 
-impl <'a> ArrowToParquetSchemaConverter<'a> {
+impl<'a> ArrowToParquetSchemaConverter<'a> {
     /// Create a new converter
     pub fn new(schema: &'a Schema) -> Self {
         Self {
@@ -318,13 +318,19 @@ impl <'a> ArrowToParquetSchemaConverter<'a> {
 
     /// Build the desired parquet [`SchemaDescriptor`]
     pub fn build(self) -> Result<SchemaDescriptor> {
-        let Self { schema, schema_root: root_schema_name, coerce_types } = self;
+        let Self {
+            schema,
+            schema_root: root_schema_name,
+            coerce_types,
+        } = self;
         let fields = schema
             .fields()
             .iter()
             .map(|field| arrow_to_parquet_type(field, coerce_types).map(Arc::new))
             .collect::<Result<_>>()?;
-        let group = Type::group_type_builder(root_schema_name).with_fields(fields).build()?;
+        let group = Type::group_type_builder(root_schema_name)
+            .with_fields(fields)
+            .build()?;
         Ok(SchemaDescriptor::new(Arc::new(group)))
     }
 }
@@ -335,10 +341,8 @@ impl <'a> ArrowToParquetSchemaConverter<'a> {
 /// overridden with [`ArrowToParquetSchemaConverter`]
 #[deprecated(since = "54.0.0", note = "Use `ArrowToParquetSchemaConverter` instead")]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-
     ArrowToParquetSchemaConverter::new(schema).build()
 }
-
 
 fn parse_key_value_metadata(
     key_value_metadata: Option<&Vec<KeyValue>>,
@@ -1661,7 +1665,9 @@ mod tests {
             Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema).build().unwrap();
+        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+            .build()
+            .unwrap();
 
         assert_eq!(
             parquet_schema.columns().len(),
