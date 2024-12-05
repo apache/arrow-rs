@@ -949,6 +949,32 @@ impl ColumnDescriptor {
 ///
 /// Encapsulates the file's schema ([`Type`]) and [`ColumnDescriptor`]s for
 /// each primitive (leaf) column.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// use parquet::schema::types::{SchemaDescriptor, Type};
+/// use parquet::basic; // note there are two `Type`s that are different
+/// // Schema for a table with two columns: "a" (int64) and "b" (int32, stored as a date)
+/// let descriptor = SchemaDescriptor::new(
+///   Arc::new(
+///     Type::group_type_builder("my_schema")
+///       .with_fields(vec![
+///         Arc::new(
+///          Type::primitive_type_builder("a", basic::Type::INT64)
+///           .build().unwrap()
+///         ),
+///         Arc::new(
+///          Type::primitive_type_builder("b", basic::Type::INT32)
+///           .with_converted_type(basic::ConvertedType::DATE)
+///           .with_logical_type(Some(basic::LogicalType::Date))
+///           .build().unwrap()
+///         ),
+///      ])
+///      .build().unwrap()
+///   )
+/// );
+/// ```
 #[derive(PartialEq)]
 pub struct SchemaDescriptor {
     /// The top-level logical schema (the "message" type).
