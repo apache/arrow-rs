@@ -30,7 +30,7 @@ async fn test_http_store_gzip() {
         .build()
         .unwrap();
 
-    let object = http_store
+    let _ = http_store
         .get_opts(
             &Path::parse("LICENSE.txt").unwrap(),
             GetOptions {
