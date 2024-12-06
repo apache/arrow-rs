@@ -77,3 +77,7 @@ harness = false
 [[bench]]
 name = "parse_decimal"
 harness = false
+
+[[bench]]
+name = "cast_decimal"
+harness = false
