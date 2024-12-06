@@ -82,6 +82,24 @@ versions approximately every 2 months.
 
 [`object_store`]: https://crates.io/crates/object_store
 
+### Deprecation Policy
+
+Minor releases may deprecate, but not remove APIs. Deprecating APIs allows the
+Rust programs to still compile, but will generate compiler warnings. This gives
+downstream crates time to migrate to non deprecated APIs prior to their removal.
+
+All deprecated APIs are marked using the `#[deprecated]` attribute with both the
+first version they were deprecated in, as well as what new API to use instead.
+
+```rust
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
+```
+
+Deprecated APIs will be kept for at least one major release after they were
+deprecated. For example, an API deprecated in `51.3.0` will not be removed until
+at least `53.0.0`. Given the planned release schedule, this is typically between
+3 and 6 months.
+
 ## Related Projects
 
 There are several related crates in different repositories
