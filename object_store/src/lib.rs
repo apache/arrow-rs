@@ -1101,41 +1101,43 @@ impl GetResult {
 
 /// Configuration for controlling transfer behavior.
 #[derive(Debug, Clone, Copy)]
-pub struct TransferConfig {
+pub struct TransferOptions {
     /// Maximum number of concurrent chunks to transfer.
-    pub max_concurrent_chunks: usize,
+    pub concurrent_tasks: usize,
     /// Maximum number of chunks to buffer in memory during the transfer.
-    /// Defaults to `max_concurrent_chunks` if `None`.
-    pub chunk_queue_size: Option<usize>,
+    /// Defaults to `concurrent_tasks` if `None`.
+    pub buffer_capacity: Option<usize>,
     /// Maximum number of retries for a chunk transfer.
     pub max_retries: Option<usize>,
 }
 
-impl TransferConfig {
-    /// Creates a new `TransferConfig` with the specified parameters.
+impl TransferOptions {
+    /// Creates a new `TransferOptions` with the specified parameters.
     pub fn new(
-        max_concurrent_chunks: usize,
-        chunk_queue_size: Option<usize>,
+        concurrent_tasks: usize,
+        buffer_capacity: Option<usize>,
         max_retries: Option<usize>,
     ) -> Self {
+        let buffer_capacity = buffer_capacity.or(Some(concurrent_tasks));
+        let max_retries = max_retries.or(Some(3));
         Self {
-            max_concurrent_chunks,
-            chunk_queue_size,
+            concurrent_tasks,
+            buffer_capacity,
             max_retries,
         }
     }
 }
 
-/// Default implementation for `TransferConfig`.
+/// Default implementation for `TransferOptions`.
 ///
-/// - `max_concurrent_chunks`: 1
-/// - `chunk_queue_size`: Some(2)
+/// - `concurrent_tasks`: 1
+/// - `buffer_capacity`: Some(2)
 /// - `max_retries`: None
-impl Default for TransferConfig {
+impl Default for TransferOptions {
     fn default() -> Self {
         Self {
-            max_concurrent_chunks: 1,
-            chunk_queue_size: Some(2),
+            concurrent_tasks: 1,
+            buffer_capacity: Some(1),
             max_retries: None,
         }
     }

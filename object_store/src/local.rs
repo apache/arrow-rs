@@ -40,7 +40,7 @@ use crate::{
     util::InvalidGetRange,
     Attributes, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    TransferConfig, UploadPart,
+    TransferOptions, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -1040,7 +1040,7 @@ fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
 /// The function listens for cancellation signals using `cancellation_alert` and exits early
 /// if a cancellation is detected. It also retries download attempts up to `max_retries` in case
 /// of transient errors.
-async fn download_chunk_stream(
+async fn download_chunk(
     store: Arc<dyn ObjectStore>,
     location: Path,
     opts: GetOptions,
@@ -1117,7 +1117,6 @@ async fn write_multi_chunks(
     let mut data = 0;
 
     while let Some((offset, buffer)) = receiver.recv().await {
-        // Verificar si se ha solicitado una cancelación
         if *cancellation_alert.borrow() {
             return Err(Error::DownloadAborted);
         }
@@ -1144,8 +1143,8 @@ async fn write_multi_chunks(
 ///
 /// # Details
 /// The function determines the number of concurrent tasks (`concurrent_tasks`) and the size of the
-/// channel buffer (`channel_size`). If `chunk_queue_size` is not provided, it defaults to the value of
-/// `max_concurrent_chunks`. The total size of the file is divided into chunks, and each chunk is
+/// channel buffer (`channel_size`). If `buffer_capacity` is not provided, it defaults to the value of
+/// `concurrent_tasks`. The total size of the file is divided into chunks, and each chunk is
 /// processed by a concurrent task.
 ///
 /// The download process listens for cancellation signals via a shared `cancellation_alert`. If a
@@ -1163,12 +1162,12 @@ pub async fn download(
     location: &Path,
     opts: GetOptions,
     mut file: std::fs::File,
-    transfer_opts: Option<&TransferConfig>,
+    transfer_opts: Option<&TransferOptions>,
 ) -> Result<u64> {
     let req = store.get_opts(&location, opts.clone()).await?;
-    let transfer_opts = *transfer_opts.unwrap_or(&TransferConfig::default());
-    let concurrent_tasks = transfer_opts.max_concurrent_chunks;
-    let channel_size = transfer_opts.chunk_queue_size.unwrap_or(concurrent_tasks);
+    let transfer_opts = *transfer_opts.unwrap_or(&TransferOptions::default());
+    let concurrent_tasks = transfer_opts.concurrent_tasks;
+    let channel_size = transfer_opts.buffer_capacity.unwrap_or(concurrent_tasks);
     let mut written_bytes: u64 = 0;
     match req.payload {
         GetResultPayload::Stream(_) => {
@@ -1184,7 +1183,7 @@ pub async fn download(
             }
 
             let mut tasks = tokio::task::JoinSet::new();
-            for i in 0..transfer_opts.max_concurrent_chunks {
+            for i in 0..transfer_opts.concurrent_tasks {
                 let chunk_start = i * chunk_size;
                 let chunk_end = std::cmp::min((i + 1) * chunk_size - 1, obj_size - 1);
                 let ranged_opts = GetOptions {
@@ -1198,7 +1197,7 @@ pub async fn download(
                 let cancellation_alert_clone = cancellation_alert.clone();
                 tasks.spawn(async move {
                     TaskResult::Download(
-                        download_chunk_stream(
+                        download_chunk(
                             store_clone,
                             location_clone,
                             ranged_opts,
