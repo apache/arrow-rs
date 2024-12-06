@@ -242,7 +242,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 /// let parquet_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
 ///   .build()
 ///   .unwrap();
-/// //
+///
 /// let expected_parquet_schema = SchemaDescriptor::new(
 ///   Arc::new(
 ///     Type::group_type_builder("arrow_schema")
