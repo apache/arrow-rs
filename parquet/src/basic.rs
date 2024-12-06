@@ -302,6 +302,7 @@ pub enum Encoding {
     ///
     /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
     #[deprecated(
+        since = "51.0.0",
         note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
     )]
     BIT_PACKED,

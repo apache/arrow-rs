@@ -689,12 +689,6 @@ array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
 array_downcast_fn!(as_map_array, MapArray);
 
-/// Force downcast of an Array, such as an ArrayRef to Decimal128Array, panic’ing on failure.
-#[deprecated(note = "please use `as_primitive_array::<Decimal128Type>` instead")]
-pub fn as_decimal_array(arr: &dyn Array) -> &PrimitiveArray<Decimal128Type> {
-    as_primitive_array::<Decimal128Type>(arr)
-}
-
 /// Downcasts a `dyn Array` to a concrete type
 ///
 /// ```

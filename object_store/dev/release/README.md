@@ -27,7 +27,7 @@ This file documents the release process for the `object_store` crate.
 At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
 
 As we are still in an early phase, we use the 0.x version scheme. If any code has 
-been merged to master that has a breaking API change, as defined in [Rust RFC 1105]
+been merged to main that has a breaking API change, as defined in [Rust RFC 1105]
 the minor version number is incremented changed (e.g. `0.3.0` to `0.4.0`). 
 Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
@@ -45,14 +45,14 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/object_store/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
 
 ## Prepare CHANGELOG and version:
 
-Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
+Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
 Note  this process is done in the `object_store` directory. See [#6227] for an example
 
@@ -62,7 +62,7 @@ Note  this process is done in the `object_store` directory. See [#6227] for an e
 # NOTE: Run commands in object_store sub directory (not main repo checkout)
 # cd object_store
 
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
@@ -82,7 +82,7 @@ export CHANGELOG_GITHUB_TOKEN=<TOKEN>
 # Commit changes
 git commit -a -m 'Create changelog'
 
-# push changes to fork and create a PR to master
+# push changes to fork and create a PR to main
 git push
 ```
 
@@ -90,7 +90,7 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-Merge this PR to `master` prior to the next step.
+Merge this PR to `main` prior to the next step.
 
 ## Prepare release candidate tarball
 
@@ -109,7 +109,7 @@ Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version> apache/main
 # push tag to apache
 git push apache <version>
 ```
@@ -170,7 +170,7 @@ The vote will be open for at least 72 hours.
 [1]: https://github.com/apache/arrow-rs/tree/b945b15de9085f5961a478d4f35b0c5c3427e248
 [2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-0.11.1-rc1
 [3]: https://github.com/apache/arrow-rs/blob/b945b15de9085f5961a478d4f35b0c5c3427e248/object_store/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/master/object_store/dev/release/verify-release-candidate.sh
+[4]: https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/verify-release-candidate.sh
 ```
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.

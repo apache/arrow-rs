@@ -36,7 +36,6 @@ bench = false
 [dependencies]
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
-arrow-cast = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 flatbuffers = { version = "24.3.25", default-features = false }

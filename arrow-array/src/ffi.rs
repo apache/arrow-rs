@@ -121,7 +121,10 @@ type Result<T> = std::result::Result<T, ArrowError>;
 /// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
 /// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
 /// Usually the raw pointers are provided by the array data consumer.
-#[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
+#[deprecated(
+    since = "52.0.0",
+    note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from"
+)]
 pub unsafe fn export_array_into_raw(
     src: ArrayRef,
     out_array: *mut FFI_ArrowArray,
@@ -719,7 +722,7 @@ mod tests_to_then_from_ffi {
 
         // Construct a list array from the above two
         let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::Int32, false),
+            Field::new_list_field(DataType::Int32, false),
         ));
 
         let list_data = ArrayData::builder(list_data_type)
@@ -1478,7 +1481,7 @@ mod tests_from_ffi {
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
         let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
             .len(8)
             .add_buffer(value_offsets)

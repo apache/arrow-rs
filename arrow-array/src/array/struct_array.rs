@@ -239,12 +239,6 @@ impl StructArray {
         &self.fields
     }
 
-    /// Returns child array refs of the struct array
-    #[deprecated(note = "Use columns().to_vec()")]
-    pub fn columns_ref(&self) -> Vec<ArrayRef> {
-        self.columns().to_vec()
-    }
-
     /// Return field names in this struct array
     pub fn column_names(&self) -> Vec<&str> {
         match self.data_type() {
@@ -368,6 +362,13 @@ impl Array for StructArray {
 
     fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.fields.iter_mut().for_each(|n| n.shrink_to_fit());
     }
 
     fn offset(&self) -> usize {

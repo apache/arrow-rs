@@ -136,7 +136,7 @@ use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
 
 use crate::map_csv_error;
@@ -397,51 +397,6 @@ impl Format {
         }
         builder.build()
     }
-}
-
-/// Infer the schema of a CSV file by reading through the first n records of the file,
-/// with `max_read_records` controlling the maximum number of records to read.
-///
-/// If `max_read_records` is not set, the whole file is read to infer its schema.
-///
-/// Return inferred schema and number of records used for inference. This function does not change
-/// reader cursor offset.
-///
-/// The inferred schema will always have each field set as nullable.
-#[deprecated(note = "Use Format::infer_schema")]
-#[allow(deprecated)]
-pub fn infer_file_schema<R: Read + Seek>(
-    mut reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.stream_position()?;
-    let r = infer_reader_schema(&mut reader, delimiter, max_read_records, has_header)?;
-    // return the reader seek back to the start
-    reader.seek(SeekFrom::Start(saved_offset))?;
-    Ok(r)
-}
-
-/// Infer schema of CSV records provided by struct that implements `Read` trait.
-///
-/// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
-/// not set, all records are read to infer the schema.
-///
-/// Return inferred schema and number of records used for inference.
-#[deprecated(note = "Use Format::infer_schema")]
-pub fn infer_reader_schema<R: Read>(
-    reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let format = Format {
-        delimiter: Some(delimiter),
-        header: has_header,
-        ..Default::default()
-    };
-    format.infer_schema(reader, max_read_records)
 }
 
 /// Infer schema from a list of CSV files by reading through first n records
@@ -824,42 +779,66 @@ fn parse(
                     match key_type.as_ref() {
                         DataType::Int8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int8Type>>(),
                         ) as ArrayRef),
                         DataType::Int16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int16Type>>(),
                         ) as ArrayRef),
                         DataType::Int32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int32Type>>(),
                         ) as ArrayRef),
                         DataType::Int64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int64Type>>(),
                         ) as ArrayRef),
                         DataType::UInt8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt8Type>>(),
                         ) as ArrayRef),
                         DataType::UInt16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt16Type>>(),
                         ) as ArrayRef),
                         DataType::UInt32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt32Type>>(),
                         ) as ArrayRef),
                         DataType::UInt64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt64Type>>(),
                         ) as ArrayRef),
                         _ => Err(ArrowError::ParseError(format!(
@@ -1101,14 +1080,6 @@ impl ReaderBuilder {
         }
     }
 
-    /// Set whether the CSV file has headers
-    #[deprecated(note = "Use with_header")]
-    #[doc(hidden)]
-    pub fn has_header(mut self, has_header: bool) -> Self {
-        self.format.header = has_header;
-        self
-    }
-
     /// Set whether the CSV file has a header
     pub fn with_header(mut self, has_header: bool) -> Self {
         self.format.header = has_header;
@@ -1236,7 +1207,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
@@ -1528,6 +1499,40 @@ mod tests {
         assert_eq!(strings.value(29), "Uckfield, East Sussex, UK");
     }
 
+    #[test]
+    fn test_csv_with_nullable_dictionary() {
+        let offset_type = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ];
+        for data_type in offset_type {
+            let file = File::open("test/data/dictionary_nullable_test.csv").unwrap();
+            let dictionary_type =
+                DataType::Dictionary(Box::new(data_type), Box::new(DataType::Utf8));
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("name", dictionary_type.clone(), true),
+            ]));
+
+            let mut csv = ReaderBuilder::new(schema)
+                .build(file.try_clone().unwrap())
+                .unwrap();
+
+            let batch = csv.next().unwrap().unwrap();
+            assert_eq!(3, batch.num_rows());
+            assert_eq!(2, batch.num_columns());
+
+            let names = arrow_cast::cast(batch.column(1), &dictionary_type).unwrap();
+            assert!(!names.is_null(2));
+            assert!(names.is_null(1));
+        }
+    }
     #[test]
     fn test_nulls() {
         let schema = Arc::new(Schema::new(vec![

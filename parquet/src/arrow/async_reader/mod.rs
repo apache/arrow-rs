@@ -159,7 +159,7 @@ pub trait AsyncFileReader: Send {
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
-impl<'reader> AsyncFileReader for Box<dyn AsyncFileReader + 'reader> {
+impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
@@ -928,7 +928,6 @@ mod tests {
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -1566,12 +1565,11 @@ mod tests {
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
             .parse_and_finish(&data)
             .unwrap();
 
-        let offset_index =
-            index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
-                .expect("reading offset index");
+        let offset_index = metadata.offset_index().expect("reading offset index")[0].clone();
 
         let mut metadata_builder = metadata.into_builder();
         let mut row_groups = metadata_builder.take_row_groups();
@@ -1871,7 +1869,7 @@ mod tests {
     async fn test_nested_skip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("col_1", DataType::UInt64, false),
-            Field::new_list("col_2", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list("col_2", Field::new_list_field(DataType::Utf8, true), true),
         ]));
 
         // Default writer properties

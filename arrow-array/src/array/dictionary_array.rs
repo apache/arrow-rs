@@ -720,6 +720,11 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.keys.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.keys.offset()
     }

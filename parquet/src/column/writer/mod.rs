@@ -347,7 +347,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     data_pages: VecDeque<CompressedPage>,
     // column index and offset index
     column_index_builder: ColumnIndexBuilder,
-    offset_index_builder: OffsetIndexBuilder,
+    offset_index_builder: Option<OffsetIndexBuilder>,
 
     // Below fields used to incrementally check boundary order across data pages.
     // We assume they are ascending/descending until proven wrong.
@@ -394,6 +394,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             column_index_builder.to_invalid()
         }
 
+        // Disable offset_index_builder if requested by user.
+        let offset_index_builder = match props.offset_index_disabled() {
+            false => Some(OffsetIndexBuilder::new()),
+            _ => None,
+        };
+
         Self {
             descr,
             props,
@@ -408,7 +414,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             page_metrics,
             column_metrics,
             column_index_builder,
-            offset_index_builder: OffsetIndexBuilder::new(),
+            offset_index_builder,
             encodings,
             data_page_boundary_ascending: true,
             data_page_boundary_descending: true,
@@ -613,7 +619,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .column_index_builder
             .valid()
             .then(|| self.column_index_builder.build_to_thrift());
-        let offset_index = Some(self.offset_index_builder.build_to_thrift());
+
+        let offset_index = self.offset_index_builder.map(|b| b.build_to_thrift());
 
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
@@ -841,11 +848,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         );
 
         // Update the offset index
-        self.offset_index_builder
-            .append_row_count(self.page_metrics.num_buffered_rows as i64);
-
-        self.offset_index_builder
-            .append_unencoded_byte_array_data_bytes(page_variable_length_bytes);
+        if let Some(builder) = self.offset_index_builder.as_mut() {
+            builder.append_row_count(self.page_metrics.num_buffered_rows as i64);
+            builder.append_unencoded_byte_array_data_bytes(page_variable_length_bytes);
+        }
     }
 
     /// Determine if we should allow truncating min/max values for this column's statistics
@@ -1174,8 +1180,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let page_spec = self.page_writer.write_page(page)?;
         // update offset index
         // compressed_size = header_size + compressed_data_size
-        self.offset_index_builder
-            .append_offset_and_size(page_spec.offset as i64, page_spec.compressed_size as i32);
+        if let Some(builder) = self.offset_index_builder.as_mut() {
+            builder
+                .append_offset_and_size(page_spec.offset as i64, page_spec.compressed_size as i32)
+        }
         self.update_metrics_for_page(page_spec);
         Ok(())
     }
@@ -3213,6 +3221,52 @@ mod tests {
         let column_close_result = writer.close().unwrap();
         assert!(column_close_result.offset_index.is_some());
         assert!(column_close_result.column_index.is_none());
+    }
+
+    #[test]
+    fn test_no_offset_index_when_disabled() {
+        // Test that offset indexes can be disabled
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .set_offset_index_disabled(true)
+                .build(),
+        );
+        let column_writer = get_column_writer(descr, props, get_test_page_writer());
+        let mut writer = get_typed_column_writer::<Int32Type>(column_writer);
+
+        let data = Vec::new();
+        let def_levels = vec![0; 10];
+        writer.write_batch(&data, Some(&def_levels), None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let column_close_result = writer.close().unwrap();
+        assert!(column_close_result.offset_index.is_none());
+        assert!(column_close_result.column_index.is_none());
+    }
+
+    #[test]
+    fn test_offset_index_overridden() {
+        // Test that offset indexes are not disabled when gathering page statistics
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(1, 0));
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_offset_index_disabled(true)
+                .build(),
+        );
+        let column_writer = get_column_writer(descr, props, get_test_page_writer());
+        let mut writer = get_typed_column_writer::<Int32Type>(column_writer);
+
+        let data = Vec::new();
+        let def_levels = vec![0; 10];
+        writer.write_batch(&data, Some(&def_levels), None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let column_close_result = writer.close().unwrap();
+        assert!(column_close_result.offset_index.is_some());
+        assert!(column_close_result.column_index.is_some());
     }
 
     #[test]

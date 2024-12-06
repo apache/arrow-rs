@@ -88,30 +88,6 @@ pub trait ArrowNativeType:
     /// Returns `None` if [`Self`] is not an integer or conversion would result
     /// in truncation/overflow
     fn to_i64(self) -> Option<i64>;
-
-    /// Convert native type from i32.
-    ///
-    /// Returns `None` if [`Self`] is not `i32`
-    #[deprecated(note = "please use `Option::Some` instead")]
-    fn from_i32(_: i32) -> Option<Self> {
-        None
-    }
-
-    /// Convert native type from i64.
-    ///
-    /// Returns `None` if [`Self`] is not `i64`
-    #[deprecated(note = "please use `Option::Some` instead")]
-    fn from_i64(_: i64) -> Option<Self> {
-        None
-    }
-
-    /// Convert native type from i128.
-    ///
-    /// Returns `None` if [`Self`] is not `i128`
-    #[deprecated(note = "please use `Option::Some` instead")]
-    fn from_i128(_: i128) -> Option<Self> {
-        None
-    }
 }
 
 macro_rules! native_integer {
@@ -147,23 +123,15 @@ macro_rules! native_integer {
             fn usize_as(i: usize) -> Self {
                 i as _
             }
-
-
-            $(
-                #[inline]
-                fn $from(v: $t) -> Option<Self> {
-                    Some(v)
-                }
-            )*
         }
     };
 }
 
 native_integer!(i8);
 native_integer!(i16);
-native_integer!(i32, from_i32);
-native_integer!(i64, from_i64);
-native_integer!(i128, from_i128);
+native_integer!(i32);
+native_integer!(i64);
+native_integer!(i128);
 native_integer!(u8);
 native_integer!(u16);
 native_integer!(u32);

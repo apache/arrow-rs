@@ -23,11 +23,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - object_store/**
@@ -138,7 +138,7 @@ jobs:
 
       - name: Setup LocalStack (AWS emulation)
         run: |
-          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:3.8.1)" >> $GITHUB_ENV
+          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:4.0.3)" >> $GITHUB_ENV
           echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
           aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
@@ -164,7 +164,7 @@ jobs:
       - name: Run object_store tests (AWS native conditional put)
         run: cargo test --features=aws
         env:
-          AWS_CONDITIONAL_PUT: etag-put-if-not-exists
+          AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
 
       - name: GCS Output
