@@ -286,13 +286,13 @@ impl<'a> ArrowToParquetSchemaConverter<'a> {
         }
     }
 
-    /// Should arrow types be coerced into parquet native types (default false).
+    /// Should arrow types be coerced into parquet native types (default `false`).
     ///
     /// Setting this option to `true` will result in parquet files that can be
     /// read by more readers, but may lose precision for arrow types such as
     /// [`DataType::Date64`] which have no direct corresponding Parquet type.
     ///
-    /// By default, does not coerce to native parquet types. Enabling type
+    /// By default, this converter does not coerce to native parquet types. Enabling type
     /// coercion allows for meaningful representations that do not require
     /// downstream readers to consider the embedded Arrow schema, and can allow
     /// for greater compatibility with other Parquet implementations. However,
@@ -303,11 +303,14 @@ impl<'a> ArrowToParquetSchemaConverter<'a> {
     /// Some Arrow types such as `Date64`, `Timestamp` and `Interval` have no
     /// corresponding Parquet logical type. Thus, they can not be losslessly
     /// round-tripped when stored using the appropriate Parquet logical type.
-    ///
     /// For example, some Date64 values may be truncated when stored with
-    /// parquet's native 32 bit date type. For [`List`] and [`Map`] types, some
+    /// parquet's native 32 bit date type.
+    ///
+    /// For [`List`] and [`Map`] types, some
     /// Parquet readers expect certain schema elements to have specific names
-    /// (earlier versions of the spec was somewhat ambiguous on this point).
+    /// (earlier versions of the spec were somewhat ambiguous on this point).
+    /// Type coercion will use the names prescribed by the Parquet specification,
+    /// potentially losing naming metadata from the Arrow schema.
     ///
     /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
     /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
