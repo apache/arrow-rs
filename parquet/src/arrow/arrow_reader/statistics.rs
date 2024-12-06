@@ -1414,6 +1414,24 @@ impl<'a> StatisticsConverter<'a> {
         Ok(UInt64Array::from_iter(null_counts))
     }
 
+    /// Extract the uncompressed sizes from row group statistics in [`RowGroupMetaData`]
+    pub fn row_group_uncompressed_size<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
+        };
+
+        let uncompressed_sizes = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).uncompressed_size() as u64);
+        Ok(UInt64Array::from_iter_values(uncompressed_sizes))
+    }
+
     /// Extract the minimum values from Data Page statistics.
     ///
     /// In Parquet files, in addition to the Column Chunk level statistics
