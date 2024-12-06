@@ -312,7 +312,7 @@ macro_rules! process_regexp_array_match {
     };
 }
 
-pub fn regexp_array_match<OffsetSize: OffsetSizeTrait>(
+fn regexp_array_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
     flags_array: Option<&GenericStringArray<OffsetSize>>,
@@ -325,7 +325,7 @@ pub fn regexp_array_match<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(list_builder.finish()))
 }
 
-pub fn regexp_array_match_utf8view(
+fn regexp_array_match_utf8view(
     array: &StringViewArray,
     regex_array: &StringViewArray,
     flags_array: Option<&StringViewArray>,
@@ -608,7 +608,7 @@ mod tests {
         ],
         StringArray,
         GenericStringBuilder<i32>,
-        vec![Some("005"), Some("7"), None, None, None, Some("")]
+        [Some("005"), Some("7"), None, None, None, Some("")]
     );
     test_match_single_group!(
         match_single_group_string_view,
@@ -630,7 +630,7 @@ mod tests {
         ],
         StringViewArray,
         StringViewBuilder,
-        vec![Some("005"), Some("7"), None, None, None, Some("")]
+        [Some("005"), Some("7"), None, None, None, Some("")]
     );
 
     macro_rules! test_match_single_group_with_flags {
@@ -672,7 +672,7 @@ mod tests {
         vec!["i"; 4],
         StringArray,
         GenericStringBuilder<i32>,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
     test_match_single_group_with_flags!(
         match_single_group_with_flags_stringview,
@@ -681,7 +681,7 @@ mod tests {
         vec!["i"; 4],
         StringViewArray,
         StringViewBuilder,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
 
     macro_rules! test_match_scalar_pattern {
@@ -722,7 +722,7 @@ mod tests {
         Some("i"),
         StringArray,
         GenericStringBuilder<i32>,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
     test_match_scalar_pattern!(
         match_scalar_pattern_stringview_with_flags,
@@ -731,7 +731,7 @@ mod tests {
         Some("i"),
         StringViewArray,
         StringViewBuilder,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
 
     test_match_scalar_pattern!(
@@ -741,7 +741,7 @@ mod tests {
         None::<&str>,
         StringArray,
         GenericStringBuilder<i32>,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
     test_match_scalar_pattern!(
         match_scalar_pattern_stringview_no_flags,
@@ -750,7 +750,7 @@ mod tests {
         None::<&str>,
         StringViewArray,
         StringViewBuilder,
-        vec![None, Some("7"), None, None]
+        [None, Some("7"), None, None]
     );
 
     macro_rules! test_match_scalar_no_pattern {
@@ -788,7 +788,7 @@ mod tests {
         StringArray,
         DataType::Utf8,
         GenericStringBuilder<i32>,
-        vec![None::<&str>, None, None, None]
+        [None::<&str>, None, None, None]
     );
     test_match_scalar_no_pattern!(
         match_scalar_no_pattern_stringview,
@@ -796,7 +796,7 @@ mod tests {
         StringViewArray,
         DataType::Utf8View,
         StringViewBuilder,
-        vec![None::<&str>, None, None, None]
+        [None::<&str>, None, None, None]
     );
 
     macro_rules! test_match_single_group_not_skip {
@@ -834,7 +834,7 @@ mod tests {
         r"foo",
         StringArray,
         GenericStringBuilder<i32>,
-        vec![Some("foo")]
+        [Some("foo")]
     );
     test_match_single_group_not_skip!(
         match_single_group_not_skip_stringview,
@@ -842,7 +842,7 @@ mod tests {
         r"foo",
         StringViewArray,
         StringViewBuilder,
-        vec![Some("foo")]
+        [Some("foo")]
     );
 
     macro_rules! test_flag_utf8 {
