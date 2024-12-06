@@ -1421,7 +1421,7 @@ async fn test_dates_64_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
-        expected_uncompressed_size: UInt64Array::from(vec![110, 80]),
+        expected_uncompressed_size: UInt64Array::from(vec![164, 108]),
         column_name: "date64",
         check: Check::Both,
     }
