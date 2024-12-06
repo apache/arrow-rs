@@ -384,7 +384,7 @@ macro_rules! process_regexp_match {
                         Some(caps) => {
                             let mut iter = caps.iter();
                             if caps.len() > 1 {
-                                iter.next(); // Skip the entire match if there are capture groups
+                                iter.next();
                             }
                             for m in iter.flatten() {
                                 $list_builder.values().append_value(m.as_str());
@@ -560,231 +560,290 @@ mod tests {
     use super::*;
 
     macro_rules! test_match_single_group {
-        ($values:expr, $array_type:ty, $builder_type:ty) => {{
-            let array: $array_type = <$array_type>::from($values);
+        ($test_name:ident, $values:expr, $patterns:expr, $arr_type:ty, $builder_type:ty, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let array: $arr_type = <$arr_type>::from($values);
+                let pattern: $arr_type = <$arr_type>::from($patterns);
 
-            let mut pattern_values = vec![r".*-(\d*)-.*"; 4];
-            pattern_values.push(r"(bar)(bequ1e)");
-            pattern_values.push("");
-            let pattern: $array_type = <$array_type>::from(pattern_values);
+                let actual = regexp_match(&array, &pattern, None).unwrap();
 
-            let actual = regexp_match(&array, &pattern, None).unwrap();
+                let elem_builder: $builder_type = <$builder_type>::new();
+                let mut expected_builder = ListBuilder::new(elem_builder);
 
-            let elem_builder: $builder_type = <$builder_type>::new();
-            let mut expected_builder = ListBuilder::new(elem_builder);
-            expected_builder.values().append_value("005");
-            expected_builder.append(true);
-            expected_builder.values().append_value("7");
-            expected_builder.append(true);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            expected_builder.values().append_value("");
-            expected_builder.append(true);
-            let expected = expected_builder.finish();
+                for val in $expected {
+                    match val {
+                        Some(v) => {
+                            expected_builder.values().append_value(v);
+                            expected_builder.append(true);
+                        }
+                        None => expected_builder.append(false),
+                    }
+                }
 
-            let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(&expected, result);
-        }};
+                let expected = expected_builder.finish();
+                let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+                assert_eq!(&expected, result);
+            }
+        };
     }
 
-    #[test]
-    fn match_single_group() {
-        let values = vec![
+    test_match_single_group!(
+        match_single_group_string,
+        vec![
             Some("abc-005-def"),
             Some("X-7-5"),
             Some("X545"),
             None,
             Some("foobarbequebaz"),
             Some("foobarbequebaz"),
-        ];
-        test_match_single_group!(values.clone(), StringArray, GenericStringBuilder<i32>);
-        test_match_single_group!(values.clone(), StringViewArray, StringViewBuilder);
-    }
+        ],
+        vec![
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r"(bar)(bequ1e)",
+            ""
+        ],
+        StringArray,
+        GenericStringBuilder<i32>,
+        vec![Some("005"), Some("7"), None, None, None, Some("")]
+    );
+    test_match_single_group!(
+        match_single_group_string_view,
+        vec![
+            Some("abc-005-def"),
+            Some("X-7-5"),
+            Some("X545"),
+            None,
+            Some("foobarbequebaz"),
+            Some("foobarbequebaz"),
+        ],
+        vec![
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r"(bar)(bequ1e)",
+            ""
+        ],
+        StringViewArray,
+        StringViewBuilder,
+        vec![Some("005"), Some("7"), None, None, None, Some("")]
+    );
 
     macro_rules! test_match_single_group_with_flags {
-        ($values:expr, $patterns:expr, $flags:expr, $array_type:ty, $builder_type:ty) => {{
-            let array: $array_type = <$array_type>::from($values);
-            let pattern: $array_type = <$array_type>::from($patterns);
-            let flags: $array_type = <$array_type>::from($flags);
+        ($test_name:ident, $values:expr, $patterns:expr, $flags:expr, $array_type:ty, $builder_type:ty, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let array: $array_type = <$array_type>::from($values);
+                let pattern: $array_type = <$array_type>::from($patterns);
+                let flags: $array_type = <$array_type>::from($flags);
 
-            let actual = regexp_match(&array, &pattern, Some(&flags)).unwrap();
+                let actual = regexp_match(&array, &pattern, Some(&flags)).unwrap();
 
-            let elem_builder: $builder_type = <$builder_type>::new();
-            let mut expected_builder = ListBuilder::new(elem_builder);
-            expected_builder.append(false);
-            expected_builder.values().append_value("7");
-            expected_builder.append(true);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            let expected = expected_builder.finish();
+                let elem_builder: $builder_type = <$builder_type>::new();
+                let mut expected_builder = ListBuilder::new(elem_builder);
 
-            let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(&expected, result);
-        }};
+                for val in $expected {
+                    match val {
+                        Some(v) => {
+                            expected_builder.values().append_value(v);
+                            expected_builder.append(true);
+                        }
+                        None => {
+                            expected_builder.append(false);
+                        }
+                    }
+                }
+
+                let expected = expected_builder.finish();
+                let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+                assert_eq!(&expected, result);
+            }
+        };
     }
 
-    #[test]
-    fn match_single_group_with_flags() {
-        let values = vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None];
-        let patterns = vec![r"x.*-(\d*)-.*"; 4];
-        let flags = vec!["i"; 4];
-
-        test_match_single_group_with_flags!(
-            values.clone(),
-            patterns.clone(),
-            flags.clone(),
-            StringArray,
-            GenericStringBuilder<i32>
-        );
-
-        test_match_single_group_with_flags!(
-            values.clone(),
-            patterns.clone(),
-            flags.clone(),
-            StringViewArray,
-            StringViewBuilder
-        );
-    }
+    test_match_single_group_with_flags!(
+        match_single_group_with_flags_string,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        vec![r"x.*-(\d*)-.*"; 4],
+        vec!["i"; 4],
+        StringArray,
+        GenericStringBuilder<i32>,
+        vec![None, Some("7"), None, None]
+    );
+    test_match_single_group_with_flags!(
+        match_single_group_with_flags_stringview,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        vec![r"x.*-(\d*)-.*"; 4],
+        vec!["i"; 4],
+        StringViewArray,
+        StringViewBuilder,
+        vec![None, Some("7"), None, None]
+    );
 
     macro_rules! test_match_scalar_pattern {
-        ($values:expr, $pattern:expr, $flag:expr, $array_type:ty, $builder_type:ty) => {{
-            let array: $array_type = <$array_type>::from($values);
-            let pattern = Scalar::new(<$array_type>::from(vec![$pattern; 1]));
-            let flag = Scalar::new(<$array_type>::from(vec![$flag; 1]));
+        ($test_name:ident, $values:expr, $pattern:expr, $flag:expr, $array_type:ty, $builder_type:ty, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let array: $array_type = <$array_type>::from($values);
 
-            let actual = regexp_match(&array, &pattern, Some(&flag)).unwrap();
+                let pattern_scalar = Scalar::new(<$array_type>::from(vec![$pattern; 1]));
+                let flag_scalar = Scalar::new(<$array_type>::from(vec![$flag; 1]));
 
-            let elem_builder: $builder_type = <$builder_type>::new();
-            let mut expected_builder = ListBuilder::new(elem_builder);
-            expected_builder.append(false);
-            expected_builder.values().append_value("7");
-            expected_builder.append(true);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            let expected = expected_builder.finish();
+                let actual = regexp_match(&array, &pattern_scalar, Some(&flag_scalar)).unwrap();
 
-            let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(&expected, result);
-        }};
+                let elem_builder: $builder_type = <$builder_type>::new();
+                let mut expected_builder = ListBuilder::new(elem_builder);
+
+                for val in $expected {
+                    match val {
+                        Some(v) => {
+                            expected_builder.values().append_value(v);
+                            expected_builder.append(true);
+                        }
+                        None => expected_builder.append(false),
+                    }
+                }
+
+                let expected = expected_builder.finish();
+                let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+                assert_eq!(&expected, result);
+            }
+        };
     }
 
-    #[test]
-    fn match_scalar_pattern() {
-        let values_with_flags = vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None];
-        let pattern = r"x.*-(\d*)-.*";
-        let flags = Some("i");
+    test_match_scalar_pattern!(
+        match_scalar_pattern_string_with_flags,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        r"x.*-(\d*)-.*",
+        Some("i"),
+        StringArray,
+        GenericStringBuilder<i32>,
+        vec![None, Some("7"), None, None]
+    );
+    test_match_scalar_pattern!(
+        match_scalar_pattern_stringview_with_flags,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        r"x.*-(\d*)-.*",
+        Some("i"),
+        StringViewArray,
+        StringViewBuilder,
+        vec![None, Some("7"), None, None]
+    );
 
-        test_match_scalar_pattern!(
-            values_with_flags.clone(),
-            pattern,
-            flags,
-            StringArray,
-            GenericStringBuilder<i32>
-        );
-
-        test_match_scalar_pattern!(
-            values_with_flags.clone(),
-            pattern,
-            flags,
-            StringViewArray,
-            StringViewBuilder
-        );
-
-        let values_no_flags = vec![Some("abc-005-def"), Some("x-7-5"), Some("X545"), None];
-
-        test_match_scalar_pattern!(
-            values_no_flags.clone(),
-            pattern,
-            None::<&str>,
-            StringArray,
-            GenericStringBuilder<i32>
-        );
-
-        test_match_scalar_pattern!(
-            values_no_flags.clone(),
-            pattern,
-            None::<&str>,
-            StringViewArray,
-            StringViewBuilder
-        );
-    }
+    test_match_scalar_pattern!(
+        match_scalar_pattern_string_no_flags,
+        vec![Some("abc-005-def"), Some("x-7-5"), Some("X545"), None],
+        r"x.*-(\d*)-.*",
+        None::<&str>,
+        StringArray,
+        GenericStringBuilder<i32>,
+        vec![None, Some("7"), None, None]
+    );
+    test_match_scalar_pattern!(
+        match_scalar_pattern_stringview_no_flags,
+        vec![Some("abc-005-def"), Some("x-7-5"), Some("X545"), None],
+        r"x.*-(\d*)-.*",
+        None::<&str>,
+        StringViewArray,
+        StringViewBuilder,
+        vec![None, Some("7"), None, None]
+    );
 
     macro_rules! test_match_scalar_no_pattern {
-        ($values:expr, $array_type:ty, $pattern_type:expr, $builder_type:ty) => {{
-            let array: $array_type = <$array_type>::from($values);
-            let pattern = Scalar::new(new_null_array(&$pattern_type, 1));
+        ($test_name:ident, $values:expr, $array_type:ty, $pattern_type:expr, $builder_type:ty, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let array: $array_type = <$array_type>::from($values);
+                let pattern = Scalar::new(new_null_array(&$pattern_type, 1));
 
-            let actual = regexp_match(&array, &pattern, None).unwrap();
+                let actual = regexp_match(&array, &pattern, None).unwrap();
 
-            let elem_builder: $builder_type = <$builder_type>::new();
-            let mut expected_builder = ListBuilder::new(elem_builder);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            expected_builder.append(false);
-            let expected = expected_builder.finish();
+                let elem_builder: $builder_type = <$builder_type>::new();
+                let mut expected_builder = ListBuilder::new(elem_builder);
 
-            let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(&expected, result);
-        }};
+                for val in $expected {
+                    match val {
+                        Some(v) => {
+                            expected_builder.values().append_value(v);
+                            expected_builder.append(true);
+                        }
+                        None => expected_builder.append(false),
+                    }
+                }
+
+                let expected = expected_builder.finish();
+                let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+                assert_eq!(&expected, result);
+            }
+        };
     }
 
-    #[test]
-    fn match_scalar_no_pattern() {
-        let values = vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None];
-
-        test_match_scalar_no_pattern!(
-            values.clone(),
-            StringArray,
-            DataType::Utf8,
-            GenericStringBuilder<i32>
-        );
-        test_match_scalar_no_pattern!(
-            values.clone(),
-            StringViewArray,
-            DataType::Utf8View,
-            StringViewBuilder
-        );
-    }
+    test_match_scalar_no_pattern!(
+        match_scalar_no_pattern_string,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        StringArray,
+        DataType::Utf8,
+        GenericStringBuilder<i32>,
+        vec![None::<&str>, None, None, None]
+    );
+    test_match_scalar_no_pattern!(
+        match_scalar_no_pattern_stringview,
+        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        StringViewArray,
+        DataType::Utf8View,
+        StringViewBuilder,
+        vec![None::<&str>, None, None, None]
+    );
 
     macro_rules! test_match_single_group_not_skip {
-        ($values:expr, $pattern:expr, $array_type:ty, $builder_type:ty) => {{
-            let array: $array_type = <$array_type>::from($values);
-            let pattern = <$array_type>::from(vec![$pattern]);
+        ($test_name:ident, $values:expr, $pattern:expr, $array_type:ty, $builder_type:ty, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let array: $array_type = <$array_type>::from($values);
+                let pattern: $array_type = <$array_type>::from(vec![$pattern]);
 
-            let actual = regexp_match(&array, &pattern, None).unwrap();
+                let actual = regexp_match(&array, &pattern, None).unwrap();
 
-            let elem_builder: $builder_type = <$builder_type>::new();
-            let mut expected_builder = ListBuilder::new(elem_builder);
-            expected_builder.values().append_value("foo");
-            expected_builder.append(true);
-            let expected = expected_builder.finish();
+                let elem_builder: $builder_type = <$builder_type>::new();
+                let mut expected_builder = ListBuilder::new(elem_builder);
 
-            let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
-            assert_eq!(&expected, result);
-        }};
+                for val in $expected {
+                    match val {
+                        Some(v) => {
+                            expected_builder.values().append_value(v);
+                            expected_builder.append(true);
+                        }
+                        None => expected_builder.append(false),
+                    }
+                }
+
+                let expected = expected_builder.finish();
+                let result = actual.as_any().downcast_ref::<ListArray>().unwrap();
+                assert_eq!(&expected, result);
+            }
+        };
     }
 
-    #[test]
-    fn match_single_group_not_skip() {
-        let values = vec![Some("foo"), Some("bar")];
-        let pattern = r"foo";
-
-        test_match_single_group_not_skip!(
-            values.clone(),
-            pattern,
-            StringArray,
-            GenericStringBuilder<i32>
-        );
-
-        test_match_single_group_not_skip!(
-            values.clone(),
-            pattern,
-            StringViewArray,
-            StringViewBuilder
-        );
-    }
+    test_match_single_group_not_skip!(
+        match_single_group_not_skip_string,
+        vec![Some("foo"), Some("bar")],
+        r"foo",
+        StringArray,
+        GenericStringBuilder<i32>,
+        vec![Some("foo")]
+    );
+    test_match_single_group_not_skip!(
+        match_single_group_not_skip_stringview,
+        vec![Some("foo"), Some("bar")],
+        r"foo",
+        StringViewArray,
+        StringViewBuilder,
+        vec![Some("foo")]
+    );
 
     macro_rules! test_flag_utf8 {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
