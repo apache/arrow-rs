@@ -32,7 +32,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             i128::MAX,
             i128::MIN,
         ])
-        .with_precision_and_scale(24, 2).unwrap(),
+        .with_precision_and_scale(24, 2)
+        .unwrap(),
     );
     let options = CastOptions::default();
     let d = black_box(decimals);
