@@ -781,9 +781,17 @@ impl WriterPropertiesBuilder {
 
     /// Should the writer coerce types to parquet native types (defaults to `false`).
     ///
+    /// Leaving this option the default `false` will ensure the exact same data
+    /// written to parquet using this library will be read.
+    ///
     /// Setting this option to `true` will result in parquet files that can be
-    /// read by more readers, but may lose precision for arrow types such as
-    /// [`DataType::Date64`] which have no direct corresponding Parquet type.
+    /// read by more readers, but potentially lose information in the process.
+    ///
+    /// * Types such as [`DataType::Date64`], which have no direct corresponding
+    ///   Parquet type, may be stored with lower precision.
+    ///
+    /// * The internal field names of [`List`] and [`Map`] will be renamed if
+    ///   necessary to match what is required by the newest Parquet specification.
     ///
     /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
     ///
