@@ -36,6 +36,7 @@ bench = false
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "std", "rc"], optional = true }
 bitflags = { version = "2.0.0", default-features = false, optional = true }
+criterion = { version = "0.5", default-features = false }
 
 [features]
 # Enable ffi support
