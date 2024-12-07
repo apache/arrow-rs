@@ -158,23 +158,22 @@ pub(crate) enum Error {
     Aborted,
 
     #[snafu(display("Failed to seek to position in file: {}", source))]
-    FileSeekError {
+    SeekFile {
         source: io::Error,
     },
 
     #[snafu(display("Failed to write to file: {}", source))]
-    FileWriteError {
+    WriteFile {
         source: io::Error,
     },
 
-    #[snafu(display("Failed to send data to writer for file at '{}': {}", path, source))]
-    DataSendError {
-        path: String,
-        source: tokio::sync::mpsc::error::SendError<(usize, Bytes)>,
+    #[snafu(display("Failed to send to channel: {}", source))]
+    UnableSendToChannel {
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     #[snafu(display("Failed to download file from '{}': {}", path, source))]
-    FileDownloadError {
+    DownloadFile {
         source: io::Error,
         path: String,
     },
@@ -1068,7 +1067,7 @@ async fn download_chunk(
                     continue;
                 }
                 Err(e) => {
-                    return Err(Error::FileDownloadError {
+                    return Err(Error::DownloadFile {
                         source: e.into(),
                         path: location.to_string(),
                     });
@@ -1079,10 +1078,7 @@ async fn download_chunk(
             sender
                 .send((offset, buffer))
                 .await
-                .map_err(|e| Error::DataSendError {
-                    path: location.to_string(),
-                    source: e,
-                })?;
+                .map_err(|e| Error::UnableSendToChannel { source: e.into() })?;
             offset += bytes_readed;
         }
 
@@ -1122,9 +1118,9 @@ async fn write_multi_chunks(
         }
 
         file.seek(SeekFrom::Start(offset as u64))
-            .map_err(|e| Error::FileSeekError { source: e })?;
+            .map_err(|e| Error::SeekFile { source: e })?;
         file.write_all(&buffer)
-            .map_err(|e| Error::FileWriteError { source: e })?;
+            .map_err(|e| Error::WriteFile { source: e })?;
 
         data += buffer.len() as u64;
     }
@@ -1243,7 +1239,7 @@ pub async fn download(
         GetResultPayload::File(mut source_file, _path) => {
             let mut file = file.try_clone().unwrap();
             written_bytes = std::io::copy(&mut source_file, &mut file)
-                .map_err(|e| Error::FileWriteError { source: e })?;
+                .map_err(|e| Error::WriteFile { source: e })?;
         }
     }
     Ok(written_bytes)
