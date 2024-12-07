@@ -790,7 +790,7 @@ impl WriterPropertiesBuilder {
     /// * Types such as [`DataType::Date64`], which have no direct corresponding
     ///   Parquet type, may be stored with lower precision.
     ///
-    /// * The internal field names of [`List`] and [`Map`] will be renamed if
+    /// * The internal field names of `List` and `Map` types will be renamed if
     ///   necessary to match what is required by the newest Parquet specification.
     ///
     /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
