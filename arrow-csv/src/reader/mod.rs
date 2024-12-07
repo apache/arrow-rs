@@ -241,7 +241,7 @@ pub struct Format {
 }
 
 impl Format {
-    /// Specify whether the CSV file has a header, defaults to `true`
+    /// Specify whether the CSV file has a header, defaults to `false`
     ///
     /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
