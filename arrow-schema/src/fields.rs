@@ -18,7 +18,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::{ArrowError, DataType, Field, FieldRef, SchemaBuilder};
+use crate::{ArrowError, DataType, Field, FieldRef};
 
 /// A cheaply cloneable, owned slice of [`FieldRef`]
 ///
@@ -255,33 +255,6 @@ impl Fields {
             .filter_map(|f| f.as_ref().cloned())
             .collect();
         Ok(filtered)
-    }
-
-    /// Remove a field by index and return it.
-    ///
-    /// # Panic
-    ///
-    /// Panics if `index` is out of bounds.
-    ///
-    /// # Example
-    /// ```
-    /// use arrow_schema::{DataType, Field, Fields};
-    /// let mut fields = Fields::from(vec![
-    ///   Field::new("a", DataType::Boolean, false),
-    ///   Field::new("b", DataType::Int8, false),
-    ///   Field::new("c", DataType::Utf8, false),
-    /// ]);
-    /// assert_eq!(fields.len(), 3);
-    /// assert_eq!(fields.remove(1), Field::new("b", DataType::Int8, false).into());
-    /// assert_eq!(fields.len(), 2);
-    /// ```
-    #[deprecated(since = "50.0.0", note = "Use SchemaBuilder::remove")]
-    #[doc(hidden)]
-    pub fn remove(&mut self, index: usize) -> FieldRef {
-        let mut builder = SchemaBuilder::from(Fields::from(&*self.0));
-        let field = builder.remove(index);
-        *self = builder.finish().fields;
-        field
     }
 }
 

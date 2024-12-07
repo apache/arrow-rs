@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
+use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
@@ -97,26 +97,6 @@ impl Buffer {
         let mut buffer = MutableBuffer::with_capacity(capacity);
         buffer.extend_from_slice(slice);
         buffer.into()
-    }
-
-    /// Creates a buffer from an existing aligned memory region (must already be byte-aligned), this
-    /// `Buffer` will free this piece of memory when dropped.
-    ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(since = "50.0.0", note = "Use Buffer::from_vec")]
-    pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
-        assert!(len <= capacity);
-        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
-        Buffer::build_with_arguments(ptr, len, Deallocation::Standard(layout))
     }
 
     /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
@@ -322,6 +302,8 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
+    ///
+    /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;

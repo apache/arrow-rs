@@ -434,33 +434,6 @@ impl Schema {
                 .iter()
                 .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
     }
-
-    /// Remove field by index and return it. Recommend to use [`SchemaBuilder`]
-    /// if you are looking to remove multiple columns, as this will save allocations.
-    ///
-    /// # Panic
-    ///
-    /// Panics if `index` is out of bounds.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// let mut schema = Schema::new(vec![
-    ///   Field::new("a", DataType::Boolean, false),
-    ///   Field::new("b", DataType::Int8, false),
-    ///   Field::new("c", DataType::Utf8, false),
-    /// ]);
-    /// assert_eq!(schema.fields.len(), 3);
-    /// assert_eq!(schema.remove(1), Field::new("b", DataType::Int8, false).into());
-    /// assert_eq!(schema.fields.len(), 2);
-    /// ```
-    #[deprecated(since = "50.0.0", note = "Use SchemaBuilder::remove")]
-    #[doc(hidden)]
-    #[allow(deprecated)]
-    pub fn remove(&mut self, index: usize) -> FieldRef {
-        self.fields.remove(index)
-    }
 }
 
 impl fmt::Display for Schema {
