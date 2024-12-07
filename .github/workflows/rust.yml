@@ -128,17 +128,17 @@ jobs:
         working-directory: arrow
         run: |
           # run `cd arrow; cargo msrv verify` to see problematic dependencies
-          cargo msrv --log-target stdout verify
+          cargo msrv verify --output-format=json
       - name: Check parquet
         working-directory: parquet
         run: |
           # run `cd parquet; cargo msrv verify` to see problematic dependencies
-          cargo msrv --log-target stdout verify
+          cargo msrv verify --output-format=json
       - name: Check arrow-flight
         working-directory: arrow-flight
         run: |
           # run `cd arrow-flight; cargo msrv verify` to see problematic dependencies
-          cargo msrv --log-target stdout verify
+          cargo msrv verify --output-format=json
       - name: Downgrade object_store dependencies
         working-directory: object_store
         # Necessary because tokio 1.30.0 updates MSRV to 1.63
@@ -150,4 +150,4 @@ jobs:
         working-directory: object_store
         run: |
           # run `cd object_store; cargo msrv verify` to see problematic dependencies
-          cargo msrv --log-target stdout verify
+          cargo msrv verify --output-format=json
