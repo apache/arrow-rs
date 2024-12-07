@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_read", 0, "Binary file to read data from a Parquet file.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")
