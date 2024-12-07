@@ -111,9 +111,13 @@ where
         O::Native::from_decimal(adjusted)
     };
 
-    Ok(match cast_options.safe {
-        true => array.unary_opt(f),
-        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
@@ -137,15 +141,20 @@ where
 
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
-    Ok(match cast_options.safe {
-        true => array.unary_opt(f),
-        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
 // Only support one type of decimal cast operations
 pub(crate) fn cast_decimal_to_decimal_same_type<T>(
     array: &PrimitiveArray<T>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -155,20 +164,11 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
-        Ordering::Equal => {
-            // the scale doesn't change, the native value don't need to be changed
+    let array: PrimitiveArray<T> =
+        if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
-        }
-        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )?,
-        Ordering::Less => {
-            // input_scale < output_scale
+        } else if input_scale < output_scale {
+            // the scale doesn't change, but precision may change and cause overflow
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
@@ -176,8 +176,15 @@ where
                 output_scale,
                 cast_options,
             )?
-        }
-    };
+        } else {
+            convert_to_smaller_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
+        };
 
     Ok(Arc::new(array.with_precision_and_scale(
         output_precision,
