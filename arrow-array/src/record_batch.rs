@@ -640,8 +640,8 @@ pub struct RecordBatchOptions {
     /// Option to skip schema checking when creating new record batches. This is intended for
     /// cases where the schema has already been checked or where more flexibility is required
     /// in downstream projects, such as allowing either Utf8 or Dictionary<_, Utf8> for a
-    /// schema with type Utf8. This option should not be used within DataFusion since it is
-    /// an invariant that all batches must have the same physical schema during execution.
+    /// schema with type Utf8. Using this option is likely to break compatibility with arrow-rs
+    /// kernels that operate on RecordBatch so should be used with caution.
     pub skip_schema_check: bool,
 }
 
