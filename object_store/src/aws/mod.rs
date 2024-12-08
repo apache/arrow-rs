@@ -494,6 +494,66 @@ mod tests {
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
     #[tokio::test]
+    async fn write_multipart_file_with_signature() {
+        maybe_skip_integration!();
+
+        let store = AmazonS3Builder::from_env()
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()
+            .unwrap();
+
+        let str = "test.bin";
+        let path = Path::parse(str).unwrap();
+        let opts = PutMultipartOpts::default();
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+
+        upload
+            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+            .await
+            .unwrap();
+        upload
+            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+            .await
+            .unwrap();
+
+        let res = upload.complete().await.unwrap();
+        assert!(res.e_tag.is_some(), "Should have valid etag");
+
+        store.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_multipart_file_with_signature_object_lock() {
+        maybe_skip_integration!();
+
+        let bucket = "test-object-lock";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()
+            .unwrap();
+
+        let str = "test.bin";
+        let path = Path::parse(str).unwrap();
+        let opts = PutMultipartOpts::default();
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+
+        upload
+            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+            .await
+            .unwrap();
+        upload
+            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+            .await
+            .unwrap();
+
+        let res = upload.complete().await.unwrap();
+        assert!(res.e_tag.is_some(), "Should have valid etag");
+
+        store.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn s3_test() {
         maybe_skip_integration!();
         let config = AmazonS3Builder::from_env();

@@ -29,7 +29,7 @@ use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
-    InitiateMultipartUploadResult, ListResponse,
+    InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
@@ -62,6 +62,7 @@ use std::sync::Arc;
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
+const ALGORITHM: &str = "x-amz-checksum-algorithm";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -390,10 +391,9 @@ impl<'a> Request<'a> {
             let payload_sha256 = sha256.finish();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
-                self.builder = self.builder.header(
-                    "x-amz-checksum-sha256",
-                    BASE64_STANDARD.encode(payload_sha256),
-                );
+                self.builder = self
+                    .builder
+                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(payload_sha256));
             }
             self.payload_sha256 = Some(payload_sha256);
         }
@@ -617,8 +617,15 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
-        let response = self
-            .request(Method::POST, location)
+        let mut request = self.request(Method::POST, location);
+        if let Some(algorithm) = self.config.checksum {
+            match algorithm {
+                Checksum::SHA256 => {
+                    request = request.header(ALGORITHM, "SHA256");
+                }
+            }
+        }
+        let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
@@ -669,8 +676,13 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
+        let checksum_sha256 = response
+            .headers()
+            .get(SHA256_CHECKSUM)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
 
-        let content_id = match is_copy {
+        let e_tag = match is_copy {
             false => get_etag(response.headers()).context(MetadataSnafu)?,
             true => {
                 let response = response
@@ -682,6 +694,17 @@ impl S3Client {
                 response.e_tag
             }
         };
+
+        let content_id = if self.config.checksum == Some(Checksum::SHA256) {
+            let meta = PartMetadata {
+                e_tag,
+                checksum_sha256,
+            };
+            quick_xml::se::to_string(&meta).unwrap()
+        } else {
+            e_tag
+        };
+
         Ok(PartId { content_id })
     }
 
