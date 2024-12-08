@@ -1129,10 +1129,6 @@ impl TransferOptions {
 }
 
 /// Default implementation for `TransferOptions`.
-///
-/// - `concurrent_tasks`: 1
-/// - `buffer_capacity`: Some(2)
-/// - `max_retries`: None
 impl Default for TransferOptions {
     fn default() -> Self {
         Self {
