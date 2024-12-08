@@ -621,11 +621,11 @@ impl S3Client {
         if let Some(algorithm) = self.config.checksum {
             match algorithm {
                 Checksum::SHA256 => {
-                    reqquest = reqquest.header(ALGORITHM, "SHA256");
+                    request = request.header(ALGORITHM, "SHA256");
                 }
             }
         }
-        let response = reqquest
+        let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
@@ -676,7 +676,7 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
-        let checksum = response
+        let checksum_sha256 = response
             .headers()
             .get(SHA256_CHECKSUM)
             .and_then(|v| v.to_str().ok())
@@ -696,7 +696,10 @@ impl S3Client {
         };
 
         let content_id = if self.config.checksum == Some(Checksum::SHA256) {
-            let meta = PartMetadata { e_tag, checksum };
+            let meta = PartMetadata {
+                e_tag,
+                checksum_sha256,
+            };
             quick_xml::se::to_string(&meta).unwrap()
         } else {
             e_tag
