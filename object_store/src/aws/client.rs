@@ -617,7 +617,7 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
-        let mut reqquest = self.request(Method::POST, location);
+        let mut request = self.request(Method::POST, location);
         if let Some(algorithm) = self.config.checksum {
             match algorithm {
                 Checksum::SHA256 => {
