@@ -22,30 +22,29 @@ use crate::PutPayload;
 use futures::future::BoxFuture;
 use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
-use snafu::Error as SnafuError;
-use snafu::Snafu;
+use std::error::Error as StdError;
 use std::time::{Duration, Instant};
 use tracing::info;
 
 /// Retry request error
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Received redirect without LOCATION, this normally indicates an incorrectly configured region"))]
+    #[error("Received redirect without LOCATION, this normally indicates an incorrectly configured region")]
     BareRedirect,
 
-    #[snafu(display("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    #[error("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body"))]
     Server {
         status: StatusCode,
         body: Option<String>,
     },
 
-    #[snafu(display("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    #[error("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body"))]
     Client {
         status: StatusCode,
         body: Option<String>,
     },
 
-    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
+    #[error("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}")]
     Reqwest {
         retries: usize,
         max_retries: usize,
