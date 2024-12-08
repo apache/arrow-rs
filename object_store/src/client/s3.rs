@@ -110,7 +110,7 @@ pub(crate) struct CompleteMultipartUpload {
 pub(crate) struct PartMetadata {
     pub e_tag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub checksum: Option<String>,
+    pub checksum_sha256: Option<String>,
 }
 
 impl From<Vec<PartId>> for CompleteMultipartUpload {
