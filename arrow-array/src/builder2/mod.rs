@@ -184,7 +184,7 @@ mod union_builder;
 
 pub use union_builder::*;
 
-use crate::ArrayRef;
+use crate::{Array, ArrayAccessor, ArrayRef};
 use std::any::Any;
 
 /// Trait for dealing with different array builders at runtime
@@ -235,7 +235,9 @@ use std::any::Any;
 ///     "🍎"
 /// );
 /// ```
-pub trait ArrayBuilder: Any + Send + Sync {
+pub trait SpecificArrayBuilder: Any + Send + Sync {
+    type Output: Array + ArrayAccessor;
+
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize;
 
@@ -245,10 +247,10 @@ pub trait ArrayBuilder: Any + Send + Sync {
     }
 
     /// Builds the array
-    fn finish(&mut self) -> ArrayRef;
+    fn finish(&mut self) -> Self::Output;
 
     /// Builds the array without resetting the underlying builder.
-    fn finish_cloned(&self) -> ArrayRef;
+    fn finish_cloned(&self) -> Self::Output;
 
     /// Returns the builder as a non-mutable `Any` reference.
     ///
@@ -266,9 +268,14 @@ pub trait ArrayBuilder: Any + Send + Sync {
 
     /// Returns the boxed builder as a box of `Any`.
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
+
+    // Append a value to the builder
+    fn append_value(&mut self, value: <Self::Output as ArrayAccessor>::Item);
 }
 
-impl ArrayBuilder for Box<dyn ArrayBuilder> {
+impl<T: Array + ArrayAccessor> SpecificArrayBuilder for Box<dyn SpecificArrayBuilder<Output = T>> {
+    type Output = T;
+
     fn len(&self) -> usize {
         (**self).len()
     }
@@ -295,6 +302,10 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
 
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+
+    fn append_value(&mut self, value: <Self::Output as ArrayAccessor>::Item) {
+        (**self).append_value(value)
     }
 }
 
