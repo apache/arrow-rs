@@ -617,15 +617,15 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
-        let mut reqquest = self.request(Method::POST, location);
+        let mut request = self.request(Method::POST, location);
         if let Some(algorithm) = self.config.checksum {
             match algorithm {
                 Checksum::SHA256 => {
-                    reqquest = reqquest.header(ALGORITHM, "SHA256");
+                    request = request.header(ALGORITHM, "SHA256");
                 }
             }
         }
-        let response = reqquest
+        let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
