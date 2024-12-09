@@ -254,6 +254,7 @@ pub mod temporal_conversions;
 pub mod timezone;
 mod trusted_len;
 pub mod types;
+pub mod builder2;
 
 #[cfg(test)]
 mod tests {
