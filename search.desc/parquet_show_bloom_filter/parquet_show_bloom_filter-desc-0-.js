@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_show_bloom_filter", 0, "Binary file to read bloom filter data from a Parquet file.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")
