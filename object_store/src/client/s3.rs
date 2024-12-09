@@ -110,7 +110,7 @@ pub(crate) struct CompleteMultipartUpload {
 pub(crate) struct PartMetadata {
     pub e_tag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub checksum: Option<String>,
+    pub checksum_sha256: Option<String>,
 }
 
 impl From<Vec<PartId>> for CompleteMultipartUpload {
@@ -124,13 +124,13 @@ impl From<Vec<PartId>> for CompleteMultipartUpload {
                     // fallback to old way
                     Err(_) => PartMetadata {
                         e_tag: part.content_id.clone(),
-                        checksum: None,
+                        checksum_sha256: None,
                     },
                 };
                 MultipartPart {
                     e_tag: md.e_tag,
                     part_number: part_idx + 1,
-                    checksum_sha256: md.checksum,
+                    checksum_sha256: md.checksum_sha256,
                 }
             })
             .collect();

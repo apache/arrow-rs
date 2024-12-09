@@ -676,7 +676,7 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
-        let checksum = response
+        let checksum_sha256 = response
             .headers()
             .get(SHA256_CHECKSUM)
             .and_then(|v| v.to_str().ok())
@@ -696,7 +696,10 @@ impl S3Client {
         };
 
         let content_id = if self.config.checksum == Some(Checksum::SHA256) {
-            let meta = PartMetadata { e_tag, checksum };
+            let meta = PartMetadata {
+                e_tag,
+                checksum_sha256,
+            };
             quick_xml::se::to_string(&meta).unwrap()
         } else {
             e_tag
