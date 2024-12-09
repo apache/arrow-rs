@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::{ArrayBuilder, BufferBuilder};
-use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
+use crate::builder2::{SpecificArrayBuilder};
+use crate::builder::{BufferBuilder};
+use crate::{Array, ArrayAccessor, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, OffsetBuffer};
 use arrow_schema::{Field, FieldRef};
@@ -85,20 +86,20 @@ use std::sync::Arc;
 /// [`LargeListBuilder`]: crate::builder::LargeListBuilder
 /// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
-pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
+pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: SpecificArrayBuilder> where for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor {
     offsets_builder: BufferBuilder<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     field: Option<FieldRef>,
 }
 
-impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListBuilder<O, T> {
+impl<O: OffsetSizeTrait, T: SpecificArrayBuilder + Default> Default for GenericListBuilder<O, T> where for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T> {
+impl<OffsetSize: OffsetSizeTrait, T: SpecificArrayBuilder> GenericListBuilder<OffsetSize, T> where for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor {
     /// Creates a new [`GenericListBuilder`] from a given values array builder
     pub fn new(values_builder: T) -> Self {
         let capacity = values_builder.len();
@@ -131,12 +132,15 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
         }
     }
 }
-
-impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> ArrayBuilder
+impl<OffsetSize, ValuesOutput, T: SpecificArrayBuilder> SpecificArrayBuilder
     for GenericListBuilder<OffsetSize, T>
 where
-    T: 'static,
+    OffsetSize: OffsetSizeTrait,
+    ValuesOutput: Array + ArrayAccessor,
+    T: 'static + SpecificArrayBuilder<Output = ValuesOutput>, for<'a> &'a ValuesOutput: ArrayAccessor
 {
+    type Output = GenericListArray<OffsetSize>;
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -158,19 +162,29 @@ where
     }
 
     /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<Self::Output> {
         Arc::new(self.finish())
     }
 
     /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<Self::Output> {
         Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        // our item is their output
+        self.values_builder.append_output(value.as_any().downcast_ref::<ValuesOutput>().unwrap());
+        self.append(true);
+    }
+
+    fn append_null(&mut self) {
+        self.append(false);
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T>
+impl<OffsetSize: OffsetSizeTrait, T: SpecificArrayBuilder> GenericListBuilder<OffsetSize, T>
 where
-    T: 'static,
+    T: 'static, for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor
 {
     /// Returns the child array builder as a mutable reference.
     ///
@@ -261,11 +275,6 @@ where
         self.extend(std::iter::once(Some(i)))
     }
 
-    pub fn append_list(&mut self, list: GenericListArray<OffsetSize>) {
-        self.values_builder.extend(list.values().iter());
-        self.append(true);
-    }
-
     /// Append a null to this [`GenericListBuilder`]
     ///
     /// See [`Self::append_value`] for an example use.
@@ -339,8 +348,8 @@ where
 impl<O, B, V, E> Extend<Option<V>> for GenericListBuilder<O, B>
 where
     O: OffsetSizeTrait,
-    B: ArrayBuilder + Extend<E>,
-    V: IntoIterator<Item = E>,
+    B: SpecificArrayBuilder + Extend<E>,
+    V: IntoIterator<Item = E>, for<'a> &'a <B as SpecificArrayBuilder>::Output: ArrayAccessor
 {
     #[inline]
     fn extend<T: IntoIterator<Item = Option<V>>>(&mut self, iter: T) {
@@ -359,7 +368,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, Int8Builder, ListBuilder};
+    use crate::builder2::{Int32Builder, Int8Builder, LargeListBuilder, ListBuilder, PrimitiveBuilder};
+    use crate::builder2::SpecificArrayBuilder;
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, ListArray};
@@ -446,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_list_array_builder_finish() {
-        let values_builder = Int32Array::builder(5);
+        let values_builder = Int32Array::builder2(5);
         let mut builder = ListBuilder::new(values_builder);
 
         builder.values().append_slice(&[1, 2, 3]);
@@ -559,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_boxed_primitive_array_builder() {
-        let values_builder = make_builder(&DataType::Int32, 5);
+        let values_builder = PrimitiveBuilder::<Int32Type>::with_capacity(5);
         let mut builder = ListBuilder::new(values_builder);
 
         builder
@@ -588,173 +598,26 @@ mod tests {
     #[test]
     fn test_boxed_list_list_array_builder() {
         // This test is same as `test_list_list_array_builder` but uses boxed builders.
-        let values_builder = make_builder(
-            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
-            10,
-        );
+        let values_builder = ListBuilder::with_capacity( Int32Builder::with_capacity(10), 10);
         test_boxed_generic_list_generic_list_array_builder::<i32>(values_builder);
     }
 
     #[test]
     fn test_boxed_large_list_large_list_array_builder() {
         // This test is same as `test_list_list_array_builder` but uses boxed builders.
-        let values_builder = make_builder(
-            &DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true))),
-            10,
+        test_boxed_generic_list_generic_list_array_builder(
+            LargeListBuilder::with_capacity(Int32Builder::with_capacity(10), 10),
         );
-        test_boxed_generic_list_generic_list_array_builder::<i64>(values_builder);
     }
 
-    fn test_boxed_generic_list_generic_list_array_builder<O: OffsetSizeTrait + PartialEq>(
-        values_builder: Box<dyn ArrayBuilder>,
-    ) {
-        let mut builder: GenericListBuilder<O, Box<dyn ArrayBuilder>> =
-            GenericListBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
+    fn test_boxed_generic_list_generic_list_array_builder<O: OffsetSizeTrait + PartialEq, O2: OffsetSizeTrait, ValuesBuilder: SpecificArrayBuilder>(
+        values_builder: GenericListBuilder<O2, ValuesBuilder>,
+    ) where for<'a> &'a <ValuesBuilder as SpecificArrayBuilder>::Output: ArrayAccessor {
+        let mut builder: GenericListBuilder<O, GenericListBuilder<O2, ValuesBuilder>> =
+            GenericListBuilder::<O, GenericListBuilder<O2, ValuesBuilder>>::new(values_builder);
 
         //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(1);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(2);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(true);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(3);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(4);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(true);
-        builder.append(true);
-
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(5);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(6);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an (Large)ListBuilder")
-            .append_value(7);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(true);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(false);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(8);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(true);
-        builder.append(true);
-
-        builder.append(false);
-
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(9);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .values()
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("should be an Int32Builder")
-            .append_value(10);
-        builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
-            .expect("should be an (Large)ListBuilder")
-            .append(true);
-        builder.append(true);
+        builder.append_value(vec![vec![1, 2], vec![3, 4]]);
 
         let l1 = builder.finish();
 

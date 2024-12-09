@@ -152,8 +152,6 @@ pub use arrow_buffer::BooleanBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
-mod buffer_builder;
-pub use buffer_builder::*;
 mod fixed_size_binary_builder;
 pub use fixed_size_binary_builder::*;
 mod fixed_size_list_builder;
@@ -162,30 +160,14 @@ mod generic_bytes_builder;
 pub use generic_bytes_builder::*;
 mod generic_list_builder;
 pub use generic_list_builder::*;
-mod map_builder;
-pub use map_builder::*;
-mod null_builder;
-pub use null_builder::*;
 mod primitive_builder;
 pub use primitive_builder::*;
-mod primitive_dictionary_builder;
-pub use primitive_dictionary_builder::*;
-mod primitive_run_builder;
-pub use primitive_run_builder::*;
-mod struct_builder;
-pub use struct_builder::*;
-mod generic_bytes_dictionary_builder;
-pub use generic_bytes_dictionary_builder::*;
-mod generic_byte_run_builder;
-pub use generic_byte_run_builder::*;
 mod generic_bytes_view_builder;
 pub use generic_bytes_view_builder::*;
-mod union_builder;
-
-pub use union_builder::*;
 
 use crate::{Array, ArrayAccessor, ArrayRef};
 use std::any::Any;
+use std::sync::Arc;
 
 /// Trait for dealing with different array builders at runtime
 ///
@@ -235,8 +217,11 @@ use std::any::Any;
 ///     "🍎"
 /// );
 /// ```
-pub trait SpecificArrayBuilder: Any + Send + Sync {
-    type Output: Array + ArrayAccessor;
+///
+// TODO - require extend or allow to append from iterator
+trait SpecificArrayBuilder: Any + Send + Sync where for<'a> &'a <Self as SpecificArrayBuilder>::Output: ArrayAccessor {
+    type Output: Array;
+
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize;
@@ -247,10 +232,10 @@ pub trait SpecificArrayBuilder: Any + Send + Sync {
     }
 
     /// Builds the array
-    fn finish(&mut self) -> Self::Output;
+    fn finish(&mut self) -> Arc<Self::Output>;
 
     /// Builds the array without resetting the underlying builder.
-    fn finish_cloned(&self) -> Self::Output;
+    fn finish_cloned(&self) -> Arc<Self::Output>;
 
     /// Returns the builder as a non-mutable `Any` reference.
     ///
@@ -270,44 +255,88 @@ pub trait SpecificArrayBuilder: Any + Send + Sync {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any>;
 
     // Append a value to the builder
-    fn append_value(&mut self, value: <Self::Output as ArrayAccessor>::Item);
-}
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item);
 
-impl<T: Array + ArrayAccessor> SpecificArrayBuilder for Box<dyn SpecificArrayBuilder<Output = T>> {
-    type Output = T;
+    /// Appends a null slot into the builder
+    fn append_null(&mut self) ;
 
-    fn len(&self) -> usize {
-        (**self).len()
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        for _ in 0..n {
+            self.append_null();
+        }
     }
 
-    fn is_empty(&self) -> bool {
-        (**self).is_empty()
+    /// Appends an `Option<T>` into the builder
+    #[inline]
+    fn append_option(&mut self, v: Option<<&Self::Output as ArrayAccessor>::Item>) {
+        match v {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
     }
 
-    fn finish(&mut self) -> ArrayRef {
-        (**self).finish()
-    }
-
-    fn finish_cloned(&self) -> ArrayRef {
-        (**self).finish_cloned()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        (**self).as_any()
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        (**self).as_any_mut()
-    }
-
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
-    fn append_value(&mut self, value: <Self::Output as ArrayAccessor>::Item) {
-        (**self).append_value(value)
+    #[inline]
+    fn append_output(&mut self, output: &Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.append_value(output.value(i));
+            }
+        }
     }
 }
+
+// impl<T> SpecificArrayBuilder for Box<dyn SpecificArrayBuilder<Output = dyn Array>>
+// where
+//     T: Array + 'static,
+//     for<'a> &'a T: ArrayAccessor,
+// {
+//     type Output = dyn Array;
+//
+//     fn len(&self) -> usize {
+//         (**self).len()
+//     }
+//
+//     fn is_empty(&self) -> bool {
+//         (**self).is_empty()
+//     }
+//
+//     fn finish(&mut self) -> Arc<Self::Output> {
+//         (**self).finish()
+//     }
+//
+//     fn finish_cloned(&self) -> Arc<Self::Output> {
+//         (**self).finish_cloned()
+//     }
+//
+//     fn as_any(&self) -> &dyn Any {
+//         (**self).as_any()
+//     }
+//
+//     fn as_any_mut(&mut self) -> &mut dyn Any {
+//         (**self).as_any_mut()
+//     }
+//
+//     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+//         self
+//     }
+//
+//     fn append_value(&mut self, value: <Self::Output as ArrayAccessor>::Item) {
+//         (**self).append_value(value)
+//     }
+//
+//     fn append_null(&mut self) {
+//         (**self).append_null()
+//     }
+//
+//     fn append_option(&mut self, v: Option<<Self::Output as ArrayAccessor>::Item>) {
+//         (**self).append_option(v)
+//     }
+// }
 
 /// Builder for [`ListArray`](crate::array::ListArray)
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;

@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::{ArrayBuilder, BufferBuilder};
+use crate::builder2::{SpecificArrayBuilder};
+use crate::builder::BufferBuilder;
 use crate::types::*;
-use crate::{ArrayRef, PrimitiveArray};
+use crate::{ArrayAccessor, ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -100,7 +101,9 @@ pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     data_type: DataType,
 }
 
-impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
+impl<T: ArrowPrimitiveType> SpecificArrayBuilder for PrimitiveBuilder<T> {
+    type Output = PrimitiveArray<T>;
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -122,13 +125,29 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     }
 
     /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<Self::Output> {
         Arc::new(self.finish())
     }
 
     /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<Self::Output> {
         Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        self.append_value(value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        self.append_nulls(n)
+    }
+
+    fn append_output(&mut self, output: &Self::Output) {
+        self.extend(output.iter())
     }
 }
 

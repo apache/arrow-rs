@@ -25,10 +25,10 @@ use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 
-use crate::builder2::ArrayBuilder;
+use crate::builder2::SpecificArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{ArrayAccessor, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -426,16 +426,18 @@ impl<T: ByteViewType + ?Sized> std::fmt::Debug for GenericByteViewBuilder<T> {
     }
 }
 
-impl<T: ByteViewType + ?Sized> ArrayBuilder for GenericByteViewBuilder<T> {
+impl<T: ByteViewType + ?Sized> SpecificArrayBuilder for GenericByteViewBuilder<T> {
+    type Output = GenericByteViewArray<T>;
+
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
     }
 
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<Self::Output> {
         Arc::new(self.finish())
     }
 
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<Self::Output> {
         Arc::new(self.finish_cloned())
     }
 
@@ -449,6 +451,14 @@ impl<T: ByteViewType + ?Sized> ArrayBuilder for GenericByteViewBuilder<T> {
 
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        self.append_value(value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
     }
 }
 

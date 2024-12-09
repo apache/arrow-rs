@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::{ArrayBuilder, BooleanBufferBuilder};
-use crate::{ArrayRef, BooleanArray};
+use crate::builder2::{SpecificArrayBuilder, BooleanBufferBuilder};
+use crate::{ArrayAccessor, ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -187,37 +187,6 @@ impl BooleanBuilder {
     }
 }
 
-impl ArrayBuilder for BooleanBuilder {
-    /// Returns the builder as a non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as a mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
-    /// Returns the number of array slots in the builder
-    fn len(&self) -> usize {
-        self.values_builder.len()
-    }
-
-    /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
-        Arc::new(self.finish())
-    }
-
-    /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
-        Arc::new(self.finish_cloned())
-    }
-}
 
 impl Extend<Option<bool>> for BooleanBuilder {
     #[inline]

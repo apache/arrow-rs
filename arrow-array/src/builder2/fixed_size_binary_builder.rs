@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::{ArrayBuilder, UInt8BufferBuilder};
-use crate::{ArrayRef, FixedSizeBinaryArray};
+use crate::builder2::{SpecificArrayBuilder};
+use crate::builder::{UInt8BufferBuilder};
+use crate::{ArrayAccessor, ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -122,7 +123,9 @@ impl FixedSizeBinaryBuilder {
     }
 }
 
-impl ArrayBuilder for FixedSizeBinaryBuilder {
+impl SpecificArrayBuilder for FixedSizeBinaryBuilder {
+    type Output = FixedSizeBinaryArray;
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -144,14 +147,26 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
     }
 
     /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<FixedSizeBinaryArray> {
         Arc::new(self.finish())
     }
 
     /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<FixedSizeBinaryArray> {
         Arc::new(self.finish_cloned())
     }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        // TODO - should panic?
+        //        should we document it or return a Result?
+        self.append_value(value).expect("append value failed");
+    }
+
+    fn append_null(&mut self) {
+        self.append_null();
+    }
+
+    // TODO - implement append nulls with better performance?
 }
 
 #[cfg(test)]

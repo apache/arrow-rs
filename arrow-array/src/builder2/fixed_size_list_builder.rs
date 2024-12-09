@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::ArrayBuilder;
-use crate::{ArrayRef, FixedSizeListArray};
+use crate::builder2::SpecificArrayBuilder;
+use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{Field, FieldRef};
 use std::any::Any;
@@ -62,14 +62,14 @@ use std::sync::Arc;
 /// ```
 ///
 #[derive(Debug)]
-pub struct FixedSizeListBuilder<T: ArrayBuilder> {
+pub struct FixedSizeListBuilder<T: SpecificArrayBuilder> where for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor {
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     list_len: i32,
     field: Option<FieldRef>,
 }
 
-impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
+impl<T: SpecificArrayBuilder> FixedSizeListBuilder<T> where for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor {
     /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
     /// `value_length` is the number of values within each array
     pub fn new(values_builder: T, value_length: i32) -> Self {
@@ -107,10 +107,14 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     }
 }
 
-impl<T: ArrayBuilder> ArrayBuilder for FixedSizeListBuilder<T>
+impl<ValuesOutput, T> SpecificArrayBuilder for FixedSizeListBuilder<T>
 where
-    T: 'static,
+    ValuesOutput: Array,
+    T: 'static + SpecificArrayBuilder<Output = ValuesOutput>,
+    for<'a> &'a ValuesOutput: ArrayAccessor
 {
+    type Output = FixedSizeListArray;
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -132,19 +136,31 @@ where
     }
 
     /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<Self::Output> {
         Arc::new(self.finish())
     }
 
     /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<Self::Output> {
         Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        // our item is their output
+        self.values_builder.append_output(value.as_any().downcast_ref::<ValuesOutput>().unwrap());
+        self.append(true);
+    }
+
+    fn append_null(&mut self) {
+        // TODO - make sure we should append nulls to the values builder
+        self.values_builder.append_nulls(self.list_len as usize);
+        self.append(false);
     }
 }
 
-impl<T: ArrayBuilder> FixedSizeListBuilder<T>
+impl<T: SpecificArrayBuilder> FixedSizeListBuilder<T>
 where
-    T: 'static,
+    T: 'static, for<'a> &'a <T as SpecificArrayBuilder>::Output: ArrayAccessor
 {
     /// Returns the child array builder as a mutable reference.
     ///
@@ -220,14 +236,14 @@ mod tests {
     use super::*;
     use arrow_schema::DataType;
 
-    use crate::builder::Int32Builder;
+    use crate::builder2::{Int32Builder, PrimitiveBuilder};
     use crate::Array;
     use crate::Int32Array;
 
     fn make_list_builder(
         include_null_element: bool,
         include_null_in_values: bool,
-    ) -> FixedSizeListBuilder<crate::builder::PrimitiveBuilder<crate::types::Int32Type>> {
+    ) -> FixedSizeListBuilder<PrimitiveBuilder<crate::types::Int32Type>> {
         let values_builder = Int32Builder::new();
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
@@ -415,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_with_field_empty() {
-        let values_builder = Int32Array::builder(0);
+        let values_builder = Int32Array::builder2(0);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3).with_field(Field::new(
             "list_item",
             DataType::Int32,
@@ -429,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_cloned_with_field_empty() {
-        let values_builder = Int32Array::builder(0);
+        let values_builder = Int32Array::builder2(0);
         let builder = FixedSizeListBuilder::new(values_builder, 3).with_field(Field::new(
             "list_item",
             DataType::Int32,
@@ -443,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_empty() {
-        let values_builder = Int32Array::builder(5);
+        let values_builder = Int32Array::builder2(5);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
         assert!(builder.is_empty());
         let arr = builder.finish();
@@ -453,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_list_array_builder_finish() {
-        let values_builder = Int32Array::builder(5);
+        let values_builder = Int32Array::builder2(5);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
         builder.values().append_slice(&[1, 2, 3]);
@@ -477,7 +493,7 @@ mod tests {
         expected = "Length of the child array (10) must be the multiple of the value length (3) and the array length (3)."
     )]
     fn test_fixed_size_list_array_builder_fail() {
-        let values_builder = Int32Array::builder(5);
+        let values_builder = Int32Array::builder2(5);
         let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
         builder.values().append_slice(&[1, 2, 3]);

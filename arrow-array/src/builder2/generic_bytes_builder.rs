@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder2::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
+use crate::builder2::{SpecificArrayBuilder};
+use crate::builder::{BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
@@ -196,19 +197,21 @@ impl<T: ByteArrayType> Default for GenericByteBuilder<T> {
     }
 }
 
-impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
+impl<T: ByteArrayType> SpecificArrayBuilder for GenericByteBuilder<T> {
+    type Output = GenericByteArray<T>;
+
     /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
     }
 
     /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
+    fn finish(&mut self) -> Arc<Self::Output> {
         Arc::new(self.finish())
     }
 
     /// Builds the array without resetting the builder.
-    fn finish_cloned(&self) -> ArrayRef {
+    fn finish_cloned(&self) -> Arc<Self::Output> {
         Arc::new(self.finish_cloned())
     }
 
@@ -225,6 +228,14 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the boxed builder as a box of `Any`.
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+
+    fn append_value(&mut self, value: <&Self::Output as ArrayAccessor>::Item) {
+        self.append_value(value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
     }
 }
 
