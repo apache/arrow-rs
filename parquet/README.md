@@ -36,7 +36,7 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 The `parquet` crate follows the [SemVer standard] defined by Cargo and works well
 within the Rust crate ecosystem. See the [repository README] for more details on
-the release schedule and version.
+the release schedule, version and deprecation policy.
 
 [semver standard]: https://doc.rust-lang.org/cargo/reference/semver.html
 [repository readme]: https://github.com/apache/arrow-rs
