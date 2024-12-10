@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::ArrayBuilder;
+use crate::builder::{SpecificArrayBuilder, ArrayBuilder};
 use crate::{ArrayRef, NullArray};
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
@@ -143,6 +143,43 @@ impl ArrayBuilder for NullBuilder {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+}
+
+impl SpecificArrayBuilder for NullBuilder {
+    type Output = NullArray;
+    type Item<'a> = ();
+
+    fn finish(&mut self) -> Arc<Self::Output> {
+        Arc::new(self.finish())
+    }
+
+    fn finish_cloned(&self) -> Arc<Self::Output> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value<'a>(&'a mut self, value: Self::Item<'a>) {
+        self.append_null();
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_null();
+    }
+
+    fn append_null(&mut self) {
+        self.append_null();
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        self.len += output.len();
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        self.append_nulls(n)
+    }
+
+    fn append_option<'a>(&'a mut self, v: Option<Self::Item<'a>>) {
+        self.append_null()
     }
 }
 
