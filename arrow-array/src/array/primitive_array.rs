@@ -1197,6 +1197,19 @@ impl<T: ArrowPrimitiveType> ArrayAccessor for &PrimitiveArray<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> ArrayAccessor for PrimitiveArray<T> {
+    type Item = T::Native;
+
+    fn value(&self, index: usize) -> Self::Item {
+        self.value(index)
+    }
+
+    #[inline]
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        self.value_unchecked(index)
+    }
+}
+
 impl<T: ArrowTemporalType> PrimitiveArray<T>
 where
     i64: From<T::Native>,
