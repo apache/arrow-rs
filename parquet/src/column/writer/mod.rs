@@ -1448,7 +1448,19 @@ fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
             if str::from_utf8(&data).is_ok() {
                 return Some(data);
             }
-            data[idx] = original;
+            // Incrementing "original" did not yield a valid unicode character, so it overflowed
+            // its available bits. If it was a continuation byte (b10xxxxxx) then set to min
+            // continuation (b10000000). Otherwise it was the first byte so set the entire char
+            // to all zeros.
+            if original & 0xc0u8 == 0x80u8 {
+                data[idx] = 0x80u8;
+            } else {
+                let byte_width = original.leading_ones() as usize;
+                match byte_width {
+                    0 => data[idx] = 0,
+                    _ => data[idx..idx + byte_width].fill(0u8),
+                }
+            }
         }
     }
 
@@ -1458,6 +1470,7 @@ fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use crate::file::properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH;
+    use core::str;
     use rand::distributions::uniform::SampleUniform;
     use std::sync::Arc;
 
@@ -3136,39 +3149,64 @@ mod tests {
 
     #[test]
     fn test_increment_utf8() {
-        // Basic ASCII case
-        let v = increment_utf8("hello".as_bytes().to_vec()).unwrap();
-        assert_eq!(&v, "hellp".as_bytes());
+        let test_inc = |o: &str, expected: &str| {
+            if let Ok(v) = String::from_utf8(increment_utf8(o.as_bytes().to_vec()).unwrap()) {
+                // Got the expected result...
+                assert_eq!(v, expected);
+                // and it's greater than the original string
+                assert!(*v > *o);
+                // Also show that BinaryArray level comparison works here
+                let mut greater = ByteArray::new();
+                greater.set_data(Bytes::from(v));
+                let mut original = ByteArray::new();
+                original.set_data(Bytes::from(o.as_bytes().to_vec()));
+                assert!(greater > original);
+            } else {
+                panic!("Expected incremented UTF8 string to also be valid.");
+            }
+        };
 
-        // Also show that BinaryArray level comparison works here
-        let mut greater = ByteArray::new();
-        greater.set_data(Bytes::from(v));
-        let mut original = ByteArray::new();
-        original.set_data(Bytes::from("hello".as_bytes().to_vec()));
-        assert!(greater > original);
+        // Basic ASCII case
+        test_inc("hello", "hellp");
+
+        // 1-byte ending in max 1-byte
+        test_inc("a\u{7f}", "b\x00");
+
+        // 1-byte max should not truncate as it would need 2-byte code points
+        assert!(increment_utf8("\u{7f}\u{7f}".as_bytes().to_vec()).is_none());
 
         // UTF8 string
-        let s = "❤️🧡💛💚💙💜";
-        let v = increment_utf8(s.as_bytes().to_vec()).unwrap();
+        test_inc("❤️🧡💛💚💙💜", "❤️🧡💛💚💙💝");
 
-        if let Ok(new) = String::from_utf8(v) {
-            assert_ne!(&new, s);
-            assert_eq!(new, "❤️🧡💛💚💙💝");
-            assert!(new.as_bytes().last().unwrap() > s.as_bytes().last().unwrap());
-        } else {
-            panic!("Expected incremented UTF8 string to also be valid.")
-        }
+        // 2-byte without overflow
+        test_inc("éééé", "éééê");
 
-        // Max UTF8 character - should be a No-Op
-        let s = char::MAX.to_string();
-        assert_eq!(s.len(), 4);
-        let v = increment_utf8(s.as_bytes().to_vec());
-        assert!(v.is_none());
+        // 2-byte that overflows lowest byte
+        test_inc("\u{ff}\u{ff}", "\u{ff}\u{100}");
 
-        // Handle multi-byte UTF8 characters
-        let s = "a\u{10ffff}";
-        let v = increment_utf8(s.as_bytes().to_vec());
-        assert_eq!(&v.unwrap(), "b\u{10ffff}".as_bytes());
+        // 2-byte ending in max 2-byte
+        test_inc("a\u{7ff}", "b\x00\x00");
+
+        // Max 2-byte should not truncate as it would need 3-byte code points
+        assert!(increment_utf8("\u{7ff}\u{7ff}".as_bytes().to_vec()).is_none());
+
+        // 3-byte without overflow
+        test_inc("ࠀࠀ", "ࠀࠁ");
+
+        // 3-byte ending in max 3-byte
+        test_inc("a\u{ffff}", "b\x00\x00\x00");
+
+        // Max 3-byte should not truncate as it would need 4-byte code points
+        assert!(increment_utf8("\u{ffff}\u{ffff}".as_bytes().to_vec()).is_none());
+
+        // 4-byte without overflow
+        test_inc("𐀀𐀀", "𐀀𐀁");
+
+        // 4-byte ending in max unicode
+        test_inc("a\u{10ffff}", "b\x00\x00\x00\x00");
+
+        // Max 4-byte should not truncate
+        assert!(increment_utf8("\u{10ffff}\u{10ffff}".as_bytes().to_vec()).is_none());
     }
 
     #[test]
@@ -3178,7 +3216,6 @@ mod tests {
         let r = truncate_utf8(data, data.as_bytes().len()).unwrap();
         assert_eq!(r.len(), data.as_bytes().len());
         assert_eq!(&r, data.as_bytes());
-        println!("len is {}", data.len());
 
         // We slice it away from the UTF8 boundary
         let r = truncate_utf8(data, 13).unwrap();
@@ -3187,6 +3224,44 @@ mod tests {
 
         // One multi-byte code point, and a length shorter than it, so we can't slice it
         let r = truncate_utf8("\u{0836}", 1);
+        assert!(r.is_none());
+
+        // test truncate and increment for max bounds on utf-8 stats
+        // 7-bit (i.e. ASCII)
+        let r = truncate_utf8("yyyyyyyyy", 8)
+            .and_then(increment_utf8)
+            .unwrap();
+        assert_eq!(&r, "yyyyyyyz".as_bytes());
+
+        // 2-byte without overflow
+        let r = truncate_utf8("ééééé", 8).and_then(increment_utf8).unwrap();
+        assert_eq!(&r, "éééê".as_bytes());
+
+        // 2-byte that overflows lowest byte
+        let r = truncate_utf8("\u{ff}\u{ff}\u{ff}\u{ff}\u{ff}", 8)
+            .and_then(increment_utf8)
+            .unwrap();
+        assert_eq!(&r, "\u{ff}\u{ff}\u{ff}\u{100}".as_bytes());
+
+        // max 2-byte should not truncate as it would need 3-byte code points
+        let r = truncate_utf8("߿߿߿߿߿", 8).and_then(increment_utf8);
+        assert!(r.is_none());
+
+        // 3-byte without overflow
+        let r = truncate_utf8("ࠀࠀࠀ", 8).and_then(increment_utf8).unwrap();
+        assert_eq!(&r, "ࠀࠁ".as_bytes());
+        assert_eq!(r.len(), 6);
+
+        // max 3-byte should not truncate as it would need 4-byte code points
+        let r = truncate_utf8("\u{ffff}\u{ffff}\u{ffff}", 8).and_then(increment_utf8);
+        assert!(r.is_none());
+
+        // 4-byte without overflow
+        let r = truncate_utf8("𐀀𐀀𐀀", 8).and_then(increment_utf8).unwrap();
+        assert_eq!(&r, "𐀀𐀁".as_bytes());
+
+        // max 4-byte should not truncate
+        let r = truncate_utf8("\u{10ffff}\u{10ffff}", 8).and_then(increment_utf8);
         assert!(r.is_none());
     }
 
