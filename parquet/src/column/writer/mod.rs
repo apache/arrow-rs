@@ -555,12 +555,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// of the current memory usage and not the final anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {
-        self.data_pages
-            .iter()
-            .map(|page| page.data().len())
-            .sum::<usize>()
-            + self.column_metrics.total_bytes_written as usize
-            + self.encoder.estimated_memory_size()
+        self.column_metrics.total_bytes_written as usize + self.encoder.estimated_memory_size()
     }
 
     /// Returns total number of bytes written by this column writer so far.
@@ -579,7 +574,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// anticipated encoded size.
     #[cfg(feature = "arrow")]
     pub(crate) fn get_estimated_total_bytes(&self) -> u64 {
-        self.column_metrics.total_bytes_written
+        self.data_pages
+            .iter()
+            .map(|page| page.data().len() as u64)
+            .sum::<u64>()
+            + self.column_metrics.total_bytes_written
             + self.encoder.estimated_data_page_size() as u64
             + self.encoder.estimated_dict_page_size().unwrap_or_default() as u64
     }
@@ -3428,22 +3427,23 @@ mod tests {
     }
 
     #[test]
-    fn test_column_writer_memory_size() {
+    #[cfg(feature = "arrow")]
+    fn test_column_writer_get_estimated_total_bytes() {
         let page_writer = get_test_page_writer();
         let props = Default::default();
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
-        assert_eq!(writer.memory_size(), 256);
+        assert_eq!(writer.get_estimated_total_bytes(), 0);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
         writer.add_data_page().unwrap();
-        let size_with_one_page = writer.memory_size();
-        assert_eq!(size_with_one_page, 256 + 20);
+        let size_with_one_page = writer.get_estimated_total_bytes();
+        assert_eq!(size_with_one_page, 20);
 
         writer.write_batch(&[5, 6, 7, 8], None, None).unwrap();
         writer.add_data_page().unwrap();
-        let size_with_two_pages = writer.memory_size();
+        let size_with_two_pages = writer.get_estimated_total_bytes();
         // different pages have different compressed lengths
-        assert_eq!(size_with_two_pages, 256 + 20 + 21);
+        assert_eq!(size_with_two_pages, 20 + 21);
     }
 
     fn write_multiple_pages<T: DataType>(
