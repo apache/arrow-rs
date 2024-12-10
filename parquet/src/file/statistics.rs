@@ -432,7 +432,7 @@ impl Statistics {
     /// Note: Versions of this library prior to `53.0.0` returned 0 if the null count was
     /// not available. This method returns `None` in that case.
     ///
-    /// Also, versions of this library prior to `53.0.0` did not store the null count in the
+    /// Also, versions of this library prior to `53.1.0` did not store the null count in the
     /// statistics if the null count was `0`.
     ///
     /// To preserve the prior behavior and read null counts properly from older files
