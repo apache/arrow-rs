@@ -17,6 +17,7 @@
 
 //! Module for working with Parquet file footers.
 
+use crate::encryption::ciphers::FileDecryptionProperties;
 use crate::errors::Result;
 use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE};
 
@@ -52,13 +53,16 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 /// Decodes [`ParquetMetaData`] from the provided bytes.
 ///
 /// Typically this is used to decode the metadata from the end of a parquet
-/// file. The format of `buf` is the Thift compact binary protocol, as specified
+/// file. The format of `buf` is the Thrift compact binary protocol, as specified
 /// by the [Parquet Spec].
 ///
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_metadata")]
-pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-    ParquetMetaDataReader::decode_metadata(buf)
+pub fn decode_metadata(
+    buf: &[u8],
+    file_decryption_properties: Option<FileDecryptionProperties>,
+) -> Result<ParquetMetaData> {
+    ParquetMetaDataReader::decode_metadata(buf, file_decryption_properties)
 }
 
 /// Decodes the Parquet footer returning the metadata length in bytes

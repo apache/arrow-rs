@@ -127,13 +127,15 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let (metadata, remainder) = if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            (ParquetMetaDataReader::decode_metadata(&meta)?, None)
+            // TODO: this won't decrypt
+            (ParquetMetaDataReader::decode_metadata(&meta, None)?, None)
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
 
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             (
-                ParquetMetaDataReader::decode_metadata(slice)?,
+                // TODO: this won't decrypt
+                ParquetMetaDataReader::decode_metadata(slice, None)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             )
         };
