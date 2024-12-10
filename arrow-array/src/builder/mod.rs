@@ -184,8 +184,9 @@ mod union_builder;
 
 pub use union_builder::*;
 
-use crate::ArrayRef;
+use crate::{Array, ArrayRef};
 use std::any::Any;
+use std::sync::Arc;
 
 /// Trait for dealing with different array builders at runtime
 ///
@@ -296,6 +297,46 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+}
+
+pub trait SpecificArrayBuilder: Any + Send + Sync + ArrayBuilder {
+    type Output: Array;
+    type Item<'a>;
+
+    /// Builds the array
+    fn finish(&mut self) -> Arc<Self::Output>;
+
+    /// Builds the array without resetting the underlying builder.
+    fn finish_cloned(&self) -> Arc<Self::Output>;
+
+    // Append a value to the builder
+    fn append_value<'a>(&'a mut self, value: Self::Item<'a>);
+
+    // Append a value to the builder
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>);
+
+    /// Appends a null slot into the builder
+    fn append_null(&mut self);
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        for _ in 0..n {
+            self.append_null();
+        }
+    }
+
+    /// Appends an `Option<T>` into the builder
+    #[inline]
+    fn append_option<'a>(&'a mut self, v: Option<Self::Item<'a>>) {
+        match v {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
+    }
+
+    #[inline]
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output);
 }
 
 /// Builder for [`ListArray`](crate::array::ListArray)

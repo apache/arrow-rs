@@ -537,6 +537,18 @@ impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for GenericListArray<OffsetSize> {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        self.value(index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        self.value_unchecked(index)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSize> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;

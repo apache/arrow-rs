@@ -352,6 +352,18 @@ impl ArrayAccessor for &BooleanArray {
     }
 }
 
+impl ArrayAccessor for BooleanArray {
+    type Item = bool;
+
+    fn value(&self, index: usize) -> Self::Item {
+        self.value(index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        self.value_unchecked(index)
+    }
+}
+
 impl From<Vec<bool>> for BooleanArray {
     fn from(data: Vec<bool>) -> Self {
         let mut mut_buf = MutableBuffer::new_null(data.len());

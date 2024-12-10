@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::{ArrayBuilder, BufferBuilder, SpecificArrayBuilder};
 use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, OffsetBuffer};
@@ -165,6 +165,59 @@ where
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+}
+
+impl<OffsetSize, T: SpecificArrayBuilder> SpecificArrayBuilder for GenericListBuilder<OffsetSize, T>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    type Output = GenericListArray<OffsetSize>;
+    type Item<'a> = T::Output;
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> Arc<GenericListArray<OffsetSize>> {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> Arc<GenericListArray<OffsetSize>> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value<'a>(&'a mut self, value: Self::Item<'a>) {
+        // our item is their output
+        self.values_builder
+            .append_output(value.as_any().downcast_ref::<Self::Item<'a>>().unwrap());
+        self.append(true);
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.values_builder
+            .append_output(value.as_any().downcast_ref::<Self::Item<'a>>().unwrap());
+        self.append(true);
+    }
+
+    fn append_null(&mut self) {
+        self.append(false);
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                let current_value = output.value(i);
+                self.values_builder.append_output(
+                    current_value
+                        .as_any()
+                        .downcast_ref::<Self::Item<'a>>()
+                        .unwrap(),
+                );
+                self.append(true);
+            }
+        }
     }
 }
 
@@ -353,11 +406,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::ArrowNativeType;
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, ListBuilder};
+    use crate::builder::{make_builder, Int32Builder, ListBuilder, PrimitiveBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::Int32Array;
+    use crate::{Int32Array, ListArray};
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
@@ -802,5 +856,73 @@ mod tests {
         let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
         builder.append_value([Some(1)]);
         builder.finish();
+    }
+
+    #[test]
+    fn should_be_able_to_add_from_list_as_is() {
+        let from: Arc<ListArray> = {
+            let primitive_builder = Int32Builder::with_capacity(10);
+            let values_builder = ListBuilder::new(primitive_builder);
+            let mut builder = ListBuilder::new(values_builder);
+
+            //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+            builder.values().values().append_value(1);
+            builder.values().values().append_value(2);
+            builder.values().append(true);
+            builder.values().values().append_value(3);
+            builder.values().values().append_value(4);
+            builder.values().append(true);
+            builder.append(true);
+
+            builder.values().values().append_value(5);
+            builder.values().values().append_value(6);
+            builder.values().values().append_value(7);
+            builder.values().append(true);
+            builder.values().append(false);
+            builder.values().values().append_value(8);
+            builder.values().append(true);
+            builder.append(true);
+
+            builder.append(false);
+
+            builder.values().values().append_value(9);
+            builder.values().values().append_value(10);
+            builder.values().append(true);
+            builder.append(true);
+
+            Arc::new(builder.finish())
+        };
+        let mut to = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
+
+        for i in 0..from.len() {
+            if from.is_valid(i) {
+                let item = from.value(i);
+                let inner_list = item
+                    .as_any()
+                    .downcast_ref::<GenericListArray<i32>>()
+                    .unwrap();
+                SpecificArrayBuilder::append_value_ref(&mut to, inner_list);
+            } else {
+                to.append_null();
+            }
+        }
+
+        // [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+        let l1 = to.finish();
+
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
+
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5, 6].map(i32::usize_as));
+        let l2 = l1.values().as_list::<i32>();
+
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8, 10].map(i32::usize_as));
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 }

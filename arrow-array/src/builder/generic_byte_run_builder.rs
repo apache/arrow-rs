@@ -18,12 +18,9 @@
 use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
-use crate::{
-    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
-    ArrayRef, ArrowPrimitiveType, RunArray,
-};
+use crate::{types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type}, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, RunArray};
 
-use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
+use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder, SpecificArrayBuilder};
 
 use arrow_buffer::ArrowNativeType;
 

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
+use crate::builder::{ArrayBuilder, BufferBuilder, SpecificArrayBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
@@ -225,6 +225,44 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the boxed builder as a box of `Any`.
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+impl<T: ByteArrayType> SpecificArrayBuilder for GenericByteBuilder<T> {
+    type Output = GenericByteArray<T>;
+    type Item<'a> = &'a T::Native;
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> Arc<GenericByteArray<T>> {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> Arc<GenericByteArray<T>> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: &T::Native) {
+        self.append_value(value)
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_value(value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.append_value(output.value(i));
+            }
+        }
     }
 }
 

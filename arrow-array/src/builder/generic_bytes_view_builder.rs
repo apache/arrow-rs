@@ -25,10 +25,10 @@ use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 
-use crate::builder::ArrayBuilder;
+use crate::builder::{ArrayBuilder, SpecificArrayBuilder};
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -449,6 +449,42 @@ impl<T: ByteViewType + ?Sized> ArrayBuilder for GenericByteViewBuilder<T> {
 
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+impl<T: ByteViewType + ?Sized> SpecificArrayBuilder for GenericByteViewBuilder<T> {
+    type Output = GenericByteViewArray<T>;
+    type Item<'a> = &'a T::Native;
+
+    fn finish(&mut self) -> Arc<GenericByteViewArray<T>> {
+        Arc::new(self.finish())
+    }
+
+    fn finish_cloned(&self) -> Arc<GenericByteViewArray<T>> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: &T::Native) {
+        self.append_value(value)
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_value(value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.append_value(output.value(i));
+            }
+        }
     }
 }
 

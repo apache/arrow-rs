@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::ArrayBuilder;
-use crate::{ArrayRef, FixedSizeListArray};
+use crate::builder::{ArrayBuilder, SpecificArrayBuilder};
+use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{Field, FieldRef};
 use std::any::Any;
@@ -212,6 +212,57 @@ where
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+}
+
+
+impl<ValuesOutput, T> SpecificArrayBuilder for FixedSizeListBuilder<T>
+where
+    ValuesOutput: Array + 'static,
+    T: SpecificArrayBuilder<Output = ValuesOutput>,
+    for<'a> &'a ValuesOutput: ArrayAccessor,
+    for<'a> <T as SpecificArrayBuilder>::Item<'a>: From<<&'a ValuesOutput as ArrayAccessor>::Item>
+{
+    type Output = FixedSizeListArray;
+    type Item<'a> = T::Output;
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> Arc<FixedSizeListArray> {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> Arc<FixedSizeListArray> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value<'a>(&'a mut self, value: Self::Item<'a>) {
+        // our item is their output
+        self.values_builder.append_output(value.as_any().downcast_ref::<ValuesOutput>().unwrap());
+        self.append(true);
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.values_builder.append_output(value.as_any().downcast_ref::<ValuesOutput>().unwrap());
+        self.append(true);
+    }
+
+    fn append_null(&mut self) {
+        // TODO - make sure we should append nulls to the values builder
+        self.values_builder.append_nulls(self.list_len as usize);
+        self.append(false);
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.values_builder.append_output(output.value(i).as_any().downcast_ref::<ValuesOutput>().unwrap());
+                self.append(true);
+            }
+        }
     }
 }
 
