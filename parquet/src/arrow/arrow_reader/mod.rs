@@ -384,7 +384,7 @@ impl ArrowReaderMetadata {
     pub fn load<T: ChunkReader>(
         reader: &T,
         options: ArrowReaderOptions,
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(options.page_index)
@@ -543,7 +543,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     pub fn try_new_with_decryption(
         reader: T,
         options: ArrowReaderOptions,
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<Self> {
         let metadata = ArrowReaderMetadata::load(&reader, options, file_decryption_properties)?;
         Ok(Self::new_with_metadata(reader, metadata))
@@ -809,10 +809,11 @@ impl ParquetRecordBatchReader {
     /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader and [`FileDecryptionProperties`]
     ///
     /// Note: this is needed when the parquet file is encrypted
+    // todo: add options or put file_decryption_properties into options
     pub fn try_new_with_decryption<T: ChunkReader + 'static>(
         reader: T,
         batch_size: usize,
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<Self> {
         ParquetRecordBatchReaderBuilder::try_new_with_decryption(
             reader,
@@ -1838,7 +1839,7 @@ mod tests {
                 .build(),
         );
 
-        let metadata = ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.clone()).unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref()).unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         assert_eq!(file_metadata.num_rows(), 50);
@@ -1852,9 +1853,27 @@ mod tests {
         });
 
         // todo: decrypting data
-        // let record_reader =
-        //     ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties)
-        //         .unwrap();
+        let record_reader =
+            ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties.as_ref())
+                .unwrap();
+        // todo check contents
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+            let f32_col = batch.column(0).as_primitive::<Float32Type>();
+            let f64_col = batch.column(1).as_primitive::<Float64Type>();
+
+            // This file contains floats from a standard normal distribution
+            for &x in f32_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+            for &x in f64_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+        }
     }
 
     #[test]

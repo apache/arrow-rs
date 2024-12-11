@@ -60,7 +60,7 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_metadata")]
 pub fn decode_metadata(
     buf: &[u8],
-    file_decryption_properties: Option<FileDecryptionProperties>,
+    file_decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
     ParquetMetaDataReader::decode_metadata(buf, file_decryption_properties)
 }

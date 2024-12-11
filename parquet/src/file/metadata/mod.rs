@@ -117,6 +117,7 @@ use crate::schema::types::{
 pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
+use crate::encryption::ciphers::FileDecryptor;
 
 /// Page level statistics for each column chunk of each row group.
 ///
@@ -174,15 +175,18 @@ pub struct ParquetMetaData {
     column_index: Option<ParquetColumnIndex>,
     /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
+    /// Optional file decryptor
+    file_decryptor: Option<FileDecryptor>,
 }
 
 impl ParquetMetaData {
     /// Creates Parquet metadata from file metadata and a list of row
     /// group metadata
-    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
+    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>, file_decryptor: Option<FileDecryptor>) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
+            file_decryptor,
             column_index: None,
             offset_index: None,
         }
@@ -325,7 +329,7 @@ pub struct ParquetMetaDataBuilder(ParquetMetaData);
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![]))
+        Self(ParquetMetaData::new(file_meta_data, vec![], None))
     }
 
     /// Create a new builder from an existing ParquetMetaData
@@ -527,6 +531,8 @@ pub struct RowGroupMetaData {
     /// Ordinal position of this row group in file
     ordinal: Option<i16>,
 }
+
+// todo:rok
 
 impl RowGroupMetaData {
     /// Returns builder for row group metadata.
@@ -1849,7 +1855,7 @@ mod tests {
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata.clone())
             .set_row_groups(row_group_meta_with_stats)
             .build();
-        let base_expected_size = 2312;
+        let base_expected_size = 2896;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1876,7 +1882,7 @@ mod tests {
             ]]))
             .build();
 
-        let bigger_expected_size = 2816;
+        let bigger_expected_size = 3400;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
