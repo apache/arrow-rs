@@ -1440,26 +1440,34 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 /// Try and increment the the string's bytes from right to left, returning when the result
 /// is a valid UTF8 string. Returns `None` when it can't increment any byte.
 fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
+    // TODO(ets): this seems like too many copies. Rethink the whole truncate+increment
+    // process.
+    let mut len = data.len();
     for idx in (0..data.len()).rev() {
         let original = data[idx];
         let (byte, overflow) = original.overflowing_add(1);
         if !overflow {
             data[idx] = byte;
             if str::from_utf8(&data).is_ok() {
-                return Some(data);
+                if len != data.len() {
+                    return Some(data[..len].to_vec());
+                } else {
+                    return Some(data);
+                }
             }
             // Incrementing "original" did not yield a valid unicode character, so it overflowed
             // its available bits. If it was a continuation byte (b10xxxxxx) then set to min
-            // continuation (b10000000). Otherwise it was the first byte so set the entire char
-            // to all zeros.
+            // continuation (b10000000). Otherwise it was the first byte so set reset the first
+            // byte back to its original value (so data remains a valid string) and reduce "len".
             if original & 0xc0u8 == 0x80u8 {
                 data[idx] = 0x80u8;
             } else {
-                let byte_width = original.leading_ones() as usize;
-                match byte_width {
-                    0 => data[idx] = 0,
-                    _ => data[idx..idx + byte_width].fill(0u8),
-                }
+                data[idx] = original;
+                len -= if original < 0x80u8 {
+                    1
+                } else {
+                    original.leading_ones() as usize
+                };
             }
         }
     }
@@ -3170,7 +3178,7 @@ mod tests {
         test_inc("hello", "hellp");
 
         // 1-byte ending in max 1-byte
-        test_inc("a\u{7f}", "b\x00");
+        test_inc("a\u{7f}", "b");
 
         // 1-byte max should not truncate as it would need 2-byte code points
         assert!(increment_utf8("\u{7f}\u{7f}".as_bytes().to_vec()).is_none());
@@ -3185,7 +3193,7 @@ mod tests {
         test_inc("\u{ff}\u{ff}", "\u{ff}\u{100}");
 
         // 2-byte ending in max 2-byte
-        test_inc("a\u{7ff}", "b\x00\x00");
+        test_inc("a\u{7ff}", "b");
 
         // Max 2-byte should not truncate as it would need 3-byte code points
         assert!(increment_utf8("\u{7ff}\u{7ff}".as_bytes().to_vec()).is_none());
@@ -3194,7 +3202,7 @@ mod tests {
         test_inc("ࠀࠀ", "ࠀࠁ");
 
         // 3-byte ending in max 3-byte
-        test_inc("a\u{ffff}", "b\x00\x00\x00");
+        test_inc("a\u{ffff}", "b");
 
         // Max 3-byte should not truncate as it would need 4-byte code points
         assert!(increment_utf8("\u{ffff}\u{ffff}".as_bytes().to_vec()).is_none());
@@ -3203,7 +3211,7 @@ mod tests {
         test_inc("𐀀𐀀", "𐀀𐀁");
 
         // 4-byte ending in max unicode
-        test_inc("a\u{10ffff}", "b\x00\x00\x00\x00");
+        test_inc("a\u{10ffff}", "b");
 
         // Max 4-byte should not truncate
         assert!(increment_utf8("\u{10ffff}\u{10ffff}".as_bytes().to_vec()).is_none());
