@@ -671,6 +671,10 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
+        // Reqwest will remove the `Content-Length` header if it is configured to
+        // transparently decompress the body via the non-default `gzip` feature.
+        builder = builder.no_gzip();
+
         builder
             .https_only(!self.allow_http.get()?)
             .build()
