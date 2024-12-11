@@ -3211,6 +3211,9 @@ mod tests {
 
         // Max 4-byte should not truncate
         assert!(increment_utf8("\u{10ffff}\u{10ffff}".as_bytes().to_vec()).is_none());
+
+        // Skip over surrogate pair range (0xD800..=0xDFFF)
+        test_inc("a\u{D7FF}", "a\u{e000}");
     }
 
     #[test]
