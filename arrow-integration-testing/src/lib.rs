@@ -17,6 +17,8 @@
 
 //! Common code used in the integration test binaries
 
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
 #![warn(missing_docs)]
 use serde_json::Value;
 
