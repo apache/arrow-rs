@@ -1440,8 +1440,9 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 /// Try and increment the the string's bytes from right to left, returning when the result
 /// is a valid UTF8 string. Returns `None` when it can't increment any byte.
 fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
-    // TODO(ets): this seems like too many copies. Rethink the whole truncate+increment
-    // process.
+    const UTF8_CONTINUATION: u8 = 0x80;
+    const UTF8_CONTINUATION_MASK: u8 = 0xc0;
+
     let mut len = data.len();
     for idx in (0..data.len()).rev() {
         let original = data[idx];
@@ -1450,24 +1451,19 @@ fn increment_utf8(mut data: Vec<u8>) -> Option<Vec<u8>> {
             data[idx] = byte;
             if str::from_utf8(&data).is_ok() {
                 if len != data.len() {
-                    return Some(data[..len].to_vec());
-                } else {
-                    return Some(data);
+                    data.truncate(len);
                 }
+                return Some(data);
             }
             // Incrementing "original" did not yield a valid unicode character, so it overflowed
             // its available bits. If it was a continuation byte (b10xxxxxx) then set to min
             // continuation (b10000000). Otherwise it was the first byte so set reset the first
             // byte back to its original value (so data remains a valid string) and reduce "len".
-            if original & 0xc0u8 == 0x80u8 {
-                data[idx] = 0x80u8;
+            if original & UTF8_CONTINUATION_MASK == UTF8_CONTINUATION {
+                data[idx] = UTF8_CONTINUATION;
             } else {
                 data[idx] = original;
-                len -= if original < 0x80u8 {
-                    1
-                } else {
-                    original.leading_ones() as usize
-                };
+                len = idx;
             }
         }
     }
