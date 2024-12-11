@@ -42,6 +42,8 @@ mod filter;
 mod selection;
 pub mod statistics;
 
+use crate::encryption::ciphers::FileDecryptionProperties;
+
 /// Builder for constructing parquet readers into arrow.
 ///
 /// Most users should use one of the following specializations:
@@ -317,7 +319,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -379,9 +381,14 @@ impl ArrowReaderMetadata {
     /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
-    pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
+    pub fn load<T: ChunkReader>(
+        reader: &T,
+        options: ArrowReaderOptions,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
+    ) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(options.page_index)
+            .with_encryption_properties(file_decryption_properties)
             .parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
@@ -528,7 +535,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(&reader, options)?;
+        let metadata = ArrowReaderMetadata::load(&reader, options, None)?;
+        Ok(Self::new_with_metadata(reader, metadata))
+    }
+
+    /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`] and [`FileDecryptionProperties`]
+    pub fn try_new_with_decryption(
+        reader: T,
+        options: ArrowReaderOptions,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
+    ) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load(&reader, options, file_decryption_properties)?;
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
@@ -553,6 +570,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -561,7 +579,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
     /// #
-    /// let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
+    /// let metadata = ArrowReaderMetadata::load(&file, Default::default(), None).unwrap();
     /// let mut a = ParquetRecordBatchReaderBuilder::new_with_metadata(file.clone(), metadata.clone()).build().unwrap();
     /// let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata).build().unwrap();
     ///
@@ -788,6 +806,24 @@ impl ParquetRecordBatchReader {
             .build()
     }
 
+    /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader and [`FileDecryptionProperties`]
+    ///
+    /// Note: this is needed when the parquet file is encrypted
+    // todo: add options or put file_decryption_properties into options
+    pub fn try_new_with_decryption<T: ChunkReader + 'static>(
+        reader: T,
+        batch_size: usize,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
+    ) -> Result<Self> {
+        ParquetRecordBatchReaderBuilder::try_new_with_decryption(
+            reader,
+            Default::default(),
+            file_decryption_properties,
+        )?
+        .with_batch_size(batch_size)
+        .build()
+    }
+
     /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`]
     ///
     /// Note: this is a low-level interface see [`ParquetRecordBatchReader::try_new`] for a
@@ -944,8 +980,9 @@ mod tests {
     use arrow_select::concat::concat_batches;
 
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
@@ -955,6 +992,7 @@ mod tests {
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
         FloatType, Int32Type, Int64Type, Int96Type,
     };
+    use crate::encryption::ciphers;
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
@@ -1771,6 +1809,56 @@ mod tests {
         assert_eq!(col.value(1), f16::ZERO);
         assert!(col.value(1).is_sign_positive());
         assert!(col.value(2).is_nan());
+    }
+
+    #[test]
+    fn test_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let decryption_properties = Some(
+            ciphers::FileDecryptionProperties::builder()
+                .with_footer_key(key_code.to_vec())
+                .build(),
+        );
+
+        let metadata = ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(file_metadata.created_by().unwrap(), "parquet-cpp-arrow version 14.0.0-SNAPSHOT");
+
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+            assert_eq!(rg.total_byte_size(), 4172);
+        });
+
+        // todo: decrypting data
+        let record_reader =
+            ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties.as_ref())
+                .unwrap();
+        // todo check contents
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+            let f32_col = batch.column(0).as_primitive::<Float32Type>();
+            let f64_col = batch.column(1).as_primitive::<Float64Type>();
+
+            // This file contains floats from a standard normal distribution
+            for &x in f32_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+            for &x in f64_col.values() {
+                assert!(x > -10.0);
+                assert!(x < 10.0);
+            }
+        }
     }
 
     #[test]
