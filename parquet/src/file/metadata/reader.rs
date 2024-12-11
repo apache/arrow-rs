@@ -138,9 +138,9 @@ impl ParquetMetaDataReader {
     /// This is only necessary when the file is encrypted.
     pub fn with_encryption_properties(
         mut self,
-        properties: Option<FileDecryptionProperties>,
+        properties: Option<&FileDecryptionProperties>,
     ) -> Self {
-        self.file_decryption_properties = properties;
+        self.file_decryption_properties = properties.cloned();
         self
     }
 
@@ -394,7 +394,7 @@ impl ParquetMetaDataReader {
             &mut fetch,
             file_size,
             self.get_prefetch_size(),
-            self.file_decryption_properties.clone(),
+            self.file_decryption_properties.as_ref(),
         )
         .await?;
 
@@ -542,7 +542,7 @@ impl ParquetMetaDataReader {
         let start = file_size - footer_metadata_len as u64;
         Self::decode_metadata(
             chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-            self.file_decryption_properties.clone(),
+            self.file_decryption_properties.as_ref(),
         )
     }
 
@@ -564,7 +564,7 @@ impl ParquetMetaDataReader {
         fetch: &mut F,
         file_size: usize,
         prefetch: usize,
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         if file_size < FOOTER_SIZE {
             return Err(eof_err!("file size of {} is less than footer", file_size));
@@ -649,10 +649,11 @@ impl ParquetMetaDataReader {
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(
         buf: &[u8],
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
 
+        let mut file_decryptor = None;
         let decrypted_fmd_buf;
         if let Some(file_decryption_properties) = file_decryption_properties {
             let t_file_crypto_metadata: TFileCryptoMetaData =
@@ -668,13 +669,13 @@ impl ParquetMetaDataReader {
             // todo decr: get key_metadata
 
             // remaining buffer contains encrypted FileMetaData
-            let file_decryptor = FileDecryptor::new(file_decryption_properties);
-            let decryptor = file_decryptor.get_footer_decryptor();
+            file_decryptor = Some(FileDecryptor::new(file_decryption_properties));
+            let decryptor = file_decryptor.clone().unwrap().get_footer_decryptor();
             // todo decr: get aad_prefix
             // todo decr: set both aad_prefix and aad_file_unique in file_decryptor
             let fmd_aad = create_footer_aad(aes_gcm_algo.aad_file_unique.unwrap().as_ref());
             decrypted_fmd_buf =
-                decryptor.decrypt(prot.as_slice().as_ref(), fmd_aad.unwrap().as_ref());
+                decryptor.decrypt(prot.as_slice().as_ref(), fmd_aad?.as_ref());
             prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
         }
 
@@ -704,7 +705,7 @@ impl ParquetMetaDataReader {
             schema_descr,
             column_orders,
         );
-        Ok(ParquetMetaData::new(file_metadata, row_groups))
+        Ok(ParquetMetaData::new(file_metadata, row_groups, file_decryptor))
     }
 
     /// Parses column orders from Thrift definition.

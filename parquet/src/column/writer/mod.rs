@@ -2105,6 +2105,7 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            None,
         )
         .unwrap();
 
@@ -2157,6 +2158,7 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            None,
         )
         .unwrap();
 
@@ -2292,6 +2294,7 @@ mod tests {
                 r.rows_written as usize,
                 None,
                 Arc::new(props),
+                None,
             )
             .unwrap(),
         );
@@ -3741,6 +3744,7 @@ mod tests {
                 result.rows_written as usize,
                 None,
                 Arc::new(props),
+                None,
             )
             .unwrap(),
         );

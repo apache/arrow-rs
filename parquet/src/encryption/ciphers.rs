@@ -119,6 +119,7 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct RingGcmBlockDecryptor {
     key: LessSafeKey,
 }
@@ -226,7 +227,7 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     Ok(aad)
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     footer_key: Option<Vec<u8>>
 }
@@ -261,18 +262,25 @@ impl DecryptionPropertiesBuilder {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
     // todo decr: change to BlockDecryptor
     footer_decryptor: RingGcmBlockDecryptor
 }
 
+impl PartialEq for FileDecryptor {
+    fn eq(&self, other: &Self) -> bool {
+        self.decryption_properties == other.decryption_properties
+    }
+}
+
 impl FileDecryptor {
-    pub(crate) fn new(decryption_properties: FileDecryptionProperties) -> Self {
+    pub(crate) fn new(decryption_properties: &FileDecryptionProperties) -> Self {
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
             footer_decryptor: RingGcmBlockDecryptor::new(decryption_properties.footer_key.clone().unwrap().as_ref()),
-            decryption_properties
+            decryption_properties: decryption_properties.clone()
         }
     }
 
@@ -280,4 +288,18 @@ impl FileDecryptor {
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
         self.footer_decryptor
     }
+}
+
+pub struct CryptoContext {
+    row_group_ordinal: i32,
+    column_ordinal: i32,
+    metadata_decryptor: FileDecryptor,
+    data_decryptor: FileDecryptor,
+    file_decryption_properties: FileDecryptionProperties,
+    aad: Vec<u8>,
+}
+
+impl CryptoContext {
+    pub fn data_decryptor(self) -> FileDecryptor { self.data_decryptor }
+    pub fn file_decryption_properties(&self) -> &FileDecryptionProperties { &self.file_decryption_properties }
 }
