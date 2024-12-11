@@ -414,16 +414,50 @@ mod tests {
         let mut multipart_upload_1 = integration.put_multipart(&path).await.unwrap();
         let mut multipart_upload_2 = integration.put_multipart(&path).await.unwrap();
 
-        for i in 0..5 {
-            multipart_upload_1
-                .put_part(Bytes::from(format!("1:{},", i)).into())
-                .await
-                .unwrap();
-            multipart_upload_2
-                .put_part(Bytes::from(format!("2:{},", i)).into())
-                .await
-                .unwrap();
-        }
+        multipart_upload_1
+            .put_part(Bytes::from("1:0,").into())
+            .await
+            .unwrap();
+        multipart_upload_2
+            .put_part(Bytes::from("2:0,").into())
+            .await
+            .unwrap();
+
+        multipart_upload_2
+            .put_part(Bytes::from("2:1,").into())
+            .await
+            .unwrap();
+        multipart_upload_1
+            .put_part(Bytes::from("1:1,").into())
+            .await
+            .unwrap();
+
+        multipart_upload_1
+            .put_part(Bytes::from("1:2,").into())
+            .await
+            .unwrap();
+        multipart_upload_2
+            .put_part(Bytes::from("2:2,").into())
+            .await
+            .unwrap();
+
+        multipart_upload_2
+            .put_part(Bytes::from("2:3,").into())
+            .await
+            .unwrap();
+        multipart_upload_1
+            .put_part(Bytes::from("1:3,").into())
+            .await
+            .unwrap();
+
+        multipart_upload_1
+            .put_part(Bytes::from("1:4,").into())
+            .await
+            .unwrap();
+        multipart_upload_2
+            .put_part(Bytes::from("2:4,").into())
+            .await
+            .unwrap();
 
         multipart_upload_1.complete().await.unwrap();
         let err = multipart_upload_2.complete().await.unwrap_err();
