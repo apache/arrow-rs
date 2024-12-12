@@ -209,8 +209,18 @@ where
     K: ArrowDictionaryKeyType,
     V: ArrowPrimitiveType,
 {
+
+    /// Only insert value **without inserting key** and get the key of that value (value index)
+    /// 
+    /// This should be used for user optimization
+    /// 
+    /// Returns an error if the new index would overflow the key type.
+    /// 
+    /// # Safety
+    /// This function is unsafe as calling this without calling one of the `append_key` functions will result in an undefined behavior
+    /// 
     #[inline]
-    fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
+    pub unsafe fn get_or_insert_key(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
         match self.map.get(&Value(value)) {
             Some(&key) => {
                 Ok(K::Native::from_usize(key).ok_or(ArrowError::DictionaryKeyOverflowError)?)
@@ -224,14 +234,67 @@ where
         }
     }
 
+
+    /// Only insert key that uses a value in a specific index 
+    /// 
+    /// This should be used for user optimization
+    /// 
+    /// # Panic
+    /// this will panic if the value index is out of bounds
+    /// 
+    pub fn append_key_for_existing_value(&mut self, value_index: K::Native) {
+        assert!(value_index.as_usize() < self.values_builder.len(), "value_index is outside values bound");
+        unsafe {
+            self.append_key_for_existing_value_unchecked(value_index);
+        }
+    }
+
+    /// Only insert key that uses a value in a specific index without checking if `value_index` is in the bounds
+    /// 
+    /// This should be used for user optimization
+    /// 
+    /// # Safety
+    /// The user must ensure that the value index is valid 
+    /// 
+    pub unsafe fn append_key_for_existing_value_unchecked(&mut self, value_index: K::Native) {
+        self.keys_builder.append_value(value_index);
+    }
+
+    /// Only insert key that uses a value in a specific index N times
+    /// 
+    /// This should be used for user optimization
+    /// 
+    /// # Panic
+    /// this will panic if the value index is out of bounds
+    /// 
+    pub fn append_key_n_for_existing_value(&mut self, value_index: K::Native, count: usize) {
+        assert!(value_index.as_usize() < self.values_builder.len(), "value_index is outside values bound");
+        unsafe {
+            self.append_key_n_for_existing_value_unchecked(value_index, count);
+        }
+    }
+
+    /// Only insert key that uses a value in a specific index `N` times without checking if `value_index` is in the bounds
+    /// 
+    /// This should be used for user optimization
+    /// 
+    /// # Safety
+    /// The user must ensure that the value index is valid 
+    /// 
+    pub unsafe fn append_key_n_for_existing_value_unchecked(&mut self, value_index: K::Native, count: usize) {
+        self.keys_builder.append_value_n(value_index, count);
+    }
+
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
     #[inline]
     pub fn append(&mut self, value: V::Native) -> Result<K::Native, ArrowError> {
-        let key = self.get_or_insert_key(value)?;
-        self.keys_builder.append_value(key);
-        Ok(key)
+        unsafe {
+            let key = self.get_or_insert_key(value)?;
+            self.append_key_for_existing_value_unchecked(key);
+            Ok(key)
+        }
     }
 
     /// Append a value multiple times to the array.
@@ -239,9 +302,11 @@ where
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append_n(&mut self, value: V::Native, count: usize) -> Result<K::Native, ArrowError> {
-        let key = self.get_or_insert_key(value)?;
-        self.keys_builder.append_value_n(key, count);
-        Ok(key)
+        unsafe {
+            let key = self.get_or_insert_key(value)?;
+            self.append_key_n_for_existing_value_unchecked(key, count);
+            Ok(key)
+        }
     }
 
     /// Infallibly append a value to this builder
