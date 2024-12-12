@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
+use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -303,6 +303,41 @@ where
         };
     }
 
+    /// Extends builder with dictionary
+    ///
+    /// This is the same as `extends` but avoid lookup for each item in the iterator 
+    ///
+    pub fn extend_dictionary(&mut self, dictionary: &TypedDictionaryArray<K, PrimitiveArray<V>>) -> Result<(), ArrowError> {
+        let values = dictionary.values();
+
+        let v_len = values.len();
+        if v_len == 0 {
+            return Ok(());
+        }
+
+        // Orphan values will be carried over to the new dictionary
+        let mapped_values =  values.iter()
+            // Dictionary values should not be null as the keys are null if the value is null
+            .map(|dict_value| self.get_or_insert_key(dict_value.expect("Dictionary value should not be null")))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Just insert the keys without additional lookups
+        dictionary
+            .keys()
+            .iter()
+            .for_each(|key| {
+                match key {
+                    None => self.append_null(),
+                    Some(original_dict_index) => {
+                        let index = original_dict_index.as_usize().min(v_len - 1);
+                        self.keys_builder.append_value(mapped_values[index]);
+                    }
+                }
+            });
+
+        Ok(())
+    }
+
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.map.clear();
@@ -368,8 +403,7 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::UInt32Array;
-    use crate::array::UInt8Array;
+    use crate::array::{UInt32Array, UInt8Array, Int32Array};
     use crate::builder::Decimal128Builder;
     use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
 
@@ -441,6 +475,37 @@ mod tests {
                 Box::new(DataType::Int32),
                 Box::new(DataType::Decimal128(1, 2)),
             )
+        );
+    }
+
+    
+    #[test]
+    fn test_extend_dictionary() {
+        let some_dict = {
+            let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+            builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
+            builder.extend([None::<i32>].into_iter());
+            builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
+            builder.append_null();
+            builder.finish()
+        };
+
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([6, 6, 7, 6, 5].into_iter().map(Some));
+        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 7);
+
+        let values = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            [Some(6), Some(6), Some(7), Some(6), Some(5), Some(1), Some(2), Some(3), Some(1), Some(2), Some(3), Some(1), Some(2), Some(3), None, Some(4), Some(5), Some(1), Some(3), Some(1), None]
         );
     }
 }

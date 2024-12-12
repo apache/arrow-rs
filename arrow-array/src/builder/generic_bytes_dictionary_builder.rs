@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
+use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray, TypedDictionaryArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
@@ -303,6 +303,41 @@ where
             None => self.keys_builder.append_nulls(count),
             Some(v) => self.append_values(v, count),
         };
+    }
+
+    /// Extends builder with dictionary
+    ///
+    /// This is the same as `extends` but avoid lookup for each item in the iterator 
+    ///
+    pub fn extend_dictionary(&mut self, dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>) -> Result<(), ArrowError> {
+        let values = dictionary.values();
+
+        let v_len = values.len();
+        if v_len == 0 {
+            return Ok(());
+        }
+
+        // Orphan values will be carried over to the new dictionary
+        let mapped_values =  values.iter()
+            // Dictionary values should not be null as the keys are null if the value is null
+            .map(|dict_value| self.get_or_insert_key(dict_value).expect("Dictionary value should not be null"))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Just insert the keys without additional lookups
+        dictionary
+            .keys()
+            .iter()
+            .for_each(|key| {
+                match key {
+                    None => self.append_null(),
+                    Some(original_dict_index) => {
+                        let index = original_dict_index.as_usize().min(v_len - 1);
+                        self.keys_builder.append_value(mapped_values[index]);
+                    }
+                }
+            });
+
+        Ok(())
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -663,5 +698,35 @@ mod tests {
         let dict = builder.finish();
         assert_eq!(dict.keys().values(), &[0, 1, 2, 0, 1, 2, 2, 3, 0]);
         assert_eq!(dict.values().len(), 4);
+    }
+
+    #[test]
+    fn test_extend_dictionary() {
+        let some_dict = {
+            let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+            builder.extend(["a", "b", "c", "a", "b", "c"].into_iter().map(Some));
+            builder.extend([None::<&str>].into_iter());
+            builder.extend(["c", "d", "a"].into_iter().map(Some));
+            builder.append_null();
+            builder.finish()
+        };
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend(["e", "e", "f", "e", "d"].into_iter().map(Some));
+        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        let dict = builder.finish();
+        
+        assert_eq!(dict.values().len(), 6);
+        
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        
+        assert_eq!(
+            values,
+            [Some("e"), Some("e"), Some("f"), Some("e"), Some("d"), Some("a"), Some("b"), Some("c"), Some("a"), Some("b"), Some("c"), None, Some("c"), Some("d"), Some("a"), None]
+        );
     }
 }
