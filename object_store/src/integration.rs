@@ -1164,6 +1164,19 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
         .await
         .unwrap();
 
+    // This is to satisy AWS S3's minimum allowed upload size of 5242880
+    let last_chunk_size = 5 * 1024 * 1024;
+    let last_chunk = get_chunk(last_chunk_size);
+
+    multipart_upload_1
+        .put_part(last_chunk.clone().into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(last_chunk.into())
+        .await
+        .unwrap();
+
     multipart_upload_1.complete().await.unwrap();
 
     if last_writer_wins {
@@ -1179,8 +1192,8 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     let string_contents = str::from_utf8(&bytes).unwrap();
 
     if last_writer_wins {
-        assert_eq!("2:0,2:1,2:2,2:3,2:4,", string_contents);
+        assert!(string_contents.starts_with("2:0,2:1,2:2,2:3,2:4,"));
     } else {
-        assert_eq!("1:0,1:1,1:2,1:3,1:4,", string_contents);
+        assert!(string_contents.starts_with("1:0,1:1,1:2,1:3,1:4,"));
     }
 }
