@@ -510,7 +510,7 @@ mod tests {
 
     use crate::array::Int8Array;
     use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
-    use crate::{BinaryArray, StringArray};
+    use crate::{BinaryArray, GenericStringArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
@@ -727,5 +727,45 @@ mod tests {
         let dict = builder.finish();
         assert_eq!(dict.keys().values(), &[0, 1, 2, 0, 1, 2, 2, 3, 0]);
         assert_eq!(dict.values().len(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "value_index is outside values bound")]
+    fn append_key_for_existing_value_should_panic_on_invalid_index() {
+        let mut builder =
+            GenericByteDictionaryBuilder::<Int16Type, GenericStringType<i32>>::with_capacity(257, 257, 257);
+
+        builder.append_key_for_existing_value(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "value_index is outside values bound")]
+    fn append_key_n_for_existing_value_should_panic_on_invalid_index() {
+        let mut builder =
+            GenericByteDictionaryBuilder::<Int16Type, GenericStringType<i32>>::with_capacity(257, 257, 257);
+
+        builder.append_key_n_for_existing_value(0, 2);
+    }
+
+    #[test]
+    fn manual_appending() {
+        let mut builder =
+            GenericByteDictionaryBuilder::<Int16Type, GenericStringType<i32>>::with_capacity(257, 257, 257);
+
+        let value = "123";
+        let key = unsafe { builder.get_or_insert_key(value).unwrap() };
+        builder.append_key_for_existing_value(key);
+
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 1);
+
+        let values = dict
+            .downcast_dict::<GenericStringArray<i32>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [Some(value)]);
     }
 }

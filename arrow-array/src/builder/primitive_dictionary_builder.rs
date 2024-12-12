@@ -234,7 +234,6 @@ where
         }
     }
 
-
     /// Only insert key that uses a value in a specific index 
     /// 
     /// This should be used for user optimization
@@ -507,5 +506,45 @@ mod tests {
                 Box::new(DataType::Decimal128(1, 2)),
             )
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "value_index is outside values bound")]
+    fn append_key_for_existing_value_should_panic_on_invalid_index() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(257, 257);
+
+        builder.append_key_for_existing_value(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "value_index is outside values bound")]
+    fn append_key_n_for_existing_value_should_panic_on_invalid_index() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(257, 257);
+
+        builder.append_key_n_for_existing_value(0, 2);
+    }
+
+    #[test]
+    fn manual_appending() {
+        let mut builder =
+            PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::with_capacity(257, 257);
+
+        let value = 123;
+        let key = unsafe { builder.get_or_insert_key(value).unwrap() };
+        builder.append_key_for_existing_value(key);
+
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 1);
+
+        let values = dict
+            .downcast_dict::<UInt32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [Some(value)]);
     }
 }
