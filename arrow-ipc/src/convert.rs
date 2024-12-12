@@ -165,6 +165,7 @@ pub fn schema_to_fb_offset<'a>(
 impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
+            #[allow(deprecated)]
             Field::new_dict(
                 field.name().unwrap(),
                 get_data_type(field, true),
@@ -519,6 +520,7 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
+                #[allow(deprecated)]
                 tracker.set_dict_id(field),
                 field
                     .dict_is_ordered()
@@ -527,6 +529,7 @@ pub(crate) fn build_field<'a>(
             )),
             None => Some(get_fb_dictionary(
                 index_type,
+                #[allow(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary type must have a dictionary id"),
@@ -1143,6 +1146,7 @@ mod tests {
                     ),
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1150,6 +1154,7 @@ mod tests {
                     123,
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),

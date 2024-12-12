@@ -535,8 +535,10 @@ fn prepare_field_for_flight(
                 )
                 .with_metadata(field.metadata().clone())
             } else {
+                #[allow(deprecated)]
                 let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
 
+                #[allow(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
@@ -583,7 +585,9 @@ fn prepare_schema_for_flight(
                     )
                     .with_metadata(field.metadata().clone())
                 } else {
+                    #[allow(deprecated)]
                     let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
+                    #[allow(deprecated)]
                     Field::new_dict(
                         field.name(),
                         field.data_type().clone(),
@@ -650,10 +654,12 @@ struct FlightIpcEncoder {
 
 impl FlightIpcEncoder {
     fn new(options: IpcWriteOptions, error_on_replacement: bool) -> Self {
+        #[allow(deprecated)]
         let preserve_dict_id = options.preserve_dict_id();
         Self {
             options,
             data_gen: IpcDataGenerator::default(),
+            #[allow(deprecated)]
             dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
                 error_on_replacement,
                 preserve_dict_id,
@@ -1541,6 +1547,7 @@ mod tests {
     async fn verify_flight_round_trip(mut batches: Vec<RecordBatch>) {
         let expected_schema = batches.first().unwrap().schema();
 
+        #[allow(deprecated)]
         let encoder = FlightDataEncoderBuilder::default()
             .with_options(IpcWriteOptions::default().with_preserve_dict_id(false))
             .with_dictionary_handling(DictionaryHandling::Resend)
@@ -1568,6 +1575,7 @@ mod tests {
             HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
         );
 
+        #[allow(deprecated)]
         let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
@@ -1598,6 +1606,7 @@ mod tests {
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 
