@@ -1472,7 +1472,7 @@ pub fn cast_with_options(
         (BinaryView, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
-        (from_type, Utf8View) if from_type.is_numeric() => {
+        (from_type, Utf8View) if from_type.is_primitive() => {
             value_to_string_view(array, cast_options)
         }
         (from_type, LargeUtf8) if from_type.is_primitive() => {
@@ -5295,7 +5295,7 @@ mod tests {
             None,
         ];
 
-        // assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
         assert_cast_timestamp_to_string!(array, DataType::Utf8, StringArray, expected);
         assert_cast_timestamp_to_string!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
@@ -5319,7 +5319,13 @@ mod tests {
             Some("2018-12-25 00:00:02.001000"),
             None,
         ];
-        // assert_cast_timestamp_to_string!(array_without_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
         assert_cast_timestamp_to_string!(
             array_without_tz,
             DataType::Utf8,
@@ -5343,7 +5349,13 @@ mod tests {
             Some("2018-12-25 05:45:02.001000"),
             None,
         ];
-        // assert_cast_timestamp_to_string!(array_with_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
         assert_cast_timestamp_to_string!(
             array_with_tz,
             DataType::Utf8,
