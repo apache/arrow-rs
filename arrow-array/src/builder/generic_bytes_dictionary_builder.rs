@@ -307,7 +307,9 @@ where
 
     /// Extends builder with dictionary
     ///
-    /// This is the same as `extends` but avoid lookup for each item in the iterator 
+    /// This is the same as `extends` but avoid lookup for each item in the iterator
+    ///
+    /// when dictionary values are null (the actual mapped values) the keys are null
     ///
     pub fn extend_dictionary(&mut self, dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>) -> Result<(), ArrowError> {
         let values = dictionary.values();
