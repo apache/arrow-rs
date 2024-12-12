@@ -311,9 +311,12 @@ where
     ///
     /// when dictionary values are null (the actual mapped values) the keys are null
     ///
-    pub fn extend_dictionary(&mut self, dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>) -> Result<(), ArrowError> {
+    pub fn extend_dictionary(
+        &mut self,
+        dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>,
+    ) -> Result<(), ArrowError> {
         let values = dictionary.values();
-        
+
         let v_len = values.len();
         let k_len = dictionary.keys().len();
         if v_len == 0 && k_len == 0 {
@@ -327,33 +330,33 @@ where
         }
 
         if k_len == 0 {
-            return Err(ArrowError::InvalidArgumentError("Dictionary keys should not be empty when values are not empty".to_string()));
+            return Err(ArrowError::InvalidArgumentError(
+                "Dictionary keys should not be empty when values are not empty".to_string(),
+            ));
         }
 
         // Orphan values will be carried over to the new dictionary
-        let mapped_values =  values.iter()
+        let mapped_values = values
+            .iter()
             // Dictionary values can technically be null, so we need to handle that
-            .map(|dict_value| dict_value
-                .map(|dict_value| self.get_or_insert_key(dict_value))
-                .transpose())
+            .map(|dict_value| {
+                dict_value
+                    .map(|dict_value| self.get_or_insert_key(dict_value))
+                    .transpose()
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         // Just insert the keys without additional lookups
-        dictionary
-            .keys()
-            .iter()
-            .for_each(|key| {
-                match key {
+        dictionary.keys().iter().for_each(|key| match key {
+            None => self.append_null(),
+            Some(original_dict_index) => {
+                let index = original_dict_index.as_usize().min(v_len - 1);
+                match mapped_values[index] {
                     None => self.append_null(),
-                    Some(original_dict_index) => {
-                        let index = original_dict_index.as_usize().min(v_len - 1);
-                        match mapped_values[index] {
-                            None => self.append_null(),
-                            Some(mapped_value) => self.keys_builder.append_value(mapped_value),
-                        }
-                    }
+                    Some(mapped_value) => self.keys_builder.append_value(mapped_value),
                 }
-            });
+            }
+        });
 
         Ok(())
     }
@@ -732,20 +735,39 @@ mod tests {
 
         let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
         builder.extend(["e", "e", "f", "e", "d"].into_iter().map(Some));
-        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
         let dict = builder.finish();
-        
+
         assert_eq!(dict.values().len(), 6);
-        
+
         let values = dict
             .downcast_dict::<GenericByteArray<Utf8Type>>()
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
-        
+
         assert_eq!(
             values,
-            [Some("e"), Some("e"), Some("f"), Some("e"), Some("d"), Some("a"), Some("b"), Some("c"), Some("a"), Some("b"), Some("c"), None, Some("c"), Some("d"), Some("a"), None]
+            [
+                Some("e"),
+                Some("e"),
+                Some("f"),
+                Some("e"),
+                Some("d"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                None,
+                Some("c"),
+                Some("d"),
+                Some("a"),
+                None
+            ]
         );
     }
     #[test]
@@ -763,7 +785,10 @@ mod tests {
             let values = values_builder.finish();
             let keys = keys_builder.finish();
 
-            let data_type = DataType::Dictionary(Box::new(Int32Type::DATA_TYPE), Box::new(Utf8Type::DATA_TYPE));
+            let data_type = DataType::Dictionary(
+                Box::new(Int32Type::DATA_TYPE),
+                Box::new(Utf8Type::DATA_TYPE),
+            );
 
             let builder = keys
                 .into_data()
@@ -775,10 +800,15 @@ mod tests {
         };
 
         let some_dict_values = some_dict.values().as_string::<i32>();
-        assert_eq!(some_dict_values.into_iter().collect::<Vec<_>>(), &[None, Some("I like worm hugs")]);
+        assert_eq!(
+            some_dict_values.into_iter().collect::<Vec<_>>(),
+            &[None, Some("I like worm hugs")]
+        );
 
         let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
-        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
         let dict = builder.finish();
 
         assert_eq!(dict.values().len(), 1);
@@ -789,10 +819,7 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            values,
-            [None, Some("I like worm hugs")]
-        );
+        assert_eq!(values, [None, Some("I like worm hugs")]);
     }
 
     #[test]
@@ -804,20 +831,19 @@ mod tests {
         };
 
         let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
-        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
         let dict = builder.finish();
-        
+
         assert_eq!(dict.values().len(), 0);
-        
+
         let values = dict
             .downcast_dict::<GenericByteArray<Utf8Type>>()
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
-        
-        assert_eq!(
-            values,
-            [None, None]
-        );
+
+        assert_eq!(values, [None, None]);
     }
 }
