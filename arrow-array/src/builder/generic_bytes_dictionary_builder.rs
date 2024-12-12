@@ -330,8 +330,10 @@ where
 
         // Orphan values will be carried over to the new dictionary
         let mapped_values =  values.iter()
-            // Dictionary values should not be null as the keys are null if the value is null
-            .map(|dict_value| self.get_or_insert_key(dict_value.expect("Dictionary value should not be null")))
+            // Dictionary values can technically be null, so we need to handle that
+            .map(|dict_value| dict_value
+                .map(|dict_value| self.get_or_insert_key(dict_value))
+                .transpose())
             .collect::<Result<Vec<_>, _>>()?;
 
         // Just insert the keys without additional lookups
@@ -343,7 +345,10 @@ where
                     None => self.append_null(),
                     Some(original_dict_index) => {
                         let index = original_dict_index.as_usize().min(v_len - 1);
-                        self.keys_builder.append_value(mapped_values[index]);
+                        match mapped_values[index] {
+                            None => self.append_null(),
+                            Some(mapped_value) => self.keys_builder.append_value(mapped_value),
+                        }
                     }
                 }
             });
@@ -491,8 +496,9 @@ mod tests {
     use super::*;
 
     use crate::array::Int8Array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
-    use crate::{BinaryArray, StringArray};
+    use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
@@ -738,6 +744,52 @@ mod tests {
         assert_eq!(
             values,
             [Some("e"), Some("e"), Some("f"), Some("e"), Some("d"), Some("a"), Some("b"), Some("c"), Some("a"), Some("b"), Some("c"), None, Some("c"), Some("d"), Some("a"), None]
+        );
+    }
+    #[test]
+    fn test_extend_dictionary_with_null_in_mapped_value() {
+        let some_dict = {
+            let mut values_builder = GenericByteBuilder::<Utf8Type>::new();
+            let mut keys_builder = PrimitiveBuilder::<Int32Type>::new();
+
+            // Manually build a dictionary values that the mapped values have null
+            values_builder.append_null();
+            keys_builder.append_value(0);
+            values_builder.append_value("I like worm hugs");
+            keys_builder.append_value(1);
+
+            let values = values_builder.finish();
+            let keys = keys_builder.finish();
+
+            let data_type = DataType::Dictionary(Box::new(Int32Type::DATA_TYPE), Box::new(Utf8Type::DATA_TYPE));
+
+            let builder = keys
+                .into_data()
+                .into_builder()
+                .data_type(data_type)
+                .child_data(vec![values.into_data()]);
+
+            DictionaryArray::from(unsafe { builder.build_unchecked() })
+        };
+
+        let some_dict_values = some_dict.values().as_string::<i32>();
+        assert_eq!(some_dict_values.into_iter().collect::<Vec<_>>(), &[None, Some("I like worm hugs")]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 1);
+
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            [None, Some("I like worm hugs")]
         );
     }
 
