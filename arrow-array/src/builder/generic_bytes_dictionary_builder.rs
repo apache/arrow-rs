@@ -311,16 +311,27 @@ where
     ///
     pub fn extend_dictionary(&mut self, dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>) -> Result<(), ArrowError> {
         let values = dictionary.values();
-
+        
         let v_len = values.len();
-        if v_len == 0 {
+        let k_len = dictionary.keys().len();
+        if v_len == 0 && k_len == 0 {
             return Ok(());
+        }
+
+        // All nulls
+        if v_len == 0 {
+            self.append_nulls(k_len);
+            return Ok(());
+        }
+
+        if k_len == 0 {
+            return Err(ArrowError::InvalidArgumentError("Dictionary keys should not be empty when values are not empty".to_string()));
         }
 
         // Orphan values will be carried over to the new dictionary
         let mapped_values =  values.iter()
             // Dictionary values should not be null as the keys are null if the value is null
-            .map(|dict_value| self.get_or_insert_key(dict_value).expect("Dictionary value should not be null"))
+            .map(|dict_value| self.get_or_insert_key(dict_value.expect("Dictionary value should not be null")))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Just insert the keys without additional lookups
@@ -727,6 +738,32 @@ mod tests {
         assert_eq!(
             values,
             [Some("e"), Some("e"), Some("f"), Some("e"), Some("d"), Some("a"), Some("b"), Some("c"), Some("a"), Some("b"), Some("c"), None, Some("c"), Some("d"), Some("a"), None]
+        );
+    }
+
+    #[test]
+    fn test_extend_all_null_dictionary() {
+        let some_dict = {
+            let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+            builder.append_nulls(2);
+            builder.finish()
+        };
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        let dict = builder.finish();
+        
+        assert_eq!(dict.values().len(), 0);
+        
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        
+        assert_eq!(
+            values,
+            [None, None]
         );
     }
 }

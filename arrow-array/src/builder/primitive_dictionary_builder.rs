@@ -311,8 +311,19 @@ where
         let values = dictionary.values();
 
         let v_len = values.len();
-        if v_len == 0 {
+        let k_len = dictionary.keys().len();
+        if v_len == 0 && k_len == 0 {
             return Ok(());
+        }
+
+        // All nulls
+        if v_len == 0 {
+            self.append_nulls(k_len);
+            return Ok(());
+        }
+
+        if k_len == 0 {
+            return Err(ArrowError::InvalidArgumentError("Dictionary keys should not be empty when values are not empty".to_string()));
         }
 
         // Orphan values will be carried over to the new dictionary
@@ -506,6 +517,32 @@ mod tests {
         assert_eq!(
             values,
             [Some(6), Some(6), Some(7), Some(6), Some(5), Some(1), Some(2), Some(3), Some(1), Some(2), Some(3), Some(1), Some(2), Some(3), None, Some(4), Some(5), Some(1), Some(3), Some(1), None]
+        );
+    }
+
+    #[test]
+    fn test_extend_all_null_dictionary() {
+        let some_dict = {
+            let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+            builder.append_nulls(2);
+            builder.finish()
+        };
+
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend_dictionary(&some_dict.downcast_dict().unwrap()).unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 0);
+
+        let values = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            [None, None]
         );
     }
 }
