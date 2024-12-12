@@ -5258,9 +5258,6 @@ mod tests {
         assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
-    // Cast Timestamp to Utf8View is not supported yet
-    // TODO: Implement casting from Timestamp to Utf8View
-    // https://github.com/apache/arrow-rs/issues/6734
     macro_rules! assert_cast_timestamp_to_string {
         ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
             let out = cast(&$array, &$datatype).unwrap();
