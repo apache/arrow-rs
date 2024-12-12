@@ -65,6 +65,10 @@ pub struct IpcWriteOptions {
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
     /// Defaults to `false`
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -138,6 +142,10 @@ impl IpcWriteOptions {
 
     /// Return whether the writer is configured to preserve the dictionary IDs
     /// defined in the schema
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn preserve_dict_id(&self) -> bool {
         self.preserve_dict_id
     }
@@ -149,6 +157,10 @@ impl IpcWriteOptions {
     /// to the dictionary batches in order to encode them correctly
     ///
     /// The default will change to `false`  in future releases
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
         self.preserve_dict_id = preserve_dict_id;
         self
@@ -767,6 +779,10 @@ pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -795,6 +811,10 @@ impl DictionaryTracker {
     /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn new_with_preserve_dict_id(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
         Self {
             written: HashMap::new(),
@@ -811,6 +831,10 @@ impl DictionaryTracker {
     ///
     /// If `preserve_dict_id` is false, this will return the value of the last `dict_id` assigned incremented by 1
     /// or 0 in the case where no dictionary IDs have yet been assigned
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn set_dict_id(&mut self, field: &Field) -> i64 {
         let next = if self.preserve_dict_id {
             field.dict_id().expect("no dict_id in field")

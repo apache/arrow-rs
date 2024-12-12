@@ -38,6 +38,10 @@ pub struct Field {
     name: String,
     data_type: DataType,
     nullable: bool,
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
@@ -151,6 +155,10 @@ impl Field {
     }
 
     /// Creates a new field that has additional dictionary information
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With the dict_id field disappearing this function signature will change by removing the dict_id parameter."
+    )]
     pub fn new_dict(
         name: impl Into<String>,
         data_type: DataType,
@@ -386,6 +394,10 @@ impl Field {
     /// Returns a vector containing all (potentially nested) `Field` instances selected by the
     /// dictionary ID they use
     #[inline]
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
         self.fields()
             .into_iter()
@@ -397,6 +409,10 @@ impl Field {
 
     /// Returns the dictionary ID, if this is a dictionary type.
     #[inline]
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     pub const fn dict_id(&self) -> Option<i64> {
         match self.data_type {
             DataType::Dictionary(_, _) => Some(self.dict_id),
