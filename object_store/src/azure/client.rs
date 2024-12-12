@@ -36,6 +36,7 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
+use rand::Rng as _;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, RequestBuilder, Response,
@@ -556,10 +557,11 @@ impl AzureClient {
     pub(crate) async fn put_block(
         &self,
         path: &Path,
-        part_idx: usize,
+        _part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let content_id = format!("{part_idx:20}");
+        let part_idx = u128::from_be_bytes(rand::thread_rng().gen());
+        let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
         self.put_request(path, payload)
