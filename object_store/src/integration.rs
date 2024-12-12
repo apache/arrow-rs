@@ -1178,5 +1178,9 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     let bytes = get_result.bytes().await.unwrap();
     let string_contents = str::from_utf8(&bytes).unwrap();
 
-    assert_eq!("1:0,1:1,1:2,1:3,1:4,", string_contents);
+    if last_writer_wins {
+        assert_eq!("2:0,2:1,2:2,2:3,2:4,", string_contents);
+    } else {
+        assert_eq!("1:0,1:1,1:2,1:3,1:4,", string_contents);
+    }
 }
