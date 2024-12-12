@@ -1113,7 +1113,7 @@ async fn delete_fixtures(storage: &DynObjectStore) {
 }
 
 /// Tests a race condition where 2 threads are performing multipart writes to the same path
-pub async fn multipart_race_condition(storage: &dyn ObjectStore) {
+pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_wins: bool) {
     let path = Path::from("test_multipart_race_condition");
 
     let mut multipart_upload_1 = storage.put_multipart(&path).await.unwrap();
@@ -1165,9 +1165,14 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore) {
         .unwrap();
 
     multipart_upload_1.complete().await.unwrap();
-    let err = multipart_upload_2.complete().await.unwrap_err();
 
-    assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+    if last_writer_wins {
+        multipart_upload_2.complete().await.unwrap();
+    } else {
+        let err = multipart_upload_2.complete().await.unwrap_err();
+
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+    }
 
     let get_result = storage.get(&path).await.unwrap();
     let bytes = get_result.bytes().await.unwrap();
