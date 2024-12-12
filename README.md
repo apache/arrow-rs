@@ -101,7 +101,6 @@ deprecated in `51.3.0` can be removed in `54.0.0` (or later). Deprecated APIs
 may be removed earlier or later than these guidelines at the discretion of the
 maintainers.
 
-
 ## Related Projects
 
 There are several related crates in different repositories
