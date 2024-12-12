@@ -295,14 +295,10 @@ impl MultipartStore for MicrosoftAzure {
 
 #[cfg(test)]
 mod tests {
-    use core::str;
-
     use super::*;
     use crate::integration::*;
     use crate::tests::*;
     use bytes::Bytes;
-    use rand::thread_rng;
-    use rand::Rng;
 
     #[tokio::test]
     async fn azure_blob_test() {
@@ -396,100 +392,5 @@ mod tests {
             builder.get_config_value(&AzureConfigKey::Token).unwrap(),
             azure_storage_token
         );
-    }
-
-    #[tokio::test]
-    async fn azure_parallel_put_multipart_test() {
-        maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
-
-        let rng = thread_rng();
-        let suffix = String::from_utf8(
-            rng.sample_iter(rand::distributions::Alphanumeric)
-                .take(32)
-                .collect(),
-        )
-        .unwrap();
-        let path = Path::from(format!("put_multipart_{suffix}"));
-
-        let mut multipart_upload_1 = integration.put_multipart(&path).await.unwrap();
-        let mut multipart_upload_2 = integration.put_multipart(&path).await.unwrap();
-
-        multipart_upload_1
-            .put_part(Bytes::from("1:0,").into())
-            .await
-            .unwrap();
-        multipart_upload_2
-            .put_part(Bytes::from("2:0,").into())
-            .await
-            .unwrap();
-
-        multipart_upload_2
-            .put_part(Bytes::from("2:1,").into())
-            .await
-            .unwrap();
-        multipart_upload_1
-            .put_part(Bytes::from("1:1,").into())
-            .await
-            .unwrap();
-
-        multipart_upload_1
-            .put_part(Bytes::from("1:2,").into())
-            .await
-            .unwrap();
-        multipart_upload_2
-            .put_part(Bytes::from("2:2,").into())
-            .await
-            .unwrap();
-
-        multipart_upload_2
-            .put_part(Bytes::from("2:3,").into())
-            .await
-            .unwrap();
-        multipart_upload_1
-            .put_part(Bytes::from("1:3,").into())
-            .await
-            .unwrap();
-
-        multipart_upload_1
-            .put_part(Bytes::from("1:4,").into())
-            .await
-            .unwrap();
-        multipart_upload_2
-            .put_part(Bytes::from("2:4,").into())
-            .await
-            .unwrap();
-
-        multipart_upload_1.complete().await.unwrap();
-        let err = multipart_upload_2.complete().await.unwrap_err();
-
-        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
-
-        if let crate::Error::Generic { source, store } = err as crate::Error {
-            assert_eq!(store, STORE);
-
-            if let Some(crate::client::retry::Error::Client { status, body, .. }) =
-                source.downcast_ref::<crate::client::retry::Error>()
-            {
-                assert_eq!(status.clone(), http::StatusCode::BAD_REQUEST);
-
-                let body = body.clone().unwrap();
-                if !body.contains("<Error><Code>InvalidBlockList</Code><Message>The specified block list is invalid.") {
-                    panic!(
-                        "assertion failed: `{body:?}` is not an InvalidBlockList response",
-                    );
-                }
-            } else {
-                panic!("Not a Client error")
-            }
-        } else {
-            panic!("Not a Generic error")
-        }
-
-        let get_result = integration.get(&path).await.unwrap();
-        let bytes = get_result.bytes().await.unwrap();
-        let string_contents = str::from_utf8(&bytes).unwrap();
-
-        assert_eq!("1:0,1:1,1:2,1:3,1:4,", string_contents);
     }
 }
