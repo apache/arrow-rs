@@ -38,6 +38,8 @@
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
