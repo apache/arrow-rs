@@ -3198,7 +3198,8 @@ mod tests {
         // Max 2-byte should not truncate as it would need 3-byte code points
         assert!(increment_utf8("\u{7ff}\u{7ff}".as_bytes().to_vec()).is_none());
 
-        // 3-byte without overflow
+        // 3-byte without overflow [U+800, U+800] -> [U+800, U+801] (note that these
+        // characters should render right to left).
         test_inc("ࠀࠀ", "ࠀࠁ");
 
         // 3-byte ending in max 3-byte
