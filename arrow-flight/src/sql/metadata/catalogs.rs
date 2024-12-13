@@ -69,7 +69,7 @@ impl GetCatalogsBuilder {
     /// [`CommandGetCatalogs`] response
     pub fn build(self) -> Result<RecordBatch> {
         let Self { mut catalogs } = self;
-        catalogs.sort();
+        catalogs.sort_unstable();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&GET_CATALOG_SCHEMA),
