@@ -3268,8 +3268,8 @@ mod tests {
         assert_eq!(&r, "yyyyyyyz".as_bytes());
 
         // 2-byte without overflow
-        let r = truncate_and_increment_utf8("ééééé", 8).unwrap();
-        assert_eq!(&r, "éééê".as_bytes());
+        let r = truncate_and_increment_utf8("ééééé", 7).unwrap();
+        assert_eq!(&r, "ééê".as_bytes());
 
         // 2-byte that overflows lowest byte
         let r = truncate_and_increment_utf8("\u{ff}\u{ff}\u{ff}\u{ff}\u{ff}", 8).unwrap();
@@ -3281,7 +3281,7 @@ mod tests {
 
         // 3-byte without overflow [U+800, U+800, U+800] -> [U+800, U+801] (note that these
         // characters should render right to left).
-        let r = truncate_and_increment_utf8("ࠀࠀࠀ", 8).unwrap();
+        let r = truncate_and_increment_utf8("ࠀࠀࠀࠀ", 8).unwrap();
         assert_eq!(&r, "ࠀࠁ".as_bytes());
 
         // max 3-byte should not truncate as it would need 4-byte code points
@@ -3289,7 +3289,7 @@ mod tests {
         assert!(r.is_none());
 
         // 4-byte without overflow
-        let r = truncate_and_increment_utf8("𐀀𐀀𐀀", 8).unwrap();
+        let r = truncate_and_increment_utf8("𐀀𐀀𐀀𐀀", 9).unwrap();
         assert_eq!(&r, "𐀀𐀁".as_bytes());
 
         // max 4-byte should not truncate
