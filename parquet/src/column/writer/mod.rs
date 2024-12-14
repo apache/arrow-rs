@@ -1467,13 +1467,12 @@ fn truncate_and_increment_utf8(data: &str, length: usize) -> Option<Vec<u8>> {
 ///
 /// Note that this implementation will not promote an N-byte code point to (N+1) bytes.
 fn increment_utf8(data: &str) -> Option<Vec<u8>> {
-    for (idx, code_point) in data.char_indices().rev() {
-        let curr_len = code_point.len_utf8();
-        let original = code_point as u32;
-        if let Some(next_char) = char::from_u32(original + 1) {
+    for (idx, original_char) in data.char_indices().rev() {
+        let original_len = original_char.len_utf8();
+        if let Some(next_char) = char::from_u32(original_char as u32 + 1) {
             // do not allow increasing byte width of incremented char
-            if next_char.len_utf8() == curr_len {
-                let mut result = data.as_bytes()[..idx + curr_len].to_vec();
+            if next_char.len_utf8() == original_len {
+                let mut result = data.as_bytes()[..idx + original_len].to_vec();
                 next_char.encode_utf8(&mut result[idx..]);
                 return Some(result);
             }
