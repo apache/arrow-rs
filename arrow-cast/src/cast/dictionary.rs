@@ -325,6 +325,13 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             }
             pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
         }
+        FixedSizeBinary(i32) => {
+            // If the input is a view type, we can avoid casting (thus copying) the data
+            if array.data_type() == &DataType::FixedSizeBinary(i32) {
+                return binary_view_to_dictionary::<K, i64>(array);
+            }
+            pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
+        }
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
