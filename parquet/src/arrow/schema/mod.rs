@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Converting Parquet schema <--> Arrow schema: [`ArrowToParquetSchemaConverter`] and [parquet_to_arrow_schema]
+//! Converting Parquet schema <--> Arrow schema: [`ArrowSchemaConverter`] and [parquet_to_arrow_schema]
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -226,7 +226,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Field, Schema, DataType};
-/// # use parquet::arrow::ArrowToParquetSchemaConverter;
+/// # use parquet::arrow::ArrowSchemaConverter;
 /// use parquet::schema::types::{SchemaDescriptor, Type};
 /// use parquet::basic; // note there are two `Type`s in the following example
 /// let arrow_schema = Schema::new(vec![
@@ -234,7 +234,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 ///   Field::new("b", DataType::Date32, true),
 /// ]);
 ///
-/// let parquet_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+/// let parquet_schema = ArrowSchemaConverter::new(&arrow_schema)
 ///   .build()
 ///   .unwrap();
 ///
@@ -260,7 +260,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
 /// assert_eq!(parquet_schema, expected_parquet_schema);
 /// ```
 #[derive(Debug)]
-pub struct ArrowToParquetSchemaConverter<'a> {
+pub struct ArrowSchemaConverter<'a> {
     /// The schema to convert
     schema: &'a Schema,
     /// Name of the root schema in Parquet
@@ -271,7 +271,7 @@ pub struct ArrowToParquetSchemaConverter<'a> {
     coerce_types: bool,
 }
 
-impl<'a> ArrowToParquetSchemaConverter<'a> {
+impl<'a> ArrowSchemaConverter<'a> {
     /// Create a new converter
     pub fn new(schema: &'a Schema) -> Self {
         Self {
@@ -344,10 +344,10 @@ impl<'a> ArrowToParquetSchemaConverter<'a> {
 /// Convert arrow schema to parquet schema
 ///
 /// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`ArrowToParquetSchemaConverter`]
+/// overridden with [`ArrowSchemaConverter`]
 #[deprecated(since = "54.0.0", note = "Use `ArrowToParquetSchemaConverter` instead")]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    ArrowToParquetSchemaConverter::new(schema).build()
+    ArrowSchemaConverter::new(schema).build()
 }
 
 fn parse_key_value_metadata(
@@ -1589,7 +1589,7 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
-        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+        let converted_arrow_schema = ArrowSchemaConverter::new(&arrow_schema)
             .with_coerce_types(true)
             .build()
             .unwrap();
@@ -1616,7 +1616,7 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
-        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+        let converted_arrow_schema = ArrowSchemaConverter::new(&arrow_schema)
             .with_coerce_types(false)
             .build()
             .unwrap();
@@ -1775,7 +1775,7 @@ mod tests {
             Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+        let converted_arrow_schema = ArrowSchemaConverter::new(&arrow_schema)
             .build()
             .unwrap();
 
@@ -1814,7 +1814,7 @@ mod tests {
             false,
         )];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = ArrowToParquetSchemaConverter::new(&arrow_schema)
+        let converted_arrow_schema = ArrowSchemaConverter::new(&arrow_schema)
             .with_coerce_types(true)
             .build();
 
@@ -2088,7 +2088,7 @@ mod tests {
         // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
         let arrow_schema = crate::arrow::parquet_to_arrow_schema(&schema_descriptor, None)?;
 
-        let parq_schema_descr = crate::arrow::ArrowToParquetSchemaConverter::new(&arrow_schema)
+        let parq_schema_descr = crate::arrow::ArrowSchemaConverter::new(&arrow_schema)
             .with_coerce_types(true)
             .build()?;
         let parq_fields = parq_schema_descr.root_schema().get_fields();

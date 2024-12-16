@@ -796,7 +796,7 @@ impl WriterPropertiesBuilder {
     /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
     ///
     /// [`DataType::Date64`]: arrow_schema::DataType::Date64
-    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowToParquetSchemaConverter::with_coerce_types
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
         self
