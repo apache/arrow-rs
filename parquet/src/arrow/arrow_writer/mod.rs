@@ -179,12 +179,11 @@ impl<W: Write + Send> ArrowWriter<W> {
         options: ArrowWriterOptions,
     ) -> Result<Self> {
         let mut props = options.properties;
-        let mut converter =
-            ArrowSchemaConverter::new(&arrow_schema).with_coerce_types(props.coerce_types());
+        let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
         if let Some(schema_root) = &options.schema_root {
             converter = converter.schema_root(schema_root);
         }
-        let schema = converter.build()?;
+        let schema = converter.convert(&arrow_schema)?;
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
