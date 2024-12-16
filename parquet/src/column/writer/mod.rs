@@ -884,6 +884,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             || self.get_descriptor().converted_type() == ConvertedType::UTF8
     }
 
+    /// Truncates a binary statistic to at most `truncation_length` bytes.
+    ///
+    /// If truncation is not possible, returns `data`.
+    ///
+    /// The `bool` in the returned tuple indicates whether truncation occurred or not.
+    ///
+    /// UTF-8 Note:
+    /// If the column type indicates UTF-8, and `data` contains valid UTF-8, then the result will
+    /// also remain valid UTF-8, but may be less tnan `truncation_length` bytes to avoid splitting
+    /// on non-character boundaries.
     fn truncate_min_value(&self, truncation_length: Option<usize>, data: &[u8]) -> (Vec<u8>, bool) {
         truncation_length
             .filter(|l| data.len() > *l)
