@@ -19,7 +19,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-
+use num::ToPrimitive;
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -42,7 +42,7 @@ mod filter;
 mod selection;
 pub mod statistics;
 
-use crate::encryption::ciphers::FileDecryptionProperties;
+use crate::encryption::ciphers::{CryptoContext, FileDecryptionProperties};
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -695,7 +695,18 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
-        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+        let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
+        // let aad_file_unique = file_decryptor?.aad_file_unique();
+        // let aad_prefix = file_decryptor?.aad_prefix();
+        //
+        // let file_decryptor = FileDecryptor::new(file_decryptor, aad_file_unique.clone(), aad_prefix.clone());
+
+        let crypto_context = CryptoContext::new(
+            meta.dictionary_page_offset().is_some(), rg_idx.to_i16()?, self.column_idx.to_i16()?, file_decryptor.clone(), file_decryptor);
+        let crypto_context = Arc::new(crypto_context);
+
+        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations, Some(crypto_context));
+        // let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -1853,6 +1864,11 @@ mod tests {
         });
 
         // todo: decrypting data
+        let decryption_properties = Some(
+            ciphers::FileDecryptionProperties::builder()
+                .with_footer_key(key_code.to_vec())
+                .build(),
+        );
         let record_reader =
             ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties.as_ref())
                 .unwrap();

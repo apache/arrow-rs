@@ -921,6 +921,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     self.metadata.column(i),
                     self.row_count,
                     page_locations,
+                    None,
                 )?);
 
                 Ok(Box::new(ColumnChunkIterator {

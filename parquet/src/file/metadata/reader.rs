@@ -669,13 +669,19 @@ impl ParquetMetaDataReader {
             // todo decr: get key_metadata
 
             // remaining buffer contains encrypted FileMetaData
-            file_decryptor = Some(FileDecryptor::new(file_decryption_properties));
-            let decryptor = file_decryptor.clone().unwrap().get_footer_decryptor();
+
             // todo decr: get aad_prefix
             // todo decr: set both aad_prefix and aad_file_unique in file_decryptor
-            let fmd_aad = create_footer_aad(aes_gcm_algo.aad_file_unique.unwrap().as_ref());
+            let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
+            let aad_footer = create_footer_aad(aad_file_unique.as_ref())?;
+            let aad_prefix : Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
+
+            file_decryptor = Some(FileDecryptor::new(file_decryption_properties, aad_file_unique.clone(), aad_prefix.clone()));
+            let decryptor = file_decryptor.clone().unwrap().get_footer_decryptor();
+            // file_decryptor = Some(FileDecryptor::new(file_decryption_properties, aad, aad_prefix));
+
             decrypted_fmd_buf =
-                decryptor.decrypt(prot.as_slice().as_ref(), fmd_aad?.as_ref());
+                decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref());
             prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
         }
 
@@ -705,7 +711,7 @@ impl ParquetMetaDataReader {
             schema_descr,
             column_orders,
         );
-        Ok(ParquetMetaData::new(file_metadata, row_groups, file_decryptor))
+        Ok(ParquetMetaData::new(file_metadata, row_groups, Some(file_decryptor.unwrap())))
     }
 
     /// Parses column orders from Thrift definition.
