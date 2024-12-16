@@ -317,7 +317,7 @@ impl<'a> ArrowToParquetSchemaConverter<'a> {
     }
 
     /// Set the root schema element name (defaults to `"arrow_schema"`).
-    pub fn with_root(mut self, schema_root: &'a str) -> Self {
+    pub fn schema_root(mut self, schema_root: &'a str) -> Self {
         self.schema_root = schema_root;
         self
     }
