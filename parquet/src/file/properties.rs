@@ -16,14 +16,13 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
-use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc};
-
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
+use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc};
 
 /// Default value for [`WriterProperties::data_page_size_limit`]
 pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
@@ -780,22 +779,24 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to control if type coercion is enabled (defaults to `false`).
+    /// Should the writer coerce types to parquet native types (defaults to `false`).
     ///
-    /// # Notes
-    /// Some Arrow types do not have a corresponding Parquet logical type.
-    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
-    /// Also, for [`List`] and [`Map`] types, Parquet expects certain schema elements
-    /// to have specific names to be considered fully compliant.
-    /// Writers have the option to coerce these types and names to match those required
-    /// by the Parquet specification.
-    /// This type coercion allows for meaningful representations that do not require
-    /// downstream readers to consider the embedded Arrow schema, and can allow for greater
-    /// compatibility with other Parquet implementations. However, type
-    /// coercion also prevents the data from being losslessly round-tripped.
+    /// Leaving this option the default `false` will ensure the exact same data
+    /// written to parquet using this library will be read.
     ///
-    /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-    /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but potentially lose information in the process.
+    ///
+    /// * Types such as [`DataType::Date64`], which have no direct corresponding
+    ///   Parquet type, may be stored with lower precision.
+    ///
+    /// * The internal field names of `List` and `Map` types will be renamed if
+    ///   necessary to match what is required by the newest Parquet specification.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
         self
