@@ -549,9 +549,9 @@ impl ArrowColumnChunk {
 ///
 /// // Compute the parquet schema
 /// let props = Arc::new(WriterProperties::default());
-/// let parquet_schema = ArrowSchemaConverter::new(schema.as_ref())
+/// let parquet_schema = ArrowSchemaConverter::new()
 ///   .with_coerce_types(props.coerce_types())
-///   .build()
+///   .convert(&schema)
 ///   .unwrap();
 ///
 /// // Create writers for each of the leaf columns
