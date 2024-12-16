@@ -38,9 +38,11 @@ use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-use bytes::{Buf, Bytes};
-use thrift::protocol::TCompactInputProtocol;
-use crate::encryption::ciphers::{create_footer_aad, BlockDecryptor, CryptoContext, FileDecryptionProperties, FileDecryptor, RingGcmBlockDecryptor};
+use bytes::Bytes;
+use thrift::protocol::{TCompactInputProtocol, TInputProtocol};
+use zstd::zstd_safe::WriteBuf;
+use crate::data_type::AsBytes;
+use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, FileDecryptionProperties, ModuleType};
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -339,37 +341,38 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
-pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<&CryptoContext>) -> Result<PageHeader> {
-    let buf = &mut [];
-    let size = input.read(buf)?;
+pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Arc<CryptoContext>>) -> Result<PageHeader> {
+    let mut prot = TCompactInputProtocol::new(input);
+    if let Some(crypto_context) = crypto_context {
+        // let mut buf = [0; 16 * 1024];
+        // let size = input.read(&mut buf)?;
 
-    // todo: decrypt buffer
-    let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-    let t_file_crypto_metadata: TFileCryptoMetaData =
-        TFileCryptoMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+        let decryptor = &crypto_context.data_decryptor();
+        let file_decryptor = decryptor.footer_decryptor();
+        let aad_file_unique = decryptor.aad_file_unique();
+        // let aad_prefix = decryptor.aad_prefix();
 
-    let file_decryption_properties = crypto_context.unwrap().file_decryption_properties();
-    let file_decryptor = FileDecryptor::new(file_decryption_properties);
+        let aad = create_page_aad(
+            aad_file_unique.as_slice(),
+            ModuleType::DictionaryPageHeader,
+            crypto_context.row_group_ordinal,
+            crypto_context.column_ordinal,
+            0,
+        )?;
 
-    // let fmd_aad = create_footer_aad(aes_gcm_algo.aad_file_unique.unwrap().as_ref());
-    let algo = t_file_crypto_metadata.encryption_algorithm;
-    let aes_gcm_algo = if let EncryptionAlgorithm::AESGCMV1(a) = algo {
-        a
-    } else {
-        unreachable!()
-    }; // todo decr: add support for GCMCTRV1
-    let fmd_aad = create_footer_aad(aes_gcm_algo.aad_file_unique.unwrap().as_ref());
-    let buf2 = file_decryptor.get_footer_decryptor().decrypt(prot.as_slice().as_ref(), fmd_aad?.as_ref());
-
-    let mut prot = TCompactInputProtocol::new(buf2.reader());
-
+        // todo: This currently fails, possibly due to wrongly generated AAD
+        let buf = file_decryptor.decrypt(prot.read_bytes()?.as_slice(), aad.as_ref());
+        todo!("Decrypted page header!");
+        let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
+        let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+        return Ok(page_header)
+    }
     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
     Ok(page_header)
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
-fn read_page_header_len<T: Read>(input: &mut T, crypto_context: Option<&CryptoContext>) -> Result<(usize, PageHeader)> {
+fn read_page_header_len<T: Read>(input: &mut T, crypto_context: Option<Arc<CryptoContext>>) -> Result<(usize, PageHeader)> {
     /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
     struct TrackedRead<R> {
         inner: R,
@@ -538,7 +541,7 @@ pub struct SerializedPageReader<R: ChunkReader> {
     state: SerializedPageReaderState,
 
     /// Crypto context
-    crypto_context: Option<&'static CryptoContext>,
+    crypto_context: Option<Arc<CryptoContext>>,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
@@ -548,9 +551,10 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         meta: &ColumnChunkMetaData,
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
+        crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props, None)
+        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props, crypto_context)
     }
 
     /// Creates a new serialized page with custom options.
@@ -560,7 +564,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
-        crypto_context: Option<&'static CryptoContext>,
+        crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
@@ -707,26 +711,10 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     }
 
                     let mut read = self.reader.get_read(*offset as u64)?;
-                    // let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-
-                    // let decrypted_fmd_buf =
-                    //     decryptor.decrypt(prot.as_slice().as_ref(), fmd_aad?.as_ref());
-
-                    // if let Some(z) = self.crypto_context.as_ref() {
-                    //     let c = read.take(1);
-                    //     // read = z.get_data_decryptor().decrypt(&read, b"aaaaa");
-                    //     // let (header_len, header) = read_page_header_len(&mut read)?;
-                    //     // header
-                    //     // let dec = z.get_data_decryptor().decrypt(header_len, header);
-                    // }
-                    // let file_decryptor = self.crypto_context.unwrap().get_data_decryptor().unwrap();
-                    let file_decryption_properties =
-                        FileDecryptionProperties::builder().with_footer_key("0123456789012345".into()).build();
-                    // let file_decryptor = FileDecryptor::new(&file_decryption_properties);
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
-                        let (header_len, header) = read_page_header_len(&mut read, self.crypto_context)?;
+                        let (header_len, header) = read_page_header_len(&mut read, self.crypto_context.clone())?;
                         verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len;
                         *remaining -= header_len;

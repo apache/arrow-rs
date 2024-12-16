@@ -18,6 +18,7 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
+use std::sync::Arc;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 use crate::errors::{ParquetError, Result};
@@ -172,8 +173,12 @@ pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, -1, -1, -1)
 }
 
-fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i32,
-                     column_ordinal: i32, page_ordinal: i32) -> Result<Vec<u8>> {
+pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16, column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
+    create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
+}
+
+fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16,
+                     column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
 
@@ -187,7 +192,7 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     if row_group_ordinal < 0 {
         return Err(general_err!("Wrong row group ordinal: {}", row_group_ordinal));
     }
-    if row_group_ordinal > u16::MAX as i32 {
+    if row_group_ordinal > i16::MAX {
         return Err(general_err!("Encrypted parquet files can't have more than {} row groups: {}",
             u16::MAX, row_group_ordinal));
     }
@@ -195,7 +200,7 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     if column_ordinal < 0 {
         return Err(general_err!("Wrong column ordinal: {}", column_ordinal));
     }
-    if column_ordinal > u16::MAX as i32 {
+    if column_ordinal > i16::MAX {
         return Err(general_err!("Encrypted parquet files can't have more than {} columns: {}",
             u16::MAX, column_ordinal));
     }
@@ -205,15 +210,15 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
         let mut aad = Vec::with_capacity(file_aad.len() + 5);
         aad.extend_from_slice(file_aad);
         aad.extend_from_slice(module_buf.as_ref());
-        aad.extend_from_slice((row_group_ordinal as u16).to_le_bytes().as_ref());
-        aad.extend_from_slice((column_ordinal as u16).to_le_bytes().as_ref());
+        aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
+        aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
         return Ok(aad)
     }
 
     if page_ordinal < 0 {
-        return Err(general_err!("Wrong column ordinal: {}", page_ordinal));
+        return Err(general_err!("Wrong page ordinal: {}", page_ordinal));
     }
-    if page_ordinal > u16::MAX as i32 {
+    if page_ordinal > i32::MAX {
         return Err(general_err!("Encrypted parquet files can't have more than {} pages in a chunk: {}",
             u16::MAX, page_ordinal));
     }
@@ -221,9 +226,9 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     let mut aad = Vec::with_capacity(file_aad.len() + 7);
     aad.extend_from_slice(file_aad);
     aad.extend_from_slice(module_buf.as_ref());
-    aad.extend_from_slice((row_group_ordinal as u16).to_le_bytes().as_ref());
-    aad.extend_from_slice((column_ordinal as u16).to_le_bytes().as_ref());
-    aad.extend_from_slice((page_ordinal as u16).to_le_bytes().as_ref());
+    aad.extend_from_slice(row_group_ordinal.to_le_bytes().as_ref());
+    aad.extend_from_slice(column_ordinal.to_le_bytes().as_ref());
+    aad.extend_from_slice(page_ordinal.to_le_bytes().as_ref());
     Ok(aad)
 }
 
@@ -266,7 +271,9 @@ impl DecryptionPropertiesBuilder {
 pub struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
     // todo decr: change to BlockDecryptor
-    footer_decryptor: RingGcmBlockDecryptor
+    footer_decryptor: RingGcmBlockDecryptor,
+    aad_file_unique: Vec<u8>,
+    aad_prefix: Vec<u8>,
 }
 
 impl PartialEq for FileDecryptor {
@@ -276,11 +283,13 @@ impl PartialEq for FileDecryptor {
 }
 
 impl FileDecryptor {
-    pub(crate) fn new(decryption_properties: &FileDecryptionProperties) -> Self {
+    pub(crate) fn new(decryption_properties: &FileDecryptionProperties, aad_file_unique: Vec<u8>, aad_prefix: Vec<u8>) -> Self {
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
             footer_decryptor: RingGcmBlockDecryptor::new(decryption_properties.footer_key.clone().unwrap().as_ref()),
-            decryption_properties: decryption_properties.clone()
+            decryption_properties: decryption_properties.clone(),
+            aad_file_unique,
+            aad_prefix,
         }
     }
 
@@ -288,18 +297,49 @@ impl FileDecryptor {
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
         self.footer_decryptor
     }
+
+    pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {
+        &self.decryption_properties
+    }
+
+    pub(crate) fn footer_decryptor(&self) -> RingGcmBlockDecryptor {
+        self.footer_decryptor.clone()
+    }
+
+    pub(crate) fn aad_file_unique(&self) -> &Vec<u8> {
+        &self.aad_file_unique
+    }
+
+    pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
+        &self.aad_prefix
+    }
 }
 
+#[derive(Debug, Clone)]
 pub struct CryptoContext {
-    row_group_ordinal: i32,
-    column_ordinal: i32,
-    metadata_decryptor: FileDecryptor,
-    data_decryptor: FileDecryptor,
-    file_decryption_properties: FileDecryptionProperties,
-    aad: Vec<u8>,
+    pub(crate) start_decrypt_with_dictionary_page: bool,
+    pub(crate) row_group_ordinal: i16,
+    pub(crate) column_ordinal: i16,
+    pub(crate) data_decryptor: Arc<FileDecryptor>,
+    pub(crate) metadata_decryptor: Arc<FileDecryptor>,
+
 }
 
 impl CryptoContext {
-    pub fn data_decryptor(self) -> FileDecryptor { self.data_decryptor }
-    pub fn file_decryption_properties(&self) -> &FileDecryptionProperties { &self.file_decryption_properties }
+    pub fn new(start_decrypt_with_dictionary_page: bool, row_group_ordinal: i16,
+               column_ordinal: i16, data_decryptor: Arc<FileDecryptor>,
+               metadata_decryptor: Arc<FileDecryptor>) -> Self {
+        Self {
+            start_decrypt_with_dictionary_page,
+            row_group_ordinal,
+            column_ordinal,
+            data_decryptor,
+            metadata_decryptor,
+        }
+    }
+    pub fn start_decrypt_with_dictionary_page(&self) -> &bool { &self.start_decrypt_with_dictionary_page }
+    pub fn row_group_ordinal(&self) -> &i16 { &self.row_group_ordinal }
+    pub fn column_ordinal(&self) -> &i16 { &self.column_ordinal }
+    pub fn data_decryptor(&self) -> Arc<FileDecryptor> { self.data_decryptor.clone()}
+    pub fn metadata_decryptor(&self) -> Arc<FileDecryptor> { self.metadata_decryptor.clone() }
 }

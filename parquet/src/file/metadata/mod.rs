@@ -218,6 +218,13 @@ impl ParquetMetaData {
         &self.file_metadata
     }
 
+    /// Returns file decryptor as reference.
+    pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
+        &self.file_decryptor
+    }
+
+
+
     /// Returns number of row groups in this file.
     pub fn num_row_groups(&self) -> usize {
         self.row_groups.len()
