@@ -15,23 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
+//! Tests the HTTP store implementation
 
-use std::io;
+#[cfg(feature = "http")]
+use object_store::{http::HttpBuilder, path::Path, GetOptions, GetRange, ObjectStore};
 
-use arrow::error::Result;
-use arrow::ipc::reader::StreamReader;
-use arrow::ipc::writer::FileWriter;
+/// Tests that even when reqwest has the `gzip` feature enabled, the HTTP store
+/// does not error on a missing `Content-Length` header.
+#[tokio::test]
+#[cfg(feature = "http")]
+async fn test_http_store_gzip() {
+    let http_store = HttpBuilder::new()
+        .with_url("https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main")
+        .build()
+        .unwrap();
 
-fn main() -> Result<()> {
-    let mut arrow_stream_reader = StreamReader::try_new(io::stdin(), None)?;
-    let schema = arrow_stream_reader.schema();
-
-    let mut writer = FileWriter::try_new(io::stdout(), &schema)?;
-
-    arrow_stream_reader.try_for_each(|batch| writer.write(&batch?))?;
-    writer.finish()?;
-
-    Ok(())
+    let _ = http_store
+        .get_opts(
+            &Path::parse("LICENSE.txt").unwrap(),
+            GetOptions {
+                range: Some(GetRange::Bounded(0..100)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 }

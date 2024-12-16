@@ -119,6 +119,7 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
         let data_gen = writer::IpcDataGenerator::default();

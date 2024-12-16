@@ -2590,6 +2590,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -2611,6 +2612,7 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
@@ -2633,6 +2635,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),

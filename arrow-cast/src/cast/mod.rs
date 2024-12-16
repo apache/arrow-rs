@@ -830,18 +830,20 @@ pub fn cast_with_options(
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
             cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
-        (Decimal128(_, s1), Decimal128(p2, s2)) => {
+        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal128Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(_, s1), Decimal256(p2, s2)) => {
+        (Decimal256(p1, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal256Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
@@ -1472,7 +1474,7 @@ pub fn cast_with_options(
         (BinaryView, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported",
         ))),
-        (from_type, Utf8View) if from_type.is_numeric() => {
+        (from_type, Utf8View) if from_type.is_primitive() => {
             value_to_string_view(array, cast_options)
         }
         (from_type, LargeUtf8) if from_type.is_primitive() => {
@@ -2694,13 +2696,16 @@ mod tests {
         // negative test
         let array = vec![Some(123456), None];
         let array = create_decimal_array(array, 10, 0).unwrap();
-        let result = cast(&array, &DataType::Decimal128(2, 2));
-        assert!(result.is_ok());
-        let array = result.unwrap();
-        let array: &Decimal128Array = array.as_primitive();
-        let err = array.validate_decimal_precision(2);
+        let result_safe = cast(&array, &DataType::Decimal128(2, 2));
+        assert!(result_safe.is_ok());
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let result_unsafe = cast_with_options(&array, &DataType::Decimal128(2, 2), &options);
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
-                   err.unwrap_err().to_string());
+                   result_unsafe.unwrap_err().to_string());
     }
 
     #[test]
@@ -5258,9 +5263,6 @@ mod tests {
         assert_eq!("2018-12-25T00:00:00", c.value(1));
     }
 
-    // Cast Timestamp to Utf8View is not supported yet
-    // TODO: Implement casting from Timestamp to Utf8View
-    // https://github.com/apache/arrow-rs/issues/6734
     macro_rules! assert_cast_timestamp_to_string {
         ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
             let out = cast(&$array, &$datatype).unwrap();
@@ -5295,7 +5297,7 @@ mod tests {
             None,
         ];
 
-        // assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
         assert_cast_timestamp_to_string!(array, DataType::Utf8, StringArray, expected);
         assert_cast_timestamp_to_string!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
@@ -5319,7 +5321,13 @@ mod tests {
             Some("2018-12-25 00:00:02.001000"),
             None,
         ];
-        // assert_cast_timestamp_to_string!(array_without_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_without_tz,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
         assert_cast_timestamp_to_string!(
             array_without_tz,
             DataType::Utf8,
@@ -5343,7 +5351,13 @@ mod tests {
             Some("2018-12-25 05:45:02.001000"),
             None,
         ];
-        // assert_cast_timestamp_to_string!(array_with_tz, DataType::Utf8View, StringViewArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            array_with_tz,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
         assert_cast_timestamp_to_string!(
             array_with_tz,
             DataType::Utf8,
@@ -8451,7 +8465,7 @@ mod tests {
         let input_type = DataType::Decimal128(10, 3);
         let output_type = DataType::Decimal256(10, 5);
         assert!(can_cast_types(&input_type, &output_type));
-        let array = vec![Some(i128::MAX), Some(i128::MIN)];
+        let array = vec![Some(123456), Some(-123456)];
         let input_decimal_array = create_decimal_array(array, 10, 3).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
 
@@ -8461,8 +8475,8 @@ mod tests {
             Decimal256Array,
             &output_type,
             vec![
-                Some(i256::from_i128(i128::MAX).mul_wrapping(hundred)),
-                Some(i256::from_i128(i128::MIN).mul_wrapping(hundred))
+                Some(i256::from_i128(123456).mul_wrapping(hundred)),
+                Some(i256::from_i128(-123456).mul_wrapping(hundred))
             ]
         );
     }
@@ -9925,5 +9939,77 @@ mod tests {
         cast(&struct_array, &to_type).expect_err(
             "Cast non-nullable to non-nullable struct field returning null should fail",
         );
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_same_scale() {
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal128(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(result.unwrap_err().to_string(),
+                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_lower_scale() {
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 4);
+        let output_type = DataType::Decimal128(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(result.unwrap_err().to_string(),
+                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_greater_scale() {
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal128(6, 3);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(result.unwrap_err().to_string(),
+                   "Invalid argument error: 1234567890 is too large to store in a Decimal128 of precision 6. Max is 999999");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_throw_error_on_precision_overflow_diff_type() {
+        let array = vec![Some(123456789)];
+        let array = create_decimal_array(array, 24, 2).unwrap();
+        println!("{:?}", array);
+        let input_type = DataType::Decimal128(24, 2);
+        let output_type = DataType::Decimal256(6, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(result.unwrap_err().to_string(),
+                   "Invalid argument error: 123456789 is too large to store in a Decimal256 of precision 6. Max is 999999");
     }
 }
