@@ -249,7 +249,9 @@ pub fn arrow_to_parquet_schema_with_root(
     Ok(SchemaDescriptor::new(Arc::new(group)))
 }
 
-fn parse_key_value_metadata(key_value_metadata: Option<&Vec<KeyValue>>) -> Option<HashMap<String, String>> {
+fn parse_key_value_metadata(
+    key_value_metadata: Option<&Vec<KeyValue>>,
+) -> Option<HashMap<String, String>> {
     match key_value_metadata {
         Some(key_values) => {
             let map: HashMap<String, String> = key_values
