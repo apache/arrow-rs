@@ -1775,9 +1775,7 @@ mod tests {
             Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = ArrowSchemaConverter::new()
-            .convert(&arrow_schema)
-            .unwrap();
+        let converted_arrow_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
 
         assert_eq!(
             parquet_schema.columns().len(),
