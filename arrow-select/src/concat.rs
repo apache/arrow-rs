@@ -200,9 +200,7 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
     let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
 
     // Merge value offsets from the lists
-    let all_value_offsets_iterator = lists
-        .iter()
-        .map(|x| x.offsets());
+    let all_value_offsets_iterator = lists.iter().map(|x| x.offsets());
 
     let value_offset_buffer = merge_value_offsets(all_value_offsets_iterator);
 
@@ -228,7 +226,13 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
 /// [[0, 3, 5], [0, 2, 2, 8], [], [0, 0, 1]]
 /// The output should be
 /// [ 0, 3, 5,      7, 7, 13,         13, 14]
-fn merge_value_offsets<'a, OffsetSize: OffsetSizeTrait, I: Iterator<Item = &'a OffsetBuffer<OffsetSize>>>(offset_buffers_iterator: I) -> Buffer {
+fn merge_value_offsets<
+    'a,
+    OffsetSize: OffsetSizeTrait,
+    I: Iterator<Item = &'a OffsetBuffer<OffsetSize>>,
+>(
+    offset_buffers_iterator: I,
+) -> Buffer {
     // 1. Filter out empty lists
     let mut offset_buffers_iterator = offset_buffers_iterator.filter(|x| !x.is_empty());
 
@@ -237,12 +241,13 @@ fn merge_value_offsets<'a, OffsetSize: OffsetSizeTrait, I: Iterator<Item = &'a O
 
     // 3. If we have only empty lists, return an empty buffer
     if starting_buffer.is_none() {
-        return Buffer::from(&[])
+        return Buffer::from(&[]);
     }
 
     let starting_buffer = starting_buffer.unwrap();
 
-    let mut offsets_iter: Box<dyn Iterator<Item=OffsetSize>> = Box::new(starting_buffer.iter().copied());
+    let mut offsets_iter: Box<dyn Iterator<Item = OffsetSize>> =
+        Box::new(starting_buffer.iter().copied());
 
     // 4. Get the last value in the starting buffer as the starting point for the next buffer
     // Safety: We already filtered out empty lists
@@ -269,9 +274,7 @@ fn merge_value_offsets<'a, OffsetSize: OffsetSizeTrait, I: Iterator<Item = &'a O
         advance_by += last_value;
     }
 
-    unsafe {
-        Buffer::from_trusted_len_iter(offsets_iter)
-    }
+    unsafe { Buffer::from_trusted_len_iter(offsets_iter) }
 }
 
 macro_rules! dict_helper {
@@ -1027,7 +1030,10 @@ mod tests {
             create_single_row_list_of_dict(vec![Some("b")]),
         ];
 
-        let arrays = scalars.iter().map(|a| a as &(dyn Array)).collect::<Vec<_>>();
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
         let concat_res = concat(arrays.as_slice()).unwrap();
 
         let expected_list = create_list_of_dict(vec![
@@ -1049,7 +1055,6 @@ mod tests {
             .as_dictionary::<Int32Type>()
             .downcast_dict::<StringArray>()
             .unwrap();
-        println!("{:?}", dict);
 
         assert_dictionary_has_unique_values::<_, StringArray>(
             list.values().as_dictionary::<Int32Type>(),
@@ -1135,13 +1140,14 @@ mod tests {
             assert_eq!(a, b);
         });
 
-        // Assert that the
         assert_dictionary_has_unique_values::<_, StringArray>(
             list.values().as_dictionary::<Int32Type>(),
         );
     }
 
-    fn create_single_row_list_of_dict(list_items: Vec<Option<&'static str>>) -> GenericListArray<i32> {
+    fn create_single_row_list_of_dict(
+        list_items: Vec<Option<&'static str>>,
+    ) -> GenericListArray<i32> {
         let rows = list_items.into_iter().map(|row| Some(row)).collect();
 
         create_list_of_dict(vec![rows])
@@ -1158,9 +1164,8 @@ mod tests {
         builder.finish()
     }
 
-    fn assert_dictionary_has_unique_values<'a, K, V: 'static>(
-        array: &'a DictionaryArray<K>,
-    ) where
+    fn assert_dictionary_has_unique_values<'a, K, V: 'static>(array: &'a DictionaryArray<K>)
+    where
         K: ArrowDictionaryKeyType,
         V: Sync + Send,
         &'a V: ArrayAccessor + IntoIterator,
