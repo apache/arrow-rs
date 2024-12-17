@@ -177,8 +177,8 @@ pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordin
     create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
 }
 
-fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16,
-                     column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
+pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16,
+                         column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
 
@@ -192,17 +192,18 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     if row_group_ordinal < 0 {
         return Err(general_err!("Wrong row group ordinal: {}", row_group_ordinal));
     }
+    // todo: this check is a noop here
     if row_group_ordinal > i16::MAX {
         return Err(general_err!("Encrypted parquet files can't have more than {} row groups: {}",
-            u16::MAX, row_group_ordinal));
+            i16::MAX, row_group_ordinal));
     }
-
     if column_ordinal < 0 {
         return Err(general_err!("Wrong column ordinal: {}", column_ordinal));
     }
+    // todo: this check is a noop here
     if column_ordinal > i16::MAX {
         return Err(general_err!("Encrypted parquet files can't have more than {} columns: {}",
-            u16::MAX, column_ordinal));
+            i16::MAX, column_ordinal));
     }
 
     if module_buf[0] != (ModuleType::DataPageHeader as u8) &&
@@ -218,9 +219,9 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     if page_ordinal < 0 {
         return Err(general_err!("Wrong page ordinal: {}", page_ordinal));
     }
-    if page_ordinal > i32::MAX {
+    if page_ordinal > i16::MAX as i32 {
         return Err(general_err!("Encrypted parquet files can't have more than {} pages in a chunk: {}",
-            u16::MAX, page_ordinal));
+            i16::MAX, page_ordinal));
     }
 
     let mut aad = Vec::with_capacity(file_aad.len() + 7);
@@ -228,7 +229,7 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
     aad.extend_from_slice(module_buf.as_ref());
     aad.extend_from_slice(row_group_ordinal.to_le_bytes().as_ref());
     aad.extend_from_slice(column_ordinal.to_le_bytes().as_ref());
-    aad.extend_from_slice(page_ordinal.to_le_bytes().as_ref());
+    aad.extend_from_slice((page_ordinal as i16).to_le_bytes().as_ref());
     Ok(aad)
 }
 

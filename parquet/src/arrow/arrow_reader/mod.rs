@@ -696,13 +696,9 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let reader = self.reader.clone();
 
         let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
-        // let aad_file_unique = file_decryptor?.aad_file_unique();
-        // let aad_prefix = file_decryptor?.aad_prefix();
-        //
-        // let file_decryptor = FileDecryptor::new(file_decryptor, aad_file_unique.clone(), aad_prefix.clone());
 
         let crypto_context = CryptoContext::new(
-            meta.dictionary_page_offset().is_some(), rg_idx.to_i16()?, self.column_idx.to_i16()?, file_decryptor.clone(), file_decryptor);
+            meta.dictionary_page_offset().is_some(), rg_idx as i16, self.column_idx as i16, file_decryptor.clone(), file_decryptor);
         let crypto_context = Arc::new(crypto_context);
 
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations, Some(crypto_context));
