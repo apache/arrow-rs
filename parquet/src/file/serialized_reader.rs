@@ -361,7 +361,7 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Ar
         let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
         let mut ciphertext = vec![0; 4 + ciphertext_len];
         input.read_exact(&mut ciphertext[4..])?;
-        let buf = file_decryptor.decrypt(&ciphertext, aad.as_ref());
+        let buf = file_decryptor.decrypt(&ciphertext, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
@@ -443,7 +443,7 @@ pub(crate) fn decode_page(
             crypto_context.column_ordinal,
             0,
         )?;
-        let decrypted = file_decryptor.decrypt(&buffer.as_ref(), &aad);
+        let decrypted = file_decryptor.decrypt(&buffer.as_ref(), &aad)?;
         Bytes::from(decrypted)
     } else {
         buffer
