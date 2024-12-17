@@ -727,7 +727,7 @@ mod tests {
         let some_dict = {
             let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
             builder.extend(["a", "b", "c", "a", "b", "c"].into_iter().map(Some));
-            builder.extend([None::<&str>].into_iter());
+            builder.extend([None::<&str>]);
             builder.extend(["c", "d", "a"].into_iter().map(Some));
             builder.append_null();
             builder.finish()

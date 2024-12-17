@@ -46,7 +46,7 @@ impl<T: ToByteSlice> PartialEq for Value<T> {
 
 impl<T: ToByteSlice> Eq for Value<T> {}
 
-/// Builder for [`DictionaryArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
+/// Builder for [`DictionaryArray`] of [`PrimitiveArray`]
 ///
 /// # Example:
 ///
@@ -507,7 +507,7 @@ mod tests {
         let some_dict = {
             let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
             builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
-            builder.extend([None::<i32>].into_iter());
+            builder.extend([None::<i32>]);
             builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
             builder.append_null();
             builder.finish()
