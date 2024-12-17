@@ -429,7 +429,8 @@ pub(crate) fn decode_page(
         // When is_compressed flag is missing the page is considered compressed
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
-    if crypto_context.is_some() {
+
+    let buffer = if crypto_context.is_some() {
         let crypto_context = crypto_context.as_ref().unwrap();
         let decryptor = crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
@@ -442,15 +443,18 @@ pub(crate) fn decode_page(
             crypto_context.column_ordinal,
             0,
         )?;
-        let decrypted = file_decryptor.decrypt(&buffer.as_ref()[offset..], &aad);
-        todo!("page decrypted!");
-    }
+        let decrypted = file_decryptor.decrypt(&buffer.as_ref(), &aad);
+        Bytes::from(decrypted)
+    } else {
+        buffer
+    };
 
     // TODO: page header could be huge because of statistics. We should set a
     // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_size = page_header.uncompressed_page_size as usize;
+
             let mut decompressed = Vec::with_capacity(uncompressed_size);
             let compressed = &buffer.as_ref()[offset..];
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
@@ -459,6 +463,7 @@ pub(crate) fn decode_page(
                 &mut decompressed,
                 Some(uncompressed_size - offset),
             )?;
+            todo!("page decompressed!");
 
             if decompressed.len() != uncompressed_size {
                 return Err(general_err!(
