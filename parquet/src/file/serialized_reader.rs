@@ -430,7 +430,7 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    let buffer = if crypto_context.is_some() {
+    let buffer : Bytes = if crypto_context.is_some() {
         let crypto_context = crypto_context.as_ref().unwrap();
         let decryptor = crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
@@ -463,7 +463,6 @@ pub(crate) fn decode_page(
                 &mut decompressed,
                 Some(uncompressed_size - offset),
             )?;
-            todo!("page decompressed!");
 
             if decompressed.len() != uncompressed_size {
                 return Err(general_err!(
