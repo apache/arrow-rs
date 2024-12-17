@@ -106,7 +106,7 @@ jobs:
         working-directory: parquet
         run: |
           # if this fails, run this from the parquet directory:
-          # cargo fmt -p parquet -- --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+          # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
           cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
       - name: Format object_store
         working-directory: object_store
