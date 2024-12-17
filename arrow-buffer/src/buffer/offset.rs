@@ -285,7 +285,7 @@ impl<'a, Offset: ArrowNativeType + Integer + Copy> MergeBuffersIter<'a, Offset> 
     }
 }
 
-impl<'a, Offset: ArrowNativeType + Integer + Copy> Iterator for MergeBuffersIter<'a, Offset> {
+impl<Offset: ArrowNativeType + Integer + Copy> Iterator for MergeBuffersIter<'_, Offset> {
     type Item = Offset;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -300,14 +300,8 @@ impl<'a, Offset: ArrowNativeType + Integer + Copy> Iterator for MergeBuffersIter
 
         self.advance_by = self.next_advance_by;
 
-        let current_offset_buffer = self.iterator.next();
-
         // 3. If no more iterators, than we finished
-        if current_offset_buffer.is_none() {
-            return None;
-        }
-
-        let current_offset_buffer = current_offset_buffer.unwrap();
+        let current_offset_buffer = self.iterator.next()?;
 
         // 4. Get the last value of the current buffer so we can know how much to advance the next buffer
         // Safety: We already filtered out empty lists
@@ -318,7 +312,7 @@ impl<'a, Offset: ArrowNativeType + Integer + Copy> Iterator for MergeBuffersIter
 
         self.inner_iterator = Box::new(
             current_offset_buffer
-                .into_iter()
+                .iter()
                 // 6. Skip the initial offset of 0
                 // Skipping the first item as it is the initial offset of 0,
                 // and we skip even for the first iterator as we handle that by starting with inner_iterator of [0]
@@ -336,9 +330,7 @@ impl<'a, Offset: ArrowNativeType + Integer + Copy> Iterator for MergeBuffersIter
     }
 }
 
-impl<'a, Offset: ArrowNativeType + Integer + Copy> ExactSizeIterator
-    for MergeBuffersIter<'a, Offset>
-{
+impl<Offset: ArrowNativeType + Integer + Copy> ExactSizeIterator for MergeBuffersIter<'_, Offset> {
     fn len(&self) -> usize {
         self.size
     }
