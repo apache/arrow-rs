@@ -38,7 +38,6 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, Buffer, NullBuffer, Of
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
-use num::Saturating;
 use std::sync::Arc;
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
