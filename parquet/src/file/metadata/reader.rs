@@ -681,7 +681,7 @@ impl ParquetMetaDataReader {
             // file_decryptor = Some(FileDecryptor::new(file_decryption_properties, aad, aad_prefix));
 
             decrypted_fmd_buf =
-                decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref());
+                decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
             prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
         }
 

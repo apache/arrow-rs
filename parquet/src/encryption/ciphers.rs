@@ -24,11 +24,11 @@ use ring::rand::{SecureRandom, SystemRandom};
 use crate::errors::{ParquetError, Result};
 
 pub trait BlockEncryptor {
-    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
+    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 pub trait BlockDecryptor {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Vec<u8>;
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
@@ -102,8 +102,8 @@ impl RingGcmBlockEncryptor {
 }
 
 impl BlockEncryptor for RingGcmBlockEncryptor {
-    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
-        let nonce = self.nonce_sequence.advance().unwrap();
+    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+        let nonce = self.nonce_sequence.advance()?;
         let ciphertext_len = plaintext.len() + NONCE_LEN + TAG_LEN;
         // todo TBD: add first 4 bytes with the length, per https://github.com/apache/parquet-format/blob/master/Encryption.md#51-encrypted-module-serialization
         let mut result = Vec::with_capacity(SIZE_LEN + ciphertext_len);
@@ -113,11 +113,10 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
 
         let tag = self
             .key
-            .seal_in_place_separate_tag(nonce, Aad::from(aad), &mut result[SIZE_LEN + NONCE_LEN..])
-            .unwrap();
+            .seal_in_place_separate_tag(nonce, Aad::from(aad), &mut result[SIZE_LEN + NONCE_LEN..])?;
         result.extend_from_slice(tag.as_ref());
 
-        result
+        Ok(result)
     }
 }
 
@@ -138,7 +137,7 @@ impl RingGcmBlockDecryptor {
 }
 
 impl BlockDecryptor for RingGcmBlockDecryptor {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Vec<u8> {
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         let mut result = Vec::with_capacity(
             length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN,
         );
@@ -146,15 +145,14 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
 
         let nonce = ring::aead::Nonce::try_assume_unique_for_key(
             &length_and_ciphertext[SIZE_LEN..SIZE_LEN + NONCE_LEN],
-        )
-        .unwrap();
+        )?;
 
         self.key
-            .open_in_place(nonce, Aad::from(aad), &mut result)
-            .unwrap();
+            .open_in_place(nonce, Aad::from(aad), &mut result)?;
 
+        // Truncate result to remove the tag
         result.resize(result.len() - TAG_LEN, 0u8);
-        result
+        Ok(result)
     }
 }
 
