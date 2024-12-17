@@ -345,7 +345,7 @@ impl<'a> ArrowSchemaConverter<'a> {
 ///
 /// The name of the root schema element defaults to `"arrow_schema"`, this can be
 /// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowToParquetSchemaConverter` instead")]
+#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
     ArrowSchemaConverter::new().convert(schema)
 }
