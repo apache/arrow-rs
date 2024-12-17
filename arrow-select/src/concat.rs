@@ -991,12 +991,6 @@ mod tests {
             assert_eq!(a, b);
         });
 
-        let dict = list
-            .values()
-            .as_dictionary::<Int32Type>()
-            .downcast_dict::<StringArray>()
-            .unwrap();
-
         assert_dictionary_has_unique_values::<_, StringArray>(
             list.values().as_dictionary::<Int32Type>(),
         );
@@ -1006,7 +1000,6 @@ mod tests {
     fn concat_many_dictionary_list_arrays() {
         let number_of_unique_values = 8;
         let scalars = (0..80000)
-            .into_iter()
             .map(|i| {
                 create_single_row_list_of_dict(vec![Some(
                     (i % number_of_unique_values).to_string(),
@@ -1022,7 +1015,6 @@ mod tests {
 
         let expected_list = create_list_of_dict(
             (0..80000)
-                .into_iter()
                 .map(|i| Some(vec![Some((i % number_of_unique_values).to_string())]))
                 .collect::<Vec<_>>(),
         );
@@ -1033,12 +1025,6 @@ mod tests {
         list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
             assert_eq!(a, b);
         });
-
-        let dict = list
-            .values()
-            .as_dictionary::<Int32Type>()
-            .downcast_dict::<StringArray>()
-            .unwrap();
 
         assert_dictionary_has_unique_values::<_, StringArray>(
             list.values().as_dictionary::<Int32Type>(),
@@ -1132,7 +1118,7 @@ mod tests {
     fn create_single_row_list_of_dict(
         list_items: Vec<Option<impl AsRef<str>>>,
     ) -> GenericListArray<i32> {
-        let rows = list_items.into_iter().map(|row| Some(row)).collect();
+        let rows = list_items.into_iter().map(Some).collect();
 
         create_list_of_dict(vec![rows])
     }
@@ -1150,17 +1136,17 @@ mod tests {
         builder.finish()
     }
 
-    fn assert_dictionary_has_unique_values<'a, K, V: 'static>(array: &'a DictionaryArray<K>)
+    fn assert_dictionary_has_unique_values<'a, K, V>(array: &'a DictionaryArray<K>)
     where
         K: ArrowDictionaryKeyType,
-        V: Sync + Send,
+        V: Sync + Send + 'static,
         &'a V: ArrayAccessor + IntoIterator,
 
         <&'a V as ArrayAccessor>::Item: Default + Clone + PartialEq + Debug + Ord,
         <&'a V as IntoIterator>::Item: Clone + PartialEq + Debug + Ord,
     {
         let dict = array.downcast_dict::<V>().unwrap();
-        let mut values = dict.values().clone().into_iter().collect::<Vec<_>>();
+        let mut values = dict.values().into_iter().collect::<Vec<_>>();
 
         // remove duplicates must be sorted first so we can compare
         values.sort();
