@@ -1145,14 +1145,16 @@ mod tests {
     }
 
     fn create_single_row_list_of_dict(
-        list_items: Vec<Option<&'static str>>,
+        list_items: Vec<Option<impl AsRef<str>>>,
     ) -> GenericListArray<i32> {
         let rows = list_items.into_iter().map(|row| Some(row)).collect();
 
         create_list_of_dict(vec![rows])
     }
 
-    fn create_list_of_dict(rows: Vec<Option<Vec<Option<&'static str>>>>) -> GenericListArray<i32> {
+    fn create_list_of_dict(
+        rows: Vec<Option<Vec<Option<impl AsRef<str>>>>>,
+    ) -> GenericListArray<i32> {
         let mut builder =
             GenericListBuilder::<i32, _>::new(StringDictionaryBuilder::<Int32Type>::new());
 
