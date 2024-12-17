@@ -164,7 +164,6 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
 }
 
 impl<O: ArrowNativeType + Integer + Copy> OffsetBuffer<O> {
-
     /// Merge multiple [`OffsetBuffer`] into a single [`OffsetBuffer`]
     ///
     ///
@@ -189,9 +188,7 @@ impl<O: ArrowNativeType + Integer + Copy> OffsetBuffer<O> {
         Iter: IntoIterator<Item = &'a OffsetBuffer<O>>,
         <Iter as IntoIterator>::IntoIter: 'a + Clone,
     {
-        let iter = MergeBuffersIter::from(
-            offset_buffers_iterator.into_iter(),
-        );
+        let iter = MergeBuffersIter::from(offset_buffers_iterator.into_iter());
         if iter.len() == 0 {
             return Self::new_empty();
         }
@@ -422,7 +419,7 @@ mod tests {
         ];
 
         let buffer = OffsetBuffer::<i32>::merge(&buffers);
-        assert_eq!(buffer.as_ref(), &[ 0, 3, 5, 7, 7, 13, 13, 14]);
+        assert_eq!(buffer.as_ref(), &[0, 3, 5, 7, 7, 13, 13, 14]);
     }
 
     #[test]
