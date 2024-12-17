@@ -126,7 +126,7 @@ impl From<String> for PathPart<'static> {
     }
 }
 
-impl<'a> AsRef<str> for PathPart<'a> {
+impl AsRef<str> for PathPart<'_> {
     fn as_ref(&self) -> &str {
         self.raw.as_ref()
     }

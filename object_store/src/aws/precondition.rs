@@ -138,17 +138,6 @@ pub enum S3ConditionalPut {
     /// [HTTP precondition]: https://datatracker.ietf.org/doc/html/rfc9110#name-preconditions
     ETagMatch,
 
-    /// Like `ETagMatch`, but with support for `PutMode::Create` and not
-    /// `PutMode::Option`.
-    ///
-    /// This is the limited form of conditional put supported by Amazon S3
-    /// as of August 2024 ([announcement]).
-    ///
-    /// Encoded as `etag-put-if-not-exists` ignoring whitespace.
-    ///
-    /// [announcement]: https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/
-    ETagPutIfNotExists,
-
     /// The name of a DynamoDB table to use for coordination
     ///
     /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
@@ -164,7 +153,6 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
-            Self::ETagPutIfNotExists => write!(f, "etag-put-if-not-exists"),
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -174,7 +162,6 @@ impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
-            "etag-put-if-not-exists" => Some(Self::ETagPutIfNotExists),
             trimmed => match trimmed.split_once(':')? {
                 ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
                 _ => None,

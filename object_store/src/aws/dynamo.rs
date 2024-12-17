@@ -471,7 +471,7 @@ enum ReturnValues {
 /// This provides cheap, ordered serialization of maps
 struct Map<'a, K, V>(&'a [(K, V)]);
 
-impl<'a, K: Serialize, V: Serialize> Serialize for Map<'a, K, V> {
+impl<K: Serialize, V: Serialize> Serialize for Map<'_, K, V> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

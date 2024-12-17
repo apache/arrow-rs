@@ -430,31 +430,31 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// Before GC:
     /// ```text
-    ///                                        ┌──────┐                 
-    ///                                        │......│                 
-    ///                                        │......│                 
-    /// ┌────────────────────┐       ┌ ─ ─ ─ ▶ │Data1 │   Large buffer  
+    ///                                        ┌──────┐
+    ///                                        │......│
+    ///                                        │......│
+    /// ┌────────────────────┐       ┌ ─ ─ ─ ▶ │Data1 │   Large buffer
     /// │       View 1       │─ ─ ─ ─          │......│  with data that
     /// ├────────────────────┤                 │......│ is not referred
     /// │       View 2       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data2 │ to by View 1 or
-    /// └────────────────────┘                 │......│      View 2     
-    ///                                        │......│                 
-    ///    2 views, refer to                   │......│                 
-    ///   small portions of a                  └──────┘                 
-    ///      large buffer                                               
+    /// └────────────────────┘                 │......│      View 2
+    ///                                        │......│
+    ///    2 views, refer to                   │......│
+    ///   small portions of a                  └──────┘
+    ///      large buffer
     /// ```
-    ///                                                                
+    ///
     /// After GC:
     ///
     /// ```text
     /// ┌────────────────────┐                 ┌─────┐    After gc, only
-    /// │       View 1       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data1│     data that is  
-    /// ├────────────────────┤       ┌ ─ ─ ─ ▶ │Data2│    pointed to by  
-    /// │       View 2       │─ ─ ─ ─          └─────┘     the views is  
-    /// └────────────────────┘                                 left      
-    ///                                                                  
-    ///                                                                  
-    ///         2 views                                                  
+    /// │       View 1       │─ ─ ─ ─ ─ ─ ─ ─▶ │Data1│     data that is
+    /// ├────────────────────┤       ┌ ─ ─ ─ ▶ │Data2│    pointed to by
+    /// │       View 2       │─ ─ ─ ─          └─────┘     the views is
+    /// └────────────────────┘                                 left
+    ///
+    ///
+    ///         2 views
     /// ```
     /// This method will compact the data buffers by recreating the view array and only include the data
     /// that is pointed to by the views.
@@ -573,6 +573,15 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
 
     fn is_empty(&self) -> bool {
         self.views.is_empty()
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.views.shrink_to_fit();
+        self.buffers.iter_mut().for_each(|b| b.shrink_to_fit());
+        self.buffers.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
     }
 
     fn offset(&self) -> usize {

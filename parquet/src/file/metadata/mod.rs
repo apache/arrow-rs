@@ -190,7 +190,7 @@ impl ParquetMetaData {
 
     /// Creates Parquet metadata from file metadata, a list of row
     /// group metadata, and the column index structures.
-    #[deprecated(note = "Use ParquetMetaDataBuilder")]
+    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataBuilder")]
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
@@ -230,12 +230,6 @@ impl ParquetMetaData {
         &self.row_groups
     }
 
-    /// Returns page indexes in this file.
-    #[deprecated(note = "Use Self::column_index")]
-    pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
-        self.column_index.as_ref()
-    }
-
     /// Returns the column index for this file if loaded
     ///
     /// Returns `None` if the parquet file does not have a `ColumnIndex` or
@@ -244,12 +238,6 @@ impl ParquetMetaData {
     /// [ArrowReaderOptions::with_page_index]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index
     pub fn column_index(&self) -> Option<&ParquetColumnIndex> {
         self.column_index.as_ref()
-    }
-
-    /// Returns the offset index for this file if loaded
-    #[deprecated(note = "Use Self::offset_index")]
-    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
-        self.offset_index.as_ref()
     }
 
     /// Returns offset indexes in this file, if loaded

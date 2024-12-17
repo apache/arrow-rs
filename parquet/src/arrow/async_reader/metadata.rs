@@ -119,7 +119,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             return Err(ParquetError::EOF(format!(
                 "file size of {} is less than footer + metadata {}",
                 file_size,
-                length + 8
+                length + FOOTER_SIZE
             )));
         }
 

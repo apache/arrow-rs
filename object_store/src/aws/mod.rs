@@ -136,7 +136,8 @@ impl Signer for AmazonS3 {
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region);
+        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
+            .with_request_payer(self.client.config.request_payer);
 
         let path_url = self.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
@@ -169,10 +170,7 @@ impl ObjectStore for AmazonS3 {
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
             (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
-            (
-                PutMode::Create,
-                Some(S3ConditionalPut::ETagMatch | S3ConditionalPut::ETagPutIfNotExists),
-            ) => {
+            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
@@ -196,9 +194,26 @@ impl ObjectStore for AmazonS3 {
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
                 match put {
-                    S3ConditionalPut::ETagPutIfNotExists => Err(Error::NotImplemented),
                     S3ConditionalPut::ETagMatch => {
-                        request.header(&IF_MATCH, etag.as_str()).do_put().await
+                        match request
+                            .header(&IF_MATCH, etag.as_str())
+                            // Real S3 will occasionally report 409 Conflict
+                            // if there are concurrent `If-Match` requests
+                            // in flight, so we need to be prepared to retry
+                            // 409 responses.
+                            .retry_on_conflict(true)
+                            .do_put()
+                            .await
+                        {
+                            // Real S3 reports NotFound rather than PreconditionFailed when the
+                            // object doesn't exist. Convert to PreconditionFailed for
+                            // consistency with R2. This also matches what the HTTP spec
+                            // says the behavior should be.
+                            Err(Error::NotFound { path, source }) => {
+                                Err(Error::Precondition { path, source })
+                            }
+                            r => r,
+                        }
                     }
                     S3ConditionalPut::Dynamo(d) => {
                         d.conditional_op(&self.client, location, Some(&etag), move || {
@@ -479,6 +494,66 @@ mod tests {
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
     #[tokio::test]
+    async fn write_multipart_file_with_signature() {
+        maybe_skip_integration!();
+
+        let store = AmazonS3Builder::from_env()
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()
+            .unwrap();
+
+        let str = "test.bin";
+        let path = Path::parse(str).unwrap();
+        let opts = PutMultipartOpts::default();
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+
+        upload
+            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+            .await
+            .unwrap();
+        upload
+            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+            .await
+            .unwrap();
+
+        let res = upload.complete().await.unwrap();
+        assert!(res.e_tag.is_some(), "Should have valid etag");
+
+        store.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_multipart_file_with_signature_object_lock() {
+        maybe_skip_integration!();
+
+        let bucket = "test-object-lock";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256)
+            .build()
+            .unwrap();
+
+        let str = "test.bin";
+        let path = Path::parse(str).unwrap();
+        let opts = PutMultipartOpts::default();
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+
+        upload
+            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+            .await
+            .unwrap();
+        upload
+            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+            .await
+            .unwrap();
+
+        let res = upload.complete().await.unwrap();
+        assert!(res.e_tag.is_some(), "Should have valid etag");
+
+        store.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn s3_test() {
         maybe_skip_integration!();
         let config = AmazonS3Builder::from_env();
@@ -486,6 +561,7 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
+        let test_conditional_put = config.conditional_put.is_some();
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -494,6 +570,7 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+        multipart_race_condition(&integration, true).await;
         signing(&integration).await;
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;
@@ -516,9 +593,8 @@ mod tests {
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }
-        if let Some(conditional_put) = &config.conditional_put {
-            let supports_update = !matches!(conditional_put, S3ConditionalPut::ETagPutIfNotExists);
-            put_opts(&integration, supports_update).await;
+        if test_conditional_put {
+            put_opts(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled

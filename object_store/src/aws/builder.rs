@@ -170,6 +170,8 @@ pub struct AmazonS3Builder {
     encryption_bucket_key_enabled: Option<ConfigValue<bool>>,
     /// base64-encoded 256-bit customer encryption key for SSE-C.
     encryption_customer_key_base64: Option<String>,
+    /// When set to true, charge requester for bucket operations
+    request_payer: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -330,6 +332,13 @@ pub enum AmazonS3ConfigKey {
     /// - `s3_express`
     S3Express,
 
+    /// Enable Support for S3 Requester Pays
+    ///
+    /// Supported keys:
+    /// - `aws_request_payer`
+    /// - `request_payer`
+    RequestPayer,
+
     /// Client options
     Client(ClientConfigKey),
 
@@ -358,6 +367,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
             Self::DisableTagging => "aws_disable_tagging",
+            Self::RequestPayer => "aws_request_payer",
             Self::Client(opt) => opt.as_ref(),
             Self::Encryption(opt) => opt.as_ref(),
         }
@@ -389,6 +399,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
+            "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             "aws_server_side_encryption" => Ok(Self::Encryption(
@@ -510,6 +521,9 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put = Some(ConfigValue::Deferred(value.into()))
             }
+            AmazonS3ConfigKey::RequestPayer => {
+                self.request_payer = ConfigValue::Deferred(value.into())
+            }
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
                     self.encryption_type = Some(ConfigValue::Deferred(value.into()))
@@ -567,6 +581,7 @@ impl AmazonS3Builder {
                 self.conditional_put.as_ref().map(ToString::to_string)
             }
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
+            AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
                     self.encryption_type.as_ref().map(ToString::to_string)
@@ -845,6 +860,14 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set whether to charge requester for bucket operations.
+    ///
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html>
+    pub fn with_request_payer(mut self, enabled: bool) -> Self {
+        self.request_payer = ConfigValue::Parsed(enabled);
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -996,6 +1019,7 @@ impl AmazonS3Builder {
             copy_if_not_exists,
             conditional_put: put_precondition,
             encryption_headers,
+            request_payer: self.request_payer.get()?,
         };
 
         let client = Arc::new(S3Client::new(config)?);

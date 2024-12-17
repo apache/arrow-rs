@@ -710,7 +710,7 @@ mod tests {
             .build()
             .unwrap();
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
         let nulls = NullBuffer::from(vec![true, false, true]);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)

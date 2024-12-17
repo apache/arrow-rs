@@ -680,7 +680,7 @@ fn create_string_list_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     let items = create_byte_array_reader(page_iterator, column_desc);
-    let field = Field::new("item", DataType::Utf8, true);
+    let field = Field::new_list_field(DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
     Box::new(ListArrayReader::<i32>::new(items, data_type, 2, 1, true))
 }

@@ -20,10 +20,10 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
+use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::BufferBuilder;
-use crate::{bytes::Bytes, native::ArrowNativeType};
+use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
@@ -99,26 +99,6 @@ impl Buffer {
         buffer.into()
     }
 
-    /// Creates a buffer from an existing aligned memory region (must already be byte-aligned), this
-    /// `Buffer` will free this piece of memory when dropped.
-    ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(note = "Use Buffer::from_vec")]
-    pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
-        assert!(len <= capacity);
-        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
-        Buffer::build_with_arguments(ptr, len, Deallocation::Standard(layout))
-    }
-
     /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
     /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
     ///
@@ -165,6 +145,41 @@ impl Buffer {
     #[inline]
     pub fn capacity(&self) -> usize {
         self.data.capacity()
+    }
+
+    /// Tried to shrink the capacity of the buffer as much as possible, freeing unused memory.
+    ///
+    /// If the buffer is shared, this is a no-op.
+    ///
+    /// If the memory was allocated with a custom allocator, this is a no-op.
+    ///
+    /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    ///
+    /// The memory region will be reallocated using `std::alloc::realloc`.
+    pub fn shrink_to_fit(&mut self) {
+        let offset = self.ptr_offset();
+        let is_empty = self.is_empty();
+        let desired_capacity = if is_empty {
+            0
+        } else {
+            // For realloc to work, we cannot free the elements before the offset
+            offset + self.len()
+        };
+        if desired_capacity < self.capacity() {
+            if let Some(bytes) = Arc::get_mut(&mut self.data) {
+                if bytes.try_realloc(desired_capacity).is_ok() {
+                    // Realloc complete - update our pointer into `bytes`:
+                    self.ptr = if is_empty {
+                        bytes.as_ptr()
+                    } else {
+                        // SAFETY: we kept all elements leading up to the offset
+                        unsafe { bytes.as_ptr().add(offset) }
+                    }
+                } else {
+                    // Failure to reallocate is fine; we just failed to free up memory.
+                }
+            }
+        }
     }
 
     /// Returns whether the buffer is empty.
@@ -265,7 +280,7 @@ impl Buffer {
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
         if offset % 8 == 0 {
-            return self.slice(offset / 8);
+            return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
         bitwise_unary_op_helper(self, offset, len, |a| a)
@@ -278,14 +293,6 @@ impl Buffer {
         BitChunks::new(self.as_slice(), offset, len)
     }
 
-    /// Returns the number of 1-bits in this buffer.
-    #[deprecated(note = "use count_set_bits_offset instead")]
-    pub fn count_set_bits(&self) -> usize {
-        let len_in_bits = self.len() * 8;
-        // self.offset is already taken into consideration by the bit_chunks implementation
-        self.count_set_bits_offset(0, len_in_bits)
-    }
-
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
@@ -295,6 +302,8 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
+    ///
+    /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;
@@ -560,6 +569,34 @@ mod tests {
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
         assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
+    }
+
+    #[test]
+    fn test_shrink_to_fit() {
+        let original = Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.capacity(), 64);
+
+        let slice = original.slice_with_length(2, 3);
+        drop(original); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(slice.as_slice(), &[2, 3, 4]);
+        assert_eq!(slice.capacity(), 64);
+
+        let mut shrunk = slice;
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.as_slice(), &[2, 3, 4]);
+        assert_eq!(shrunk.capacity(), 5); // shrink_to_fit is allowed to keep the elements before the offset
+
+        // Test that we can handle empty slices:
+        let empty_slice = shrunk.slice_with_length(1, 0);
+        drop(shrunk); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(empty_slice.as_slice(), &[]);
+        assert_eq!(empty_slice.capacity(), 5);
+
+        let mut shrunk_empty = empty_slice;
+        shrunk_empty.shrink_to_fit();
+        assert_eq!(shrunk_empty.as_slice(), &[]);
+        assert_eq!(shrunk_empty.capacity(), 0);
     }
 
     #[test]
@@ -859,5 +896,38 @@ mod tests {
     fn test_from_iter_overflow() {
         let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
         let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
+    }
+
+    #[test]
+    fn bit_slice_length_preserved() {
+        // Create a boring buffer
+        let buf = Buffer::from_iter(std::iter::repeat(true).take(64));
+
+        let assert_preserved = |offset: usize, len: usize| {
+            let new_buf = buf.bit_slice(offset, len);
+            assert_eq!(new_buf.len(), bit_util::ceil(len, 8));
+
+            // if the offset is not byte-aligned, we have to create a deep copy to a new buffer
+            // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
+            // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
+            // want to make sure it doesn't unnecessarily create a deep copy.
+            if offset % 8 == 0 {
+                assert_eq!(new_buf.ptr_offset(), offset / 8);
+            } else {
+                assert_eq!(new_buf.ptr_offset(), 0);
+            }
+        };
+
+        // go through every available value for offset
+        for o in 0..=64 {
+            // and go through every length that could accompany that offset - we can't have a
+            // situation where offset + len > 64, because that would go past the end of the buffer,
+            // so we use the map to ensure it's in range.
+            for l in (o..=64).map(|l| l - o) {
+                // and we just want to make sure every one of these keeps its offset and length
+                // when neeeded
+                assert_preserved(o, l);
+            }
+        }
     }
 }
