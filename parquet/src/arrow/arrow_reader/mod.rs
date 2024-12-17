@@ -3294,11 +3294,13 @@ mod tests {
         let nested_fields = Fields::from(vec![
             Field::new("utf8_to_dict", ArrowDataType::Utf8, false),
             Field::new("int64_to_ts_nano", ArrowDataType::Int64, false),
+            Field::new("int16_to_int32", ArrowDataType::Int16, false),
         ]);
 
         let nested_arrays: Vec<ArrayRef> = vec![
             Arc::new(StringArray::from(vec!["a", "a", "a", "b"])) as ArrayRef,
             Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+            Arc::new(Int16Array::from(vec![1, 2, 3, 4])) as ArrayRef,
         ];
 
         let nested = StructArray::try_new(nested_fields, nested_arrays, None).unwrap();
@@ -3311,6 +3313,10 @@ mod tests {
             (
                 "date32_to_date64",
                 Arc::new(Date32Array::from(vec![0, 1, 2, 3])) as ArrayRef,
+            ),
+            (
+                "int8_to_int64",
+                Arc::new(Int8Array::from(vec![0, 1, 2, 3])) as ArrayRef,
             ),
             ("nested", Arc::new(nested) as ArrayRef),
         ]);
@@ -3326,21 +3332,20 @@ mod tests {
             ),
             Field::new(
                 "int64_to_ts_nano",
-                ArrowDataType::Timestamp(
-                    arrow::datatypes::TimeUnit::Nanosecond,
-                    Some("+10:00".into()),
-                ),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("+10:00".into())),
                 false,
             ),
+            Field::new("int16_to_int32", ArrowDataType::Int32, false),
         ]);
 
         let supplied_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "int32_to_ts_second",
-                ArrowDataType::Timestamp(arrow::datatypes::TimeUnit::Second, Some("+01:00".into())),
+                ArrowDataType::Timestamp(TimeUnit::Second, Some("+01:00".into())),
                 false,
             ),
             Field::new("date32_to_date64", ArrowDataType::Date64, false),
+            Field::new("int8_to_int64", ArrowDataType::Int64, false),
             Field::new(
                 "nested",
                 ArrowDataType::Struct(supplied_nested_fields),
@@ -3359,7 +3364,7 @@ mod tests {
 
         assert_eq!(arrow_reader.schema(), supplied_schema);
         let batch = arrow_reader.next().unwrap().unwrap();
-        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 4);
         assert_eq!(
             batch
@@ -3383,9 +3388,17 @@ mod tests {
                 .expect("value as date"),
             "1970-01-01"
         );
+        assert_eq!(
+            batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("downcast to int64"),
+            &Int64Array::from(vec![0, 1, 2, 3]),
+        );
 
         let nested = batch
-            .column(2)
+            .column(3)
             .as_any()
             .downcast_ref::<StructArray>()
             .expect("downcast to struct");
@@ -3422,6 +3435,15 @@ mod tests {
                 .map(|v| v.to_string())
                 .expect("value as datetime"),
             "1970-01-01 10:00:00.000000001 +10:00"
+        );
+
+        assert_eq!(
+            nested
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("downcast to int64"),
+            &Int32Array::from(vec![1, 2, 3, 4]),
         );
     }
 
