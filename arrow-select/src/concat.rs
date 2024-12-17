@@ -1061,6 +1061,49 @@ mod tests {
     }
 
     #[test]
+    fn concat_many_dictionary_list_arrays() {
+        let number_of_unique_values = 8;
+        let scalars = (0..80000)
+            .into_iter()
+            .map(|i| {
+                create_single_row_list_of_dict(vec![Some(
+                    (i % number_of_unique_values).to_string(),
+                )])
+            })
+            .collect::<Vec<_>>();
+
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(
+            (0..80000)
+                .into_iter()
+                .map(|i| Some(vec![Some((i % number_of_unique_values).to_string())]))
+                .collect::<Vec<_>>(),
+        );
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        let dict = list
+            .values()
+            .as_dictionary::<Int32Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap();
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    #[test]
     fn concat_dictionary_list_array_with_multiple_rows() {
         let scalars = vec![
             create_list_of_dict(vec![
