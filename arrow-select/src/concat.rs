@@ -266,14 +266,14 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     } else {
         if let DataType::List(field) = d {
             if let DataType::Dictionary(k, _) = field.data_type() {
-                return downcast_integer! {
+                downcast_integer! {
                     k.as_ref() => (list_dict_helper, i32, arrays),
                     _ => unreachable!("illegal dictionary key type {k}")
                 };
             }
         } else if let DataType::LargeList(field) = d {
             if let DataType::Dictionary(k, _) = field.data_type() {
-                return downcast_integer! {
+                downcast_integer! {
                     k.as_ref() => (list_dict_helper, i64, arrays),
                     _ => unreachable!("illegal dictionary key type {k}")
                 };
