@@ -90,6 +90,7 @@ pub fn batches_to_flight_data(
     let mut flight_data = vec![];
 
     let data_gen = writer::IpcDataGenerator::default();
+    #[allow(deprecated)]
     let mut dictionary_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 

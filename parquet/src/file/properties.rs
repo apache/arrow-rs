@@ -16,14 +16,13 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
-use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc};
-
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
+use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc};
 
 /// Default value for [`WriterProperties::data_page_size_limit`]
 pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
@@ -42,6 +41,7 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::max_statistics_size`]
+#[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
@@ -351,7 +351,9 @@ impl WriterProperties {
 
     /// Returns max size for statistics.
     /// Only applicable if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
+        #[allow(deprecated)]
         self.column_properties
             .get(col)
             .and_then(|c| c.max_statistics_size())
@@ -602,7 +604,9 @@ impl WriterPropertiesBuilder {
     /// Sets default max statistics size for all columns (defaults to `4096`).
     ///
     /// Applicable only if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_max_statistics_size(mut self, value: usize) -> Self {
+        #[allow(deprecated)]
         self.default_column_properties
             .set_max_statistics_size(value);
         self
@@ -707,7 +711,9 @@ impl WriterPropertiesBuilder {
     /// Sets max size for statistics for a specific column.
     ///
     /// Takes precedence over [`Self::set_max_statistics_size`].
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
+        #[allow(deprecated)]
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
@@ -780,22 +786,24 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to control if type coercion is enabled (defaults to `false`).
+    /// Should the writer coerce types to parquet native types (defaults to `false`).
     ///
-    /// # Notes
-    /// Some Arrow types do not have a corresponding Parquet logical type.
-    /// Affected Arrow data types include `Date64`, `Timestamp` and `Interval`.
-    /// Also, for [`List`] and [`Map`] types, Parquet expects certain schema elements
-    /// to have specific names to be considered fully compliant.
-    /// Writers have the option to coerce these types and names to match those required
-    /// by the Parquet specification.
-    /// This type coercion allows for meaningful representations that do not require
-    /// downstream readers to consider the embedded Arrow schema, and can allow for greater
-    /// compatibility with other Parquet implementations. However, type
-    /// coercion also prevents the data from being losslessly round-tripped.
+    /// Leaving this option the default `false` will ensure the exact same data
+    /// written to parquet using this library will be read.
     ///
-    /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-    /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but potentially lose information in the process.
+    ///
+    /// * Types such as [`DataType::Date64`], which have no direct corresponding
+    ///   Parquet type, may be stored with lower precision.
+    ///
+    /// * The internal field names of `List` and `Map` types will be renamed if
+    ///   necessary to match what is required by the newest Parquet specification.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
         self
@@ -895,6 +903,7 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
@@ -933,6 +942,8 @@ impl ColumnProperties {
     }
 
     /// Sets max size for statistics for this column.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
+    #[allow(deprecated)]
     fn set_max_statistics_size(&mut self, value: usize) {
         self.max_statistics_size = Some(value);
     }
@@ -997,7 +1008,9 @@ impl ColumnProperties {
     }
 
     /// Returns optional max size in bytes for statistics.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     fn max_statistics_size(&self) -> Option<usize> {
+        #[allow(deprecated)]
         self.max_statistics_size
     }
 
@@ -1141,10 +1154,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert_eq!(
-            props.max_statistics_size(&ColumnPath::from("col")),
-            DEFAULT_MAX_STATISTICS_SIZE
-        );
         assert!(props
             .bloom_filter_properties(&ColumnPath::from("col"))
             .is_none());
@@ -1221,13 +1230,11 @@ mod tests {
             .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_max_statistics_size(50)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
             .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
-            .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
@@ -1259,7 +1266,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("a")),
             EnabledStatistics::None
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
             props.encoding(&ColumnPath::from("col")),
@@ -1274,7 +1280,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             EnabledStatistics::Chunk
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
         assert_eq!(
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })

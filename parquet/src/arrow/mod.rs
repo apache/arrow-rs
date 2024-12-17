@@ -116,9 +116,13 @@ pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::SchemaDescriptor;
 use arrow_schema::{FieldRef, Schema};
 
+// continue to export deprecated methods until they are removed
+#[allow(deprecated)]
+pub use self::schema::arrow_to_parquet_schema;
+
 pub use self::schema::{
-    arrow_to_parquet_schema, parquet_to_arrow_field_levels, parquet_to_arrow_schema,
-    parquet_to_arrow_schema_by_columns, FieldLevels,
+    parquet_to_arrow_field_levels, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
+    ArrowSchemaConverter, FieldLevels,
 };
 
 /// Schema metadata key used to store serialized Arrow IPC schema

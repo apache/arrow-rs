@@ -552,8 +552,11 @@ fn convert_field(parquet_type: &Type, field: &ParquetField, arrow_hint: Option<&
     match arrow_hint {
         Some(hint) => {
             // If the inferred type is a dictionary, preserve dictionary metadata
+            #[allow(deprecated)]
             let field = match (&data_type, hint.dict_id(), hint.dict_is_ordered()) {
-                (DataType::Dictionary(_, _), Some(id), Some(ordered)) => {
+                (DataType::Dictionary(_, _), Some(id), Some(ordered)) =>
+                {
+                    #[allow(deprecated)]
                     Field::new_dict(name, data_type, nullable, id, ordered)
                 }
                 _ => Field::new(name, data_type, nullable),

@@ -923,6 +923,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_ordered() {
+        #[allow(deprecated)]
         let schema = Schema::new(vec![Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
