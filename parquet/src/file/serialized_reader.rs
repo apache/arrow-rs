@@ -342,31 +342,33 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Arc<CryptoContext>>) -> Result<PageHeader> {
-    let mut prot = TCompactInputProtocol::new(input);
     if let Some(crypto_context) = crypto_context {
-        // let mut buf = [0; 16 * 1024];
-        // let size = input.read(&mut buf)?;
-
         let decryptor = &crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
-        // let aad_prefix = decryptor.aad_prefix();
 
+        // todo: page ordinal and page type (ModuleType)
         let aad = create_page_aad(
             aad_file_unique.as_slice(),
-            ModuleType::DictionaryPageHeader,
+            ModuleType::DataPageHeader,
             crypto_context.row_group_ordinal,
             crypto_context.column_ordinal,
             0,
         )?;
 
-        // todo: This currently fails, possibly due to wrongly generated AAD
-        let buf = file_decryptor.decrypt(prot.read_bytes()?.as_slice(), aad.as_ref());
-        todo!("Decrypted page header!");
+        let mut len_bytes = [0; 4];
+        input.read_exact(&mut len_bytes)?;
+        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut ciphertext = vec![0; 4 + ciphertext_len];
+        input.read_exact(&mut ciphertext[4..])?;
+        let buf = file_decryptor.decrypt(&ciphertext, aad.as_ref());
+
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
         return Ok(page_header)
     }
+
+    let mut prot = TCompactInputProtocol::new(input);
     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
     Ok(page_header)
 }
@@ -401,6 +403,7 @@ pub(crate) fn decode_page(
     buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
+    crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
     #[cfg(feature = "crc")]
@@ -425,6 +428,22 @@ pub(crate) fn decode_page(
             as usize;
         // When is_compressed flag is missing the page is considered compressed
         can_decompress = header_v2.is_compressed.unwrap_or(true);
+    }
+    if crypto_context.is_some() {
+        let crypto_context = crypto_context.as_ref().unwrap();
+        let decryptor = crypto_context.data_decryptor();
+        let file_decryptor = decryptor.footer_decryptor();
+
+        // todo: page ordinal
+        let aad = create_page_aad(
+            decryptor.aad_file_unique().as_slice(),
+            ModuleType::DataPage,
+            crypto_context.row_group_ordinal,
+            crypto_context.column_ordinal,
+            0,
+        )?;
+        let decrypted = file_decryptor.decrypt(&buffer.as_ref()[offset..], &aad);
+        todo!("page decrypted!");
     }
 
     // TODO: page header could be huge because of statistics. We should set a
@@ -749,6 +768,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        self.crypto_context.clone(),
                     )?
                 }
                 SerializedPageReaderState::Pages {
@@ -778,6 +798,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        None,
                     )?
                 }
             };
