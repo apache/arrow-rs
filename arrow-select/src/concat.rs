@@ -34,7 +34,7 @@ use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values}
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, Buffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -199,9 +199,9 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
     let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
 
     // Merge value offsets from the lists
-    let all_value_offsets_iterator = lists.iter().map(|x| x.offsets());
-
-    let value_offset_buffer = merge_value_offsets(all_value_offsets_iterator);
+    let value_offset_buffer = OffsetBuffer::merge(lists.iter().map(|x| x.offsets()))
+        .into_inner()
+        .into_inner();
 
     let builder = ArrayDataBuilder::new(arrays[0].data_type().clone())
         .len(output_len)
@@ -216,64 +216,6 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
 
     let array = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(array))
-}
-
-/// Merge value offsets
-///
-///
-/// if we have the following
-/// [[0, 3, 5], [0, 2, 2, 8], [], [0, 0, 1]]
-/// The output should be
-/// [ 0, 3, 5,      7, 7, 13,         13, 14]
-fn merge_value_offsets<
-    'a,
-    OffsetSize: OffsetSizeTrait,
-    I: Iterator<Item = &'a OffsetBuffer<OffsetSize>>,
->(
-    offset_buffers_iterator: I,
-) -> Buffer {
-    // 1. Filter out empty lists
-    let mut offset_buffers_iterator = offset_buffers_iterator.filter(|x| !x.is_empty());
-
-    // 2. Get first non-empty list as the starting point
-    let starting_buffer = offset_buffers_iterator.next();
-
-    // 3. If we have only empty lists, return an empty buffer
-    if starting_buffer.is_none() {
-        return Buffer::from(&[]);
-    }
-
-    let starting_buffer = starting_buffer.unwrap();
-
-    let mut offsets_iter: Box<dyn Iterator<Item = OffsetSize>> =
-        Box::new(starting_buffer.iter().copied());
-
-    // 4. Get the last value in the starting buffer as the starting point for the next buffer
-    // Safety: We already filtered out empty lists
-    let mut advance_by = *starting_buffer.last().unwrap();
-
-    // 5. Iterate over the remaining buffers
-    for offset_buffer in offset_buffers_iterator {
-        // 6. Get the last value of the current buffer so we can know how much to advance the next buffer
-        // Safety: We already filtered out empty lists
-        let last_value = *offset_buffer.last().unwrap();
-
-        // 7. Advance the offset buffer by the last value in the previous buffer
-        let offset_buffer_iter = offset_buffer
-            .iter()
-            // Skip the first value as it is the initial offset of 0
-            .skip(1)
-            .map(move |&x| x + advance_by);
-
-        // 8. concat the current buffer with the previous buffer
-        // Chaining keeps the iterator have trusting length
-        offsets_iter = Box::new(offsets_iter.chain(offset_buffer_iter));
-
-        // 9. Update the next advance_by
-        advance_by += last_value;
-    }
-
-    unsafe { Buffer::from_trusted_len_iter(offsets_iter) }
 }
 
 macro_rules! dict_helper {
