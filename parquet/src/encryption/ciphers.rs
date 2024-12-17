@@ -35,6 +35,7 @@ const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const SIZE_LEN: usize = 4;
+const NON_PAGE_ORDINAL: i32 = -1;
 
 struct CounterNonce {
     start: u128,
@@ -152,10 +153,12 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
             .open_in_place(nonce, Aad::from(aad), &mut result)
             .unwrap();
 
+        result.resize(result.len() - TAG_LEN, 0u8);
         result
     }
 }
 
+#[derive(PartialEq)]
 pub(crate) enum ModuleType {
     Footer = 0,
     ColumnMetaData = 1,
@@ -170,7 +173,7 @@ pub(crate) enum ModuleType {
 }
 
 pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
-    create_module_aad(file_aad, ModuleType::Footer, -1, -1, -1)
+    create_module_aad(file_aad, ModuleType::Footer, -1, -1, NON_PAGE_ORDINAL)
 }
 
 pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16, column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
@@ -313,6 +316,14 @@ impl FileDecryptor {
 
     pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
         &self.aad_prefix
+    }
+
+    pub fn update_aad(&mut self, aad: Vec<u8>, row_group_ordinal: i16, column_ordinal: i16, module_type: ModuleType) {
+        // todo decr: update aad
+        debug_assert!(!self.aad_file_unique().is_empty(), "AAD is empty");
+
+        let aad = create_module_aad(self.aad_file_unique(), module_type, row_group_ordinal, column_ordinal, NON_PAGE_ORDINAL).unwrap();
+        self.aad_file_unique = aad;
     }
 }
 
