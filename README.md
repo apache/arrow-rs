@@ -88,14 +88,22 @@ Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
 downstream Rust programs to still compile, but generate compiler warnings. This
 gives downstream crates time to migrate prior to API removal.
 
-All deprecated APIs are marked using the `#[deprecated]` attribute with both the
-first version they were deprecated in, and what new API to use instead.
+To deprecate an API:
+
+- Mark the API as deprecated using `#[deprecated]` and specify the exact arrow-rs version in which it was deprecated
+- Concisely describe the preferred API to help the user transition
+
+The deprecated version is the next version which will be released (please
+consult the list above). To mark the API as deprecated, use the
+`#[deprecated(since = "...", note = "...")]` attribute.
+
+Foe example
 
 ```rust
 #[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
 ```
 
-In general, deprecated APIs will be kept for at least two major releases after
+In general, deprecated APIs will remain in the codebase for at least two major releases after
 they were deprecated (typically between 6 - 9 months later). For example, an API
 deprecated in `51.3.0` can be removed in `54.0.0` (or later). Deprecated APIs
 may be removed earlier or later than these guidelines at the discretion of the
