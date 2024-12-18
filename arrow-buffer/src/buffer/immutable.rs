@@ -243,6 +243,17 @@ impl Buffer {
         );
         // Safety:
         // offset + length <= self.length
+        unsafe { self.slice_with_length_unchecked(offset, length) }
+    }
+
+    /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
+    /// with `length` bytes.
+    /// Doing so allows the same memory region to be shared between buffers.
+    /// # Safety
+    /// `(offset + length)` MUST be `<=` [`Self::length`].
+    pub unsafe fn slice_with_length_unchecked(&self, offset: usize, length: usize) -> Self {
+        // Safety:
+        // offset + length <= self.length
         let ptr = unsafe { self.ptr.add(offset) };
         Self {
             data: self.data.clone(),

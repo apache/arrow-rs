@@ -64,12 +64,33 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     ///
     /// * `offset` or `len` would result in overflow
     /// * `buffer` is not aligned to a multiple of `std::mem::align_of::<T>`
-    /// * `bytes` is not large enough for the requested slice
+    /// * `buffer` is not large enough for the requested slice
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let size = std::mem::size_of::<T>();
         let byte_offset = offset.checked_mul(size).expect("offset overflow");
         let byte_len = len.checked_mul(size).expect("length overflow");
         buffer.slice_with_length(byte_offset, byte_len).into()
+    }
+
+    /// Create a new [`ScalarBuffer`] from a [`Buffer`], and an `offset`
+    /// and `length` in units of `T`
+    ///
+    /// # Safety
+    ///
+    /// This method will be safe UNLESS any of the following:
+    ///
+    /// * `offset` or `len` would result in overflow
+    /// * `buffer` is not aligned to a multiple of `std::mem::align_of::<T>`
+    /// * `buffer` is not large enough for the requested slice
+    pub unsafe fn new_unchecked(buffer: Buffer, offset: usize, len: usize) -> Self {
+        let size = std::mem::size_of::<T>();
+        let byte_offset = offset * size;
+        let byte_len = len * size;
+        unsafe {
+            buffer
+                .slice_with_length_unchecked(byte_offset, byte_len)
+                .into()
+        }
     }
 
     /// Free up unused memory.
@@ -80,6 +101,14 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self::new(self.buffer.clone(), offset, len)
+    }
+
+    /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
+    ///
+    /// # Safety
+    /// `(offset + len)` <= [`Self::length`]
+    pub unsafe fn slice_unchecked(&self, offset: usize, len: usize) -> Self {
+        unsafe { Self::new_unchecked(self.buffer.clone(), offset, len) }
     }
 
     /// Returns the inner [`Buffer`]
