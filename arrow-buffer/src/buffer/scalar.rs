@@ -93,7 +93,7 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         }
     }
 
-    /// The length of the scalar buffer, in number of elements.
+    /// The length of the scalar buffer, in units of `T`.
     #[inline]
     pub fn len_in_elements(&self) -> usize {
         self.buffer.len() / std::mem::size_of::<T>()
