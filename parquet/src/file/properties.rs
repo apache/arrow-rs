@@ -41,6 +41,7 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::max_statistics_size`]
+#[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
@@ -350,7 +351,9 @@ impl WriterProperties {
 
     /// Returns max size for statistics.
     /// Only applicable if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
+        #[allow(deprecated)]
         self.column_properties
             .get(col)
             .and_then(|c| c.max_statistics_size())
@@ -601,7 +604,9 @@ impl WriterPropertiesBuilder {
     /// Sets default max statistics size for all columns (defaults to `4096`).
     ///
     /// Applicable only if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_max_statistics_size(mut self, value: usize) -> Self {
+        #[allow(deprecated)]
         self.default_column_properties
             .set_max_statistics_size(value);
         self
@@ -706,7 +711,9 @@ impl WriterPropertiesBuilder {
     /// Sets max size for statistics for a specific column.
     ///
     /// Takes precedence over [`Self::set_max_statistics_size`].
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
+        #[allow(deprecated)]
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
@@ -896,6 +903,7 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
@@ -934,6 +942,8 @@ impl ColumnProperties {
     }
 
     /// Sets max size for statistics for this column.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
+    #[allow(deprecated)]
     fn set_max_statistics_size(&mut self, value: usize) {
         self.max_statistics_size = Some(value);
     }
@@ -998,7 +1008,9 @@ impl ColumnProperties {
     }
 
     /// Returns optional max size in bytes for statistics.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     fn max_statistics_size(&self) -> Option<usize> {
+        #[allow(deprecated)]
         self.max_statistics_size
     }
 
@@ -1142,10 +1154,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert_eq!(
-            props.max_statistics_size(&ColumnPath::from("col")),
-            DEFAULT_MAX_STATISTICS_SIZE
-        );
         assert!(props
             .bloom_filter_properties(&ColumnPath::from("col"))
             .is_none());
@@ -1222,13 +1230,11 @@ mod tests {
             .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_max_statistics_size(50)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
             .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
-            .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
@@ -1260,7 +1266,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("a")),
             EnabledStatistics::None
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
             props.encoding(&ColumnPath::from("col")),
@@ -1275,7 +1280,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             EnabledStatistics::Chunk
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
         assert_eq!(
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })

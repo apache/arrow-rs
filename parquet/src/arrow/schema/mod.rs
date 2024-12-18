@@ -345,7 +345,7 @@ impl<'a> ArrowSchemaConverter<'a> {
 ///
 /// The name of the root schema element defaults to `"arrow_schema"`, this can be
 /// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowToParquetSchemaConverter` instead")]
+#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
     ArrowSchemaConverter::new().convert(schema)
 }
@@ -1391,6 +1391,17 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let mask = ProjectionMask::leaves(&parquet_schema, [3, 0, 4]);
+        let converted_arrow_schema =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
+        let converted_fields = converted_arrow_schema.fields();
+
+        assert_eq!(arrow_fields.len(), converted_fields.len());
+        for i in 0..arrow_fields.len() {
+            assert_eq!(&arrow_fields[i], converted_fields[i].as_ref());
+        }
+
+        let mask =
+            ProjectionMask::columns(&parquet_schema, ["group2.leaf4", "group1.leaf1", "leaf5"]);
         let converted_arrow_schema =
             parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();

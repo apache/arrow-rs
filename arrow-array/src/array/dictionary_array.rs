@@ -249,7 +249,7 @@ pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     /// map to the real values.
     keys: PrimitiveArray<K>,
 
-    /// Array of dictionary values (can by any DataType).
+    /// Array of dictionary values (can be any DataType).
     values: ArrayRef,
 
     /// Values are ordered.
