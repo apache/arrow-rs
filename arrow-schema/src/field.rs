@@ -426,12 +426,37 @@ impl Field {
     }
 
     /// Returns whether this `Field`'s dictionary is ordered, if this is a dictionary type.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{DataType, Field};
+    /// // non dictionaries do not have a dict is ordered flat
+    /// let field = Field::new("c1", DataType::Int64, false);
+    /// assert_eq!(field.dict_is_ordered(), None);
+    /// // by default dictionary is not ordered
+    /// let field = Field::new("c1", DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)), false);
+    /// assert_eq!(field.dict_is_ordered(), Some(false));
+    /// let field = field.with_dict_is_ordered(true);
+    /// assert_eq!(field.dict_is_ordered(), Some(true));
+    /// ```
     #[inline]
     pub const fn dict_is_ordered(&self) -> Option<bool> {
         match self.data_type {
             DataType::Dictionary(_, _) => Some(self.dict_is_ordered),
             _ => None,
         }
+    }
+
+    /// Set the is ordered field for this `Field`, if it is a dictionary.
+    ///
+    /// Does nothing if this is not a dictionary type.
+    ///
+    /// See [`Field::dict_is_ordered`] for more information.
+    pub fn with_dict_is_ordered(mut self, dict_is_ordered: bool) -> Self {
+        if matches!(self.data_type, DataType::Dictionary(_, _)) {
+            self.dict_is_ordered = dict_is_ordered;
+        };
+        self
     }
 
     /// Merge this field into self if it is compatible.
