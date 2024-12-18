@@ -538,7 +538,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, false))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::LargeUtf8, false))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -551,6 +551,7 @@ mod tests {
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
         for array in batch.columns() {
             assert_eq!(array.null_count(), 0);
+            assert_eq!(array.logical_null_count(), 0);
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
@@ -568,10 +569,8 @@ mod tests {
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new(
-                        "item",
+                DataType::LargeList(Arc::new(Field::new_list_field(
+                    DataType::List(Arc::new(Field::new_list_field(
                         DataType::FixedSizeBinary(6),
                         true,
                     ))),
@@ -710,6 +709,7 @@ mod tests {
         assert_eq!(array.len(), 100);
         // Map field is not null
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         // Maps have multiple values like a list, so internal arrays are longer
         assert!(array.as_map().keys().len() > array.len());
         assert!(array.as_map().values().len() > array.len());

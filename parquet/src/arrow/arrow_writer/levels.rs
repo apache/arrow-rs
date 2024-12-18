@@ -634,7 +634,7 @@ mod tests {
         // based on the example at https://blog.twitter.com/engineering/en_us/a/2013/dremel-made-simple-with-parquet.html
         // [[a, b, c], [d, e, f, g]], [[h], [i,j]]
 
-        let leaf_type = Field::new("item", DataType::Int32, false);
+        let leaf_type = Field::new_list_field(DataType::Int32, false);
         let inner_type = DataType::List(Arc::new(leaf_type));
         let inner_field = Field::new("l2", inner_type.clone(), false);
         let outer_type = DataType::List(Arc::new(inner_field));
@@ -678,7 +678,7 @@ mod tests {
     fn test_calculate_one_level_1() {
         // This test calculates the levels for a non-null primitive array
         let array = Arc::new(Int32Array::from_iter(0..10)) as ArrayRef;
-        let field = Field::new("item", DataType::Int32, false);
+        let field = Field::new_list_field(DataType::Int32, false);
 
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
@@ -704,7 +704,7 @@ mod tests {
             Some(0),
             None,
         ])) as ArrayRef;
-        let field = Field::new("item", DataType::Int32, true);
+        let field = Field::new_list_field(DataType::Int32, true);
 
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn test_calculate_array_levels_1() {
-        let leaf_field = Field::new("item", DataType::Int32, false);
+        let leaf_field = Field::new_list_field(DataType::Int32, false);
         let list_type = DataType::List(Arc::new(leaf_field));
 
         // if all array values are defined (e.g. batch<list<_>>)
@@ -1048,7 +1048,7 @@ mod tests {
 
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from_iter([0_i32, 1, 3, 3, 6, 10]);
-        let a_list_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let a_list_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
@@ -1061,7 +1061,7 @@ mod tests {
 
         let a = ListArray::from(a_list_data);
 
-        let item_field = Field::new("item", a_list_type, true);
+        let item_field = Field::new_list_field(a_list_type, true);
         let mut builder = levels(&item_field, a);
         builder.write(2..4);
         let levels = builder.finish();
@@ -1336,7 +1336,7 @@ mod tests {
         // define schema
         let int_field = Field::new("a", DataType::Int32, true);
         let fields = Fields::from([Arc::new(int_field)]);
-        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
+        let item_field = Field::new_list_field(DataType::Struct(fields.clone()), true);
         let list_field = Field::new("list", DataType::List(Arc::new(item_field)), true);
 
         let int_builder = Int32Builder::with_capacity(10);
@@ -1570,7 +1570,7 @@ mod tests {
         let a = builder.finish();
         let values = a.values().clone();
 
-        let item_field = Field::new("item", a.data_type().clone(), true);
+        let item_field = Field::new_list_field(a.data_type().clone(), true);
         let mut builder = levels(&item_field, a);
         builder.write(1..4);
         let levels = builder.finish();
@@ -1596,7 +1596,7 @@ mod tests {
         let field_a = Field::new("a", DataType::Int32, true);
         let field_b = Field::new("b", DataType::Int64, false);
         let fields = Fields::from([Arc::new(field_a), Arc::new(field_b)]);
-        let item_field = Field::new("item", DataType::Struct(fields.clone()), true);
+        let item_field = Field::new_list_field(DataType::Struct(fields.clone()), true);
         let list_field = Field::new(
             "list",
             DataType::FixedSizeList(Arc::new(item_field), 2),
@@ -1760,7 +1760,7 @@ mod tests {
         let array = builder.finish();
         let values = array.values().clone();
 
-        let item_field = Field::new("item", array.data_type().clone(), true);
+        let item_field = Field::new_list_field(array.data_type().clone(), true);
         let mut builder = levels(&item_field, array);
         builder.write(0..3);
         let levels = builder.finish();
@@ -1799,7 +1799,7 @@ mod tests {
         let a = builder.finish();
         let values = a.values().as_list::<i32>().values().clone();
 
-        let item_field = Field::new("item", a.data_type().clone(), true);
+        let item_field = Field::new_list_field(a.data_type().clone(), true);
         let mut builder = levels(&item_field, a);
         builder.write(0..4);
         let levels = builder.finish();
@@ -1829,7 +1829,7 @@ mod tests {
         // [NULL, NULL, 3, 0]
         let dict = DictionaryArray::new(keys, Arc::new(values));
 
-        let item_field = Field::new("item", dict.data_type().clone(), true);
+        let item_field = Field::new_list_field(dict.data_type().clone(), true);
 
         let mut builder = levels(&item_field, dict.clone());
         builder.write(0..4);
@@ -1848,7 +1848,7 @@ mod tests {
     #[test]
     fn mismatched_types() {
         let array = Arc::new(Int32Array::from_iter(0..10)) as ArrayRef;
-        let field = Field::new("item", DataType::Float64, false);
+        let field = Field::new_list_field(DataType::Float64, false);
 
         let err = LevelInfoBuilder::try_new(&field, Default::default(), &array)
             .unwrap_err()

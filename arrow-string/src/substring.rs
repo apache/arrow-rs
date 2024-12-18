@@ -636,7 +636,7 @@ mod tests {
 
         let data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .offset(1)
             .null_bit_buffer(Some(Buffer::from(bits_v)))
             .build()

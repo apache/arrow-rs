@@ -199,6 +199,10 @@ struct Args {
     /// Sets writer version.
     #[clap(long)]
     writer_version: Option<WriterVersionArgs>,
+
+    /// Sets whether to coerce Arrow types to match Parquet specification
+    #[clap(long)]
+    coerce_types: Option<bool>,
 }
 
 fn main() {
@@ -238,6 +242,7 @@ fn main() {
     if let Some(value) = args.dictionary_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
     }
+    #[allow(deprecated)]
     if let Some(value) = args.max_statistics_size {
         writer_properties_builder = writer_properties_builder.set_max_statistics_size(value);
     }
@@ -261,6 +266,9 @@ fn main() {
     }
     if let Some(value) = args.writer_version {
         writer_properties_builder = writer_properties_builder.set_writer_version(value.into());
+    }
+    if let Some(value) = args.coerce_types {
+        writer_properties_builder = writer_properties_builder.set_coerce_types(value);
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(

@@ -932,12 +932,12 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
-        Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
-        Time32MillisecondType, Time64MicrosecondType,
+        Date32Type, Date64Type, Decimal128Type, Decimal256Type, DecimalType, Float16Type,
+        Float32Type, Float64Type, Time32MillisecondType, Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
     };
@@ -1272,6 +1272,117 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_date32_roundtrip() -> Result<()> {
+        use arrow_array::Date32Array;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "date32",
+            ArrowDataType::Date32,
+            false,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![
+                -1_000_000, -100_000, -10_000, -1_000, 0, 1_000, 10_000, 100_000, 1_000_000,
+            ]))],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Date32Type>();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_date64_roundtrip() -> Result<()> {
+        use arrow_array::Date64Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("small-date64", ArrowDataType::Date64, false),
+            Field::new("big-date64", ArrowDataType::Date64, false),
+            Field::new("invalid-date64", ArrowDataType::Date64, false),
+        ]));
+
+        let mut default_buf = Vec::with_capacity(1024);
+        let mut coerce_buf = Vec::with_capacity(1024);
+
+        let coerce_props = WriterProperties::builder().set_coerce_types(true).build();
+
+        let mut default_writer = ArrowWriter::try_new(&mut default_buf, schema.clone(), None)?;
+        let mut coerce_writer =
+            ArrowWriter::try_new(&mut coerce_buf, schema.clone(), Some(coerce_props))?;
+
+        static NUM_MILLISECONDS_IN_DAY: i64 = 1000 * 60 * 60 * 24;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                // small-date64
+                Arc::new(Date64Array::from(vec![
+                    -1_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    -1_000 * NUM_MILLISECONDS_IN_DAY,
+                    0,
+                    1_000 * NUM_MILLISECONDS_IN_DAY,
+                    1_000_000 * NUM_MILLISECONDS_IN_DAY,
+                ])),
+                // big-date64
+                Arc::new(Date64Array::from(vec![
+                    -10_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    -1_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    0,
+                    1_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    10_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                ])),
+                // invalid-date64
+                Arc::new(Date64Array::from(vec![
+                    -1_000_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    -1_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    1,
+                    1_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    1_000_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                ])),
+            ],
+        )?;
+
+        default_writer.write(&original)?;
+        coerce_writer.write(&original)?;
+
+        default_writer.close()?;
+        coerce_writer.close()?;
+
+        let mut default_reader = ParquetRecordBatchReader::try_new(Bytes::from(default_buf), 1024)?;
+        let mut coerce_reader = ParquetRecordBatchReader::try_new(Bytes::from(coerce_buf), 1024)?;
+
+        let default_ret = default_reader.next().unwrap()?;
+        let coerce_ret = coerce_reader.next().unwrap()?;
+
+        // Roundtrip should be successful when default writer used
+        assert_eq!(default_ret, original);
+
+        // Only small-date64 should roundtrip successfully when coerce_types writer is used
+        assert_eq!(coerce_ret.column(0), original.column(0));
+        assert_ne!(coerce_ret.column(1), original.column(1));
+        assert_ne!(coerce_ret.column(2), original.column(2));
+
+        // Ensure both can be downcast to the correct type
+        default_ret.column(0).as_primitive::<Date64Type>();
+        coerce_ret.column(0).as_primitive::<Date64Type>();
+
+        Ok(())
+    }
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
@@ -1542,8 +1653,7 @@ mod tests {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new(
-            "item",
+        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new_list_field(
             decimals.data_type().clone(),
             false,
         ))))
@@ -2874,7 +2984,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "emptylist",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Null, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Null, true))),
             true,
         );
 
@@ -3346,7 +3456,7 @@ mod tests {
     fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Int32, true))),
             true,
         )]));
 
@@ -3584,9 +3694,7 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            // FIXME: this test will fail when metadata parsing returns `None` for missing page
-            // indexes. https://github.com/apache/arrow-rs/issues/6447
-            assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(builder.metadata().offset_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);
@@ -3905,7 +4013,7 @@ mod tests {
     fn test_list_selection() {
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new("item", ArrowDataType::Utf8, true),
+            Field::new_list_field(ArrowDataType::Utf8, true),
             false,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -3961,7 +4069,11 @@ mod tests {
         let mut rng = thread_rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new_list("item", Field::new("item", ArrowDataType::Int32, true), true),
+            Field::new_list(
+                Field::LIST_FIELD_DEFAULT_NAME,
+                Field::new_list_field(ArrowDataType::Int32, true),
+                true,
+            ),
             true,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -4064,5 +4176,94 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_read_old_nested_list() {
+        use arrow::datatypes::DataType;
+        use arrow::datatypes::ToByteSlice;
+
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // message my_record {
+        //     REQUIRED group a (LIST) {
+        //         REPEATED group array (LIST) {
+        //             REPEATED INT32 array;
+        //         }
+        //     }
+        // }
+        // should be read as list<list<int32>>
+        let path = format!("{testdata}/old_list_structure.parquet");
+        let test_file = File::open(path).unwrap();
+
+        // create expected ListArray
+        let a_values = Int32Array::from(vec![1, 2, 3, 4]);
+
+        // Construct a buffer for value offsets, for the nested array: [[1, 2], [3, 4]]
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 2, 4].to_byte_slice());
+
+        // Construct a list array from the above two
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
+            "array",
+            DataType::Int32,
+            false,
+        ))))
+        .len(2)
+        .add_buffer(a_value_offsets)
+        .add_child_data(a_values.into_data())
+        .build()
+        .unwrap();
+        let a = ListArray::from(a_list_data);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
+        let mut reader = builder.build().unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 1);
+        assert_eq!(out.num_columns(), 1);
+        // grab first column
+        let c0 = out.column(0);
+        let c0arr = c0.as_any().downcast_ref::<ListArray>().unwrap();
+        // get first row: [[1, 2], [3, 4]]
+        let r0 = c0arr.value(0);
+        let r0arr = r0.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(r0arr, &a);
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/map_no_value.parquet");
+        let file = File::open(path).unwrap();
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 3);
+        // my_map_no_v and my_list columns should now be equivalent
+        let c0 = out.column(1).as_list::<i32>();
+        let c1 = out.column(2).as_list::<i32>();
+        assert_eq!(c0.len(), c1.len());
+        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 }

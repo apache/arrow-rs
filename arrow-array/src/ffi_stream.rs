@@ -379,21 +379,6 @@ impl RecordBatchReader for ArrowArrayStreamReader {
     }
 }
 
-/// Exports a record batch reader to raw pointer of the C Stream Interface provided by the consumer.
-///
-/// # Safety
-/// Assumes that the pointer represents valid C Stream Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-#[deprecated(note = "Use FFI_ArrowArrayStream::new")]
-pub unsafe fn export_reader_into_raw(
-    reader: Box<dyn RecordBatchReader + Send>,
-    out_stream: *mut FFI_ArrowArrayStream,
-) {
-    let stream = FFI_ArrowArrayStream::new(reader);
-
-    std::ptr::write_unaligned(out_stream, stream);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

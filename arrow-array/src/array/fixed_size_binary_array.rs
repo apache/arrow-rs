@@ -237,6 +237,7 @@ impl FixedSizeBinaryArray {
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
     #[deprecated(
+        since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
     )]
     pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
@@ -602,12 +603,24 @@ impl Array for FixedSizeBinaryArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.value_data.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -657,7 +670,7 @@ mod tests {
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -686,7 +699,7 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(2)
             .offset(1)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -716,7 +729,7 @@ mod tests {
         // [null, [10, 11, 12, 13]]
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(2)
@@ -752,7 +765,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Binary, false)),
+                Arc::new(Field::new_list_field(DataType::Binary, false)),
                 4,
             ))
             .len(3)
@@ -776,7 +789,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(3)
@@ -793,7 +806,7 @@ mod tests {
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let arr = FixedSizeBinaryArray::from(array_data);
@@ -858,6 +871,7 @@ mod tests {
         let array = FixedSizeBinaryArray::from(values);
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.value(0), b"one");
         assert_eq!(array.value(1), b"two");
         assert_eq!(array.value(2), b"six");

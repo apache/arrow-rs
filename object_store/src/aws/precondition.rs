@@ -46,6 +46,21 @@ pub enum S3CopyIfNotExists {
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
     HeaderWithStatus(String, String, reqwest::StatusCode),
+    /// Native Amazon S3 supports copy if not exists through a multipart upload
+    /// where the upload copies an existing object and is completed only if the
+    /// new object does not already exist.
+    ///
+    /// WARNING: When using this mode, `copy_if_not_exists` does not copy tags
+    /// or attributes from the source object.
+    ///
+    /// WARNING: When using this mode, `copy_if_not_exists` makes only a best
+    /// effort attempt to clean up the multipart upload if the copy operation
+    /// fails. Consider using a lifecycle rule to automatically clean up
+    /// abandoned multipart uploads. See [the module
+    /// docs](super#multipart-uploads) for details.
+    ///
+    /// Encoded as `multipart` ignoring whitespace.
+    Multipart,
     /// The name of a DynamoDB table to use for coordination
     ///
     /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
@@ -64,6 +79,7 @@ impl std::fmt::Display for S3CopyIfNotExists {
             Self::HeaderWithStatus(k, v, code) => {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
+            Self::Multipart => f.write_str("multipart"),
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -71,6 +87,10 @@ impl std::fmt::Display for S3CopyIfNotExists {
 
 impl S3CopyIfNotExists {
     fn from_str(s: &str) -> Option<Self> {
+        if s.trim() == "multipart" {
+            return Some(Self::Multipart);
+        };
+
         let (variant, value) = s.split_once(':')?;
         match variant.trim() {
             "header" => {

@@ -17,6 +17,8 @@
 
 //! Common code used in the integration test binaries
 
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
 #![warn(missing_docs)]
 use serde_json::Value;
 
@@ -28,7 +30,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
 use std::collections::HashMap;
-use std::ffi::{c_int, CStr, CString};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::fs::File;
 use std::io::BufReader;
 use std::iter::zip;
@@ -165,7 +167,7 @@ pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
 
 /// C Data Integration entrypoint to export the schema from a JSON file
 fn cdata_integration_export_schema_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     out: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
@@ -178,7 +180,7 @@ fn cdata_integration_export_schema_from_json(
 
 /// C Data Integration entrypoint to export a batch from a JSON file
 fn cdata_integration_export_batch_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     out: *mut FFI_ArrowArray,
 ) -> Result<()> {
@@ -192,7 +194,7 @@ fn cdata_integration_export_batch_from_json(
 }
 
 fn cdata_integration_import_schema_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     c_schema: *mut FFI_ArrowSchema,
 ) -> Result<()> {
     let json_name = unsafe { CStr::from_ptr(c_json_name) };
@@ -229,7 +231,7 @@ fn compare_batches(a: &RecordBatch, b: &RecordBatch) -> Result<()> {
 }
 
 fn cdata_integration_import_batch_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     c_array: *mut FFI_ArrowArray,
 ) -> Result<()> {
@@ -248,7 +250,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
 }
 
 // If Result is an error, then export a const char* to its string display, otherwise NULL
-fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut i8 {
+fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut c_char {
     match result {
         Ok(_) => ptr::null_mut(),
         Err(e) => CString::new(format!("{}", e)).unwrap().into_raw(),
@@ -261,7 +263,7 @@ fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>
 ///
 /// The pointer is assumed to have been obtained using CString::into_raw.
 #[no_mangle]
-pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
+pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut c_char) {
     if !c_error.is_null() {
         drop(unsafe { CString::from_raw(c_error) });
     }
@@ -270,9 +272,9 @@ pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut i8) {
 /// A C-ABI for exporting an Arrow schema from a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     out: *mut FFI_ArrowSchema,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_export_schema_from_json(c_json_name, out);
     result_to_c_error(&r)
 }
@@ -280,9 +282,9 @@ pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
 /// A C-ABI to compare an Arrow schema against a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     c_schema: *mut FFI_ArrowSchema,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_import_schema_and_compare_to_json(c_json_name, c_schema);
     result_to_c_error(&r)
 }
@@ -290,10 +292,10 @@ pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
 /// A C-ABI for exporting a RecordBatch from a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     out: *mut FFI_ArrowArray,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_export_batch_from_json(c_json_name, batch_num, out);
     result_to_c_error(&r)
 }
@@ -301,10 +303,10 @@ pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
 /// A C-ABI to compare a RecordBatch against a JSON file
 #[no_mangle]
 pub extern "C" fn arrow_rs_cdata_integration_import_batch_and_compare_to_json(
-    c_json_name: *const i8,
+    c_json_name: *const c_char,
     batch_num: c_int,
     c_array: *mut FFI_ArrowArray,
-) -> *mut i8 {
+) -> *mut c_char {
     let r = cdata_integration_import_batch_and_compare_to_json(c_json_name, batch_num, c_array);
     result_to_c_error(&r)
 }

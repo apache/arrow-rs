@@ -109,6 +109,42 @@ specific JIRA issues and reference them in these code comments. For example:
 //      This is not sound because .... see https://issues.apache.org/jira/browse/ARROW-nnnnn
 ```
 
+### Usage of SIMD / auto vectorization
+
+This crate does not use SIMD intrinsics (e.g. [`std::simd`]) directly, but
+instead relies on the Rust compiler's auto-vectorization capabilities, which are
+built on LLVM.
+
+SIMD intrinsics are difficult to maintain and can be difficult to reason about.
+The auto-vectorizer in LLVM is quite good and often produces kernels that are
+faster than using hand-written SIMD intrinsics. This crate used to contain
+several kernels with hand-written SIMD instructions, which were removed after
+discovering the auto-vectorized code was faster.
+
+[`std::simd`]: https://doc.rust-lang.org/std/simd/index.html
+
+#### Tips for auto vectorization
+
+LLVM is relatively good at vectorizing vertical operations provided:
+
+1. No conditionals within the loop body (e.g no checking for nulls on each row)
+2. Not too much inlining (judicious use of `#[inline]` and `#[inline(never)]`) as the vectorizer gives up if the code is too complex
+3. No [horizontal reductions] or data dependencies
+4. Suitable SIMD instructions available in the target ISA (e.g. `target-cpu` `RUSTFLAGS` flag)
+
+[horizontal reductions]: https://rust-lang.github.io/packed_simd/perf-guide/vert-hor-ops.html
+
+The last point is especially important as the default `target-cpu` doesn't
+support many SIMD instructions. See the Performance Tips section at the
+end of <https://crates.io/crates/arrow>
+
+To ensure your code is fully vectorized, we recommend using tools like
+<https://rust.godbolt.org/> (again being sure `RUSTFLAGS` is set appropriately)
+to analyze the resulting code, and only once you've exhausted auto vectorization
+think of reaching for manual SIMD. Generally the hard part of vectorizing code
+is structuring the algorithm in such a way that it can be vectorized, regardless
+of what generates those instructions.
+
 # Releases and publishing to crates.io
 
 Please see the [release](../dev/release/README.md) for details on how to create arrow releases

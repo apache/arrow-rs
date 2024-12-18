@@ -50,7 +50,7 @@ impl TryFrom<File> for SerializedFileReader<File> {
     }
 }
 
-impl<'a> TryFrom<&'a Path> for SerializedFileReader<File> {
+impl TryFrom<&Path> for SerializedFileReader<File> {
     type Error = ParquetError;
 
     fn try_from(path: &Path) -> Result<Self> {
@@ -67,7 +67,7 @@ impl TryFrom<String> for SerializedFileReader<File> {
     }
 }
 
-impl<'a> TryFrom<&'a str> for SerializedFileReader<File> {
+impl TryFrom<&str> for SerializedFileReader<File> {
     type Error = ParquetError;
 
     fn try_from(path: &str) -> Result<Self> {
@@ -302,7 +302,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     }
 }
 
-impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'a, R> {
+impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R> {
     fn metadata(&self) -> &RowGroupMetaData {
         self.metadata
     }
@@ -1223,8 +1223,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, true predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1236,8 +1236,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1249,8 +1249,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
         Ok(())
     }
 
@@ -1340,13 +1340,15 @@ mod tests {
         let columns = metadata.row_group(0).columns();
         let reversed: Vec<_> = columns.iter().cloned().rev().collect();
 
-        let a = read_columns_indexes(&test_file, columns).unwrap();
-        let mut b = read_columns_indexes(&test_file, &reversed).unwrap();
+        let a = read_columns_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_columns_indexes(&test_file, &reversed)
+            .unwrap()
+            .unwrap();
         b.reverse();
         assert_eq!(a, b);
 
-        let a = read_offset_indexes(&test_file, columns).unwrap();
-        let mut b = read_offset_indexes(&test_file, &reversed).unwrap();
+        let a = read_offset_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_offset_indexes(&test_file, &reversed).unwrap().unwrap();
         b.reverse();
         assert_eq!(a, b);
     }

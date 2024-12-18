@@ -284,6 +284,9 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast decimal128 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 5)))
     });
+    c.bench_function("cast decimal128 to decimal128 512 lower precision", |b| {
+        b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(6, 5)))
+    });
     c.bench_function("cast decimal128 to decimal256 512", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal256(50, 5)))
     });

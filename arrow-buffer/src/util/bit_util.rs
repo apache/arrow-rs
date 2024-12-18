@@ -26,7 +26,7 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
-    debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
+    debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
         .expect("failed to round to next highest power of 2")
         & !(factor - 1)

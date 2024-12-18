@@ -671,6 +671,10 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
+        // Reqwest will remove the `Content-Length` header if it is configured to
+        // transparently decompress the body via the non-default `gzip` feature.
+        builder = builder.no_gzip();
+
         builder
             .https_only(!self.allow_http.get()?)
             .build()
@@ -774,7 +778,7 @@ mod cloud {
         }
 
         /// Override the minimum remaining TTL for a cached token to be used
-        #[cfg(feature = "aws")]
+        #[cfg(any(feature = "aws", feature = "gcp"))]
         pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self

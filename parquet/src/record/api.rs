@@ -52,6 +52,11 @@ pub struct Row {
 
 #[allow(clippy::len_without_is_empty)]
 impl Row {
+    /// Constructs a `Row` from the list of `fields` and returns it.
+    pub fn new(fields: Vec<(String, Field)>) -> Row {
+        Row { fields }
+    }
+
     /// Get the number of fields in this row.
     pub fn len(&self) -> usize {
         self.fields.len()
@@ -283,12 +288,6 @@ impl RowAccessor for Row {
     row_complex_accessor!(get_map, MapInternal, Map);
 }
 
-/// Constructs a `Row` from the list of `fields` and returns it.
-#[inline]
-pub fn make_row(fields: Vec<(String, Field)>) -> Row {
-    Row { fields }
-}
-
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
@@ -506,7 +505,7 @@ macro_rules! map_list_primitive_accessor {
     };
 }
 
-impl<'a> ListAccessor for MapList<'a> {
+impl ListAccessor for MapList<'_> {
     map_list_primitive_accessor!(get_bool, Bool, bool);
 
     map_list_primitive_accessor!(get_byte, Byte, i8);
@@ -1386,7 +1385,7 @@ mod tests {
             ("z".to_string(), Field::Float(3.1)),
             ("a".to_string(), Field::Str("abc".to_string())),
         ];
-        let row = Field::Group(make_row(fields));
+        let row = Field::Group(Row::new(fields));
         assert_eq!(format!("{row}"), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
 
         let row = Field::ListInternal(make_list(vec![
@@ -1431,7 +1430,7 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert!(!Field::Group(make_row(vec![
+        assert!(!Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
             ("z".to_string(), Field::Float(3.1)),
@@ -1458,7 +1457,7 @@ mod tests {
     #[test]
     fn test_row_primitive_field_fmt() {
         // Primitives types
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("00".to_string(), Field::Null),
             ("01".to_string(), Field::Bool(false)),
             ("02".to_string(), Field::Byte(3)),
@@ -1513,10 +1512,10 @@ mod tests {
     #[test]
     fn test_row_complex_field_fmt() {
         // Complex types
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "00".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1548,7 +1547,7 @@ mod tests {
     #[test]
     fn test_row_primitive_accessors() {
         // primitives
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("a".to_string(), Field::Null),
             ("b".to_string(), Field::Bool(false)),
             ("c".to_string(), Field::Byte(3)),
@@ -1590,7 +1589,7 @@ mod tests {
     #[test]
     fn test_row_primitive_invalid_accessors() {
         // primitives
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("a".to_string(), Field::Null),
             ("b".to_string(), Field::Bool(false)),
             ("c".to_string(), Field::Byte(3)),
@@ -1619,10 +1618,10 @@ mod tests {
 
     #[test]
     fn test_row_complex_accessors() {
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "a".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1653,10 +1652,10 @@ mod tests {
 
     #[test]
     fn test_row_complex_invalid_accessors() {
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "a".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1802,7 +1801,7 @@ mod tests {
 
     #[test]
     fn test_list_complex_accessors() {
-        let list = make_list(vec![Field::Group(make_row(vec![
+        let list = make_list(vec![Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
         ]))]);
@@ -1826,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_list_complex_invalid_accessors() {
-        let list = make_list(vec![Field::Group(make_row(vec![
+        let list = make_list(vec![Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
         ]))]);
@@ -1961,7 +1960,7 @@ mod tests {
             ("Y".to_string(), Field::Double(2.2)),
             ("Z".to_string(), Field::Str("abc".to_string())),
         ];
-        let row = Field::Group(make_row(fields));
+        let row = Field::Group(Row::new(fields));
         assert_eq!(
             row.to_json_value(),
             serde_json::json!({"X": 1, "Y": 2.2, "Z": "abc"})
@@ -1990,14 +1989,14 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use super::{make_list, make_map, make_row};
+    use super::{make_list, make_map, Row};
     use crate::record::Field;
 
     #[test]
     fn test_field_visibility() {
-        let row = make_row(vec![(
+        let row = Row::new(vec![(
             "a".to_string(),
-            Field::Group(make_row(vec![
+            Field::Group(Row::new(vec![
                 ("x".to_string(), Field::Null),
                 ("Y".to_string(), Field::Int(2)),
             ])),
@@ -2009,7 +2008,7 @@ mod api_tests {
                 match column.1 {
                     Field::Group(r) => {
                         assert_eq!(
-                            &make_row(vec![
+                            &Row::new(vec![
                                 ("x".to_string(), Field::Null),
                                 ("Y".to_string(), Field::Int(2)),
                             ]),
@@ -2027,7 +2026,7 @@ mod api_tests {
     fn test_list_element_access() {
         let expected = vec![
             Field::Int(1),
-            Field::Group(make_row(vec![
+            Field::Group(Row::new(vec![
                 ("x".to_string(), Field::Null),
                 ("Y".to_string(), Field::Int(2)),
             ])),

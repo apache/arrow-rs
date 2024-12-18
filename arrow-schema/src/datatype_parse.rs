@@ -92,8 +92,8 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let data_type = self.parse_next_type()?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            "item", data_type, true,
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            data_type, true,
         ))))
     }
 
@@ -102,8 +102,8 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let data_type = self.parse_next_type()?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeList(Arc::new(Field::new(
-            "item", data_type, true,
+        Ok(DataType::LargeList(Arc::new(Field::new_list_field(
+            data_type, true,
         ))))
     }
 
@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::FixedSizeList(
-            Arc::new(Field::new("item", data_type, true)),
+            Arc::new(Field::new_list_field(data_type, true)),
             length,
         ))
     }
@@ -515,7 +515,7 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
-impl<'a> Iterator for Tokenizer<'a> {
+impl Iterator for Tokenizer<'_> {
     type Item = ArrowResult<Token>;
 
     fn next(&mut self) -> Option<Self::Item> {

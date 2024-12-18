@@ -158,7 +158,8 @@ pub trait AsyncFileReader: Send {
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 }
 
-impl AsyncFileReader for Box<dyn AsyncFileReader> {
+/// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
+impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
@@ -506,6 +507,8 @@ where
         let offset_index = self
             .metadata
             .offset_index()
+            // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
+            .filter(|index| !index.is_empty())
             .map(|x| x[row_group_idx].as_slice());
 
         let mut row_group = InMemoryRowGroup {
@@ -815,7 +818,7 @@ impl<'a> InMemoryRowGroup<'a> {
     }
 }
 
-impl<'a> RowGroups for InMemoryRowGroup<'a> {
+impl RowGroups for InMemoryRowGroup<'_> {
     fn num_rows(&self) -> usize {
         self.row_count
     }
@@ -828,6 +831,8 @@ impl<'a> RowGroups for InMemoryRowGroup<'a> {
             Some(data) => {
                 let page_locations = self
                     .offset_index
+                    // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
+                    .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
@@ -923,7 +928,6 @@ mod tests {
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::page_index::index_reader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -1561,12 +1565,11 @@ mod tests {
         let data = Bytes::from(std::fs::read(path).unwrap());
 
         let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
             .parse_and_finish(&data)
             .unwrap();
 
-        let offset_index =
-            index_reader::read_offset_indexes(&data, metadata.row_group(0).columns())
-                .expect("reading offset index");
+        let offset_index = metadata.offset_index().expect("reading offset index")[0].clone();
 
         let mut metadata_builder = metadata.into_builder();
         let mut row_groups = metadata_builder.take_row_groups();
@@ -1866,7 +1869,7 @@ mod tests {
     async fn test_nested_skip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("col_1", DataType::UInt64, false),
-            Field::new_list("col_2", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list("col_2", Field::new_list_field(DataType::Utf8, true), true),
         ]));
 
         // Default writer properties
@@ -2036,5 +2039,106 @@ mod tests {
 
         // Should only have made 3 requests
         assert_eq!(requests.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn empty_offset_index_doesnt_panic_in_read_row_group() {
+        use tokio::fs::File;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_plain.parquet");
+        let mut file = File::open(&path).await.unwrap();
+        let file_size = file.metadata().await.unwrap().len();
+        let mut metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .load_and_finish(&mut file, file_size as usize)
+            .await
+            .unwrap();
+
+        metadata.set_offset_index(Some(vec![]));
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
+        let reader =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
+                .build()
+                .unwrap();
+
+        let result = reader.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn non_empty_offset_index_doesnt_panic_in_read_row_group() {
+        use tokio::fs::File;
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
+        let mut file = File::open(&path).await.unwrap();
+        let file_size = file.metadata().await.unwrap().len();
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .load_and_finish(&mut file, file_size as usize)
+            .await
+            .unwrap();
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
+        let reader =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
+                .build()
+                .unwrap();
+
+        let result = reader.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(result.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn empty_offset_index_doesnt_panic_in_column_chunks() {
+        use tempfile::TempDir;
+        use tokio::fs::File;
+        fn write_metadata_to_local_file(
+            metadata: ParquetMetaData,
+            file: impl AsRef<std::path::Path>,
+        ) {
+            use crate::file::metadata::ParquetMetaDataWriter;
+            use std::fs::File;
+            let file = File::create(file).unwrap();
+            ParquetMetaDataWriter::new(file, &metadata)
+                .finish()
+                .unwrap()
+        }
+
+        fn read_metadata_from_local_file(file: impl AsRef<std::path::Path>) -> ParquetMetaData {
+            use std::fs::File;
+            let file = File::open(file).unwrap();
+            ParquetMetaDataReader::new()
+                .with_page_indexes(true)
+                .parse_and_finish(&file)
+                .unwrap()
+        }
+
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_plain.parquet");
+        let mut file = File::open(&path).await.unwrap();
+        let file_size = file.metadata().await.unwrap().len();
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .load_and_finish(&mut file, file_size as usize)
+            .await
+            .unwrap();
+
+        let tempdir = TempDir::new().unwrap();
+        let metadata_path = tempdir.path().join("thrift_metadata.dat");
+        write_metadata_to_local_file(metadata, &metadata_path);
+        let metadata = read_metadata_from_local_file(&metadata_path);
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
+        let reader =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
+                .build()
+                .unwrap();
+
+        // Panics here
+        let result = reader.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(result.len(), 1);
     }
 }

@@ -80,6 +80,10 @@ fn make_encoder_impl<'a>(
             let array = array.as_string::<i64>();
             (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
         }
+        DataType::Utf8View => {
+            let array = array.as_string_view();
+            (Box::new(StringViewEncoder(array)) as _, array.nulls().cloned())
+        }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
             (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
@@ -134,6 +138,11 @@ fn make_encoder_impl<'a>(
             };
             (Box::new(encoder) as _, array.nulls().cloned())
         }
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+            let options = FormatOptions::new().with_display_error(true);
+            let formatter = ArrayFormatter::try_new(array, &options)?;
+            (Box::new(RawArrayFormatter(formatter)) as _, array.nulls().cloned())
+        }
         d => match d.is_temporal() {
             true => {
                 // Note: the implementation of Encoder for ArrayFormatter assumes it does not produce
@@ -174,7 +183,7 @@ fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
     }
 }
 
-impl<'a> Encoder for StructArrayEncoder<'a> {
+impl Encoder for StructArrayEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'{');
         let mut is_first = true;
@@ -289,7 +298,7 @@ impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
 
 struct BooleanEncoder<'a>(&'a BooleanArray);
 
-impl<'a> Encoder for BooleanEncoder<'a> {
+impl Encoder for BooleanEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         match self.0.value(idx) {
             true => out.extend_from_slice(b"true"),
@@ -300,7 +309,15 @@ impl<'a> Encoder for BooleanEncoder<'a> {
 
 struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
-impl<'a, O: OffsetSizeTrait> Encoder for StringEncoder<'a, O> {
+impl<O: OffsetSizeTrait> Encoder for StringEncoder<'_, O> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        encode_string(self.0.value(idx), out);
+    }
+}
+
+struct StringViewEncoder<'a>(&'a StringViewArray);
+
+impl Encoder for StringViewEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
     }
@@ -326,7 +343,7 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
     }
 }
 
-impl<'a, O: OffsetSizeTrait> Encoder for ListEncoder<'a, O> {
+impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         let end = self.offsets[idx + 1].as_usize();
         let start = self.offsets[idx].as_usize();
@@ -372,7 +389,7 @@ impl<'a> FixedSizeListEncoder<'a> {
     }
 }
 
-impl<'a> Encoder for FixedSizeListEncoder<'a> {
+impl Encoder for FixedSizeListEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         let start = idx * self.value_length;
         let end = start + self.value_length;
@@ -418,19 +435,28 @@ impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
     }
 }
 
-impl<'a, K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'a, K> {
+impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(self.keys[idx].as_usize(), out)
     }
 }
 
-impl<'a> Encoder for ArrayFormatter<'a> {
+impl Encoder for ArrayFormatter<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'"');
         // Should be infallible
         // Note: We are making an assumption that the formatter does not produce characters that require escaping
         let _ = write!(out, "{}", self.value(idx));
         out.push(b'"')
+    }
+}
+
+/// A newtype wrapper around [`ArrayFormatter`] that skips surrounding the value with `"`
+struct RawArrayFormatter<'a>(ArrayFormatter<'a>);
+
+impl Encoder for RawArrayFormatter<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        let _ = write!(out, "{}", self.0.value(idx));
     }
 }
 
@@ -488,7 +514,7 @@ impl<'a> MapEncoder<'a> {
     }
 }
 
-impl<'a> Encoder for MapEncoder<'a> {
+impl Encoder for MapEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         let end = self.offsets[idx + 1].as_usize();
         let start = self.offsets[idx].as_usize();

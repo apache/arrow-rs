@@ -28,8 +28,8 @@ use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::s3::{
-    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
-    ListResponse,
+    CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
+    InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
@@ -62,6 +62,7 @@ use std::sync::Arc;
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
+const ALGORITHM: &str = "x-amz-checksum-algorithm";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, Snafu)]
@@ -98,8 +99,11 @@ pub(crate) enum Error {
     #[snafu(display("Error getting create multipart response body: {}", source))]
     CreateMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error performing complete multipart request: {}", source))]
-    CompleteMultipartRequest { source: crate::client::retry::Error },
+    #[snafu(display("Error performing complete multipart request: {}: {}", path, source))]
+    CompleteMultipartRequest {
+        source: crate::client::retry::Error,
+        path: String,
+    },
 
     #[snafu(display("Error getting complete multipart response body: {}", source))]
     CompleteMultipartResponseBody { source: reqwest::Error },
@@ -118,11 +122,30 @@ pub(crate) enum Error {
 
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
-        Self::Generic {
-            store: STORE,
-            source: Box::new(err),
+        match err {
+            Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
+            _ => Self::Generic {
+                store: STORE,
+                source: Box::new(err),
+            },
         }
     }
+}
+
+pub(crate) enum PutPartPayload<'a> {
+    Part(PutPayload),
+    Copy(&'a Path),
+}
+
+impl Default for PutPartPayload<'_> {
+    fn default() -> Self {
+        Self::Part(PutPayload::default())
+    }
+}
+
+pub(crate) enum CompleteMultipartMode {
+    Overwrite,
+    Create,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +203,7 @@ pub(crate) struct S3Config {
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: Option<S3ConditionalPut>,
+    pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
 }
 
@@ -223,11 +247,12 @@ struct SessionCredential<'a> {
     config: &'a S3Config,
 }
 
-impl<'a> SessionCredential<'a> {
+impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
         let mut authorizer =
             AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
-                .with_sign_payload(self.config.sign_payload);
+                .with_sign_payload(self.config.sign_payload)
+                .with_request_payer(self.config.request_payer);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
@@ -266,6 +291,7 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_on_conflict: bool,
     retry_error_body: bool,
 }
 
@@ -291,6 +317,13 @@ impl<'a> Request<'a> {
 
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
+        Self {
+            retry_on_conflict,
+            ..self
+        }
     }
 
     pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
@@ -350,16 +383,17 @@ impl<'a> Request<'a> {
     }
 
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
-        if !self.config.skip_signature || self.config.checksum.is_some() {
+        if (!self.config.skip_signature && self.config.sign_payload)
+            || self.config.checksum.is_some()
+        {
             let mut sha256 = Context::new(&digest::SHA256);
             payload.iter().for_each(|x| sha256.update(x));
             let payload_sha256 = sha256.finish();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
-                self.builder = self.builder.header(
-                    "x-amz-checksum-sha256",
-                    BASE64_STANDARD.encode(payload_sha256),
-                );
+                self.builder = self
+                    .builder
+                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(payload_sha256));
             }
             self.payload_sha256 = Some(payload_sha256);
         }
@@ -386,6 +420,7 @@ impl<'a> Request<'a> {
         self.builder
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
+            .retry_on_conflict(self.retry_on_conflict)
             .idempotent(self.idempotent)
             .retry_error_body(self.retry_error_body)
             .payload(self.payload)
@@ -422,6 +457,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_on_conflict: false,
             retry_error_body: false,
         }
     }
@@ -581,8 +617,15 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
-        let response = self
-            .request(Method::POST, location)
+        let mut request = self.request(Method::POST, location);
+        if let Some(algorithm) = self.config.checksum {
+            match algorithm {
+                Checksum::SHA256 => {
+                    request = request.header(ALGORITHM, "SHA256");
+                }
+            }
+        }
+        let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
@@ -605,15 +648,24 @@ impl S3Client {
         path: &Path,
         upload_id: &MultipartId,
         part_idx: usize,
-        data: PutPayload,
+        data: PutPartPayload<'_>,
     ) -> Result<PartId> {
+        let is_copy = matches!(data, PutPartPayload::Copy(_));
         let part = (part_idx + 1).to_string();
 
         let mut request = self
             .request(Method::PUT, path)
-            .with_payload(data)
             .query(&[("partNumber", &part), ("uploadId", upload_id)])
             .idempotent(true);
+
+        request = match data {
+            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Copy(path) => request.header(
+                "x-amz-copy-source",
+                &format!("{}/{}", self.config.bucket, encode_path(path)),
+            ),
+        };
+
         if self
             .config
             .encryption_headers
@@ -624,9 +676,46 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
+        let checksum_sha256 = response
+            .headers()
+            .get(SHA256_CHECKSUM)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
 
-        let content_id = get_etag(response.headers()).context(MetadataSnafu)?;
+        let e_tag = match is_copy {
+            false => get_etag(response.headers()).context(MetadataSnafu)?,
+            true => {
+                let response = response
+                    .bytes()
+                    .await
+                    .context(CreateMultipartResponseBodySnafu)?;
+                let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
+                    .context(InvalidMultipartResponseSnafu)?;
+                response.e_tag
+            }
+        };
+
+        let content_id = if self.config.checksum == Some(Checksum::SHA256) {
+            let meta = PartMetadata {
+                e_tag,
+                checksum_sha256,
+            };
+            quick_xml::se::to_string(&meta).unwrap()
+        } else {
+            e_tag
+        };
+
         Ok(PartId { content_id })
+    }
+
+    pub(crate) async fn abort_multipart(&self, location: &Path, upload_id: &str) -> Result<()> {
+        self.request(Method::DELETE, location)
+            .query(&[("uploadId", upload_id)])
+            .with_encryption_headers()
+            .send()
+            .await?;
+
+        Ok(())
     }
 
     pub(crate) async fn complete_multipart(
@@ -634,12 +723,18 @@ impl S3Client {
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
+        mode: CompleteMultipartMode,
     ) -> Result<PutResult> {
         let parts = if parts.is_empty() {
             // If no parts were uploaded, upload an empty part
             // otherwise the completion request will fail
             let part = self
-                .put_part(location, &upload_id.to_string(), 0, PutPayload::default())
+                .put_part(
+                    location,
+                    &upload_id.to_string(),
+                    0,
+                    PutPartPayload::default(),
+                )
                 .await?;
             vec![part]
         } else {
@@ -651,18 +746,27 @@ impl S3Client {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(location);
 
-        let response = self
+        let request = self
             .client
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
-            .with_aws_sigv4(credential.authorizer(), None)
+            .with_aws_sigv4(credential.authorizer(), None);
+
+        let request = match mode {
+            CompleteMultipartMode::Overwrite => request,
+            CompleteMultipartMode::Create => request.header("If-None-Match", "*"),
+        };
+
+        let response = request
             .retryable(&self.config.retry_config)
             .idempotent(true)
             .retry_error_body(true)
             .send()
             .await
-            .context(CompleteMultipartRequestSnafu)?;
+            .context(CompleteMultipartRequestSnafu {
+                path: location.as_ref(),
+            })?;
 
         let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
 

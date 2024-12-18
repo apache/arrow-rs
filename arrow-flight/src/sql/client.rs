@@ -228,8 +228,8 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -274,8 +274,8 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -593,8 +593,8 @@ impl PreparedStatement<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 

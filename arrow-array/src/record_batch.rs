@@ -32,15 +32,6 @@ pub trait RecordBatchReader: Iterator<Item = Result<RecordBatch, ArrowError>> {
     /// Implementation of this trait should guarantee that all `RecordBatch`'s returned by this
     /// reader should have the same schema as returned from this method.
     fn schema(&self) -> SchemaRef;
-
-    /// Reads the next `RecordBatch`.
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `next` from the trait Iterator."
-    )]
-    fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        self.next().transpose()
-    }
 }
 
 impl<R: RecordBatchReader + ?Sized> RecordBatchReader for Box<R> {
@@ -58,6 +49,129 @@ pub trait RecordBatchWriter {
     fn close(self) -> Result<(), ArrowError>;
 }
 
+/// Creates an array from a literal slice of values,
+/// suitable for rapid testing and development.
+///
+/// Example:
+///
+/// ```rust
+///
+/// use arrow_array::create_array;
+///
+/// let array = create_array!(Int32, [1, 2, 3, 4, 5]);
+/// let array = create_array!(Utf8, [Some("a"), Some("b"), None, Some("e")]);
+/// ```
+/// Support for limited data types is available. The macro will return a compile error if an unsupported data type is used.
+/// Presently supported data types are:
+/// - `Boolean`, `Null`
+/// - `Decimal128`, `Decimal256`
+/// - `Float16`, `Float32`, `Float64`
+/// - `Int8`, `Int16`, `Int32`, `Int64`
+/// - `UInt8`, `UInt16`, `UInt32`, `UInt64`
+/// - `IntervalDayTime`, `IntervalYearMonth`
+/// - `Second`, `Millisecond`, `Microsecond`, `Nanosecond`
+/// - `Second32`, `Millisecond32`, `Microsecond64`, `Nanosecond64`
+/// - `DurationSecond`, `DurationMillisecond`, `DurationMicrosecond`, `DurationNanosecond`
+/// - `TimestampSecond`, `TimestampMillisecond`, `TimestampMicrosecond`, `TimestampNanosecond`
+/// - `Utf8`, `Utf8View`, `LargeUtf8`, `Binary`, `LargeBinary`
+#[macro_export]
+macro_rules! create_array {
+    // `@from` is used for those types that have a common method `<type>::from`
+    (@from Boolean) => { $crate::BooleanArray };
+    (@from Int8) => { $crate::Int8Array };
+    (@from Int16) => { $crate::Int16Array };
+    (@from Int32) => { $crate::Int32Array };
+    (@from Int64) => { $crate::Int64Array };
+    (@from UInt8) => { $crate::UInt8Array };
+    (@from UInt16) => { $crate::UInt16Array };
+    (@from UInt32) => { $crate::UInt32Array };
+    (@from UInt64) => { $crate::UInt64Array };
+    (@from Float16) => { $crate::Float16Array };
+    (@from Float32) => { $crate::Float32Array };
+    (@from Float64) => { $crate::Float64Array };
+    (@from Utf8) => { $crate::StringArray };
+    (@from Utf8View) => { $crate::StringViewArray };
+    (@from LargeUtf8) => { $crate::LargeStringArray };
+    (@from IntervalDayTime) => { $crate::IntervalDayTimeArray };
+    (@from IntervalYearMonth) => { $crate::IntervalYearMonthArray };
+    (@from Second) => { $crate::TimestampSecondArray };
+    (@from Millisecond) => { $crate::TimestampMillisecondArray };
+    (@from Microsecond) => { $crate::TimestampMicrosecondArray };
+    (@from Nanosecond) => { $crate::TimestampNanosecondArray };
+    (@from Second32) => { $crate::Time32SecondArray };
+    (@from Millisecond32) => { $crate::Time32MillisecondArray };
+    (@from Microsecond64) => { $crate::Time64MicrosecondArray };
+    (@from Nanosecond64) => { $crate::Time64Nanosecond64Array };
+    (@from DurationSecond) => { $crate::DurationSecondArray };
+    (@from DurationMillisecond) => { $crate::DurationMillisecondArray };
+    (@from DurationMicrosecond) => { $crate::DurationMicrosecondArray };
+    (@from DurationNanosecond) => { $crate::DurationNanosecondArray };
+    (@from Decimal128) => { $crate::Decimal128Array };
+    (@from Decimal256) => { $crate::Decimal256Array };
+    (@from TimestampSecond) => { $crate::TimestampSecondArray };
+    (@from TimestampMillisecond) => { $crate::TimestampMillisecondArray };
+    (@from TimestampMicrosecond) => { $crate::TimestampMicrosecondArray };
+    (@from TimestampNanosecond) => { $crate::TimestampNanosecondArray };
+
+    (@from $ty: ident) => {
+        compile_error!(concat!("Unsupported data type: ", stringify!($ty)))
+    };
+
+    (Null, $size: expr) => {
+        std::sync::Arc::new($crate::NullArray::new($size))
+    };
+
+    (Binary, [$($values: expr),*]) => {
+        std::sync::Arc::new($crate::BinaryArray::from_vec(vec![$($values),*]))
+    };
+
+    (LargeBinary, [$($values: expr),*]) => {
+        std::sync::Arc::new($crate::LargeBinaryArray::from_vec(vec![$($values),*]))
+    };
+
+    ($ty: tt, [$($values: expr),*]) => {
+        std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from(vec![$($values),*]))
+    };
+}
+
+/// Creates a record batch from literal slice of values, suitable for rapid
+/// testing and development.
+///
+/// Example:
+///
+/// ```rust
+/// use arrow_array::record_batch;
+/// use arrow_schema;
+///
+/// let batch = record_batch!(
+///     ("a", Int32, [1, 2, 3]),
+///     ("b", Float64, [Some(4.0), None, Some(5.0)]),
+///     ("c", Utf8, ["alpha", "beta", "gamma"])
+/// );
+/// ```
+/// Due to limitation of [`create_array!`] macro, support for limited data types is available.
+#[macro_export]
+macro_rules! record_batch {
+    ($(($name: expr, $type: ident, [$($values: expr),*])),*) => {
+        {
+            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+                $(
+                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
+                )*
+            ]));
+
+            let batch = $crate::RecordBatch::try_new(
+                schema,
+                vec![$(
+                    $crate::create_array!($type, [$($values),*]),
+                )*]
+            );
+
+            batch
+        }
+    }
+}
+
 /// A two-dimensional batch of column-oriented data with a defined
 /// [schema](arrow_schema::Schema).
 ///
@@ -68,6 +182,19 @@ pub trait RecordBatchWriter {
 ///
 /// Record batches are a convenient unit of work for various
 /// serialization and computation functions, possibly incremental.
+///
+/// Use the [`record_batch!`] macro to create a [`RecordBatch`] from
+/// literal slice of values, useful for rapid prototyping and testing.
+///
+/// Example:
+/// ```rust
+/// use arrow_array::record_batch;
+/// let batch = record_batch!(
+///     ("a", Int32, [1, 2, 3]),
+///     ("b", Float64, [Some(4.0), None, Some(5.0)]),
+///     ("c", Utf8, ["alpha", "beta", "gamma"])
+/// );
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordBatch {
     schema: SchemaRef,
@@ -411,6 +538,19 @@ impl RecordBatch {
     ///   ("b", b),
     /// ]);
     /// ```
+    /// Another way to quickly create a [`RecordBatch`] is to use the [`record_batch!`] macro,
+    /// which is particularly helpful for rapid prototyping and testing.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use arrow_array::record_batch;
+    /// let batch = record_batch!(
+    ///     ("a", Int32, [1, 2, 3]),
+    ///     ("b", Float64, [Some(4.0), None, Some(5.0)]),
+    ///     ("c", Utf8, ["alpha", "beta", "gamma"])
+    /// );
+    /// ```
     pub fn try_from_iter<I, F>(value: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (F, ArrayRef)>,
@@ -469,6 +609,11 @@ impl RecordBatch {
     }
 
     /// Returns the total number of bytes of memory occupied physically by this batch.
+    ///
+    /// Note that this does not always correspond to the exact memory usage of a
+    /// `RecordBatch` (might overestimate), since multiple columns can share the same
+    /// buffers or slices thereof, the memory used by the shared buffers might be
+    /// counted multiple times.
     pub fn get_array_memory_size(&self) -> usize {
         self.columns()
             .iter()
@@ -801,7 +946,7 @@ mod tests {
     fn create_record_batch_field_name_mismatch() {
         let fields = vec![
             Field::new("a1", DataType::Int32, false),
-            Field::new_list("a2", Field::new("item", DataType::Int8, false), false),
+            Field::new_list("a2", Field::new_list_field(DataType::Int8, false), false),
         ];
         let schema = Arc::new(Schema::new(vec![Field::new_struct("a", fields, true)]));
 

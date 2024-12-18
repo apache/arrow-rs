@@ -330,7 +330,7 @@ static GET_XDBC_INFO_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
         Field::new("literal_suffix", DataType::Utf8, true),
         Field::new(
             "create_params",
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, false))),
             true,
         ),
         Field::new("nullable", DataType::Int32, false),

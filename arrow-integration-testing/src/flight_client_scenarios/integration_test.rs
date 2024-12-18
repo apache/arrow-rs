@@ -29,7 +29,7 @@ use arrow::{
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location, SchemaAsIpc, Ticket,
+    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, IpcMessage, Location, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
 use tonic::{Request, Streaming};
@@ -72,7 +72,20 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    let mut schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    #[allow(deprecated)]
+    let mut dict_tracker =
+        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let data_gen = writer::IpcDataGenerator::default();
+    let data = IpcMessage(
+        data_gen
+            .schema_to_bytes_with_dictionary_tracker(&schema, &mut dict_tracker, &options)
+            .ipc_message
+            .into(),
+    );
+    let mut schema_flight_data = FlightData {
+        data_header: data.0,
+        ..Default::default()
+    };
     // arrow_flight::utils::flight_data_from_arrow_schema(&schema, &options);
     schema_flight_data.flight_descriptor = Some(descriptor.clone());
     upload_tx.send(schema_flight_data).await?;
@@ -82,7 +95,14 @@ async fn upload_data(
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
         // Preload the first batch into the channel before starting the request
-        send_batch(&mut upload_tx, &metadata, first_batch, &options).await?;
+        send_batch(
+            &mut upload_tx,
+            &metadata,
+            first_batch,
+            &options,
+            &mut dict_tracker,
+        )
+        .await?;
 
         let outer = client.do_put(Request::new(upload_rx)).await?;
         let mut inner = outer.into_inner();
@@ -97,7 +117,14 @@ async fn upload_data(
         // Stream the rest of the batches
         for (counter, batch) in original_data_iter {
             let metadata = counter.to_string().into_bytes();
-            send_batch(&mut upload_tx, &metadata, batch, &options).await?;
+            send_batch(
+                &mut upload_tx,
+                &metadata,
+                batch,
+                &options,
+                &mut dict_tracker,
+            )
+            .await?;
 
             let r = inner
                 .next()
@@ -124,12 +151,12 @@ async fn send_batch(
     metadata: &[u8],
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
+    dictionary_tracker: &mut writer::DictionaryTracker,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker = writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, options)
+        .encoded_batch(batch, dictionary_tracker, options)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =
