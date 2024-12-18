@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
-use crate::{ArrayRef, BooleanArray};
+use crate::builder::{SpecificArrayBuilder, ArrayBuilder, BooleanBufferBuilder};
+use crate::{Array, ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -216,6 +216,49 @@ impl ArrayBuilder for BooleanBuilder {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+}
+
+
+impl SpecificArrayBuilder for BooleanBuilder {
+    type Output = BooleanArray;
+    type Item<'a> = bool;
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> Arc<BooleanArray> {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> Arc<BooleanArray> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: bool) {
+        self.append_value(value)
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_value(*value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        self.append_nulls(n)
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        // TODO - if iterator exists try it?
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.append_value(output.value(i));
+            }
+        }
     }
 }
 

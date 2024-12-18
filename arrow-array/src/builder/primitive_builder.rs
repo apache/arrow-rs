@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::{ArrayBuilder, BufferBuilder, SpecificArrayBuilder};
 use crate::types::*;
 use crate::{ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
@@ -129,6 +129,42 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+}
+
+
+impl<T: ArrowPrimitiveType> SpecificArrayBuilder for PrimitiveBuilder<T> {
+    type Output = PrimitiveArray<T>;
+    type Item<'a> = T::Native;
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> Arc<PrimitiveArray<T>> {
+        Arc::new(self.finish())
+    }
+
+    /// Builds the array without resetting the builder.
+    fn finish_cloned(&self) -> Arc<PrimitiveArray<T>> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value(&mut self, value: T::Native) {
+        self.append_value(value)
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_value(*value)
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        self.append_nulls(n)
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a PrimitiveArray<T>) {
+        self.extend(output)
     }
 }
 
