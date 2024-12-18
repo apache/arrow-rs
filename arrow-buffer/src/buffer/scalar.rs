@@ -93,6 +93,12 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         }
     }
 
+    /// The length of the scalar buffer, in number of elements.
+    #[inline]
+    pub fn len_in_elements(&self) -> usize {
+        self.buffer.len() / std::mem::size_of::<T>()
+    }
+
     /// Free up unused memory.
     pub fn shrink_to_fit(&mut self) {
         self.buffer.shrink_to_fit();
@@ -106,7 +112,7 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
     ///
     /// # Safety
-    /// `(offset + len)` <= [`Self::length`]
+    /// `(offset + len)` <= [`Self::len_in_elements`]
     pub unsafe fn slice_unchecked(&self, offset: usize, len: usize) -> Self {
         unsafe { Self::new_unchecked(self.buffer.clone(), offset, len) }
     }
