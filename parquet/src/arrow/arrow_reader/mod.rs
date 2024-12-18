@@ -17,9 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-use num::ToPrimitive;
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -27,6 +24,8 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
@@ -695,14 +694,22 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
-        let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
+        let crypto_context = if self.metadata.file_decryptor().is_some() {
+            let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
 
-        let crypto_context = CryptoContext::new(
-            rg_idx, self.column_idx, file_decryptor.clone(), file_decryptor);
-        let crypto_context = Arc::new(crypto_context);
+            let crypto_context = CryptoContext::new(
+                rg_idx,
+                self.column_idx,
+                file_decryptor.clone(),
+                file_decryptor,
+            );
+            Some(Arc::new(crypto_context))
+        } else {
+            None
+        };
 
-        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations, Some(crypto_context));
-        // let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+        let ret =
+            SerializedPageReader::new(reader, meta, total_rows, page_locations, crypto_context);
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -1846,12 +1853,17 @@ mod tests {
                 .build(),
         );
 
-        let metadata = ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref()).unwrap();
+        let metadata =
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
+                .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         assert_eq!(file_metadata.num_rows(), 50);
         assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-        assert_eq!(file_metadata.created_by().unwrap(), "parquet-cpp-arrow version 14.0.0-SNAPSHOT");
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 14.0.0-SNAPSHOT"
+        );
 
         metadata.metadata.row_groups().iter().for_each(|rg| {
             assert_eq!(rg.num_columns(), 8);
@@ -1865,9 +1877,12 @@ mod tests {
                 .with_footer_key(key_code.to_vec())
                 .build(),
         );
-        let record_reader =
-            ParquetRecordBatchReader::try_new_with_decryption(file, 128, decryption_properties.as_ref())
-                .unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
+            file,
+            128,
+            decryption_properties.as_ref(),
+        )
+        .unwrap();
         // todo check contents
         let mut row_count = 0;
         for batch in record_reader {
