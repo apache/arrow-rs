@@ -33,17 +33,14 @@ use crate::file::{
     reader::*,
     statistics,
 };
-use crate::format::{PageHeader, PageLocation, PageType, FileCryptoMetaData as TFileCryptoMetaData, EncryptionAlgorithm};
+use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
-use num::ToPrimitive;
-use thrift::protocol::{TCompactInputProtocol, TInputProtocol};
-use zstd::zstd_safe::WriteBuf;
-use crate::data_type::AsBytes;
-use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, FileDecryptionProperties, ModuleType};
+use thrift::protocol::TCompactInputProtocol;
+use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -953,14 +950,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 }
 
 fn page_crypto_context(crypto_context: &Option<Arc<CryptoContext>>, page_ordinal: usize, dictionary_page: bool) -> Result<Option<Arc<CryptoContext>>> {
-    let page_ordinal = page_ordinal
-        .to_i16()
-        .ok_or_else(|| general_err!(
-                            "Page ordinal {} is greater than the maximum allowed in encrypted Parquet files ({})",
-                            page_ordinal, i16::MAX))?;
-
     Ok(crypto_context.as_ref().map(
-        |c| Arc::new(if dictionary_page { c.for_dictionary_page() } else { c.with_page_ordinal(page_ordinal) })))
+        |c| Arc::new(if dictionary_page {
+            c.for_dictionary_page()
+        } else {
+            c.with_page_ordinal(page_ordinal)
+        })))
 }
 
 #[cfg(test)]
