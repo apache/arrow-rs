@@ -652,6 +652,22 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i, null_regex),
+                DataType::Decimal32(precision, scale) => build_decimal_array::<Decimal32Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal64(precision, scale) => build_decimal_array::<Decimal64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
                 DataType::Decimal128(precision, scale) => build_decimal_array::<Decimal128Type>(
                     line_number,
                     rows,

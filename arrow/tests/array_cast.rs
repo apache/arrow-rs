@@ -18,8 +18,9 @@
 use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
@@ -262,6 +263,22 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
         Arc::new(create_decimal_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        make_dictionary_primitive::<Int8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal64Type>(vec![1, 2]),
         make_dictionary_primitive::<Int8Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal128Type>(vec![1, 2]),
@@ -501,6 +518,7 @@ fn get_all_types() -> Vec<DataType> {
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeUtf8)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal32(9, 0))),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]

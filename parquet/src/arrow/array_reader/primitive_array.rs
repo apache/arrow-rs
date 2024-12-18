@@ -23,9 +23,9 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::Decimal256Array;
 use arrow_array::{
-    builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray, Decimal128Array,
+    builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array,
     UInt64Array,
 };
@@ -144,7 +144,8 @@ where
                         // follow C++ implementation and use overflow/reinterpret cast from  i32 to u32 which will map
                         // `i32::MIN..0` to `(i32::MAX as u32)..u32::MAX`
                         ArrowType::UInt32
-                    }
+                    },
+                    ArrowType::Decimal32(_, _) => target_type.clone(),
                     _ => ArrowType::Int32,
                 }
             }
@@ -154,7 +155,8 @@ where
                         // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
                         // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
                         ArrowType::UInt64
-                    }
+                    },
+                    ArrowType::Decimal64(_, _) => target_type.clone(),
                     _ => ArrowType::Int64,
                 }
             }
@@ -185,11 +187,13 @@ where
             PhysicalType::INT32 => match array_data.data_type() {
                 ArrowType::UInt32 => Arc::new(UInt32Array::from(array_data)),
                 ArrowType::Int32 => Arc::new(Int32Array::from(array_data)),
+                ArrowType::Decimal32(_, _) => Arc::new(Decimal32Array::from(array_data)),
                 _ => unreachable!(),
             },
             PhysicalType::INT64 => match array_data.data_type() {
                 ArrowType::UInt64 => Arc::new(UInt64Array::from(array_data)),
                 ArrowType::Int64 => Arc::new(Int64Array::from(array_data)),
+                ArrowType::Decimal64(_, _) => Arc::new(Decimal64Array::from(array_data)),
                 _ => unreachable!(),
             },
             PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)),
