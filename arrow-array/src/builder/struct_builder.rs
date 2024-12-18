@@ -270,6 +270,16 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                     .with_field(field.clone()),
             )
         }
+        DataType::ListView(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(ListViewBuilder::with_capacity(builder, capacity).with_field(field.clone()))
+        }
+        DataType::LargeListView(field) => {
+            let builder = make_builder(field.data_type(), capacity);
+            Box::new(
+                LargeListViewBuilder::with_capacity(builder, capacity).with_field(field.clone()),
+            )
+        }
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {
                 let map_field_names = MapFieldNames {
