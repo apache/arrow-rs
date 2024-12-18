@@ -117,9 +117,13 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     ///
     /// [`Self::try_push`] can perform this validation check on insertion
     pub fn check_valid_utf8(&self, start_offset: usize) -> Result<()> {
-        match std::str::from_utf8(&self.values.as_slice()[start_offset..]) {
+        match simdutf8::basic::from_utf8(&self.values.as_slice()[start_offset..]) {
             Ok(_) => Ok(()),
-            Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+            Err(_) => {
+                let e = simdutf8::compat::from_utf8(&self.values.as_slice()[start_offset..])
+                    .unwrap_err();
+                Err(general_err!("encountered non UTF-8 data: {}", e))
+            }
         }
     }
 
