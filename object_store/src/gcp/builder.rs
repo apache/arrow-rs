@@ -27,7 +27,6 @@ use crate::gcp::{
 };
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,33 +36,33 @@ use super::credential::{AuthorizedUserSigningCredentials, InstanceSigningCredent
 
 const TOKEN_MIN_TTL: Duration = Duration::from_secs(4 * 60);
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Missing bucket name"))]
+    #[error("Missing bucket name")]
     MissingBucketName {},
 
-    #[snafu(display("One of service account path or service account key may be provided."))]
+    #[error("One of service account path or service account key may be provided.")]
     ServiceAccountPathAndKeyProvided,
 
-    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    #[error("Unable parse source url. Url: {}, Error: {}", url, source)]
     UnableToParseUrl {
         source: url::ParseError,
         url: String,
     },
 
-    #[snafu(display(
+    #[error(
         "Unknown url scheme cannot be parsed into storage location: {}",
         scheme
-    ))]
+    )]
     UnknownUrlScheme { scheme: String },
 
-    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    #[error("URL did not match any known pattern for scheme: {}", url)]
     UrlNotRecognised { url: String },
 
-    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
 
-    #[snafu(display("GCP credential error: {}", source))]
+    #[error("GCP credential error: {}", source)]
     Credential { source: credential::Error },
 }
 
@@ -319,12 +318,21 @@ impl GoogleCloudStorageBuilder {
     /// This is a separate member function to allow fallible computation to
     /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
     fn parse_url(&mut self, url: &str) -> Result<()> {
-        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
-        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+        let parsed = Url::parse(url).map_err(|source| Error::UnableToParseUrl {
+            source,
+            url: url.to_string(),
+        })?;
+
+        let host = parsed.host_str().ok_or_else(|| Error::UrlNotRecognised {
+            url: url.to_string(),
+        })?;
 
         match parsed.scheme() {
             "gs" => self.bucket_name = Some(host.to_string()),
-            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+            scheme => {
+                let scheme = scheme.to_string();
+                return Err(Error::UnknownUrlScheme { scheme }.into());
+            }
         }
         Ok(())
     }
@@ -428,12 +436,14 @@ impl GoogleCloudStorageBuilder {
         // First try to initialize from the service account information.
         let service_account_credentials =
             match (self.service_account_path, self.service_account_key) {
-                (Some(path), None) => {
-                    Some(ServiceAccountCredentials::from_file(path).context(CredentialSnafu)?)
-                }
-                (None, Some(key)) => {
-                    Some(ServiceAccountCredentials::from_key(&key).context(CredentialSnafu)?)
-                }
+                (Some(path), None) => Some(
+                    ServiceAccountCredentials::from_file(path)
+                        .map_err(|source| Error::Credential { source })?,
+                ),
+                (None, Some(key)) => Some(
+                    ServiceAccountCredentials::from_key(&key)
+                        .map_err(|source| Error::Credential { source })?,
+                ),
                 (None, None) => None,
                 (Some(_), Some(_)) => return Err(Error::ServiceAccountPathAndKeyProvided.into()),
             };

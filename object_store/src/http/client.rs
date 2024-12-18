@@ -32,42 +32,41 @@ use hyper::header::{
 use percent_encoding::percent_decode_str;
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
-use snafu::{OptionExt, ResultExt, Snafu};
 use url::Url;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Request error: {}", source))]
+    #[error("Request error: {}", source)]
     Request { source: retry::Error },
 
-    #[snafu(display("Request error: {}", source))]
+    #[error("Request error: {}", source)]
     Reqwest { source: reqwest::Error },
 
-    #[snafu(display("Range request not supported by {}", href))]
+    #[error("Range request not supported by {}", href)]
     RangeNotSupported { href: String },
 
-    #[snafu(display("Error decoding PROPFIND response: {}", source))]
+    #[error("Error decoding PROPFIND response: {}", source)]
     InvalidPropFind { source: quick_xml::de::DeError },
 
-    #[snafu(display("Missing content size for {}", href))]
+    #[error("Missing content size for {}", href)]
     MissingSize { href: String },
 
-    #[snafu(display("Error getting properties of \"{}\" got \"{}\"", href, status))]
+    #[error("Error getting properties of \"{}\" got \"{}\"", href, status)]
     PropStatus { href: String, status: String },
 
-    #[snafu(display("Failed to parse href \"{}\": {}", href, source))]
+    #[error("Failed to parse href \"{}\": {}", href, source)]
     InvalidHref {
         href: String,
         source: url::ParseError,
     },
 
-    #[snafu(display("Path \"{}\" contained non-unicode characters: {}", path, source))]
+    #[error("Path \"{}\" contained non-unicode characters: {}", path, source)]
     NonUnicode {
         path: String,
         source: std::str::Utf8Error,
     },
 
-    #[snafu(display("Encountered invalid path \"{}\": {}", path, source))]
+    #[error("Encountered invalid path \"{}\": {}", path, source)]
     InvalidPath {
         path: String,
         source: crate::path::Error,
@@ -129,7 +128,7 @@ impl Client {
             .request(method, url)
             .send_retry(&self.retry_config)
             .await
-            .context(RequestSnafu)?;
+            .map_err(|source| Error::Request { source })?;
 
         Ok(())
     }
@@ -236,7 +235,10 @@ impl Client {
             .await;
 
         let response = match result {
-            Ok(result) => result.bytes().await.context(ReqwestSnafu)?,
+            Ok(result) => result
+                .bytes()
+                .await
+                .map_err(|source| Error::Reqwest { source })?,
             Err(e) if matches!(e.status(), Some(StatusCode::NOT_FOUND)) => {
                 return match depth {
                     "0" => {
@@ -255,7 +257,9 @@ impl Client {
             Err(source) => return Err(Error::Request { source }.into()),
         };
 
-        let status = quick_xml::de::from_reader(response.reader()).context(InvalidPropFindSnafu)?;
+        let status = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidPropFind { source })?;
+
         Ok(status)
     }
 
@@ -397,14 +401,23 @@ impl MultiStatusResponse {
         let url = Url::options()
             .base_url(Some(base_url))
             .parse(&self.href)
-            .context(InvalidHrefSnafu { href: &self.href })?;
+            .map_err(|source| Error::InvalidHref {
+                href: self.href.clone(),
+                source,
+            })?;
 
         // Reverse any percent encoding
         let path = percent_decode_str(url.path())
             .decode_utf8()
-            .context(NonUnicodeSnafu { path: url.path() })?;
+            .map_err(|source| Error::NonUnicode {
+                path: url.path().into(),
+                source,
+            })?;
 
-        Ok(Path::parse(path.as_ref()).context(InvalidPathSnafu { path })?)
+        Ok(Path::parse(path.as_ref()).map_err(|source| {
+            let path = path.into();
+            Error::InvalidPath { path, source }
+        })?)
     }
 
     fn size(&self) -> Result<usize> {
@@ -412,7 +425,10 @@ impl MultiStatusResponse {
             .prop_stat
             .prop
             .content_length
-            .context(MissingSizeSnafu { href: &self.href })?;
+            .ok_or_else(|| Error::MissingSize {
+                href: self.href.clone(),
+            })?;
+
         Ok(size)
     }
 
