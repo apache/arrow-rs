@@ -196,6 +196,14 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    ///
+    /// Timezone string parsing
+    /// -----------------------
+    /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
+    ///
+    /// When feature `chrono-tz` is enabled, additional strings supported [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
+    /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+    /// timezones.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
