@@ -35,7 +35,6 @@ const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const SIZE_LEN: usize = 4;
-const NON_PAGE_ORDINAL: i32 = -1;
 
 struct CounterNonce {
     start: u128,
@@ -171,15 +170,15 @@ pub(crate) enum ModuleType {
 }
 
 pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
-    create_module_aad(file_aad, ModuleType::Footer, -1, -1, NON_PAGE_ORDINAL)
+    create_module_aad(file_aad, ModuleType::Footer, -1, -1, None)
 }
 
-pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16, column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
+pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16, column_ordinal: i16, page_ordinal: Option<i16>) -> Result<Vec<u8>> {
     create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
 }
 
 pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: i16,
-                         column_ordinal: i16, page_ordinal: i32) -> Result<Vec<u8>> {
+                         column_ordinal: i16, page_ordinal: Option<i16>) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
 
@@ -217,12 +216,11 @@ pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ord
         return Ok(aad)
     }
 
+    let page_ordinal = page_ordinal.ok_or_else(|| general_err!(
+        "Page ordinal must be set for data pages"))?;
+
     if page_ordinal < 0 {
         return Err(general_err!("Wrong page ordinal: {}", page_ordinal));
-    }
-    if page_ordinal > i16::MAX as i32 {
-        return Err(general_err!("Encrypted parquet files can't have more than {} pages in a chunk: {}",
-            i16::MAX, page_ordinal));
     }
 
     let mut aad = Vec::with_capacity(file_aad.len() + 7);
@@ -230,7 +228,7 @@ pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ord
     aad.extend_from_slice(module_buf.as_ref());
     aad.extend_from_slice(row_group_ordinal.to_le_bytes().as_ref());
     aad.extend_from_slice(column_ordinal.to_le_bytes().as_ref());
-    aad.extend_from_slice((page_ordinal as i16).to_le_bytes().as_ref());
+    aad.extend_from_slice(page_ordinal.to_le_bytes().as_ref());
     Ok(aad)
 }
 
@@ -315,41 +313,57 @@ impl FileDecryptor {
     pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
         &self.aad_prefix
     }
-
-    pub fn update_aad(&mut self, aad: Vec<u8>, row_group_ordinal: i16, column_ordinal: i16, module_type: ModuleType) {
-        // todo decr: update aad
-        debug_assert!(!self.aad_file_unique().is_empty(), "AAD is empty");
-
-        let aad = create_module_aad(self.aad_file_unique(), module_type, row_group_ordinal, column_ordinal, NON_PAGE_ORDINAL).unwrap();
-        self.aad_file_unique = aad;
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CryptoContext {
-    pub(crate) start_decrypt_with_dictionary_page: bool,
     pub(crate) row_group_ordinal: i16,
     pub(crate) column_ordinal: i16,
+    pub(crate) page_ordinal: Option<i16>,
+    pub(crate) dictionary_page: bool,
     pub(crate) data_decryptor: Arc<FileDecryptor>,
     pub(crate) metadata_decryptor: Arc<FileDecryptor>,
-
 }
 
 impl CryptoContext {
-    pub fn new(start_decrypt_with_dictionary_page: bool, row_group_ordinal: i16,
+    pub fn new(row_group_ordinal: i16,
                column_ordinal: i16, data_decryptor: Arc<FileDecryptor>,
                metadata_decryptor: Arc<FileDecryptor>) -> Self {
         Self {
-            start_decrypt_with_dictionary_page,
             row_group_ordinal,
             column_ordinal,
+            page_ordinal: None,
+            dictionary_page: false,
             data_decryptor,
             metadata_decryptor,
         }
     }
-    pub fn start_decrypt_with_dictionary_page(&self) -> &bool { &self.start_decrypt_with_dictionary_page }
+
+    pub fn with_page_ordinal(&self, page_ordinal: i16) -> Self {
+        Self {
+            row_group_ordinal: self.row_group_ordinal,
+            column_ordinal: self.column_ordinal,
+            page_ordinal: Some(page_ordinal),
+            dictionary_page: false,
+            data_decryptor: self.data_decryptor.clone(),
+            metadata_decryptor: self.metadata_decryptor.clone(),
+        }
+    }
+
+    pub fn for_dictionary_page(&self) -> Self {
+        Self {
+            row_group_ordinal: self.row_group_ordinal,
+            column_ordinal: self.column_ordinal,
+            page_ordinal: self.page_ordinal,
+            dictionary_page: true,
+            data_decryptor: self.data_decryptor.clone(),
+            metadata_decryptor: self.metadata_decryptor.clone(),
+        }
+    }
+
     pub fn row_group_ordinal(&self) -> &i16 { &self.row_group_ordinal }
     pub fn column_ordinal(&self) -> &i16 { &self.column_ordinal }
+    pub fn page_ordinal(&self) -> &Option<i16> { &self.page_ordinal }
     pub fn data_decryptor(&self) -> Arc<FileDecryptor> { self.data_decryptor.clone()}
     pub fn metadata_decryptor(&self) -> Arc<FileDecryptor> { self.metadata_decryptor.clone() }
 }
