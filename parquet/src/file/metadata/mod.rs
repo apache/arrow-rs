@@ -104,6 +104,7 @@ use crate::format::{
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
+use crate::encryption::ciphers::FileDecryptor;
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
@@ -117,7 +118,6 @@ use crate::schema::types::{
 pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
-use crate::encryption::ciphers::FileDecryptor;
 
 /// Page level statistics for each column chunk of each row group.
 ///
@@ -182,7 +182,11 @@ pub struct ParquetMetaData {
 impl ParquetMetaData {
     /// Creates Parquet metadata from file metadata and a list of row
     /// group metadata
-    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>, file_decryptor: Option<FileDecryptor>) -> Self {
+    pub fn new(
+        file_metadata: FileMetaData,
+        row_groups: Vec<RowGroupMetaData>,
+        file_decryptor: Option<FileDecryptor>,
+    ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
@@ -222,8 +226,6 @@ impl ParquetMetaData {
     pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
         &self.file_decryptor
     }
-
-
 
     /// Returns number of row groups in this file.
     pub fn num_row_groups(&self) -> usize {
