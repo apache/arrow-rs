@@ -237,6 +237,12 @@ pub use record_batch::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
 };
 
+// THESE EXPORTS ARE ARAS ONLY
+pub use record_batch::{
+    CHECKPOINT_MESSAGE, INTERMEDIATE_NODE_GENERATED_WATERMARK, NORMAL_RECORD_BATCH,
+    SOURCE_GENERATED_WATERMARK,
+};
+
 mod arithmetic;
 pub use arithmetic::ArrowNativeTypeOp;
 
