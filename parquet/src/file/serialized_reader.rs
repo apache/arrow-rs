@@ -18,13 +18,11 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use std::collections::VecDeque;
-use std::iter;
-use std::{fs::File, io::Read, path::Path, sync::Arc};
 use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
+use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -39,8 +37,10 @@ use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
+use std::collections::VecDeque;
+use std::iter;
+use std::{fs::File, io::Read, path::Path, sync::Arc};
 use thrift::protocol::TCompactInputProtocol;
-use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -339,7 +339,10 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`]
-pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Arc<CryptoContext>>) -> Result<PageHeader> {
+pub(crate) fn read_page_header<T: Read>(
+    input: &mut T,
+    crypto_context: Option<Arc<CryptoContext>>,
+) -> Result<PageHeader> {
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
@@ -367,7 +370,7 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Ar
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-        return Ok(page_header)
+        return Ok(page_header);
     }
 
     let mut prot = TCompactInputProtocol::new(input);
@@ -376,7 +379,10 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Ar
 }
 
 /// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
-fn read_page_header_len<T: Read>(input: &mut T, crypto_context: Option<Arc<CryptoContext>>) -> Result<(usize, PageHeader)> {
+fn read_page_header_len<T: Read>(
+    input: &mut T,
+    crypto_context: Option<Arc<CryptoContext>>,
+) -> Result<(usize, PageHeader)> {
     /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
     struct TrackedRead<R> {
         inner: R,
@@ -432,7 +438,7 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    let buffer : Bytes = if crypto_context.is_some() {
+    let buffer: Bytes = if crypto_context.is_some() {
         let crypto_context = crypto_context.as_ref().unwrap();
         let decryptor = crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
@@ -589,7 +595,14 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props, crypto_context)
+        SerializedPageReader::new_with_properties(
+            reader,
+            meta,
+            total_rows,
+            page_locations,
+            props,
+            crypto_context,
+        )
     }
 
     /// Creates a new serialized page with custom options.
@@ -636,7 +649,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 state,
                 physical_type: meta.column_type(),
                 crypto_context,
-            })
+            });
         }
         Ok(Self {
             reader,
@@ -753,7 +766,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
-                        let crypto_context = page_crypto_context(&self.crypto_context, *page_ordinal, *require_dictionary)?;
+                        let crypto_context = page_crypto_context(
+                            &self.crypto_context,
+                            *page_ordinal,
+                            *require_dictionary,
+                        )?;
                         let (header_len, header) = read_page_header_len(&mut read, crypto_context)?;
                         verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len;
@@ -784,7 +801,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         ));
                     }
 
-                    let crypto_context = page_crypto_context(&self.crypto_context, *page_ordinal, *require_dictionary)?;
+                    let crypto_context = page_crypto_context(
+                        &self.crypto_context,
+                        *page_ordinal,
+                        *require_dictionary,
+                    )?;
                     let page = decode_page(
                         header,
                         Bytes::from(buffer),
@@ -949,13 +970,18 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     }
 }
 
-fn page_crypto_context(crypto_context: &Option<Arc<CryptoContext>>, page_ordinal: usize, dictionary_page: bool) -> Result<Option<Arc<CryptoContext>>> {
-    Ok(crypto_context.as_ref().map(
-        |c| Arc::new(if dictionary_page {
+fn page_crypto_context(
+    crypto_context: &Option<Arc<CryptoContext>>,
+    page_ordinal: usize,
+    dictionary_page: bool,
+) -> Result<Option<Arc<CryptoContext>>> {
+    Ok(crypto_context.as_ref().map(|c| {
+        Arc::new(if dictionary_page {
             c.for_dictionary_page()
         } else {
             c.with_page_ordinal(page_ordinal)
-        })))
+        })
+    }))
 }
 
 #[cfg(test)]
