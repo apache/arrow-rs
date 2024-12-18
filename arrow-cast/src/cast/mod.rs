@@ -2501,6 +2501,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
@@ -3842,6 +3843,25 @@ mod tests {
                 )
             }
         }
+    }
+    #[test]
+    fn test_cast_with_options_utf8_to_decimal() {
+        let array = StringArray::from(vec!["4e7"]);
+        let result = cast_with_options(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap();
+        let output_array = result.as_any().downcast_ref::<Decimal128Array>();
+
+        let result_128 = parse_decimal::<Decimal128Type>("40000000", 10, 2);
+
+        println!("Parsed decimal result: {:?}", result_128);
+        assert_eq!(output_array.unwrap().value(0), result_128.unwrap());
     }
 
     #[test]
