@@ -66,10 +66,13 @@
 //! By default, this crate provides the following implementations:
 //!
 //! * Memory: [`InMemory`](memory::InMemory)
-//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
 //! Feature flags are used to enable support for other implementations:
 //!
+#![cfg_attr(
+    feature = "fs",
+    doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
+)]
 #![cfg_attr(
     feature = "gcp",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
@@ -513,7 +516,7 @@ pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod limit;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
 pub mod memory;
 pub mod path;
@@ -557,7 +560,7 @@ pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
 use crate::path::Path;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -565,7 +568,7 @@ use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
@@ -1028,6 +1031,7 @@ pub struct GetResult {
 /// be able to optimise the case of a file already present on local disk
 pub enum GetResultPayload {
     /// The file, path
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     File(std::fs::File, std::path::PathBuf),
     /// An opaque stream of bytes
     Stream(BoxStream<'static, Result<Bytes>>),
@@ -1036,6 +1040,7 @@ pub enum GetResultPayload {
 impl Debug for GetResultPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             Self::File(_, _) => write!(f, "GetResultPayload(File)"),
             Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
         }
@@ -1047,7 +1052,7 @@ impl GetResult {
     pub async fn bytes(self) -> Result<Bytes> {
         let len = self.range.end - self.range.start;
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
                     file.seek(SeekFrom::Start(self.range.start as _))
@@ -1087,7 +1092,7 @@ impl GetResult {
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
