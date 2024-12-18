@@ -201,7 +201,7 @@ pub enum DataType {
     /// -----------------------
     /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
     ///
-    /// When feature `chrono-tz` is enabled, additional strings supported [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
+    /// When feature `chrono-tz` is enabled, additional strings supported by [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
     /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
     /// timezones.
     Timestamp(TimeUnit, Option<Arc<str>>),
