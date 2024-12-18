@@ -39,6 +39,7 @@ use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
+use num::ToPrimitive;
 use thrift::protocol::{TCompactInputProtocol, TInputProtocol};
 use zstd::zstd_safe::WriteBuf;
 use crate::data_type::AsBytes;
@@ -347,13 +348,17 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T, crypto_context: Option<Ar
         let file_decryptor = decryptor.footer_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
 
-        // todo: page ordinal and page type (ModuleType)
+        let module_type = if crypto_context.dictionary_page {
+            ModuleType::DictionaryPageHeader
+        } else {
+            ModuleType::DataPageHeader
+        };
         let aad = create_page_aad(
             aad_file_unique.as_slice(),
-            ModuleType::DataPageHeader,
+            module_type,
             crypto_context.row_group_ordinal,
             crypto_context.column_ordinal,
-            0,
+            crypto_context.page_ordinal,
         )?;
 
         let mut len_bytes = [0; 4];
@@ -435,13 +440,17 @@ pub(crate) fn decode_page(
         let decryptor = crypto_context.data_decryptor();
         let file_decryptor = decryptor.footer_decryptor();
 
-        // todo: page ordinal
+        let module_type = if crypto_context.dictionary_page {
+            ModuleType::DictionaryPage
+        } else {
+            ModuleType::DataPage
+        };
         let aad = create_page_aad(
             decryptor.aad_file_unique().as_slice(),
-            ModuleType::DataPage,
+            module_type,
             crypto_context.row_group_ordinal,
             crypto_context.column_ordinal,
-            0,
+            crypto_context.page_ordinal,
         )?;
         let decrypted = file_decryptor.decrypt(&buffer.as_ref(), &aad)?;
         Bytes::from(decrypted)
@@ -539,6 +548,12 @@ enum SerializedPageReaderState {
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
         next_page_header: Option<Box<PageHeader>>,
+
+        /// The index of the data page within this column chunk
+        page_ordinal: usize,
+
+        /// Whether the next page is expected to be a dictionary page
+        require_dictionary: bool,
     },
     Pages {
         /// Remaining page locations
@@ -613,6 +628,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 offset: start as usize,
                 remaining_bytes: len as usize,
                 next_page_header: None,
+                page_ordinal: 0,
+                require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
         if crypto_context.is_some() {
@@ -728,6 +745,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     offset,
                     remaining_bytes: remaining,
                     next_page_header,
+                    page_ordinal,
+                    require_dictionary,
                 } => {
                     if *remaining == 0 {
                         return Ok(None);
@@ -737,7 +756,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
-                        let (header_len, header) = read_page_header_len(&mut read, self.crypto_context.clone())?;
+                        let crypto_context = page_crypto_context(&self.crypto_context, *page_ordinal, *require_dictionary)?;
+                        let (header_len, header) = read_page_header_len(&mut read, crypto_context)?;
                         verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len;
                         *remaining -= header_len;
@@ -767,13 +787,20 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         ));
                     }
 
-                    decode_page(
+                    let crypto_context = page_crypto_context(&self.crypto_context, *page_ordinal, *require_dictionary)?;
+                    let page = decode_page(
                         header,
                         Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
-                        self.crypto_context.clone(),
-                    )?
+                        crypto_context,
+                    )?;
+                    if page.is_data_page() {
+                        *page_ordinal += 1;
+                    } else if page.is_dictionary_page() {
+                        *require_dictionary = false;
+                    }
+                    page
                 }
                 SerializedPageReaderState::Pages {
                     page_locations,
@@ -817,6 +844,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 offset,
                 remaining_bytes,
                 next_page_header,
+                ..
             } => {
                 loop {
                     if *remaining_bytes == 0 {
@@ -882,6 +910,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 offset,
                 remaining_bytes,
                 next_page_header,
+                ..
             } => {
                 if let Some(buffered_header) = next_page_header.take() {
                     verify_page_size(
@@ -921,6 +950,17 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             SerializedPageReaderState::Pages { .. } => Ok(true),
         }
     }
+}
+
+fn page_crypto_context(crypto_context: &Option<Arc<CryptoContext>>, page_ordinal: usize, dictionary_page: bool) -> Result<Option<Arc<CryptoContext>>> {
+    let page_ordinal = page_ordinal
+        .to_i16()
+        .ok_or_else(|| general_err!(
+                            "Page ordinal {} is greater than the maximum allowed in encrypted Parquet files ({})",
+                            page_ordinal, i16::MAX))?;
+
+    Ok(crypto_context.as_ref().map(
+        |c| Arc::new(if dictionary_page { c.for_dictionary_page() } else { c.with_page_ordinal(page_ordinal) })))
 }
 
 #[cfg(test)]
