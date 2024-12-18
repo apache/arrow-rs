@@ -305,9 +305,10 @@ where
         };
     }
 
-    /// Extends builder with dictionary
+    /// Extends builder with an existing dictionary array.
     ///
-    /// This is the same as `extends` but avoid lookup for each item in the iterator
+    /// This is the same as [`Self::extend`] but is faster as it translates
+    /// the dictionary values once rather than doing a lookup for each item in the iterator
     ///
     /// when dictionary values are null (the actual mapped values) the keys are null
     ///
