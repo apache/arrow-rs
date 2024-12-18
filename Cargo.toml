@@ -93,4 +93,6 @@ arrow-select = { version = "54.2.0", path = "./arrow-select" }
 arrow-string = { version = "54.2.0", path = "./arrow-string" }
 parquet = { version = "54.2.0", path = "./parquet", default-features = false }
 
-chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
+# THIS DEPENDENCY IS COMMON, MODIFIED BY ARAS
+# Once arrow-rs becomes stable within a single version, remove this pinning
+chrono = { version = "=0.4.39", default-features = false, features = ["clock"] }
