@@ -83,6 +83,13 @@ versions approximately every 2 months.
 
 [`object_store`]: https://crates.io/crates/object_store
 
+Planned Release Schedule
+
+| Approximate Date | Version  | Notes                                   |
+| ---------------- | -------- | --------------------------------------- |
+| Dec 2024         | `0.11.2` | Minor, NO breaking API changes          |
+| Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
+
 ### Deprecation Guidelines
 
 Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
