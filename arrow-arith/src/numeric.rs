@@ -836,15 +836,7 @@ fn interval_div_op<T: IntervalOp>(
                     l_s,
                     r_int,
                     r_s,
-                    T::div_int(
-                        l_interval,
-                        r_int.try_into().map_err(|e| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {:?} to i32: {}",
-                                r_int, e
-                            ))
-                        })?
-                    )
+                    T::div_int(l_interval, r_int)
                 ))
             }
             DataType::Float64 => {
