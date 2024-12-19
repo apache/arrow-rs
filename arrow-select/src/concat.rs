@@ -34,8 +34,9 @@ use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values}
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::sync::Arc;
 
@@ -129,9 +130,103 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
+fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKeyType>(
+    arrays: &[&dyn Array],
+) -> Result<ArrayRef, ArrowError> {
+    let mut output_len = 0;
+    let mut list_has_nulls = false;
+
+    let lists = arrays
+        .iter()
+        .map(|x| x.as_list::<OffsetSize>())
+        .inspect(|l| {
+            output_len += l.len();
+            list_has_nulls |= l.null_count() != 0;
+        })
+        .collect::<Vec<_>>();
+
+    let mut dictionary_output_len = 0;
+    let dictionaries: Vec<_> = lists
+        .iter()
+        .map(|x| x.values().as_ref().as_dictionary::<K>())
+        .inspect(|d| dictionary_output_len += d.len())
+        .collect();
+
+    if !should_merge_dictionary_values::<K>(&dictionaries, dictionary_output_len) {
+        return concat_fallback(arrays, Capacities::Array(output_len));
+    }
+
+    let merged = merge_dictionary_values(&dictionaries, None)?;
+
+    let lists_nulls = list_has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    // Recompute keys
+    let mut key_values = Vec::with_capacity(dictionary_output_len);
+
+    let mut dictionary_has_nulls = false;
+    for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
+        dictionary_has_nulls |= d.null_count() != 0;
+        for key in d.keys().values() {
+            // Use get to safely handle nulls
+            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
+        }
+    }
+
+    let dictionary_nulls = dictionary_has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(dictionary_output_len);
+        for d in &dictionaries {
+            match d.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(d.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    let keys = PrimitiveArray::<K>::new(key_values.into(), dictionary_nulls);
+    // Sanity check
+    assert_eq!(keys.len(), dictionary_output_len);
+
+    let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
+
+    // Merge value offsets from the lists
+    let value_offset_buffer = OffsetBuffer::merge(lists.iter().map(|x| x.offsets()))
+        .into_inner()
+        .into_inner();
+
+    let builder = ArrayDataBuilder::new(arrays[0].data_type().clone())
+        .len(output_len)
+        .nulls(lists_nulls)
+        // `GenericListArray` must only have 1 buffer
+        .buffers(vec![value_offset_buffer])
+        // `GenericListArray` must only have 1 child_data
+        .child_data(vec![array.to_data()]);
+
+    // TODO - maybe use build_unchecked?
+    let array_data = builder.build()?;
+
+    let array = GenericListArray::<OffsetSize>::from(array_data);
+    Ok(Arc::new(array))
+}
+
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
         return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    };
+}
+
+macro_rules! list_dict_helper {
+    ($t:ty, $o: ty, $arrays:expr) => {
+        return Ok(Arc::new(concat_list_of_dictionaries::<$o, $t>($arrays)?) as _)
     };
 }
 
@@ -169,6 +264,21 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
             _ => unreachable!("illegal dictionary key type {k}")
         };
     } else {
+        if let DataType::List(field) = d {
+            if let DataType::Dictionary(k, _) = field.data_type() {
+                downcast_integer! {
+                    k.as_ref() => (list_dict_helper, i32, arrays),
+                    _ => unreachable!("illegal dictionary key type {k}")
+                };
+            }
+        } else if let DataType::LargeList(field) = d {
+            if let DataType::Dictionary(k, _) = field.data_type() {
+                downcast_integer! {
+                    k.as_ref() => (list_dict_helper, i64, arrays),
+                    _ => unreachable!("illegal dictionary key type {k}")
+                };
+            }
+        }
         let capacity = get_capacity(arrays, d);
         concat_fallback(arrays, capacity)
     }
@@ -228,8 +338,9 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::StringDictionaryBuilder;
+    use arrow_array::builder::{GenericListBuilder, StringDictionaryBuilder};
     use arrow_schema::{Field, Schema};
+    use std::fmt::Debug;
 
     #[test]
     fn test_concat_empty_vec() {
@@ -850,5 +961,203 @@ mod tests {
         let array = concat(&[&dict_a, &dict_b]).unwrap();
         assert_eq!(array.null_count(), 10);
         assert_eq!(array.logical_null_count(), 10);
+    }
+
+    #[test]
+    fn concat_dictionary_list_array_simple() {
+        let scalars = vec![
+            create_single_row_list_of_dict(vec![Some("a")]),
+            create_single_row_list_of_dict(vec![Some("a")]),
+            create_single_row_list_of_dict(vec![Some("b")]),
+        ];
+
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(vec![
+            // Row 1
+            Some(vec![Some("a")]),
+            Some(vec![Some("a")]),
+            Some(vec![Some("b")]),
+        ]);
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    #[test]
+    fn concat_many_dictionary_list_arrays() {
+        let number_of_unique_values = 8;
+        let scalars = (0..80000)
+            .map(|i| {
+                create_single_row_list_of_dict(vec![Some(
+                    (i % number_of_unique_values).to_string(),
+                )])
+            })
+            .collect::<Vec<_>>();
+
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(
+            (0..80000)
+                .map(|i| Some(vec![Some((i % number_of_unique_values).to_string())]))
+                .collect::<Vec<_>>(),
+        );
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    #[test]
+    fn concat_dictionary_list_array_with_multiple_rows() {
+        let scalars = vec![
+            create_list_of_dict(vec![
+                // Row 1
+                Some(vec![Some("a"), Some("c")]),
+                // Row 2
+                None,
+                // Row 3
+                Some(vec![Some("f"), Some("g"), None]),
+                // Row 4
+                Some(vec![Some("c"), Some("f")]),
+            ]),
+            create_list_of_dict(vec![
+                // Row 1
+                Some(vec![Some("a")]),
+                // Row 2
+                Some(vec![]),
+                // Row 3
+                Some(vec![None, Some("b")]),
+                // Row 4
+                Some(vec![Some("d"), Some("e")]),
+            ]),
+            create_list_of_dict(vec![
+                // Row 1
+                Some(vec![Some("g")]),
+                // Row 2
+                Some(vec![Some("h"), Some("i")]),
+                // Row 3
+                Some(vec![Some("j"), Some("a")]),
+                // Row 4
+                Some(vec![Some("d"), Some("e")]),
+            ]),
+        ];
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(vec![
+            // First list:
+
+            // Row 1
+            Some(vec![Some("a"), Some("c")]),
+            // Row 2
+            None,
+            // Row 3
+            Some(vec![Some("f"), Some("g"), None]),
+            // Row 4
+            Some(vec![Some("c"), Some("f")]),
+            // Second list:
+            // Row 1
+            Some(vec![Some("a")]),
+            // Row 2
+            Some(vec![]),
+            // Row 3
+            Some(vec![None, Some("b")]),
+            // Row 4
+            Some(vec![Some("d"), Some("e")]),
+            // Third list:
+
+            // Row 1
+            Some(vec![Some("g")]),
+            // Row 2
+            Some(vec![Some("h"), Some("i")]),
+            // Row 3
+            Some(vec![Some("j"), Some("a")]),
+            // Row 4
+            Some(vec![Some("d"), Some("e")]),
+        ]);
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    fn create_single_row_list_of_dict(
+        list_items: Vec<Option<impl AsRef<str>>>,
+    ) -> GenericListArray<i32> {
+        let rows = list_items.into_iter().map(Some).collect();
+
+        create_list_of_dict(vec![rows])
+    }
+
+    fn create_list_of_dict(
+        rows: Vec<Option<Vec<Option<impl AsRef<str>>>>>,
+    ) -> GenericListArray<i32> {
+        let mut builder =
+            GenericListBuilder::<i32, _>::new(StringDictionaryBuilder::<Int32Type>::new());
+
+        for row in rows {
+            builder.append_option(row);
+        }
+
+        builder.finish()
+    }
+
+    fn assert_dictionary_has_unique_values<'a, K, V>(array: &'a DictionaryArray<K>)
+    where
+        K: ArrowDictionaryKeyType,
+        V: Sync + Send + 'static,
+        &'a V: ArrayAccessor + IntoIterator,
+
+        <&'a V as ArrayAccessor>::Item: Default + Clone + PartialEq + Debug + Ord,
+        <&'a V as IntoIterator>::Item: Clone + PartialEq + Debug + Ord,
+    {
+        let dict = array.downcast_dict::<V>().unwrap();
+        let mut values = dict.values().into_iter().collect::<Vec<_>>();
+
+        // remove duplicates must be sorted first so we can compare
+        values.sort();
+
+        let mut unique_values = values.clone();
+
+        unique_values.dedup();
+
+        assert_eq!(
+            values, unique_values,
+            "There are duplicates in the value list (the value list here is sorted which is only for the assertion)"
+        );
     }
 }
