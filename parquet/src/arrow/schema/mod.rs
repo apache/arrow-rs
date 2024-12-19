@@ -1399,6 +1399,17 @@ mod tests {
         for i in 0..arrow_fields.len() {
             assert_eq!(&arrow_fields[i], converted_fields[i].as_ref());
         }
+
+        let mask =
+            ProjectionMask::columns(&parquet_schema, ["group2.leaf4", "group1.leaf1", "leaf5"]);
+        let converted_arrow_schema =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
+        let converted_fields = converted_arrow_schema.fields();
+
+        assert_eq!(arrow_fields.len(), converted_fields.len());
+        for i in 0..arrow_fields.len() {
+            assert_eq!(&arrow_fields[i], converted_fields[i].as_ref());
+        }
     }
 
     #[test]

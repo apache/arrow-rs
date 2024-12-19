@@ -990,6 +990,21 @@ mod tests {
     }
 
     #[test]
+    fn test_arrow_reader_single_column_by_name() {
+        let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let original_schema = Arc::clone(builder.schema());
+
+        let mask = ProjectionMask::columns(builder.parquet_schema(), ["blog_id"]);
+        let reader = builder.with_projection(mask).build().unwrap();
+
+        // Verify that the schema was correctly parsed
+        assert_eq!(1, reader.schema().fields().len());
+        assert_eq!(original_schema.fields()[1], reader.schema().fields()[0]);
+    }
+
+    #[test]
     fn test_null_column_reader_test() {
         let mut file = tempfile::tempfile().unwrap();
 
@@ -2555,6 +2570,59 @@ mod tests {
         ]);
 
         // Tests for #1652 and #1654
+        assert_eq!(&expected_schema, projected_reader.schema().as_ref());
+
+        for batch in projected_reader {
+            let batch = batch.unwrap();
+            assert_eq!(batch.schema().as_ref(), &expected_schema);
+        }
+    }
+
+    #[test]
+    // same as test_read_structs but constructs projection mask via column names
+    fn test_read_structs_by_name() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/nested_structs.rust.parquet");
+        let file = File::open(&path).unwrap();
+        let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
+
+        for batch in record_batch_reader {
+            batch.unwrap();
+        }
+
+        let file = File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        let mask = ProjectionMask::columns(
+            builder.parquet_schema(),
+            ["roll_num.count", "PC_CUR.mean", "PC_CUR.sum"],
+        );
+        let projected_reader = builder
+            .with_projection(mask)
+            .with_batch_size(60)
+            .build()
+            .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new(
+                "roll_num",
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
+                    "count",
+                    ArrowDataType::UInt64,
+                    false,
+                )])),
+                false,
+            ),
+            Field::new(
+                "PC_CUR",
+                ArrowDataType::Struct(Fields::from(vec![
+                    Field::new("mean", ArrowDataType::Int64, false),
+                    Field::new("sum", ArrowDataType::Int64, false),
+                ])),
+                false,
+            ),
+        ]);
+
         assert_eq!(&expected_schema, projected_reader.schema().as_ref());
 
         for batch in projected_reader {
