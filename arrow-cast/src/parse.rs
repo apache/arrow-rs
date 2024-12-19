@@ -842,6 +842,7 @@ pub fn parse_decimal<T: DecimalType>(
     let mut result = T::Native::usize_as(0);
     let mut fractionals: i8 = 0;
     let mut digits: u8 = 0;
+    let mut rounding_digit = -1; // to store digit after the scale for rounding
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
@@ -869,6 +870,13 @@ pub fn parse_decimal<T: DecimalType>(
             b'0'..=b'9' => {
                 if digits == 0 && *b == b'0' {
                     // Ignore leading zeros.
+                    continue;
+                }
+                if fractionals == scale && scale != 0 && rounding_digit < 0 {
+                    // Capture the rounding digit once
+                    if rounding_digit < 0 {
+                        rounding_digit = (b - b'0') as i8;
+                    }
                     continue;
                 }
                 digits += 1;
@@ -903,9 +911,10 @@ pub fn parse_decimal<T: DecimalType>(
                         )));
                     }
                     if fractionals == scale && scale != 0 {
-                        // We have processed all the digits that we need. All that
-                        // is left is to validate that the rest of the string contains
-                        // valid digits.
+                        // Capture the rounding digit once
+                        if rounding_digit < 0 {
+                            rounding_digit = (b - b'0') as i8;
+                        }
                         continue;
                     }
                     fractionals += 1;
@@ -965,6 +974,10 @@ pub fn parse_decimal<T: DecimalType>(
             return Err(ArrowError::ParseError(format!(
                 "parse decimal overflow ({s})"
             )));
+        }
+        //add one if >=5
+        if rounding_digit >= 5 {
+            result = result.add_wrapping(T::Native::usize_as(1));
         }
     }
 
@@ -2547,6 +2560,8 @@ mod tests {
         let e_notation_tests = [
             ("1.23e3", "1230.0", 2),
             ("5.6714e+2", "567.14", 4),
+            ("4e+5", "400000", 4),
+            ("4e7", "40000000", 2),
             ("5.6714e-2", "0.056714", 4),
             ("5.6714e-2", "0.056714", 3),
             ("5.6741214125e2", "567.41214125", 4),

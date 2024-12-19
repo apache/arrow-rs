@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use crate::parse::*;
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
@@ -230,6 +231,7 @@ where
     )?))
 }
 
+#[allow(dead_code)]
 /// Parses given string to specified decimal native (i128/i256) based on given
 /// scale. Returns an `Err` if it cannot parse given string.
 pub(crate) fn parse_string_to_decimal_native<T: DecimalType>(
@@ -342,10 +344,9 @@ where
     &'a S: StringArrayType<'a>,
 {
     if cast_options.safe {
-        let iter = from.iter().map(|v| {
-            v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
-                .and_then(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
-        });
+        let iter = from
+            .iter()
+            .map(|v| v.and_then(|v| parse_decimal::<T>(v, precision, scale).ok()));
         // Benefit:
         //     20% performance improvement
         // Soundness:
@@ -359,15 +360,12 @@ where
             .iter()
             .map(|v| {
                 v.map(|v| {
-                    parse_string_to_decimal_native::<T>(v, scale as usize)
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
-                                T::DATA_TYPE,
-                            ))
-                        })
-                        .and_then(|v| T::validate_decimal_precision(v, precision).map(|_| v))
+                    parse_decimal::<T>(v, precision, scale).map_err(|_| {
+                        ArrowError::CastError(format!(
+                            "Cannot cast string '{}' to decimal type of precision {} and scale {}",
+                            v, precision, scale
+                        ))
+                    })
                 })
                 .transpose()
             })
