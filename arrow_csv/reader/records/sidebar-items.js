@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AVERAGE_FIELD_SIZE","MIN_CAPACITY"],"struct":["RecordDecoder","StringRecord","StringRecords"]};
