@@ -8849,16 +8849,16 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type"));
+        assert!(casted_err.to_string().contains(
+            "Cast error: Cannot cast string '4.4.5' to decimal type of precision 38 and scale 2"
+        ));
 
         let str_array = StringArray::from(vec![". 0.123"]);
         let array = Arc::new(str_array) as ArrayRef;
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type"));
+        assert!(casted_err.to_string().contains(
+            "Cast error: Cannot cast string '. 0.123' to decimal type of precision 38 and scale 2"
+        ));
     }
 
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
@@ -8902,7 +8902,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal128 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast string '1000' to decimal type of precision 10 and scale 8",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -8985,7 +8988,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal256 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast string '1000' to decimal type of precision 10 and scale 8",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
