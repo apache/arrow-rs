@@ -18,6 +18,7 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -227,35 +228,48 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileDecryptionProperties {
-    footer_key: Option<Vec<u8>>
+    footer_key: Option<Vec<u8>>,
+    column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
 }
 
 impl FileDecryptionProperties {
     pub fn builder() -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::with_defaults()
     }
+    pub fn has_footer_key(&self) -> bool { self.footer_key.is_some() }
 }
 
 pub struct DecryptionPropertiesBuilder {
-    footer_key: Option<Vec<u8>>
+    footer_key: Option<Vec<u8>>,
+    column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
 }
 
 impl DecryptionPropertiesBuilder {
     pub fn with_defaults() -> Self {
         Self {
-            footer_key: None
+            footer_key: None,
+            column_keys: None,
         }
     }
 
     pub fn build(self) -> FileDecryptionProperties {
         FileDecryptionProperties {
-            footer_key: self.footer_key
+            footer_key: self.footer_key,
+            column_keys: self.column_keys,
         }
     }
 
     // todo decr: doc comment
     pub fn with_footer_key(mut self, value: Vec<u8>) -> Self {
         self.footer_key = Some(value);
+        self
+    }
+
+    pub fn with_column_key(mut self, key: Vec<u8>, value: Vec<u8>) -> Self {
+        let mut column_keys= self.column_keys.unwrap_or_else(HashMap::new);
+        column_keys.insert(key, value);
+        // let _ = column_keys.insert(key, value);
+        self.column_keys = Some(column_keys);
         self
     }
 }
@@ -289,6 +303,11 @@ impl FileDecryptor {
     // todo decr: change to BlockDecryptor
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
         self.footer_decryptor
+    }
+
+    pub(crate) fn get_column_decryptor(&self, column_key: &[u8]) -> RingGcmBlockDecryptor {
+        let column_key = self.decryption_properties.column_keys.as_ref().unwrap().get(column_key).unwrap();
+        RingGcmBlockDecryptor::new(column_key)
     }
 
     pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {

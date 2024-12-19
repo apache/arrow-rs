@@ -345,6 +345,8 @@ pub(crate) fn read_page_header<T: Read>(
 ) -> Result<PageHeader> {
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
+        // todo: get column decryptor
+        // let file_decryptor = decryptor.get_column_decryptor(crypto_context.column_ordinal);
         let file_decryptor = decryptor.footer_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
 

@@ -1841,6 +1841,87 @@ mod tests {
     }
 
     #[test]
+    fn test_non_uniform_encryption_plaintext_footer() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = Some(
+            ciphers::FileDecryptionProperties::builder()
+                .with_column_key("kc1".as_bytes().to_vec(), column_1_key.to_vec())
+                .with_column_key("kc2".as_bytes().to_vec(), column_2_key.to_vec())
+                .build(),
+        );
+
+        let metadata =
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
+                .unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 14.0.0-SNAPSHOT"
+        );
+
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+            assert_eq!(rg.total_byte_size(), 3816);
+        });
+
+        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
+            file,
+            128,
+            decryption_properties.as_ref(),
+        )
+        .unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+    }
+
+    #[test]
+    fn test_non_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = Some(
+            ciphers::FileDecryptionProperties::builder()
+                .with_footer_key(footer_key.to_vec())
+                .with_column_key("kc1".as_bytes().to_vec(), column_1_key.to_vec())
+                .with_column_key("kc2".as_bytes().to_vec(), column_2_key.to_vec())
+                .build(),
+        );
+
+        let metadata =
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
+                .unwrap();
+        // let file_metadata = metadata.metadata.file_metadata();
+        //
+        // assert_eq!(file_metadata.num_rows(), 50);
+        // assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        // assert_eq!(
+        //     file_metadata.created_by().unwrap(),
+        //     "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
+        // );
+    }
+
+    #[test]
     fn test_uniform_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
