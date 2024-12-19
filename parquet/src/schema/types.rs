@@ -556,7 +556,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                let length = self.length.checked_mul(8).unwrap_or(i32::MAX);
+                let length = self
+                    .length
+                    .checked_mul(8)
+                    .ok_or(general_err!("Invalid length {} for Decimal", self.length))?;
                 let max_precision = (2f64.powi(length - 1) - 1f64).log10().floor() as i32;
 
                 if self.precision > max_precision {
