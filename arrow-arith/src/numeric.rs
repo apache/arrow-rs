@@ -599,7 +599,7 @@ impl IntervalOp for IntervalYearMonthType {
     }
 
     fn mul_float(left: Self::Native, right: f64) -> Result<Self::Native, ArrowError> {
-        let result = (left as f64 * right).round() as i32;
+        let result = (left as f64 * right) as i32;
         Ok(result)
     }
 
@@ -608,8 +608,8 @@ impl IntervalOp for IntervalYearMonthType {
             return Err(ArrowError::DivideByZero);
         }
 
-        let result = (left as f64 / right as f64).round();
-        f64_to_i32(result)
+        let result = left / right;
+        Ok(result)
     }
 
     fn div_float(left: Self::Native, right: f64) -> Result<Self::Native, ArrowError> {
@@ -617,7 +617,7 @@ impl IntervalOp for IntervalYearMonthType {
             return Err(ArrowError::DivideByZero);
         }
 
-        let result = (left as f64 / right).round();
+        let result = left as f64 / right;
         f64_to_i32(result)
     }
 }
@@ -657,10 +657,10 @@ impl IntervalOp for IntervalDayTimeType {
         let frac_days = total_days.fract();
 
         // Convert fractional days to milliseconds (24 * 60 * 60 * 1000 = 86_400_000 ms per day)
-        let frac_ms = (frac_days * 86_400_000.0).round() as i32;
+        let frac_ms = f64_to_i32(frac_days * 86_400_000.0)?;
 
         // Calculate total milliseconds including the fractional days
-        let total_ms = (ms as f64 * right).round() as i32 + frac_ms;
+        let total_ms = f64_to_i32(ms as f64 * right)? + frac_ms;
 
         Ok(Self::make_value(whole_days, total_ms))
     }
@@ -676,10 +676,10 @@ impl IntervalOp for IntervalDayTimeType {
         let result_ms = total_ms / right as i64;
 
         // Convert back to days and milliseconds
-        let result_days = result_ms / 86_400_000;
+        let result_days = result_ms as f64 / 86_400_000.0;
         let result_ms = result_ms % 86_400_000;
 
-        let result_days_i32 = f64_to_i32(result_days as f64)?;
+        let result_days_i32 = f64_to_i32(result_days)?;
         let result_ms_i32 = f64_to_i32(result_ms as f64)?;
         Ok(Self::make_value(result_days_i32, result_ms_i32))
     }
