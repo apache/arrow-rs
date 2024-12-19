@@ -652,10 +652,12 @@ impl ParquetMetaDataReader {
         file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
-
         let mut file_decryptor = None;
         let decrypted_fmd_buf;
-        if let Some(file_decryption_properties) = file_decryption_properties {
+
+        if file_decryption_properties.is_some()
+            && file_decryption_properties.unwrap().has_footer_key()
+        {
             let t_file_crypto_metadata: TFileCryptoMetaData =
                 TFileCryptoMetaData::read_from_in_protocol(&mut prot)
                     .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
@@ -677,7 +679,7 @@ impl ParquetMetaDataReader {
             let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
 
             file_decryptor = Some(FileDecryptor::new(
-                file_decryption_properties,
+                file_decryption_properties.unwrap(),
                 aad_file_unique.clone(),
                 aad_prefix.clone(),
             ));
@@ -694,6 +696,7 @@ impl ParquetMetaDataReader {
         let mut row_groups = Vec::new();
         // TODO: row group filtering
         for rg in t_file_metadata.row_groups {
+            // rg.
             row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
         }
         let column_orders =
