@@ -205,7 +205,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
+            // todo: use file_decryption_properties
+            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
+                &buf, None,
+            )?))
         }
         .boxed()
     }
@@ -839,6 +842,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     self.metadata.column(i),
                     self.row_count,
                     page_locations,
+                    None,
                 )?);
 
                 Ok(Box::new(ColumnChunkIterator {
