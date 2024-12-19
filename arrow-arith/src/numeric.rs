@@ -238,9 +238,9 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
             },
         (lhs, Interval(unit)) if lhs.is_numeric() && matches!(op, Op::Mul | Op::MulWrapping) =>
             match unit {
-                YearMonth => interval_mul_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
-                DayTime => interval_mul_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
-                MonthDayNano => interval_mul_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+                YearMonth => interval_mul_op::<IntervalYearMonthType>(op, r, r_scalar, l, l_scalar),
+                DayTime => interval_mul_op::<IntervalDayTimeType>(op, r, r_scalar, l, l_scalar),
+                MonthDayNano => interval_mul_op::<IntervalMonthDayNanoType>(op, r, r_scalar, l, l_scalar),
             },
         (Interval(unit), rhs) if rhs.is_numeric() && matches!(op, Op::Div) =>
             match unit {
@@ -780,84 +780,18 @@ fn interval_mul_op<T: IntervalOp>(
     r: &dyn Array,
     r_s: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    // Try both orderings to handle either (interval * numeric) or (numeric * interval)
+    // Assume the interval is the left argument
     if let Some(l_interval) = l.as_primitive_opt::<T>() {
-        // Handle numeric multiplication based on data type
         match r.data_type() {
-            DataType::Int8 => multiply_interval(l_interval, l_s, r.as_primitive::<Int8Type>(), r_s),
-            DataType::Int16 => {
-                multiply_interval(l_interval, l_s, r.as_primitive::<Int16Type>(), r_s)
-            }
             DataType::Int32 => {
-                multiply_interval(l_interval, l_s, r.as_primitive::<Int32Type>(), r_s)
-            }
-            DataType::Int64 => {
-                let r_int = r.as_primitive::<Int64Type>();
+                let r_int = r.as_primitive::<Int32Type>();
                 Ok(try_op_ref!(
                     T,
                     l_interval,
                     l_s,
                     r_int,
                     r_s,
-                    T::mul_int(
-                        l_interval,
-                        i32::try_from(r_int).map_err(|_| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {} to i32",
-                                r_int
-                            ))
-                        })?
-                    )
-                ))
-            }
-            DataType::UInt8 => {
-                multiply_interval(l_interval, l_s, r.as_primitive::<UInt8Type>(), r_s)
-            }
-            DataType::UInt16 => {
-                multiply_interval(l_interval, l_s, r.as_primitive::<UInt16Type>(), r_s)
-            }
-            DataType::UInt32 => {
-                multiply_interval(l_interval, l_s, r.as_primitive::<UInt32Type>(), r_s)
-            }
-            DataType::UInt64 => {
-                let r_int = r.as_primitive::<UInt64Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_int,
-                    r_s,
-                    T::mul_int(
-                        l_interval,
-                        i32::try_from(r_int).map_err(|_| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {} to i32",
-                                r_int
-                            ))
-                        })?
-                    )
-                ))
-            }
-            DataType::Float16 => {
-                let r_float = r.as_primitive::<Float16Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_float,
-                    r_s,
-                    T::mul_float(l_interval, r_float.to_f64())
-                ))
-            }
-            DataType::Float32 => {
-                let r_float = r.as_primitive::<Float32Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_float,
-                    r_s,
-                    T::mul_float(l_interval, r_float as f64)
+                    T::mul_int(l_interval, r_int)
                 ))
             }
             DataType::Float64 => {
@@ -871,75 +805,9 @@ fn interval_mul_op<T: IntervalOp>(
                     T::mul_float(l_interval, r_float)
                 ))
             }
-            DataType::Decimal128(_, scale) => {
-                let r_decimal = r.as_primitive::<Decimal128Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_decimal,
-                    r_s,
-                    T::mul_float(l_interval, (r_decimal as f64) / 10f64.powi(*scale as i32))
-                ))
-            }
-            DataType::Decimal256(_, scale) => {
-                let r_decimal = r.as_primitive::<Decimal256Type>();
-                // Convert i256 to f64, considering scale
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_decimal,
-                    r_s,
-                    T::mul_float(
-                        l_interval,
-                        r_decimal.to_string().parse::<f64>().map_err(|_| {
-                            ArrowError::ComputeError("Cannot convert Decimal256 to f64".to_string())
-                        })? / 10f64.powi(*scale as i32)
-                    )
-                ))
-            }
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid numeric type for interval multiplication: {}",
                 r.data_type()
-            ))),
-        }
-    } else if let Some(r_interval) = r.as_primitive_opt::<T>() {
-        // Same logic for the reverse order
-        match l.data_type() {
-            DataType::Int32 => {
-                let l_int = l.as_primitive::<Int32Type>();
-                Ok(try_op_ref!(
-                    T,
-                    r_interval,
-                    r_s,
-                    l_int,
-                    l_s,
-                    T::mul_int(r_interval, l_int)
-                ))
-            }
-            DataType::Int64 => {
-                let l_int = l.as_primitive::<Int64Type>();
-                Ok(try_op_ref!(
-                    T,
-                    r_interval,
-                    r_s,
-                    l_int,
-                    l_s,
-                    T::mul_int(
-                        r_interval,
-                        i32::try_from(l_int).map_err(|_| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {} to i32",
-                                l_int
-                            ))
-                        })?
-                    )
-                ))
-            }
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Invalid integer type for interval multiplication: {}",
-                l.data_type()
             ))),
         }
     } else {
@@ -951,34 +819,6 @@ fn interval_mul_op<T: IntervalOp>(
     }
 }
 
-fn multiply_interval<T: IntervalOp, N: ArrowPrimitiveType>(
-    interval: &PrimitiveArray<T>,
-    interval_is_scalar: bool,
-    numeric: &PrimitiveArray<N>,
-    numeric_is_scalar: bool,
-) -> Result<ArrayRef, ArrowError>
-where
-    N::Native: TryInto<i32>,
-    <N::Native as TryInto<i32>>::Error: std::error::Error,
-{
-    Ok(try_op_ref!(
-        T,
-        interval,
-        interval_is_scalar,
-        numeric,
-        numeric_is_scalar,
-        T::mul_int(
-            interval,
-            numeric.try_into().map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Cannot safely convert {:?} to i32: {}",
-                    numeric, e
-                ))
-            })?
-        )
-    ))
-}
-
 fn interval_div_op<T: IntervalOp>(
     op: Op,
     l: &dyn Array,
@@ -986,15 +826,10 @@ fn interval_div_op<T: IntervalOp>(
     r: &dyn Array,
     r_s: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    // Only allow interval / numeric (not numeric / interval)
     if let Some(l_interval) = l.as_primitive_opt::<T>() {
-        // Handle numeric division based on data type
         match r.data_type() {
-            DataType::Int8 => divide_interval(l_interval, l_s, r.as_primitive::<Int8Type>(), r_s),
-            DataType::Int16 => divide_interval(l_interval, l_s, r.as_primitive::<Int16Type>(), r_s),
-            DataType::Int32 => divide_interval(l_interval, l_s, r.as_primitive::<Int32Type>(), r_s),
-            DataType::Int64 => {
-                let r_int = r.as_primitive::<Int64Type>();
+            DataType::Int32 => {
+                let r_int = r.as_primitive::<Int32Type>();
                 Ok(try_op_ref!(
                     T,
                     l_interval,
@@ -1003,61 +838,13 @@ fn interval_div_op<T: IntervalOp>(
                     r_s,
                     T::div_int(
                         l_interval,
-                        i32::try_from(r_int).map_err(|_| {
+                        r_int.try_into().map_err(|e| {
                             ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {} to i32",
-                                r_int
+                                "Cannot safely convert {:?} to i32: {}",
+                                r_int, e
                             ))
                         })?
                     )
-                ))
-            }
-            DataType::UInt8 => divide_interval(l_interval, l_s, r.as_primitive::<UInt8Type>(), r_s),
-            DataType::UInt16 => {
-                divide_interval(l_interval, l_s, r.as_primitive::<UInt16Type>(), r_s)
-            }
-            DataType::UInt32 => {
-                divide_interval(l_interval, l_s, r.as_primitive::<UInt32Type>(), r_s)
-            }
-            DataType::UInt64 => {
-                let r_int = r.as_primitive::<UInt64Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_int,
-                    r_s,
-                    T::div_int(
-                        l_interval,
-                        i32::try_from(r_int).map_err(|_| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "Cannot safely convert {} to i32",
-                                r_int
-                            ))
-                        })?
-                    )
-                ))
-            }
-            DataType::Float16 => {
-                let r_float = r.as_primitive::<Float16Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_float,
-                    r_s,
-                    T::div_float(l_interval, r_float.to_f64())
-                ))
-            }
-            DataType::Float32 => {
-                let r_float = r.as_primitive::<Float32Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_float,
-                    r_s,
-                    T::div_float(l_interval, r_float as f64)
                 ))
             }
             DataType::Float64 => {
@@ -1069,34 +856,6 @@ fn interval_div_op<T: IntervalOp>(
                     r_float,
                     r_s,
                     T::div_float(l_interval, r_float)
-                ))
-            }
-            DataType::Decimal128(_, scale) => {
-                let r_decimal = r.as_primitive::<Decimal128Type>();
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_decimal,
-                    r_s,
-                    T::div_float(l_interval, (r_decimal as f64) / 10f64.powi(*scale as i32))
-                ))
-            }
-            DataType::Decimal256(_, scale) => {
-                let r_decimal = r.as_primitive::<Decimal256Type>();
-                // Convert i256 to f64, considering scale
-                Ok(try_op_ref!(
-                    T,
-                    l_interval,
-                    l_s,
-                    r_decimal,
-                    r_s,
-                    T::div_float(
-                        l_interval,
-                        r_decimal.to_string().parse::<f64>().map_err(|_| {
-                            ArrowError::ComputeError("Cannot convert Decimal256 to f64".to_string())
-                        })? / 10f64.powi(*scale as i32)
-                    )
                 ))
             }
             _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -1111,34 +870,6 @@ fn interval_div_op<T: IntervalOp>(
             r.data_type()
         )))
     }
-}
-
-fn divide_interval<T: IntervalOp, N: ArrowPrimitiveType>(
-    interval: &PrimitiveArray<T>,
-    interval_is_scalar: bool,
-    numeric: &PrimitiveArray<N>,
-    numeric_is_scalar: bool,
-) -> Result<ArrayRef, ArrowError>
-where
-    N::Native: TryInto<i32>,
-    <N::Native as TryInto<i32>>::Error: std::error::Error,
-{
-    Ok(try_op_ref!(
-        T,
-        interval,
-        interval_is_scalar,
-        numeric,
-        numeric_is_scalar,
-        T::div_int(
-            interval,
-            numeric.try_into().map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Cannot safely convert {:?} to i32: {}",
-                    numeric, e
-                ))
-            })?
-        )
-    ))
 }
 
 fn duration_op<T: ArrowPrimitiveType>(
@@ -1877,9 +1608,17 @@ mod tests {
             "Arithmetic overflow: Overflow happened on: 2147483647 + 1"
         );
 
+        // Test interval multiplication
         let a = IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(2, 4)]);
         let b = PrimitiveArray::<Int32Type>::from(vec![5]);
         let result = mul(&a, &b).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(11, 8),])
+        );
+
+        // swap a and b
+        let result = mul(&b, &a).unwrap();
         assert_eq!(
             result.as_ref(),
             &IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(11, 8),])
@@ -1929,43 +1668,11 @@ mod tests {
             ])
         );
 
-        // Test multiplication with Decimal128
-        let a = IntervalDayTimeArray::from(vec![
-            IntervalDayTimeType::make_value(5, 3600000), // 5 days, 1 hour
-        ]);
-        let b = Decimal128Array::from(vec![25])
-            .with_precision_and_scale(4, 1)
-            .unwrap(); // 2.5
-        let result = mul(&a, &b).unwrap();
-        assert_eq!(
-            result.as_ref(),
-            &IntervalDayTimeArray::from(vec![
-                IntervalDayTimeType::make_value(12, 52200000), // 12.5 days, 2.5 hours
-            ])
-        );
-
-        // Test multiplication with Decimal256
+        // Test interval division
         let a = IntervalDayTimeArray::from(vec![
             IntervalDayTimeType::make_value(15, 3600000), // 15 days, 1 hour
         ]);
-        let b = Decimal256Array::from(vec![i256::from_i128(15)])
-            .with_precision_and_scale(3, 1)
-            .unwrap(); // 1.5
-        let result = mul(&a, &b).unwrap();
-        assert_eq!(
-            result.as_ref(),
-            &IntervalDayTimeArray::from(vec![
-                IntervalDayTimeType::make_value(22, 48600000), // 22.5 days, 1.5 hours
-            ])
-        );
-
-        // Test division with Decimal256
-        let a = IntervalDayTimeArray::from(vec![
-            IntervalDayTimeType::make_value(15, 3600000), // 15 days, 1 hour
-        ]);
-        let b = Decimal256Array::from(vec![i256::from_i128(20)])
-            .with_precision_and_scale(3, 1)
-            .unwrap(); // 2.0
+        let b = PrimitiveArray::<Int32Type>::from(vec![2]);
         let result = div(&a, &b).unwrap();
         assert_eq!(
             result.as_ref(),
