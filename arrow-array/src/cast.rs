@@ -72,7 +72,7 @@ macro_rules! repeat_pat {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $( if $guard:expr )? => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int8, $($data_type),+) => {
                 $m!($crate::types::Int8Type $(, $args)*)
@@ -98,7 +98,7 @@ macro_rules! downcast_integer {
             $crate::repeat_pat!($crate::cast::__private::DataType::UInt64, $($data_type),+) => {
                 $m!($crate::types::UInt64Type $(, $args)*)
             }
-            $($p => $fallback,)*
+            $($p $( if $guard )?=> $fallback,)*
         }
     };
 }
