@@ -22,6 +22,7 @@ use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
@@ -324,6 +325,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
             self.metadata.num_rows() as usize,
             page_locations,
             props,
+            #[cfg(feature = "encryption")]
             None,
         )?))
     }
@@ -341,8 +343,9 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(
     input: &mut T,
-    crypto_context: Option<Arc<CryptoContext>>,
+    #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<PageHeader> {
+    #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
         // todo: get column decryptor
@@ -383,7 +386,7 @@ pub(crate) fn read_page_header<T: Read>(
 /// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
 fn read_page_header_len<T: Read>(
     input: &mut T,
-    crypto_context: Option<Arc<CryptoContext>>,
+    #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<(usize, PageHeader)> {
     /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
     struct TrackedRead<R> {
@@ -403,7 +406,11 @@ fn read_page_header_len<T: Read>(
         inner: input,
         bytes_read: 0,
     };
-    let header = read_page_header(&mut tracked, crypto_context)?;
+    let header = read_page_header(
+        &mut tracked,
+        #[cfg(feature = "encryption")]
+        crypto_context,
+    )?;
     Ok((tracked.bytes_read, header))
 }
 
@@ -413,7 +420,7 @@ pub(crate) fn decode_page(
     buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
-    crypto_context: Option<Arc<CryptoContext>>,
+    #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
     #[cfg(feature = "crc")]
@@ -440,6 +447,7 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
+    #[cfg(feature = "encryption")]
     let buffer: Bytes = if crypto_context.is_some() {
         let crypto_context = crypto_context.as_ref().unwrap();
         let decryptor = crypto_context.data_decryptor();
@@ -584,6 +592,7 @@ pub struct SerializedPageReader<R: ChunkReader> {
     state: SerializedPageReaderState,
 
     /// Crypto context
+    #[cfg(feature = "encryption")]
     crypto_context: Option<Arc<CryptoContext>>,
 }
 
@@ -594,7 +603,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         meta: &ColumnChunkMetaData,
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
-        crypto_context: Option<Arc<CryptoContext>>,
+        #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
         SerializedPageReader::new_with_properties(
@@ -603,6 +612,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             total_rows,
             page_locations,
             props,
+            #[cfg(feature = "encryption")]
             crypto_context,
         )
     }
@@ -614,7 +624,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
-        crypto_context: Option<Arc<CryptoContext>>,
+        #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
@@ -644,21 +654,13 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
-        if crypto_context.is_some() {
-            return Ok(Self {
-                reader,
-                decompressor,
-                state,
-                physical_type: meta.column_type(),
-                crypto_context,
-            });
-        }
         Ok(Self {
             reader,
             decompressor,
             state,
             physical_type: meta.column_type(),
-            crypto_context: None,
+            #[cfg(feature = "encryption")]
+            crypto_context,
         })
     }
 }
@@ -690,12 +692,17 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
+                        #[cfg(feature = "encryption")]
                         let crypto_context = page_crypto_context(
                             &self.crypto_context,
                             *page_ordinal,
                             *require_dictionary,
                         )?;
-                        let (header_len, header) = read_page_header_len(&mut read, crypto_context)?;
+                        let (header_len, header) = read_page_header_len(
+                            &mut read,
+                            #[cfg(feature = "encryption")]
+                            crypto_context,
+                        )?;
                         *offset += header_len;
                         *remaining -= header_len;
                         header
@@ -719,6 +726,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         ));
                     }
 
+                    #[cfg(feature = "encryption")]
                     let crypto_context = page_crypto_context(
                         &self.crypto_context,
                         *page_ordinal,
@@ -729,6 +737,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        #[cfg(feature = "encryption")]
                         crypto_context,
                     )?;
                     if page.is_data_page() {
@@ -765,6 +774,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        #[cfg(feature = "encryption")]
                         None,
                     )?
                 }
@@ -796,7 +806,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         }
                     } else {
                         let mut read = self.reader.get_read(*offset as u64)?;
-                        let (header_len, header) = read_page_header_len(&mut read, None)?;
+                        let (header_len, header) = read_page_header_len(
+                            &mut read,
+                            #[cfg(feature = "encryption")]
+                            None,
+                        )?;
                         *offset += header_len;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(page_meta) = (&header).try_into() {
@@ -853,7 +867,11 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
                     let mut read = self.reader.get_read(*offset as u64)?;
-                    let (header_len, header) = read_page_header_len(&mut read, None)?;
+                    let (header_len, header) = read_page_header_len(
+                        &mut read,
+                        #[cfg(feature = "encryption")]
+                        None,
+                    )?;
                     let data_page_size = header.compressed_page_size as usize;
                     *offset += header_len + data_page_size;
                     *remaining_bytes -= header_len + data_page_size;
@@ -876,6 +894,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     }
 }
 
+#[cfg(feature = "encryption")]
 fn page_crypto_context(
     crypto_context: &Option<Arc<CryptoContext>>,
     page_ordinal: usize,
