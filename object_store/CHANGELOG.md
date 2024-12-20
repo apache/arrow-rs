@@ -19,41 +19,42 @@
 
 # Changelog
 
-## [object_store_0.11.1](https://github.com/apache/arrow-rs/tree/object_store_0.11.1) (2024-10-15)
+## [object_store_0.11.2](https://github.com/apache/arrow-rs/tree/object_store_0.11.2) (2024-12-20)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.11.0...object_store_0.11.1)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.11.1...object_store_0.11.2)
 
 **Implemented enhancements:**
 
-- There is no way to pass object store client options as environment variables [\#6333](https://github.com/apache/arrow-rs/issues/6333) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Better Document Backoff Algorithm [\#6324](https://github.com/apache/arrow-rs/issues/6324) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Add direction to `list_with_offset` [\#6274](https://github.com/apache/arrow-rs/issues/6274) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Support server-side encryption with customer-provided keys \(SSE-C\) [\#6229](https://github.com/apache/arrow-rs/issues/6229) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object-store's AzureClient should protect against multiple streams performing put\_block in parallel for the same BLOB path [\#6868](https://github.com/apache/arrow-rs/issues/6868) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Support S3 Put IfMatch [\#6799](https://github.com/apache/arrow-rs/issues/6799) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object\_store Azure Government using OAuth [\#6759](https://github.com/apache/arrow-rs/issues/6759) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Support for AWS Requester Pays buckets [\#6716](https://github.com/apache/arrow-rs/issues/6716) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[object-store\]: Implement credential\_process support for S3 [\#6422](https://github.com/apache/arrow-rs/issues/6422) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object\_store: Conditional put and rename\_if\_not\_exist on S3 [\#6285](https://github.com/apache/arrow-rs/issues/6285) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Fixed bugs:**
 
-- \[object-store\] Requested tokio version is too old - does not compile [\#6458](https://github.com/apache/arrow-rs/issues/6458) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Azure SAS tokens are visible when retry errors are logged via object\_store [\#6322](https://github.com/apache/arrow-rs/issues/6322) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- `object_store` errors when `reqwest` `gzip` feature is enabled [\#6842](https://github.com/apache/arrow-rs/issues/6842) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Multi-part s3 uploads fail when using checksum [\#6793](https://github.com/apache/arrow-rs/issues/6793) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- `with_unsigned_payload` shouldn't generate payload hash [\#6697](https://github.com/apache/arrow-rs/issues/6697) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- \[Object\_store\] min\_ttl is too high for GKE tokens [\#6625](https://github.com/apache/arrow-rs/issues/6625) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- object\_store `test_private_bucket` fails - store: "S3", source: BucketNotFound { bucket: "bloxbender" } [\#6600](https://github.com/apache/arrow-rs/issues/6600) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- S3 endpoint and trailing slash result in weird/invalid requests [\#6580](https://github.com/apache/arrow-rs/issues/6580) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Merged pull requests:**
 
-- object\_store: fix typo in with\_connect\_timeout\_disabled that actually disabled non-connect timeouts [\#6563](https://github.com/apache/arrow-rs/pull/6563) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([adriangb](https://github.com/adriangb))
-- object\_store: Clarify what is a prefix in list\(\) documentation [\#6520](https://github.com/apache/arrow-rs/pull/6520) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([progval](https://github.com/progval))
-- object\_store: enable lint `unreachable_pub` [\#6512](https://github.com/apache/arrow-rs/pull/6512) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([ByteBaker](https://github.com/ByteBaker))
-- \[object\_store\] Retry S3 requests with 200 response with "Error" in body [\#6508](https://github.com/apache/arrow-rs/pull/6508) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([PeterKeDer](https://github.com/PeterKeDer))
-- \[object-store\] Require tokio 1.29.0. [\#6459](https://github.com/apache/arrow-rs/pull/6459) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([ashtuchkin](https://github.com/ashtuchkin))
-- feat: expose HTTP/2 max frame size in `object_store` [\#6442](https://github.com/apache/arrow-rs/pull/6442) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- Derive `Clone` for `object_store::aws::AmazonS3` [\#6414](https://github.com/apache/arrow-rs/pull/6414) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([ethe](https://github.com/ethe))
-- object\_score: Support Azure Fabric OAuth Provider [\#6382](https://github.com/apache/arrow-rs/pull/6382) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([RobinLin666](https://github.com/RobinLin666))
-- `object_store::GetOptions` derive `Clone` [\#6361](https://github.com/apache/arrow-rs/pull/6361) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([samuelcolvin](https://github.com/samuelcolvin))
-- \[object\_store\] Propagate env vars as object store client options [\#6334](https://github.com/apache/arrow-rs/pull/6334) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([ccciudatu](https://github.com/ccciudatu))
-- docs\[object\_store\]: clarify the backoff strategy that is actually implemented [\#6325](https://github.com/apache/arrow-rs/pull/6325) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([westonpace](https://github.com/westonpace))
-- fix: azure sas token visible in logs [\#6323](https://github.com/apache/arrow-rs/pull/6323) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alexwilcoxson-rel](https://github.com/alexwilcoxson-rel))
-- object\_store/delimited: Fix `TrailingEscape` condition [\#6265](https://github.com/apache/arrow-rs/pull/6265) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Turbo87](https://github.com/Turbo87))
-- fix\(object\_store\): only add encryption headers for SSE-C in get request [\#6260](https://github.com/apache/arrow-rs/pull/6260) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([jiachengdb](https://github.com/jiachengdb))
-- docs: Add parquet\_opendal in related projects [\#6236](https://github.com/apache/arrow-rs/pull/6236) ([Xuanwo](https://github.com/Xuanwo))
-- feat\(object\_store\): add support for server-side encryption with customer-provided keys \(SSE-C\) [\#6230](https://github.com/apache/arrow-rs/pull/6230) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([jiachengdb](https://github.com/jiachengdb))
-- feat: further TLS options on ClientOptions: \#5034 [\#6148](https://github.com/apache/arrow-rs/pull/6148) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([ByteBaker](https://github.com/ByteBaker))
+- Use randomized content ID for Azure multipart uploads [\#6869](https://github.com/apache/arrow-rs/pull/6869) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([avarnon](https://github.com/avarnon))
+- Always explicitly disable `gzip` automatic decompression on reqwest client used by object\_store [\#6843](https://github.com/apache/arrow-rs/pull/6843) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([phillipleblanc](https://github.com/phillipleblanc))
+- object-store: remove S3ConditionalPut::ETagPutIfNotExists [\#6802](https://github.com/apache/arrow-rs/pull/6802) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([benesch](https://github.com/benesch))
+- Fix multipart uploads with checksums on object locked buckets [\#6794](https://github.com/apache/arrow-rs/pull/6794) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([avantgardnerio](https://github.com/avantgardnerio))
+- Add AuthorityHost to AzureConfigKey [\#6773](https://github.com/apache/arrow-rs/pull/6773) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([zadeluca](https://github.com/zadeluca))
+- object\_store: Add support for requester pays buckets [\#6768](https://github.com/apache/arrow-rs/pull/6768) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylebarron](https://github.com/kylebarron))
+- check sign\_payload instead of skip\_signature before computing checksum [\#6698](https://github.com/apache/arrow-rs/pull/6698) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([mherrerarendon](https://github.com/mherrerarendon))
+- Update quick-xml requirement from 0.36.0 to 0.37.0 in /object\_store [\#6687](https://github.com/apache/arrow-rs/pull/6687) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
+- Support native S3 conditional writes [\#6682](https://github.com/apache/arrow-rs/pull/6682) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([benesch](https://github.com/benesch))
+- \[object\_store\] fix S3 endpoint and trailing slash result in invalid requests [\#6641](https://github.com/apache/arrow-rs/pull/6641) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([adbmal](https://github.com/adbmal))
+- Lower GCP token min\_ttl to 4 minutes and add backoff to token refresh logic [\#6638](https://github.com/apache/arrow-rs/pull/6638) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([mwylde](https://github.com/mwylde))
+- Remove `test_private_bucket` object\_store test [\#6601](https://github.com/apache/arrow-rs/pull/6601) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
 
 
 
