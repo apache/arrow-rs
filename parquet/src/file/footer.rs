@@ -59,14 +59,12 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 ///
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_metadata")]
-pub fn decode_metadata(
-    buf: &[u8],
-    #[cfg(feature = "encryption")] file_decryption_properties: Option<&FileDecryptionProperties>,
-) -> Result<ParquetMetaData> {
+pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
     ParquetMetaDataReader::decode_metadata(
         buf,
+        false,
         #[cfg(feature = "encryption")]
-        file_decryption_properties,
+        None,
     )
 }
 
@@ -81,7 +79,10 @@ pub fn decode_metadata(
 /// | len | 'PAR1' |
 /// +-----+--------+
 /// ```
-#[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_footer")]
+#[deprecated(
+    since = "53.1.0",
+    note = "Use ParquetMetaDataReader::decode_footer_tail"
+)]
 pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
-    ParquetMetaDataReader::decode_footer(slice)
+    ParquetMetaDataReader::decode_footer_tail(slice).map(|f| f.metadata_length())
 }
