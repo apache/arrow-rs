@@ -104,6 +104,7 @@ use crate::format::{
 };
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptor;
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
@@ -176,6 +177,7 @@ pub struct ParquetMetaData {
     /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
     /// Optional file decryptor
+    #[cfg(feature = "encryption")]
     file_decryptor: Option<FileDecryptor>,
 }
 
@@ -185,11 +187,12 @@ impl ParquetMetaData {
     pub fn new(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        file_decryptor: Option<FileDecryptor>,
+        #[cfg(feature = "encryption")] file_decryptor: Option<FileDecryptor>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
+            #[cfg(feature = "encryption")]
             file_decryptor,
             column_index: None,
             offset_index: None,
@@ -223,6 +226,7 @@ impl ParquetMetaData {
     }
 
     /// Returns file decryptor as reference.
+    #[cfg(feature = "encryption")]
     pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
         &self.file_decryptor
     }
@@ -338,7 +342,12 @@ pub struct ParquetMetaDataBuilder(ParquetMetaData);
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![], None))
+        Self(ParquetMetaData::new(
+            file_meta_data,
+            vec![],
+            #[cfg(feature = "encryption")]
+            None,
+        ))
     }
 
     /// Create a new builder from an existing ParquetMetaData

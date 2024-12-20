@@ -41,6 +41,7 @@ mod filter;
 mod selection;
 pub mod statistics;
 
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{CryptoContext, FileDecryptionProperties};
 
 /// Builder for constructing parquet readers into arrow.
@@ -383,12 +384,14 @@ impl ArrowReaderMetadata {
     pub fn load<T: ChunkReader>(
         reader: &T,
         options: ArrowReaderOptions,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &FileDecryptionProperties,
+        >,
     ) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(options.page_index)
-            .with_encryption_properties(file_decryption_properties)
-            .parse_and_finish(reader)?;
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata = metadata.with_encryption_properties(file_decryption_properties);
+        let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -534,11 +537,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(&reader, options, None)?;
+        let metadata = ArrowReaderMetadata::load(
+            &reader,
+            options,
+            #[cfg(feature = "encryption")]
+            None,
+        )?;
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`] and [`FileDecryptionProperties`]
+    #[cfg(feature = "encryption")]
     pub fn try_new_with_decryption(
         reader: T,
         options: ArrowReaderOptions,
@@ -694,6 +703,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
+        #[cfg(feature = "encryption")]
         let crypto_context = if self.metadata.file_decryptor().is_some() {
             let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
 
@@ -708,8 +718,14 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
             None
         };
 
-        let ret =
-            SerializedPageReader::new(reader, meta, total_rows, page_locations, crypto_context);
+        let ret = SerializedPageReader::new(
+            reader,
+            meta,
+            total_rows,
+            page_locations,
+            #[cfg(feature = "encryption")]
+            crypto_context,
+        );
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -824,6 +840,7 @@ impl ParquetRecordBatchReader {
     ///
     /// Note: this is needed when the parquet file is encrypted
     // todo: add options or put file_decryption_properties into options
+    #[cfg(feature = "encryption")]
     pub fn try_new_with_decryption<T: ChunkReader + 'static>(
         reader: T,
         batch_size: usize,
@@ -993,10 +1010,11 @@ mod tests {
     };
     use arrow_select::concat::concat_batches;
 
+    #[cfg(feature = "encryption")]
+    use crate::arrow::arrow_reader::ArrowReaderMetadata;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
-        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
-        RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
@@ -1006,6 +1024,7 @@ mod tests {
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
         FloatType, Int32Type, Int64Type, Int96Type,
     };
+    #[cfg(feature = "encryption")]
     use crate::encryption::ciphers;
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -1841,6 +1860,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_non_uniform_encryption_plaintext_footer() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -1891,6 +1911,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_non_uniform_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -1922,6 +1943,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "encryption")]
     fn test_uniform_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
