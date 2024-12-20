@@ -20,6 +20,7 @@ use std::{io::Read, ops::Range, sync::Arc};
 use bytes::Bytes;
 
 use crate::basic::ColumnOrder;
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{
     create_footer_aad, BlockDecryptor, FileDecryptionProperties, FileDecryptor,
 };
@@ -29,10 +30,9 @@ use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-use crate::format::{
-    ColumnOrder as TColumnOrder, EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData,
-    FileMetaData as TFileMetaData,
-};
+use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
+#[cfg(feature = "encryption")]
+use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
@@ -74,6 +74,7 @@ pub struct ParquetMetaDataReader {
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
+    #[cfg(feature = "encryption")]
     file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
@@ -136,6 +137,7 @@ impl ParquetMetaDataReader {
     /// Provide the [`FileDecryptionProperties`] to use when decrypting the file.
     ///
     /// This is only necessary when the file is encrypted.
+    #[cfg(feature = "encryption")]
     pub fn with_encryption_properties(
         mut self,
         properties: Option<&FileDecryptionProperties>,
@@ -542,6 +544,7 @@ impl ParquetMetaDataReader {
         let start = file_size - footer_metadata_len as u64;
         Self::decode_metadata(
             chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
+            #[cfg(feature = "encryption")]
             self.file_decryption_properties.as_ref(),
         )
     }
@@ -649,12 +652,18 @@ impl ParquetMetaDataReader {
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(
         buf: &[u8],
-        file_decryption_properties: Option<&FileDecryptionProperties>,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &FileDecryptionProperties,
+        >,
     ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
+
+        #[cfg(feature = "encryption")]
         let mut file_decryptor = None;
+        #[cfg(feature = "encryption")]
         let decrypted_fmd_buf;
 
+        #[cfg(feature = "encryption")]
         if file_decryption_properties.is_some()
             && file_decryption_properties.unwrap().has_footer_key()
         {
@@ -719,6 +728,7 @@ impl ParquetMetaDataReader {
         Ok(ParquetMetaData::new(
             file_metadata,
             row_groups,
+            #[cfg(feature = "encryption")]
             file_decryptor,
         ))
     }

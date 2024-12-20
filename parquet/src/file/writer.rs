@@ -1314,6 +1314,7 @@ mod tests {
                 total_num_values as usize,
                 None,
                 Arc::new(props),
+                #[cfg(feature = "encryption")]
                 None,
             )
             .unwrap();

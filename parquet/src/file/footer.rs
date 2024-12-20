@@ -17,6 +17,7 @@
 
 //! Module for working with Parquet file footers.
 
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptionProperties;
 use crate::errors::Result;
 use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE};
@@ -60,9 +61,13 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader::decode_metadata")]
 pub fn decode_metadata(
     buf: &[u8],
-    file_decryption_properties: Option<&FileDecryptionProperties>,
+    #[cfg(feature = "encryption")] file_decryption_properties: Option<&FileDecryptionProperties>,
 ) -> Result<ParquetMetaData> {
-    ParquetMetaDataReader::decode_metadata(buf, file_decryption_properties)
+    ParquetMetaDataReader::decode_metadata(
+        buf,
+        #[cfg(feature = "encryption")]
+        file_decryption_properties,
+    )
 }
 
 /// Decodes the Parquet footer returning the metadata length in bytes

@@ -132,7 +132,7 @@ impl From<object_store::Error> for ParquetError {
     }
 }
 
-//#[cfg(feature = "encryption")]
+#[cfg(feature = "encryption")]
 impl From<ring::error::Unspecified> for ParquetError {
     fn from(e: ring::error::Unspecified) -> ParquetError {
         ParquetError::External(Box::new(e))
