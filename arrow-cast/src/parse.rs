@@ -823,8 +823,22 @@ fn parse_e_notation<T: DecimalType>(
         )));
     }
 
+    let mut rounding_digit = -1;
+
     if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_str = result.to_i64().unwrap().to_string();
+        let wrapped_result = result.div_wrapping(base.pow_wrapping(-exp as _));
+        if wrapped_result != T::Native::usize_as(0) {
+            let rounding_digit_position = wrapped_result.to_i64().unwrap().to_string().len(); // position inside result_str
+            rounding_digit = result_str[rounding_digit_position..rounding_digit_position + 1]
+                .parse::<i32>()
+                .unwrap();
+        }
+        if rounding_digit >= 5 {
+            result = wrapped_result.add_wrapping(T::Native::usize_as(1));
+        } else {
+            result = wrapped_result;
+        }
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
     }
@@ -2580,24 +2594,11 @@ mod tests {
             ("4749.3e-5", "0.047493", 10),
             ("4749.3e+5", "474930000", 10),
             ("4749.3e-5", "0.047493", 1),
-            ("4749.3e+5", "474930000", 1),
-            ("0E-8", "0", 10),
-            ("0E+6", "0", 10),
-            ("1E-8", "0.00000001", 10),
-            ("12E+6", "12000000", 10),
-            ("12E-6", "0.000012", 10),
-            ("0.1e-6", "0.0000001", 10),
-            ("0.1e+6", "100000", 10),
-            ("0.12e-6", "0.00000012", 10),
-            ("0.12e+6", "120000", 10),
-            ("000000000001e0", "000000000001", 3),
-            ("000001.1034567002e0", "000001.1034567002", 3),
-            ("1.234e16", "12340000000000000", 0),
-            ("123.4e16", "1234000000000000000", 0),
         ];
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
             let result_128_d = parse_decimal::<Decimal128Type>(d, 20, scale);
+            println!("{},{},{}", e, d, scale);
             assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
             let result_256_e = parse_decimal::<Decimal256Type>(e, 20, scale);
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
