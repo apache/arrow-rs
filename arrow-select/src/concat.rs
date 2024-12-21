@@ -145,18 +145,10 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
         })
         .collect::<Vec<_>>();
 
-    let mut dictionary_output_len = 0;
     let dictionaries: Vec<_> = lists
         .iter()
-        .map(|x| x.values().as_ref().as_dictionary::<K>())
-        .inspect(|d| dictionary_output_len += d.len())
+        .map(|x| x.values().as_ref())
         .collect();
-
-    if !should_merge_dictionary_values::<K>(&dictionaries, dictionary_output_len) {
-        return concat_fallback(arrays, Capacities::Array(output_len));
-    }
-
-    let merged = merge_dictionary_values(&dictionaries, None)?;
 
     let lists_nulls = list_has_nulls.then(|| {
         let mut nulls = BooleanBufferBuilder::new(output_len);
@@ -169,34 +161,7 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
         NullBuffer::new(nulls.finish())
     });
 
-    // Recompute keys
-    let mut key_values = Vec::with_capacity(dictionary_output_len);
-
-    let mut dictionary_has_nulls = false;
-    for (d, mapping) in dictionaries.iter().zip(merged.key_mappings) {
-        dictionary_has_nulls |= d.null_count() != 0;
-        for key in d.keys().values() {
-            // Use get to safely handle nulls
-            key_values.push(mapping.get(key.as_usize()).copied().unwrap_or_default())
-        }
-    }
-
-    let dictionary_nulls = dictionary_has_nulls.then(|| {
-        let mut nulls = BooleanBufferBuilder::new(dictionary_output_len);
-        for d in &dictionaries {
-            match d.nulls() {
-                Some(n) => nulls.append_buffer(n.inner()),
-                None => nulls.append_n(d.len(), true),
-            }
-        }
-        NullBuffer::new(nulls.finish())
-    });
-
-    let keys = PrimitiveArray::<K>::new(key_values.into(), dictionary_nulls);
-    // Sanity check
-    assert_eq!(keys.len(), dictionary_output_len);
-
-    let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
+    let concat_dictionaries = concat_dictionaries::<K>(dictionaries.as_slice())?;
 
     // Merge value offsets from the lists
     let value_offset_buffer =
@@ -210,7 +175,7 @@ fn concat_list_of_dictionaries<OffsetSize: OffsetSizeTrait, K: ArrowDictionaryKe
         // `GenericListArray` must only have 1 buffer
         .buffers(vec![value_offset_buffer])
         // `GenericListArray` must only have 1 child_data
-        .child_data(vec![array.to_data()]);
+        .child_data(vec![concat_dictionaries.to_data()]);
 
     // TODO - maybe use build_unchecked?
     let array_data = builder.build()?;
