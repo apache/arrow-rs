@@ -823,19 +823,16 @@ fn parse_e_notation<T: DecimalType>(
         )));
     }
 
-    let rounding_digit;
-
     if exp < 0 {
-        let result_str = result.to_i64().unwrap().to_string();
-        let wrapped_result = result.div_wrapping(base.pow_wrapping(-exp as _));
-        let rounding_digit_position = wrapped_result.to_i64().unwrap().to_string().len(); // position inside result_str
-        rounding_digit = result_str[rounding_digit_position - 1..rounding_digit_position]
-            .parse::<i32>()
-            .unwrap();
-        if rounding_digit >= 5 {
-            result = wrapped_result.add_wrapping(T::Native::usize_as(1));
+        let result_with_scale = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_with_one_scale_above =
+            result.div_wrapping(base.pow_wrapping(-exp.sub_wrapping(1) as _));
+        let rounding_digit =
+            result_with_one_scale_above.sub_wrapping(result_with_scale.mul_wrapping(base));
+        if rounding_digit >= T::Native::usize_as(5) {
+            result = result_with_scale.add_wrapping(T::Native::usize_as(1));
         } else {
-            result = wrapped_result;
+            result = result_with_scale;
         }
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
