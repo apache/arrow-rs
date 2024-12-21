@@ -243,17 +243,18 @@ fn interleave_views<T: ByteViewType>(
     let mut views_builder = BufferBuilder::new(indices.len());
     let mut buffers = Vec::new();
 
-    let mut buffer_lookup = HashMap::new();
+    // (input array_index, input buffer_index) -> output buffer_index
+    let mut buffer_lookup: HashMap<(usize, u32), u32> = HashMap::new();
     for (array_idx, value_idx) in indices {
         let array = interleaved.arrays[*array_idx];
         let raw_view = array.views().get(*value_idx).unwrap();
-        let view = ByteView::from(*raw_view);
-
-        if view.length <= 12 {
+        let view_len = *raw_view as u32;
+        if view_len <= 12 {
             views_builder.append(*raw_view);
             continue;
         }
         // value is big enough to be in a variadic buffer
+        let view = ByteView::from(*raw_view);
         let new_buffer_idx: &mut u32 = buffer_lookup
             .entry((*array_idx, view.buffer_index))
             .or_insert_with(|| {
@@ -533,7 +534,6 @@ mod tests {
         let result = values.as_string_view();
         assert_eq!(result.data_buffers().len(), 1);
 
-        // Test fallback implementation
         let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
         let fallback_result = fallback.as_string_view();
         // note that fallback_result has 2 buffers, but only one long enough string to warrant a buffer
@@ -594,7 +594,6 @@ mod tests {
         let result = values.as_string_view();
         assert_eq!(result.data_buffers().len(), 1);
 
-        // Test fallback implementation
         let fallback = interleave_fallback(&[&view_a, &view_b], indices).unwrap();
         let fallback_result = fallback.as_string_view();
 
@@ -616,6 +615,93 @@ mod tests {
                 Some("foo_long_string_not_inlined".to_string()),
                 None,
                 None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interleave_views_multiple_buffers() {
+        let str1 = "very_long_string_from_first_buffer".as_bytes();
+        let str2 = "very_long_string_from_second_buffer".as_bytes();
+        let buffer1 = str1.to_vec().into();
+        let buffer2 = str2.to_vec().into();
+
+        let view1 = ByteView::new(str1.len() as u32, &str1[..4])
+            .with_buffer_index(0)
+            .with_offset(0)
+            .as_u128();
+        let view2 = ByteView::new(str2.len() as u32, &str2[..4])
+            .with_buffer_index(1)
+            .with_offset(0)
+            .as_u128();
+        let view_a =
+            StringViewArray::try_new(vec![view1, view2].into(), vec![buffer1, buffer2], None)
+                .unwrap();
+
+        let str3 = "another_very_long_string_buffer_three".as_bytes();
+        let str4 = "different_long_string_in_buffer_four".as_bytes();
+        let buffer3 = str3.to_vec().into();
+        let buffer4 = str4.to_vec().into();
+
+        let view3 = ByteView::new(str3.len() as u32, &str3[..4])
+            .with_buffer_index(0)
+            .with_offset(0)
+            .as_u128();
+        let view4 = ByteView::new(str4.len() as u32, &str4[..4])
+            .with_buffer_index(1)
+            .with_offset(0)
+            .as_u128();
+        let view_b =
+            StringViewArray::try_new(vec![view3, view4].into(), vec![buffer3, buffer4], None)
+                .unwrap();
+
+        let indices = &[
+            (0, 0), // String from first buffer of array A
+            (1, 0), // String from first buffer of array B
+            (0, 1), // String from second buffer of array A
+            (1, 1), // String from second buffer of array B
+            (0, 0), // String from first buffer of array A again
+            (1, 1), // String from second buffer of array B again
+        ];
+
+        // Test interleave
+        let values = interleave(&[&view_a, &view_b], indices).unwrap();
+        let result = values.as_string_view();
+
+        assert_eq!(
+            result.data_buffers().len(),
+            4,
+            "Expected four buffers (two from each input array)"
+        );
+
+        let result_strings: Vec<_> = result.iter().map(|x| x.map(|s| s.to_string())).collect();
+        assert_eq!(
+            result_strings,
+            vec![
+                Some("very_long_string_from_first_buffer".to_string()),
+                Some("another_very_long_string_buffer_three".to_string()),
+                Some("very_long_string_from_second_buffer".to_string()),
+                Some("different_long_string_in_buffer_four".to_string()),
+                Some("very_long_string_from_first_buffer".to_string()),
+                Some("different_long_string_in_buffer_four".to_string()),
+            ]
+        );
+
+        let views = result.views();
+        let buffer_indices: Vec<_> = views
+            .iter()
+            .map(|raw_view| ByteView::from(*raw_view).buffer_index)
+            .collect();
+
+        assert_eq!(
+            buffer_indices,
+            vec![
+                0, // First buffer from array A
+                1, // First buffer from array B
+                2, // Second buffer from array A
+                3, // Second buffer from array B
+                0, // First buffer from array A (reused)
+                3, // Second buffer from array B (reused)
             ]
         );
     }
