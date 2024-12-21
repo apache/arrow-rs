@@ -817,10 +817,11 @@ impl<'a> MutableArrayData<'a> {
 }
 
 // See arrow/tests/array_transform.rs for tests of transform functionality
-
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow_buffer::Buffer;
+    use arrow_schema::DataType;
     use arrow_schema::Field;
     use std::sync::Arc;
 
@@ -841,5 +842,133 @@ mod test {
         // capacities are rounded up to multiples of 64 by MutableBuffer
         assert_eq!(mutable.data.buffer1.capacity(), 64);
         assert_eq!(mutable.data.child_data[0].data.buffer1.capacity(), 192);
+    }
+
+    fn create_view_array(
+        data_type: DataType,
+        views: &[u128],
+        data_buffers: Vec<Buffer>,
+    ) -> ArrayData {
+        let view_buffer = Buffer::from_slice_ref(views);
+        let mut buffers = vec![view_buffer];
+        buffers.extend(data_buffers);
+
+        ArrayData::try_new(data_type, views.len(), None, 0, buffers, vec![]).unwrap()
+    }
+
+    #[test]
+    fn test_binary_view_buffer_deduplication() {
+        let data = Buffer::from_slice_ref(b"this is a long string that will not be inlined");
+
+        let view = ByteView::new(data.len() as u32, b"this")
+            .with_buffer_index(0)
+            .with_offset(0);
+
+        // Create two arrays pointing to the same buffer
+        let array1 = create_view_array(DataType::BinaryView, &[view.into()], vec![data.clone()]);
+        let array2 = create_view_array(DataType::BinaryView, &[view.into()], vec![data.clone()]);
+
+        let mut mutable = MutableArrayData::new(vec![&array1, &array2], false, 2);
+        mutable.extend(0, 0, 1);
+        mutable.extend(1, 0, 1);
+
+        let result = mutable.freeze();
+
+        // Should only have one data buffer since they were identical
+        assert_eq!(result.buffers().len(), 2); // view buffer + 1 data buffer
+    }
+
+    #[test]
+    fn test_binary_view_buffer_remapping() {
+        let data1 = Buffer::from_slice_ref(b"this is the first long string buffer");
+        let data2 = Buffer::from_slice_ref(b"this is the second long string buffer");
+
+        // Create views pointing to different buffers
+        let view1 = ByteView::new(data1.len() as u32, b"this")
+            .with_buffer_index(0)
+            .with_offset(0);
+
+        let view2 = ByteView::new(data2.len() as u32, b"this")
+            .with_buffer_index(0) // Will be remapped
+            .with_offset(0);
+
+        let array1 = create_view_array(DataType::BinaryView, &[view1.into()], vec![data1]);
+        let array2 = create_view_array(DataType::BinaryView, &[view2.into()], vec![data2]);
+
+        let mut mutable = MutableArrayData::new(vec![&array1, &array2], false, 2);
+        mutable.extend(0, 0, 1);
+        mutable.extend(1, 0, 1);
+
+        let result = mutable.freeze();
+
+        assert_eq!(result.buffers().len(), 3); // view buffer + 2 data buffers
+
+        let views = result.buffer::<u128>(0);
+        let view1 = ByteView::from(views[0]);
+        let view2 = ByteView::from(views[1]);
+
+        assert_eq!(view1.buffer_index, 0);
+        assert_eq!(view2.buffer_index, 1); // Second buffer index was remapped
+    }
+
+    #[test]
+    fn test_utf8_view_inline_data() {
+        let short_str = "hello";
+        let mut view_data = [0u8; 16];
+        view_data[0..4].copy_from_slice(&(short_str.len() as u32).to_le_bytes());
+        view_data[4..9].copy_from_slice(short_str.as_bytes());
+        let view = u128::from_le_bytes(view_data);
+
+        // no buffers for inline strings
+        let array = create_view_array(DataType::Utf8View, &[view], vec![]);
+
+        let mut mutable = MutableArrayData::new(vec![&array], false, 1);
+        mutable.extend(0, 0, 1);
+
+        let result = mutable.freeze();
+
+        // Should only have view buffer for inline data
+        assert_eq!(result.buffers().len(), 1);
+
+        // Verify the inline data was preserved
+        let views = result.buffer::<u128>(0);
+        let actual_view = views[0];
+        assert_eq!(actual_view, view);
+    }
+
+    #[test]
+    fn test_view_multiple_arrays() {
+        let data1 = Buffer::from_slice_ref(b"this is a shared buffer that will be deduplicated");
+        let data2 = Buffer::from_slice_ref(b"this is a unique buffer that won't be deduplicated");
+
+        let view1 = ByteView::new(data1.len() as u32, b"this")
+            .with_buffer_index(0)
+            .with_offset(0);
+
+        let view2 = ByteView::new(data2.len() as u32, b"this")
+            .with_buffer_index(0)
+            .with_offset(0);
+
+        let array1 = create_view_array(DataType::BinaryView, &[view1.into()], vec![data1.clone()]);
+        let array2 = create_view_array(
+            DataType::BinaryView,
+            &[view1.into()],
+            vec![data1.clone()], // Shared buffer
+        );
+        let array3 = create_view_array(
+            DataType::BinaryView,
+            &[view2.into()],
+            vec![data2], // Unique buffer
+        );
+
+        let mut mutable = MutableArrayData::new(vec![&array1, &array2, &array3], false, 3);
+        mutable.extend(0, 0, 1);
+        mutable.extend(1, 0, 1);
+        mutable.extend(2, 0, 1);
+
+        let result = mutable.freeze();
+
+        // Should have view buffer + 2 unique data buffers
+        assert_eq!(result.buffers().len(), 3);
     }
 }
