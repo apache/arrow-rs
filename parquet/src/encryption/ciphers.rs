@@ -23,6 +23,7 @@ use std::sync::Arc;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 use crate::errors::{ParquetError, Result};
+use crate::format::EncryptionAlgorithm;
 
 pub trait BlockEncryptor {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
@@ -268,7 +269,6 @@ impl DecryptionPropertiesBuilder {
     pub fn with_column_key(mut self, key: Vec<u8>, value: Vec<u8>) -> Self {
         let mut column_keys= self.column_keys.unwrap_or_else(HashMap::new);
         column_keys.insert(key, value);
-        // let _ = column_keys.insert(key, value);
         self.column_keys = Some(column_keys);
         self
     }
@@ -278,7 +278,7 @@ impl DecryptionPropertiesBuilder {
 pub struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
     // todo decr: change to BlockDecryptor
-    footer_decryptor: RingGcmBlockDecryptor,
+    footer_decryptor: Option<RingGcmBlockDecryptor>,
     aad_file_unique: Vec<u8>,
     aad_prefix: Vec<u8>,
 }
@@ -291,9 +291,15 @@ impl PartialEq for FileDecryptor {
 
 impl FileDecryptor {
     pub(crate) fn new(decryption_properties: &FileDecryptionProperties, aad_file_unique: Vec<u8>, aad_prefix: Vec<u8>) -> Self {
+        let footer_decryptor = if let Some(footer_key) = decryption_properties.footer_key.clone() {
+            Some(RingGcmBlockDecryptor::new(footer_key.as_ref()))
+        } else {
+            None
+        };
+
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
-            footer_decryptor: RingGcmBlockDecryptor::new(decryption_properties.footer_key.clone().unwrap().as_ref()),
+            footer_decryptor,
             decryption_properties: decryption_properties.clone(),
             aad_file_unique,
             aad_prefix,
@@ -302,7 +308,7 @@ impl FileDecryptor {
 
     // todo decr: change to BlockDecryptor
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
-        self.footer_decryptor
+        self.footer_decryptor.unwrap()
     }
 
     pub(crate) fn get_column_decryptor(&self, column_key: &[u8]) -> RingGcmBlockDecryptor {
@@ -314,7 +320,7 @@ impl FileDecryptor {
         &self.decryption_properties
     }
 
-    pub(crate) fn footer_decryptor(&self) -> RingGcmBlockDecryptor {
+    pub(crate) fn footer_decryptor(&self) -> Option<RingGcmBlockDecryptor> {
         self.footer_decryptor.clone()
     }
 
