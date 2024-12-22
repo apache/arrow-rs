@@ -158,7 +158,7 @@ impl ParquetMetaDataReader {
     ///
     /// This is only necessary when the file is encrypted.
     #[cfg(feature = "encryption")]
-    pub fn with_encryption_properties(
+    pub fn with_decryption_properties(
         mut self,
         properties: Option<&FileDecryptionProperties>,
     ) -> Self {
