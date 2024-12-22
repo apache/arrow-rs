@@ -390,7 +390,10 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
         #[cfg(feature = "encryption")]
-        let metadata = metadata.with_encryption_properties(file_decryption_properties);
+        let metadata = metadata
+            .with_encryption_properties(file_decryption_properties)
+            .parse_and_finish(reader)?;
+        #[cfg(not(feature = "encryption"))]
         let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
@@ -1914,7 +1917,7 @@ mod tests {
     #[cfg(feature = "encryption")]
     fn test_non_uniform_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
         let file = File::open(path).unwrap();
 
         let footer_key = "0123456789012345".as_bytes(); // 128bit/16
@@ -1932,14 +1935,14 @@ mod tests {
         let metadata =
             ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
                 .unwrap();
-        // let file_metadata = metadata.metadata.file_metadata();
-        //
-        // assert_eq!(file_metadata.num_rows(), 50);
-        // assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-        // assert_eq!(
-        //     file_metadata.created_by().unwrap(),
-        //     "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
-        // );
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
+        );
     }
 
     #[test]
