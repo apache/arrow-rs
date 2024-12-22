@@ -391,7 +391,7 @@ impl ArrowReaderMetadata {
         let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
         #[cfg(feature = "encryption")]
         let metadata = metadata
-            .with_encryption_properties(file_decryption_properties)
+            .with_decryption_properties(file_decryption_properties)
             .parse_and_finish(reader)?;
         #[cfg(not(feature = "encryption"))]
         let metadata = metadata.parse_and_finish(reader)?;
