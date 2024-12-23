@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
+use zstd::zstd_safe::WriteBuf;
 use crate::errors::{ParquetError, Result};
 use crate::format::EncryptionAlgorithm;
 
@@ -231,6 +232,7 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
 pub struct FileDecryptionProperties {
     footer_key: Option<Vec<u8>>,
     column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
+    aad_prefix: Option<Vec<u8>>,
 }
 
 impl FileDecryptionProperties {
@@ -238,11 +240,16 @@ impl FileDecryptionProperties {
         DecryptionPropertiesBuilder::with_defaults()
     }
     pub fn has_footer_key(&self) -> bool { self.footer_key.is_some() }
+
+    pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
+        self.aad_prefix.as_ref()
+    }
 }
 
 pub struct DecryptionPropertiesBuilder {
     footer_key: Option<Vec<u8>>,
     column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
+    aad_prefix: Option<Vec<u8>>,
 }
 
 impl DecryptionPropertiesBuilder {
@@ -250,6 +257,7 @@ impl DecryptionPropertiesBuilder {
         Self {
             footer_key: None,
             column_keys: None,
+            aad_prefix: None,
         }
     }
 
@@ -257,12 +265,18 @@ impl DecryptionPropertiesBuilder {
         FileDecryptionProperties {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
+            aad_prefix: self.aad_prefix,
         }
     }
 
     // todo decr: doc comment
     pub fn with_footer_key(mut self, value: Vec<u8>) -> Self {
         self.footer_key = Some(value);
+        self
+    }
+
+    pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
+        self.aad_prefix = Some(value);
         self
     }
 
@@ -311,9 +325,10 @@ impl FileDecryptor {
         self.footer_decryptor.unwrap()
     }
 
-    pub(crate) fn get_column_decryptor(&self, column_key: &[u8]) -> RingGcmBlockDecryptor {
-        let column_key = self.decryption_properties.column_keys.as_ref().unwrap().get(column_key).unwrap();
-        RingGcmBlockDecryptor::new(column_key)
+    pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> RingGcmBlockDecryptor {
+        let column_keys = &self.decryption_properties.column_keys.clone().unwrap();
+        let column_key = column_keys[&column_name.to_vec()].clone();
+        RingGcmBlockDecryptor::new(&column_key)
     }
 
     pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {
