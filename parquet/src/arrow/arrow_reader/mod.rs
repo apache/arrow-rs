@@ -1874,8 +1874,8 @@ mod tests {
 
         let decryption_properties = Some(
             ciphers::FileDecryptionProperties::builder()
-                .with_column_key("kc1".as_bytes().to_vec(), column_1_key.to_vec())
-                .with_column_key("kc2".as_bytes().to_vec(), column_2_key.to_vec())
+                .with_column_key("float_field".as_bytes().to_vec(), column_1_key.to_vec())
+                .with_column_key("double_field".as_bytes().to_vec(), column_2_key.to_vec())
                 .build(),
         );
 
@@ -1916,6 +1916,8 @@ mod tests {
     #[test]
     #[cfg(feature = "encryption")]
     fn test_non_uniform_encryption() {
+        // Decryption configuration 2: Decrypt using key retriever callback that holds the
+        // keys of two encrypted columns and the footer key. Supply aad_prefix.
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
         let file = File::open(path).unwrap();
@@ -1927,8 +1929,9 @@ mod tests {
         let decryption_properties = Some(
             ciphers::FileDecryptionProperties::builder()
                 .with_footer_key(footer_key.to_vec())
-                .with_column_key("kc1".as_bytes().to_vec(), column_1_key.to_vec())
-                .with_column_key("kc2".as_bytes().to_vec(), column_2_key.to_vec())
+                .with_column_key("float_field".as_bytes().to_vec(), column_1_key.to_vec())
+                .with_column_key("double_field".as_bytes().to_vec(), column_2_key.to_vec())
+                .with_aad_prefix("tester".as_bytes().to_vec())
                 .build(),
         );
 

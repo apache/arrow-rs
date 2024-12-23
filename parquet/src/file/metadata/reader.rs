@@ -765,8 +765,7 @@ impl ParquetMetaDataReader {
         let mut row_groups = Vec::new();
         // TODO: row group filtering
         for rg in t_file_metadata.row_groups {
-            // rg.
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
+            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg, #[cfg(feature = "encryption")] decryptor.as_ref())?);
         }
         let column_orders =
             Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
