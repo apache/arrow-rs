@@ -677,7 +677,11 @@ where
     pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
         loop {
             match &mut self.state {
-                StreamState::Decoding(_) | StreamState::Reading(_) => unreachable!(),
+                StreamState::Decoding(_) | StreamState::Reading(_) => {
+                    return Err(ParquetError::General(
+                        "Cannot combine the use of next_row_group with the Stream API".to_string(),
+                    ))
+                }
                 StreamState::Init => {
                     let row_group_idx = match self.row_groups.pop_front() {
                         Some(idx) => idx,
