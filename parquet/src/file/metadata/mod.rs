@@ -97,12 +97,9 @@ mod writer;
 
 use std::ops::Range;
 use std::sync::Arc;
-
-use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SizeStatistics, SortingColumn,
-};
-
+use zstd::zstd_safe::WriteBuf;
+use crate::format::{BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup, SizeStatistics, SortingColumn};
+use crate::encryption::ciphers::{create_footer_aad, create_page_aad, ModuleType};
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptor;
@@ -119,6 +116,9 @@ use crate::schema::types::{
 pub use reader::ParquetMetaDataReader;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
+use crate::data_type::AsBytes;
+use crate::encryption::ciphers::{BlockDecryptor, DecryptionPropertiesBuilder, FileDecryptionProperties};
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 /// Page level statistics for each column chunk of each row group.
 ///
@@ -624,7 +624,7 @@ impl RowGroupMetaData {
     }
 
     /// Method to convert from Thrift.
-    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup, #[cfg(feature = "encryption")] decryptor: Option<&FileDecryptor>) -> Result<RowGroupMetaData> {
         if schema_descr.num_columns() != rg.columns.len() {
             return Err(general_err!(
                 "Column count mismatch. Schema has {} columns while Row Group has {}",
@@ -635,8 +635,45 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
-        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+        for (i, (c, d)) in rg.columns.drain(0..).zip(schema_descr.columns()).enumerate() {
+            let cc;
+            #[cfg(feature = "encryption")]
+            if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) = c.crypto_metadata.clone() {
+                if decryptor.is_none() {
+                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                } else {
+                    let column_name = crypto_metadata.path_in_schema.join(".");
+                    let column_decryptor = decryptor.unwrap().get_column_decryptor(column_name.as_bytes());
+                    let aad_file_unique = decryptor.unwrap().aad_file_unique();
+                    let aad_prefix = decryptor.unwrap().decryption_properties().aad_prefix().unwrap();
+                    let aad = [aad_prefix.clone(), aad_file_unique.clone()].concat();
+                    // let s = aad.as_slice();
+                    let column_aad = create_page_aad(
+                        aad.as_slice(),
+                        ModuleType::ColumnMetaData,
+                        rg.ordinal.unwrap() as usize,
+                        i as usize,
+                        None,
+                    )?;
+
+                    let mut buf = c.encrypted_column_metadata.unwrap();
+                    // let mut prot = TCompactSliceInputProtocol::new(buf.as_slice().clone());
+                    // let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
+                    // decrypted_fmd_buf =
+                    //     footer_decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
+                    let mut c2 = column_decryptor.decrypt(buf.as_ref(), column_aad.as_ref())?;
+                    let mut prot = TCompactSliceInputProtocol::new(c2.as_slice());
+                    let c3 = ColumnChunk::read_from_in_protocol(&mut prot)?;
+                    // let md = ColumnMetaData::from_thrift(c2, d.clone())?;
+                    // c2.meta_data = Some(md);
+                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c3)?;
+                    // } else if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(x)) = c.crypto_metadata {
+                    //     todo!()
+                }
+            } else {
+                cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+            }
+
             columns.push(cc);
         }
         let sorting_columns = rg.sorting_columns;
@@ -1629,7 +1666,7 @@ mod tests {
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
+        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone(),  #[cfg(feature = "encryption")] None)
             .unwrap()
             .to_thrift();
 
@@ -1711,7 +1748,7 @@ mod tests {
             .unwrap();
 
         let err =
-            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
+            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift(),  #[cfg(feature = "encryption")] None)
                 .unwrap_err()
                 .to_string();
         assert_eq!(
