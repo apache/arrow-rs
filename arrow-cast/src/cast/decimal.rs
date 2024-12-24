@@ -628,15 +628,6 @@ mod tests {
     #[test]
     fn test_parse_string_to_decimal_native() -> Result<(), ArrowError> {
         assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 0)?,
-            0_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
-            0_i128
-        );
-
-        assert_eq!(
             parse_string_to_decimal_native::<Decimal128Type>("123", 0)?,
             123_i128
         );

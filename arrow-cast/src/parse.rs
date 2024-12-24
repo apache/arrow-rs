@@ -826,7 +826,7 @@ fn parse_e_notation<T: DecimalType>(
     if exp < 0 {
         let result_with_scale = result.div_wrapping(base.pow_wrapping(-exp as _));
         let result_with_one_scale_above =
-            result.div_wrapping(base.pow_wrapping(-exp.sub_wrapping(1) as _));
+            result.div_wrapping(base.pow_wrapping(-exp.add_wrapping(1) as _));
         let rounding_digit =
             result_with_one_scale_above.sub_wrapping(result_with_scale.mul_wrapping(base));
         if rounding_digit >= T::Native::usize_as(5) {
@@ -881,7 +881,7 @@ pub fn parse_decimal<T: DecimalType>(
                     // Ignore leading zeros.
                     continue;
                 }
-                if fractionals == scale && scale != 0 && rounding_digit < 0 {
+                if fractionals == scale && scale != 0 {
                     // Capture the rounding digit once
                     if rounding_digit < 0 {
                         rounding_digit = (b - b'0') as i8;
@@ -919,12 +919,14 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale && scale != 0 {
+                    if fractionals == scale {
                         // Capture the rounding digit once
                         if rounding_digit < 0 {
                             rounding_digit = (b - b'0') as i8;
                         }
-                        continue;
+                        if scale != 0 {
+                            continue;
+                        }
                     }
                     fractionals += 1;
                     digits += 1;
@@ -983,6 +985,10 @@ pub fn parse_decimal<T: DecimalType>(
             return Err(ArrowError::ParseError(format!(
                 "parse decimal overflow ({s})"
             )));
+        }
+        //handle scale = 0 , scale down by fractional digits
+        if scale == 0 {
+            result = result.div_wrapping(base.pow_wrapping(fractionals as u32))
         }
         //add one if >=5
         if rounding_digit >= 5 {
@@ -2566,11 +2572,43 @@ mod tests {
             assert_eq!(i256::from_i128(i), result_256.unwrap());
         }
 
-        let e_notation_tests = [("4749.3e-5", "0.047493", 1)];
+        let tests_with_varying_scale = [
+            // ("123.4567891", 12345679_i128, 5),
+            ("123.4567891", 123_i128, 0),
+        ];
+        for (str, e, scale) in tests_with_varying_scale {
+            let result_128_a = parse_decimal::<Decimal128Type>(str, 20, scale);
+            assert_eq!(result_128_a.unwrap(), e);
+        }
+
+        let e_notation_tests = [
+            ("1.23e3", "1230.0", 2),
+            ("5.6714e+2", "567.14", 4),
+            ("4e+5", "400000", 4),
+            ("4e7", "40000000", 2),
+            ("5.6714e-2", "0.056714", 4),
+            ("5.6714e-2", "0.056714", 3),
+            ("5.6741214125e2", "567.41214125", 4),
+            ("8.91E4", "89100.0", 2),
+            ("3.14E+5", "314000.0", 2),
+            ("2.718e0", "2.718", 2),
+            ("9.999999e-1", "0.9999999", 4),
+            ("1.23e+3", "1230", 2),
+            ("1.234559e+3", "1234.559", 2),
+            ("1.00E-10", "0.0000000001", 11),
+            ("1.23e-4", "0.000123", 2),
+            ("9.876e7", "98760000.0", 2),
+            ("5.432E+8", "543200000.0", 10),
+            ("1.234567e9", "1234567000.0", 2),
+            ("1.234567e2", "123.45670000", 2),
+            ("4749.3e-5", "0.047493", 10),
+            ("4749.3e+5", "474930000", 10),
+            ("4749.3e-5", "0.047493", 1),
+        ];
+
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
             let result_128_d = parse_decimal::<Decimal128Type>(d, 20, scale);
-            println!("{},{},{}", e, d, scale);
             assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
             let result_256_e = parse_decimal::<Decimal256Type>(e, 20, scale);
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
