@@ -19,7 +19,9 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{downcast_primitive_array, Array, ArrowNativeTypeOp, GenericByteArray};
+use arrow_array::{
+    downcast_primitive_array, Array, ArrowNativeTypeOp, BooleanArray, GenericByteArray,
+};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::cmp::Ordering;
@@ -29,7 +31,11 @@ pub(crate) fn can_rank(data_type: &DataType) -> bool {
     data_type.is_primitive()
         || matches!(
             data_type,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+            DataType::Boolean
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
         )
 }
 
@@ -49,6 +55,7 @@ pub fn rank(array: &dyn Array, options: Option<SortOptions>) -> Result<Vec<u32>,
     let options = options.unwrap_or_default();
     let ranks = downcast_primitive_array! {
         array => primitive_rank(array.values(), array.nulls(), options),
+        DataType::Boolean => boolean_rank(array.as_boolean(), options),
         DataType::Utf8 => bytes_rank(array.as_bytes::<Utf8Type>(), options),
         DataType::LargeUtf8 => bytes_rank(array.as_bytes::<LargeUtf8Type>(), options),
         DataType::Binary => bytes_rank(array.as_bytes::<BinaryType>(), options),
@@ -73,6 +80,26 @@ fn primitive_rank<T: ArrowNativeTypeOp>(
         None => values.iter().copied().zip(0..len).collect(),
     };
     rank_impl(values.len(), to_sort, options, T::compare, T::is_eq)
+}
+
+#[inline(never)]
+fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
+    let len: u32 = array.len().try_into().unwrap();
+
+    let to_sort: Vec<(bool, u32)> = match array.nulls().filter(|n| n.null_count() > 0) {
+        Some(n) => n
+            .valid_indices()
+            .map(|idx| (array.value(idx), idx as u32))
+            .collect(),
+        None => array.values().iter().zip(0..len).collect(),
+    };
+    rank_impl(
+        array.len(),
+        to_sort,
+        options,
+        |a: bool, b: bool| a.cmp(&b),
+        |a: bool, b: bool| a == b,
+    )
 }
 
 #[inline(never)]
@@ -175,6 +202,43 @@ mod tests {
         let a = Int32Array::new(vec![1, 4, 3, 4, 5, 5].into(), Some(nulls));
         let res = rank(&a, None).unwrap();
         assert_eq!(res, &[4, 6, 3, 6, 3, 3]);
+    }
+
+    #[test]
+    fn test_booleans() {
+        let descending = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        let nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let nulls_last_descending = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let a = BooleanArray::from(vec![Some(true), Some(true), None, Some(false), Some(false)]);
+        let res = rank(&a, None).unwrap();
+        assert_eq!(res, &[5, 5, 1, 3, 3]);
+
+        let res = rank(&a, Some(descending)).unwrap();
+        assert_eq!(res, &[3, 3, 1, 5, 5]);
+
+        let res = rank(&a, Some(nulls_last)).unwrap();
+        assert_eq!(res, &[4, 4, 5, 2, 2]);
+
+        let res = rank(&a, Some(nulls_last_descending)).unwrap();
+        assert_eq!(res, &[2, 2, 5, 4, 4]);
+
+        // Test with non-zero null values
+        let nulls = NullBuffer::from(vec![true, true, false, true, true]);
+        let a = BooleanArray::new(vec![true, true, true, false, false].into(), Some(nulls));
+        let res = rank(&a, None).unwrap();
+        assert_eq!(res, &[5, 5, 1, 3, 3]);
     }
 
     #[test]
