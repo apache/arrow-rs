@@ -877,49 +877,46 @@ mod tests {
             arrays
         }
 
+        pub fn primitive_generic_list_array<OffsetSize, T>(
+            data: &[Option<Vec<Option<T::Native>>>],
+        ) -> ArrayRef
+        where
+            OffsetSize: OffsetSizeTrait,
+            T: ArrowPrimitiveType,
+            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+        {
+            Arc::new(GenericListArray::<OffsetSize>::from_iter_primitive::<T, _, _>(data.to_vec()))
+        }
+
+        pub fn primitive_fixed_list_array<T>(
+            data: &[Option<Vec<Option<T::Native>>>],
+            length: i32,
+        ) -> ArrayRef
+        where
+            T: ArrowPrimitiveType,
+            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+        {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                data.to_vec(),
+                length,
+            ))
+        }
+
         pub fn primitive_list_arrays<T>(data: Vec<Option<Vec<Option<T::Native>>>>) -> Vec<ArrayRef>
         where
             T: ArrowPrimitiveType,
             PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
         {
             let mut arrays = vec![
-                Arc::new(GenericListArray::<i32>::from_iter_primitive::<T, _, _>(
-                    data.clone(),
-                )) as ArrayRef,
-                Arc::new(GenericListArray::<i64>::from_iter_primitive::<T, _, _>(
-                    data.clone(),
-                )),
+                primitive_generic_list_array::<i32, T>(&data),
+                primitive_generic_list_array::<i64, T>(&data),
             ];
 
             if let Some(first_length) = get_same_lists_length(&data) {
-                arrays.push(Arc::new(
-                    FixedSizeListArray::from_iter_primitive::<T, _, _>(data, first_length as i32),
-                ));
+                arrays.push(primitive_fixed_list_array::<T>(&data, first_length as i32));
             }
 
             arrays
-        }
-
-        // This function is needed when the input data have items, but the expected data only have None, and it would cause different number of vector to return (the input will return 3 and the expected will return 2)
-        pub fn primitive_list_arrays_with_fixed<const FIXED_SIZE_LIST_ARRAY: i32, T>(
-            data: Vec<Option<Vec<Option<T::Native>>>>,
-        ) -> Vec<ArrayRef>
-        where
-            T: ArrowPrimitiveType,
-            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-        {
-            vec![
-                Arc::new(GenericListArray::<i32>::from_iter_primitive::<T, _, _>(
-                    data.clone(),
-                )) as ArrayRef,
-                Arc::new(GenericListArray::<i64>::from_iter_primitive::<T, _, _>(
-                    data.clone(),
-                )),
-                Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
-                    data,
-                    FIXED_SIZE_LIST_ARRAY,
-                )),
-            ]
         }
     }
 
@@ -956,7 +953,20 @@ mod tests {
         expected_data: Vec<Option<ListItemType>>,
     ) {
         let input = into_lists_fn(data);
-        let expected = into_lists_fn(expected_data);
+        let mut expected = into_lists_fn(expected_data);
+
+        // Filter out mismatched data types
+        // This can happen for getting some type of Fixed array in the expected (due to limit or something), but not in the input
+        if input.len() != expected.len() {
+            let all_input_specific_class = input
+                .iter()
+                .map(|array| array.data_type())
+                .collect::<Vec<_>>();
+            expected = expected
+                .into_iter()
+                .filter(|array| all_input_specific_class.contains(&array.data_type()))
+                .collect::<Vec<_>>()
+        }
 
         assert_eq!(
             input.len(),
@@ -3160,7 +3170,13 @@ mod tests {
 
         // more nulls than limit
         test_sort_arrays(
-            build_arrays_helper::primitive_list_arrays_with_fixed::<1, Int32Type>,
+            |arrays| {
+                vec![
+                    build_arrays_helper::primitive_generic_list_array::<i32, Int32Type>(&arrays),
+                    build_arrays_helper::primitive_generic_list_array::<i64, Int32Type>(&arrays),
+                    build_arrays_helper::primitive_fixed_list_array::<Int32Type>(&arrays, 1),
+                ]
+            },
             vec![Some(vec![Some(1)]), None, None, None],
             Some(SortOptions {
                 descending: false,
