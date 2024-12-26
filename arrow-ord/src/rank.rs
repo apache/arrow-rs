@@ -24,6 +24,15 @@ use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::cmp::Ordering;
 
+/// Whether `arrow_ord::rank` can rank an array of given data type.
+pub(crate) fn can_rank(data_type: &DataType) -> bool {
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
+        )
+}
+
 /// Assigns a rank to each value in `array` based on its position in the sorted order
 ///
 /// Where values are equal, they will be assigned the highest of their ranks,
