@@ -545,11 +545,13 @@ mod upload;
 mod util;
 
 mod attributes;
+mod checksum;
 
 #[cfg(any(feature = "integration", test))]
 pub mod integration;
 
 pub use attributes::*;
+pub use checksum::*;
 
 pub use parse::{parse_url, parse_url_opts, ObjectStoreScheme};
 pub use payload::*;

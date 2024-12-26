@@ -34,10 +34,7 @@ use crate::client::s3::{
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
-    PutMultipartOpts, PutPayload, PutResult, Result, RetryConfig, TagSet,
-};
+use crate::{Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path, PutMultipartOpts, PutPayload, PutResult, Result, RetryConfig, TagSet};
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -58,9 +55,11 @@ use ring::digest::Context;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
+use crate::checksum::ChecksumAlgorithm;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
+const CHECKSUM_MD5_HEADER: &str = "Content-MD5";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 const ALGORITHM: &str = "x-amz-checksum-algorithm";
 
@@ -360,6 +359,11 @@ impl<'a> Request<'a> {
         for (k, v) in &attributes {
             builder = match k {
                 Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::Checksum(algorithm) => {
+                    match algorithm {
+                        ChecksumAlgorithm::MD5 => builder.header(CHECKSUM_MD5_HEADER, v.as_ref()),
+                    }
+                }
                 Attribute::ContentDisposition => builder.header(CONTENT_DISPOSITION, v.as_ref()),
                 Attribute::ContentEncoding => builder.header(CONTENT_ENCODING, v.as_ref()),
                 Attribute::ContentLanguage => builder.header(CONTENT_LANGUAGE, v.as_ref()),

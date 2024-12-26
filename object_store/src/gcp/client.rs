@@ -46,10 +46,12 @@ use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::sync::Arc;
+use crate::checksum::ChecksumAlgorithm;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-goog-meta-";
+const CHECKSUM_MD5_HEADER: &str = "Content-MD5";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -196,6 +198,9 @@ impl<'a> Request<'a> {
         for (k, v) in &attributes {
             builder = match k {
                 Attribute::CacheControl => builder.header(CACHE_CONTROL, v.as_ref()),
+                Attribute::Checksum(algorithm) => match algorithm{
+                    ChecksumAlgorithm::MD5 => builder.header(CHECKSUM_MD5_HEADER, v.as_ref()),
+                }
                 Attribute::ContentDisposition => builder.header(CONTENT_DISPOSITION, v.as_ref()),
                 Attribute::ContentEncoding => builder.header(CONTENT_ENCODING, v.as_ref()),
                 Attribute::ContentLanguage => builder.header(CONTENT_LANGUAGE, v.as_ref()),
