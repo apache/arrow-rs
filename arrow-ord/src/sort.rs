@@ -899,6 +899,28 @@ mod tests {
 
             arrays
         }
+
+        // This function is needed when the input data have items, but the expected data only have None, and it would cause different number of vector to return (the input will return 3 and the expected will return 2)
+        pub fn primitive_list_arrays_with_fixed<const FIXED_SIZE_LIST_ARRAY: i32, T>(
+            data: Vec<Option<Vec<Option<T::Native>>>>,
+        ) -> Vec<ArrayRef>
+        where
+            T: ArrowPrimitiveType,
+            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+        {
+            vec![
+                Arc::new(GenericListArray::<i32>::from_iter_primitive::<T, _, _>(
+                    data.clone(),
+                )) as ArrayRef,
+                Arc::new(GenericListArray::<i64>::from_iter_primitive::<T, _, _>(
+                    data.clone(),
+                )),
+                Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                    data,
+                    FIXED_SIZE_LIST_ARRAY,
+                )),
+            ]
+        }
     }
 
     /// Return Some(length) if all lists have the same length, None otherwise
@@ -3138,7 +3160,7 @@ mod tests {
 
         // more nulls than limit
         test_sort_arrays(
-            build_arrays_helper::primitive_list_arrays::<Int32Type>,
+            build_arrays_helper::primitive_list_arrays_with_fixed::<1, Int32Type>,
             vec![Some(vec![Some(1)]), None, None, None],
             Some(SortOptions {
                 descending: false,
