@@ -24,6 +24,8 @@
 //!
 //! They are intended solely for testing purposes.
 
+use core::str;
+
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
@@ -1108,4 +1110,89 @@ async fn delete_fixtures(storage: &DynObjectStore) {
         .try_collect::<Vec<_>>()
         .await
         .unwrap();
+}
+
+/// Tests a race condition where 2 threads are performing multipart writes to the same path
+pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_wins: bool) {
+    let path = Path::from("test_multipart_race_condition");
+
+    let mut multipart_upload_1 = storage.put_multipart(&path).await.unwrap();
+    let mut multipart_upload_2 = storage.put_multipart(&path).await.unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 0)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 0)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 1)).into())
+        .await
+        .unwrap();
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 1)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 2)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 2)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 3)).into())
+        .await
+        .unwrap();
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 3)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 4)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 4)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1.complete().await.unwrap();
+
+    if last_writer_wins {
+        multipart_upload_2.complete().await.unwrap();
+    } else {
+        let err = multipart_upload_2.complete().await.unwrap_err();
+
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+    }
+
+    let get_result = storage.get(&path).await.unwrap();
+    let bytes = get_result.bytes().await.unwrap();
+    let string_contents = str::from_utf8(&bytes).unwrap();
+
+    if last_writer_wins {
+        assert!(string_contents.starts_with(
+            format!(
+                "2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},",
+                0, 1, 2, 3, 4
+            )
+            .as_str()
+        ));
+    } else {
+        assert!(string_contents.starts_with(
+            format!(
+                "1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},",
+                0, 1, 2, 3, 4
+            )
+            .as_str()
+        ));
+    }
 }

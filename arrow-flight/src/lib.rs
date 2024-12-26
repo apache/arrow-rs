@@ -38,6 +38,8 @@
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
@@ -141,6 +143,7 @@ pub struct IpcMessage(pub Bytes);
 
 fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
+    #[allow(deprecated)]
     let mut dict_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
     data_gen.schema_to_bytes_with_dictionary_tracker(arrow_schema, &mut dict_tracker, options)

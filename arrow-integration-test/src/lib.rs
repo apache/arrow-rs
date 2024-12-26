@@ -787,6 +787,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
+            #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
             })?;
@@ -930,10 +931,12 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
+            #[allow(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
+                #[allow(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary fields must have a dict_id value"),

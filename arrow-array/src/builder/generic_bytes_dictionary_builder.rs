@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray};
+use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray, TypedDictionaryArray};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
@@ -305,6 +305,63 @@ where
         };
     }
 
+    /// Extends builder with an existing dictionary array.
+    ///
+    /// This is the same as [`Self::extend`] but is faster as it translates
+    /// the dictionary values once rather than doing a lookup for each item in the iterator
+    ///
+    /// when dictionary values are null (the actual mapped values) the keys are null
+    ///
+    pub fn extend_dictionary(
+        &mut self,
+        dictionary: &TypedDictionaryArray<K, GenericByteArray<T>>,
+    ) -> Result<(), ArrowError> {
+        let values = dictionary.values();
+
+        let v_len = values.len();
+        let k_len = dictionary.keys().len();
+        if v_len == 0 && k_len == 0 {
+            return Ok(());
+        }
+
+        // All nulls
+        if v_len == 0 {
+            self.append_nulls(k_len);
+            return Ok(());
+        }
+
+        if k_len == 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "Dictionary keys should not be empty when values are not empty".to_string(),
+            ));
+        }
+
+        // Orphan values will be carried over to the new dictionary
+        let mapped_values = values
+            .iter()
+            // Dictionary values can technically be null, so we need to handle that
+            .map(|dict_value| {
+                dict_value
+                    .map(|dict_value| self.get_or_insert_key(dict_value))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Just insert the keys without additional lookups
+        dictionary.keys().iter().for_each(|key| match key {
+            None => self.append_null(),
+            Some(original_dict_index) => {
+                let index = original_dict_index.as_usize().min(v_len - 1);
+                match mapped_values[index] {
+                    None => self.append_null(),
+                    Some(mapped_value) => self.keys_builder.append_value(mapped_value),
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.dedup.clear();
@@ -445,8 +502,9 @@ mod tests {
     use super::*;
 
     use crate::array::Int8Array;
+    use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
-    use crate::{BinaryArray, StringArray};
+    use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
@@ -663,5 +721,130 @@ mod tests {
         let dict = builder.finish();
         assert_eq!(dict.keys().values(), &[0, 1, 2, 0, 1, 2, 2, 3, 0]);
         assert_eq!(dict.values().len(), 4);
+    }
+
+    #[test]
+    fn test_extend_dictionary() {
+        let some_dict = {
+            let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+            builder.extend(["a", "b", "c", "a", "b", "c"].into_iter().map(Some));
+            builder.extend([None::<&str>]);
+            builder.extend(["c", "d", "a"].into_iter().map(Some));
+            builder.append_null();
+            builder.finish()
+        };
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.extend(["e", "e", "f", "e", "d"].into_iter().map(Some));
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 6);
+
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            [
+                Some("e"),
+                Some("e"),
+                Some("f"),
+                Some("e"),
+                Some("d"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                None,
+                Some("c"),
+                Some("d"),
+                Some("a"),
+                None
+            ]
+        );
+    }
+    #[test]
+    fn test_extend_dictionary_with_null_in_mapped_value() {
+        let some_dict = {
+            let mut values_builder = GenericByteBuilder::<Utf8Type>::new();
+            let mut keys_builder = PrimitiveBuilder::<Int32Type>::new();
+
+            // Manually build a dictionary values that the mapped values have null
+            values_builder.append_null();
+            keys_builder.append_value(0);
+            values_builder.append_value("I like worm hugs");
+            keys_builder.append_value(1);
+
+            let values = values_builder.finish();
+            let keys = keys_builder.finish();
+
+            let data_type = DataType::Dictionary(
+                Box::new(Int32Type::DATA_TYPE),
+                Box::new(Utf8Type::DATA_TYPE),
+            );
+
+            let builder = keys
+                .into_data()
+                .into_builder()
+                .data_type(data_type)
+                .child_data(vec![values.into_data()]);
+
+            DictionaryArray::from(unsafe { builder.build_unchecked() })
+        };
+
+        let some_dict_values = some_dict.values().as_string::<i32>();
+        assert_eq!(
+            some_dict_values.into_iter().collect::<Vec<_>>(),
+            &[None, Some("I like worm hugs")]
+        );
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 1);
+
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [None, Some("I like worm hugs")]);
+    }
+
+    #[test]
+    fn test_extend_all_null_dictionary() {
+        let some_dict = {
+            let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+            builder.append_nulls(2);
+            builder.finish()
+        };
+
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 0);
+
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [None, None]);
     }
 }

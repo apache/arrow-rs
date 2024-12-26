@@ -324,6 +324,7 @@ mod tests {
             "test1",
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
+                #[allow(deprecated)]
                 Arc::new(Field::new_dict(
                     "values".to_string(),
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -353,6 +354,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
+                #[allow(deprecated)]
                 IpcWriteOptions::default().with_preserve_dict_id(false),
             )
             .expect("Failed to create StreamWriter");

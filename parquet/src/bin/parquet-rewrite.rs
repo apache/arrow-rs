@@ -242,6 +242,7 @@ fn main() {
     if let Some(value) = args.dictionary_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
     }
+    #[allow(deprecated)]
     if let Some(value) = args.max_statistics_size {
         writer_properties_builder = writer_properties_builder.set_max_statistics_size(value);
     }

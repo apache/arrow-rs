@@ -570,6 +570,7 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+        multipart_race_condition(&integration, true).await;
         signing(&integration).await;
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;

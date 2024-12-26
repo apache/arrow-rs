@@ -68,7 +68,8 @@ impl GetCatalogsBuilder {
     /// builds a `RecordBatch` with the correct schema for a
     /// [`CommandGetCatalogs`] response
     pub fn build(self) -> Result<RecordBatch> {
-        let Self { catalogs } = self;
+        let Self { mut catalogs } = self;
+        catalogs.sort_unstable();
 
         let batch = RecordBatch::try_new(
             Arc::clone(&GET_CATALOG_SCHEMA),
@@ -98,3 +99,30 @@ static GET_CATALOG_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
         false,
     )]))
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_catalogs_are_sorted() {
+        let batch = ["a_catalog", "c_catalog", "b_catalog"]
+            .into_iter()
+            .fold(GetCatalogsBuilder::new(), |mut builder, catalog| {
+                builder.append(catalog);
+                builder
+            })
+            .build()
+            .unwrap();
+        let catalogs = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(catalogs.is_sorted());
+        assert_eq!(catalogs, ["a_catalog", "b_catalog", "c_catalog"]);
+    }
+}

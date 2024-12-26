@@ -24,7 +24,10 @@
 
 This file documents the release process for the `object_store` crate.
 
-At the time of writing, we release a new version of `object_store` on demand rather than on a regular schedule.
+We release a new version of `object_store` according to the schedule listed in 
+the [main README.md]
+
+[main README.md]: https://github.com/apache/arrow-rs?tab=readme-ov-file#object_store-crate
 
 As we are still in an early phase, we use the 0.x version scheme. If any code has 
 been merged to main that has a breaking API change, as defined in [Rust RFC 1105]

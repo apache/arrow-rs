@@ -17,7 +17,9 @@
 
 use crate::builder::{ArrayBuilder, PrimitiveBuilder};
 use crate::types::ArrowDictionaryKeyType;
-use crate::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
+use crate::{
+    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, PrimitiveArray, TypedDictionaryArray,
+};
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -44,7 +46,7 @@ impl<T: ToByteSlice> PartialEq for Value<T> {
 
 impl<T: ToByteSlice> Eq for Value<T> {}
 
-/// Builder for [`DictionaryArray`] of [`PrimitiveArray`](crate::array::PrimitiveArray)
+/// Builder for [`DictionaryArray`] of [`PrimitiveArray`]
 ///
 /// # Example:
 ///
@@ -303,6 +305,63 @@ where
         };
     }
 
+    /// Extends builder with dictionary
+    ///
+    /// This is the same as [`Self::extend`] but is faster as it translates
+    /// the dictionary values once rather than doing a lookup for each item in the iterator
+    ///
+    /// when dictionary values are null (the actual mapped values) the keys are null
+    ///
+    pub fn extend_dictionary(
+        &mut self,
+        dictionary: &TypedDictionaryArray<K, PrimitiveArray<V>>,
+    ) -> Result<(), ArrowError> {
+        let values = dictionary.values();
+
+        let v_len = values.len();
+        let k_len = dictionary.keys().len();
+        if v_len == 0 && k_len == 0 {
+            return Ok(());
+        }
+
+        // All nulls
+        if v_len == 0 {
+            self.append_nulls(k_len);
+            return Ok(());
+        }
+
+        if k_len == 0 {
+            return Err(ArrowError::InvalidArgumentError(
+                "Dictionary keys should not be empty when values are not empty".to_string(),
+            ));
+        }
+
+        // Orphan values will be carried over to the new dictionary
+        let mapped_values = values
+            .iter()
+            // Dictionary values can technically be null, so we need to handle that
+            .map(|dict_value| {
+                dict_value
+                    .map(|dict_value| self.get_or_insert_key(dict_value))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Just insert the keys without additional lookups
+        dictionary.keys().iter().for_each(|key| match key {
+            None => self.append_null(),
+            Some(original_dict_index) => {
+                let index = original_dict_index.as_usize().min(v_len - 1);
+                match mapped_values[index] {
+                    None => self.append_null(),
+                    Some(mapped_value) => self.keys_builder.append_value(mapped_value),
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.map.clear();
@@ -368,9 +427,9 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::UInt32Array;
-    use crate::array::UInt8Array;
+    use crate::array::{Int32Array, UInt32Array, UInt8Array};
     use crate::builder::Decimal128Builder;
+    use crate::cast::AsArray;
     use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
 
     #[test]
@@ -442,5 +501,136 @@ mod tests {
                 Box::new(DataType::Decimal128(1, 2)),
             )
         );
+    }
+
+    #[test]
+    fn test_extend_dictionary() {
+        let some_dict = {
+            let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+            builder.extend([1, 2, 3, 1, 2, 3, 1, 2, 3].into_iter().map(Some));
+            builder.extend([None::<i32>]);
+            builder.extend([4, 5, 1, 3, 1].into_iter().map(Some));
+            builder.append_null();
+            builder.finish()
+        };
+
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([6, 6, 7, 6, 5].into_iter().map(Some));
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 7);
+
+        let values = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            [
+                Some(6),
+                Some(6),
+                Some(7),
+                Some(6),
+                Some(5),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(4),
+                Some(5),
+                Some(1),
+                Some(3),
+                Some(1),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_extend_dictionary_with_null_in_mapped_value() {
+        let some_dict = {
+            let mut values_builder = PrimitiveBuilder::<Int32Type>::new();
+            let mut keys_builder = PrimitiveBuilder::<Int32Type>::new();
+
+            // Manually build a dictionary values that the mapped values have null
+            values_builder.append_null();
+            keys_builder.append_value(0);
+            values_builder.append_value(42);
+            keys_builder.append_value(1);
+
+            let values = values_builder.finish();
+            let keys = keys_builder.finish();
+
+            let data_type = DataType::Dictionary(
+                Box::new(Int32Type::DATA_TYPE),
+                Box::new(values.data_type().clone()),
+            );
+
+            let builder = keys
+                .into_data()
+                .into_builder()
+                .data_type(data_type)
+                .child_data(vec![values.into_data()]);
+
+            DictionaryArray::from(unsafe { builder.build_unchecked() })
+        };
+
+        let some_dict_values = some_dict.values().as_primitive::<Int32Type>();
+        assert_eq!(
+            some_dict_values.into_iter().collect::<Vec<_>>(),
+            &[None, Some(42)]
+        );
+
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 1);
+
+        let values = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [None, Some(42)]);
+    }
+
+    #[test]
+    fn test_extend_all_null_dictionary() {
+        let some_dict = {
+            let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+            builder.append_nulls(2);
+            builder.finish()
+        };
+
+        let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        builder
+            .extend_dictionary(&some_dict.downcast_dict().unwrap())
+            .unwrap();
+        let dict = builder.finish();
+
+        assert_eq!(dict.values().len(), 0);
+
+        let values = dict
+            .downcast_dict::<Int32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, [None, None]);
     }
 }

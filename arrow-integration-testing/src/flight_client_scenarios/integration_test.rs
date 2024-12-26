@@ -72,6 +72,7 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
+    #[allow(deprecated)]
     let mut dict_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
     let data_gen = writer::IpcDataGenerator::default();
