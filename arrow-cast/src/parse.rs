@@ -2573,8 +2573,9 @@ mod tests {
         }
 
         let tests_with_varying_scale = [
-            // ("123.4567891", 12345679_i128, 5),
+            ("123.4567891", 12345679_i128, 5),
             ("123.4567891", 123_i128, 0),
+            ("123.45", 12345000_i128, 5),
         ];
         for (str, e, scale) in tests_with_varying_scale {
             let result_128_a = parse_decimal::<Decimal128Type>(str, 20, scale);
@@ -2614,6 +2615,27 @@ mod tests {
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
             assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
         }
+
+        let test_decimal_format_check = [
+            ("123.45", "123.45", 2),
+            ("12345", "12345", 2),
+            ("0.12345", "0.12", 2),
+            (".12345", "0.12", 2),
+            ("123.45", "123.450", 3),
+            ("12345", "12345.000", 3),
+            ("0.12345", "0.123", 3),
+            (".1265", ".127", 3),
+        ];
+
+        for (e, d, scale) in test_decimal_format_check {
+            let result_128_e = parse_decimal::<Decimal128Type>(e, 38, scale);
+            let result_128_d = parse_decimal::<Decimal128Type>(d, 38, scale);
+            assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
+            let result_256_e = parse_decimal::<Decimal256Type>(e, 38, scale);
+            let result_256_d = parse_decimal::<Decimal256Type>(d, 38, scale);
+            assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
+        }
+
         let can_not_parse_tests = [
             "123,123",
             ".",
