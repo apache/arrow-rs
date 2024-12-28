@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Non-nullable field of ListViewArray \\\"item\\\" cannot contain nulls"
+        expected = r#"Non-nullable field of ListViewArray \"item\" cannot contain nulls"#
     )]
     // If a non-nullable type is declared but a null value is used, it will be intercepted by the null check.
     fn test_checks_nullability() {
