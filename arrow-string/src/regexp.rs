@@ -717,40 +717,64 @@ mod tests {
 
     test_match_scalar_pattern!(
         match_scalar_pattern_string_with_flags,
-        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        vec![
+            Some("abc-005-def"),
+            Some("x-7-5"),
+            Some("X-0-Y"),
+            Some("X545"),
+            None
+        ],
         r"x.*-(\d*)-.*",
         Some("i"),
         StringArray,
         GenericStringBuilder<i32>,
-        [None, Some("7"), None, None]
+        [None, Some("7"), Some("0"), None, None]
     );
     test_match_scalar_pattern!(
         match_scalar_pattern_stringview_with_flags,
-        vec![Some("abc-005-def"), Some("X-7-5"), Some("X545"), None],
+        vec![
+            Some("abc-005-def"),
+            Some("x-7-5"),
+            Some("X-0-Y"),
+            Some("X545"),
+            None
+        ],
         r"x.*-(\d*)-.*",
         Some("i"),
         StringViewArray,
         StringViewBuilder,
-        [None, Some("7"), None, None]
+        [None, Some("7"), Some("0"), None, None]
     );
 
     test_match_scalar_pattern!(
         match_scalar_pattern_string_no_flags,
-        vec![Some("abc-005-def"), Some("x-7-5"), Some("X545"), None],
+        vec![
+            Some("abc-005-def"),
+            Some("x-7-5"),
+            Some("X-0-Y"),
+            Some("X545"),
+            None
+        ],
         r"x.*-(\d*)-.*",
         None::<&str>,
         StringArray,
         GenericStringBuilder<i32>,
-        [None, Some("7"), None, None]
+        [None, Some("7"), None, None, None]
     );
     test_match_scalar_pattern!(
         match_scalar_pattern_stringview_no_flags,
-        vec![Some("abc-005-def"), Some("x-7-5"), Some("X545"), None],
+        vec![
+            Some("abc-005-def"),
+            Some("x-7-5"),
+            Some("X-0-Y"),
+            Some("X545"),
+            None
+        ],
         r"x.*-(\d*)-.*",
         None::<&str>,
         StringViewArray,
         StringViewBuilder,
-        [None, Some("7"), None, None]
+        [None, Some("7"), None, None, None]
     );
 
     macro_rules! test_match_scalar_no_pattern {
