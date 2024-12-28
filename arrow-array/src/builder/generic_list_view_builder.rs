@@ -495,11 +495,10 @@ mod tests {
         test_boxed_generic_list_view_generic_list_view_array_builder::<i64>(values_builder);
     }
 
-    fn test_boxed_generic_list_view_generic_list_view_array_builder<
-        O: OffsetSizeTrait + PartialEq,
-    >(
+    fn test_boxed_generic_list_view_generic_list_view_array_builder<O>(
         values_builder: Box<dyn ArrayBuilder>,
-    ) {
+    ) where O: OffsetSizeTrait + PartialEq
+    {
         let mut builder: GenericListViewBuilder<O, Box<dyn ArrayBuilder>> =
             GenericListViewBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
 
