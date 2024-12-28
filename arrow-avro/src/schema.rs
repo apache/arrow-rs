@@ -123,7 +123,7 @@ pub enum ComplexType<'a> {
 pub struct Record<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
@@ -144,7 +144,7 @@ pub struct Field<'a> {
     pub doc: Option<&'a str>,
     #[serde(borrow)]
     pub r#type: Schema<'a>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub default: Option<&'a str>,
 }
 
@@ -155,7 +155,7 @@ pub struct Field<'a> {
 pub struct Enum<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
@@ -163,7 +163,7 @@ pub struct Enum<'a> {
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub symbols: Vec<&'a str>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub default: Option<&'a str>,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
@@ -198,7 +198,7 @@ pub struct Map<'a> {
 pub struct Fixed<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
@@ -237,7 +237,7 @@ mod tests {
                    "logicalType":"timestamp-micros"
                 }"#,
         )
-        .unwrap();
+            .unwrap();
 
         let timestamp = Type {
             r#type: TypeName::Primitive(PrimitiveType::Long),
@@ -260,7 +260,7 @@ mod tests {
                    "scale":2
                 }"#,
         )
-        .unwrap();
+            .unwrap();
 
         let decimal = ComplexType::Fixed(Fixed {
             name: "fixed",
@@ -300,7 +300,7 @@ mod tests {
                ]
             }"#,
         )
-        .unwrap();
+            .unwrap();
 
         assert_eq!(
             schema,
@@ -333,7 +333,7 @@ mod tests {
                   ]
                 }"#,
         )
-        .unwrap();
+            .unwrap();
 
         assert_eq!(
             schema,
@@ -392,7 +392,7 @@ mod tests {
                ]
             }"#,
         )
-        .unwrap();
+            .unwrap();
 
         assert_eq!(
             schema,
@@ -453,7 +453,7 @@ mod tests {
                   ]
             }"#,
         )
-        .unwrap();
+            .unwrap();
 
         assert_eq!(
             schema,

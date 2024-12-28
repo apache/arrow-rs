@@ -29,6 +29,7 @@ mod schema;
 mod compression;
 
 mod codec;
+mod writer;
 
 #[cfg(test)]
 mod test_util {
