@@ -110,6 +110,7 @@ use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::file::FOOTER_SIZE;
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
+mod arrow_reader;
 mod metadata;
 pub use metadata::*;
 

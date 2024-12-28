@@ -110,7 +110,7 @@ where
 /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
-    pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,
+    pub predicates: Vec<Box<dyn ArrowPredicate>>,
 }
 
 impl RowFilter {
