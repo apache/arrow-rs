@@ -252,7 +252,7 @@ mod tests {
     use crate::{Array, Int32Array};
     use arrow_schema::DataType;
 
-    fn _test_generic_list_view_array_builder<O: OffsetSizeTrait>() {
+    fn test_generic_list_view_array_builder_impl<O: OffsetSizeTrait>() {
         let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListViewBuilder::<O, _>::new(values_builder);
 
@@ -287,15 +287,15 @@ mod tests {
 
     #[test]
     fn test_list_view_array_builder() {
-        _test_generic_list_view_array_builder::<i32>()
+        test_generic_list_view_array_builder_impl::<i32>()
     }
 
     #[test]
     fn test_large_list_view_array_builder() {
-        _test_generic_list_view_array_builder::<i64>()
+        test_generic_list_view_array_builder_impl::<i64>()
     }
 
-    fn _test_generic_list_view_array_builder_nulls<O: OffsetSizeTrait>() {
+    fn test_generic_list_view_array_builder_nulls_impl<O: OffsetSizeTrait>() {
         let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListViewBuilder::<O, _>::new(values_builder);
 
@@ -324,12 +324,12 @@ mod tests {
 
     #[test]
     fn test_list_view_array_builder_nulls() {
-        _test_generic_list_view_array_builder_nulls::<i32>()
+        test_generic_list_view_array_builder_nulls_impl::<i32>()
     }
 
     #[test]
     fn test_large_list_view_array_builder_nulls() {
-        _test_generic_list_view_array_builder_nulls::<i64>()
+        test_generic_list_view_array_builder_nulls_impl::<i64>()
     }
 
     #[test]
@@ -497,7 +497,8 @@ mod tests {
 
     fn test_boxed_generic_list_view_generic_list_view_array_builder<O>(
         values_builder: Box<dyn ArrayBuilder>,
-    ) where O: OffsetSizeTrait + PartialEq
+    ) where
+        O: OffsetSizeTrait + PartialEq,
     {
         let mut builder: GenericListViewBuilder<O, Box<dyn ArrayBuilder>> =
             GenericListViewBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
