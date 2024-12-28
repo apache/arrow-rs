@@ -366,6 +366,12 @@ impl RowSelection {
         self
     }
 
+    /// Returns the internal selectors of this [`RowSelection`], testing only
+    #[cfg(test)]
+    pub(crate) fn selectors(&self) -> &[RowSelector] {
+        &self.selectors
+    }
+
     /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
     pub(crate) fn offset(mut self, offset: usize) -> Self {
         if offset == 0 {
