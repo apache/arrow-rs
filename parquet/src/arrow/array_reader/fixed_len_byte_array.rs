@@ -67,7 +67,7 @@ pub fn make_fixed_len_byte_array_reader(
         ArrowType::Decimal32(_, _) => {
             if byte_length > 4 {
                 return Err(general_err!(
-                    "decimal 64 type too large, must be less then 4 bytes, got {}",
+                    "decimal 32 type too large, must be less then 4 bytes, got {}",
                     byte_length
                 ));
             }
@@ -75,7 +75,7 @@ pub fn make_fixed_len_byte_array_reader(
         ArrowType::Decimal64(_, _) => {
             if byte_length > 8 {
                 return Err(general_err!(
-                    "decimal 32 type too large, must be less then 8 bytes, got {}",
+                    "decimal 64 type too large, must be less then 8 bytes, got {}",
                     byte_length
                 ));
             }

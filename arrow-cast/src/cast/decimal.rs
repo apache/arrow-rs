@@ -20,14 +20,80 @@ use crate::cast::*;
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
 pub(crate) trait DecimalCast: Sized {
+    fn to_i32(self) -> Option<i32>;
+
+    fn to_i64(self) -> Option<i64>;
+
     fn to_i128(self) -> Option<i128>;
 
     fn to_i256(self) -> Option<i256>;
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
+
+    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self>;
+}
+
+impl DecimalCast for i32 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self as i64)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i32()
+    }
+
+    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+        n.to_i32()
+    }
+}
+
+impl DecimalCast for i64 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i64()
+    }
+
+    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+        n.to_i64()
+    }
 }
 
 impl DecimalCast for i128 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self as i64)
+    }
+
     fn to_i128(self) -> Option<i128> {
         Some(self)
     }
@@ -39,9 +105,21 @@ impl DecimalCast for i128 {
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
         n.to_i128()
     }
+
+    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+        n.to_i128()
+    }
 }
 
 impl DecimalCast for i256 {
+    fn to_i32(self) -> Option<i32> {
+        self.to_i128().map(|x| x as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        self.to_i128().map(|x| x as i64)
+    }
+
     fn to_i128(self) -> Option<i128> {
         self.to_i128()
     }
@@ -52,6 +130,10 @@ impl DecimalCast for i256 {
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
         n.to_i256()
+    }
+
+    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+        i256::from_f64(n)
     }
 }
 
@@ -464,7 +546,7 @@ where
     Ok(Arc::new(result))
 }
 
-pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
+pub(crate) fn cast_floating_point_to_decimal<T: ArrowPrimitiveType, D, M>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: i8,
@@ -472,77 +554,34 @@ pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
+    D: DecimalType + ArrowPrimitiveType<Native = M>,
+    M: ArrowNativeTypeOp + DecimalCast,
 {
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
         array
-            .unary_opt::<_, Decimal128Type>(|v| {
-                (mul * v.as_())
-                    .round()
-                    .to_i128()
-                    .filter(|v| Decimal128Type::is_valid_decimal_precision(*v, precision))
+            .unary_opt::<_, D>(|v| {
+                M::from_f64::<M>((mul * v.as_()).round())
+                    .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
         array
-            .try_unary::<_, Decimal128Type, _>(|v| {
-                (mul * v.as_())
-                    .round()
-                    .to_i128()
+            .try_unary::<_, D, _>(|v| {
+                M::from_f64::<M>((mul * v.as_()).round())
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            Decimal128Type::PREFIX,
+                            D::PREFIX,
                             precision,
                             scale,
                             v
                         ))
                     })
                     .and_then(|v| {
-                        Decimal128Type::validate_decimal_precision(v, precision).map(|_| v)
-                    })
-            })?
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
-    }
-}
-
-pub(crate) fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    precision: u8,
-    scale: i8,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
-{
-    let mul = 10_f64.powi(scale as i32);
-
-    if cast_options.safe {
-        array
-            .unary_opt::<_, Decimal256Type>(|v| {
-                i256::from_f64((v.as_() * mul).round())
-                    .filter(|v| Decimal256Type::is_valid_decimal_precision(*v, precision))
-            })
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
-    } else {
-        array
-            .try_unary::<_, Decimal256Type, _>(|v| {
-                i256::from_f64((v.as_() * mul).round())
-                    .ok_or_else(|| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            Decimal256Type::PREFIX,
-                            precision,
-                            scale,
-                            v
-                        ))
-                    })
-                    .and_then(|v| {
-                        Decimal256Type::validate_decimal_precision(v, precision).map(|_| v)
+                        D::validate_decimal_precision(v, precision).map(|_| v)
                     })
             })?
             .with_precision_and_scale(precision, scale)
