@@ -15,23 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::sync::RwLock;
 use std::{collections::VecDeque, sync::Arc};
 
 use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader, StructArray};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
-use crate::arrow::{
-    array_reader::{build_array_reader, ArrayReader, RowGroups, StructArrayReader},
-    arrow_reader::{ArrowPredicate, RowFilter, RowSelection, RowSelector},
-};
+use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::errors::ParquetError;
-
-use super::ParquetField;
+use crate::{
+    arrow::{
+        array_reader::ArrayReader,
+        arrow_reader::{RowFilter, RowSelection, RowSelector},
+    },
+    file::reader::{ChunkReader, SerializedPageReader},
+};
 
 pub struct FilteredParquetRecordBatchReader {
     batch_size: usize,
-    array_reader: StructArrayReader,
+    array_reader: Box<dyn ArrayReader>,
     predicate_readers: Vec<Box<dyn ArrayReader>>,
     schema: SchemaRef,
     selection: VecDeque<RowSelector>,
@@ -90,38 +94,47 @@ fn take_next_selection(
     None
 }
 
-fn build_array_reader_for_filters(
-    filters: &RowFilter,
-    fields: &Option<Arc<ParquetField>>,
-    row_group: &dyn RowGroups,
-) -> Result<Vec<Box<dyn ArrayReader>>, ArrowError> {
-    let mut array_readers = Vec::new();
-    for predicate in filters.predicates.iter() {
-        let predicate_projection = predicate.projection();
-        let array_reader = build_array_reader(fields.as_deref(), predicate_projection, row_group)?;
-        array_readers.push(array_reader);
-    }
-    Ok(array_readers)
-}
-
 impl FilteredParquetRecordBatchReader {
-    fn new(batch_size: usize, array_reader: StructArrayReader, selection: RowSelection) -> Self {
-        todo!()
+    pub(crate) fn new(
+        batch_size: usize,
+        array_reader: Box<dyn ArrayReader>,
+        selection: RowSelection,
+        filter_readers: Vec<Box<dyn ArrayReader>>,
+        row_filter: Option<RowFilter>,
+    ) -> Self {
+        let schema = match array_reader.get_data_type() {
+            DataType::Struct(ref fields) => Schema::new(fields.clone()),
+            _ => unreachable!("Struct array reader's data type is not struct!"),
+        };
+
+        Self {
+            batch_size,
+            array_reader,
+            predicate_readers: filter_readers,
+            schema: Arc::new(schema),
+            selection: selection.into(),
+            row_filter,
+        }
     }
 
+    pub(crate) fn take_filter(&mut self) -> Option<RowFilter> {
+        self.row_filter.take()
+    }
+
+    #[inline(never)]
+    /// Take a selection, and return the new selection where the rows are filtered by the predicate.
     fn build_predicate_filter(
         &mut self,
-        selection: &RowSelection,
+        mut selection: RowSelection,
     ) -> Result<RowSelection, ArrowError> {
         match &mut self.row_filter {
-            None => Ok(selection.clone()),
+            None => Ok(selection),
             Some(filter) => {
                 debug_assert_eq!(
                     self.predicate_readers.len(),
                     filter.predicates.len(),
                     "predicate readers and predicates should have the same length"
                 );
-                let mut selection = selection.clone();
 
                 for (predicate, reader) in filter
                     .predicates
@@ -155,13 +168,36 @@ impl Iterator for FilteredParquetRecordBatchReader {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let selection = take_next_selection(&mut self.selection, self.batch_size)?;
-        let filtered_selection = match self.build_predicate_filter(&selection) {
-            Ok(selection) => selection,
-            Err(e) => return Some(Err(e)),
-        };
+        // With filter pushdown, it's very hard to predict the number of rows to return -- depends on the selectivity of the filter.
+        // We can do one of the following:
+        // 1. Add a coalescing step to coalesce the resulting batches.
+        // 2. Ask parquet reader to collect more rows before returning.
 
-        let rt = read_selection(&mut self.array_reader, &filtered_selection);
+        // Approach 1 has the drawback of extra overhead of coalesce batch, which can be painful to be efficient.
+        // Code below implements approach 2, where we keep consuming the selection until we select at least 3/4 of the batch size.
+        // It boils down to leveraging array_reader's ability to collect large batches natively,
+        //    rather than concatenating multiple small batches.
+
+        let mut selection = RowSelection::default();
+        let mut selected = 0;
+        while let Some(cur_selection) =
+            take_next_selection(&mut self.selection, self.batch_size - selected)
+        {
+            let filtered_selection = match self.build_predicate_filter(cur_selection) {
+                Ok(selection) => selection,
+                Err(e) => return Some(Err(e)),
+            };
+            selected += filtered_selection.row_count();
+            selection.extend(filtered_selection);
+            if selected >= (self.batch_size / 4 * 3) {
+                break;
+            }
+        }
+        if !selection.selects_any() {
+            return None;
+        }
+
+        let rt = read_selection(&mut *self.array_reader, &selection);
         match rt {
             Ok(array) => Some(Ok(RecordBatch::from(array))),
             Err(e) => Some(Err(e.into())),
@@ -172,6 +208,99 @@ impl Iterator for FilteredParquetRecordBatchReader {
 impl RecordBatchReader for FilteredParquetRecordBatchReader {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+struct PageCacheInner {
+    queue: VecDeque<usize>,
+    pages: HashMap<usize, Page>,
+}
+
+/// A simple FIFO cache for pages.
+pub(crate) struct PageCache {
+    inner: RwLock<PageCacheInner>,
+}
+
+impl PageCache {
+    const CAPACITY: usize = 16;
+
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: RwLock::new(PageCacheInner {
+                queue: VecDeque::with_capacity(Self::CAPACITY),
+                pages: HashMap::with_capacity(Self::CAPACITY),
+            }),
+        }
+    }
+
+    pub(crate) fn get_page(&self, offset: usize) -> Option<Page> {
+        let read_lock = self.inner.read().unwrap();
+        read_lock.pages.get(&offset).cloned()
+    }
+
+    pub(crate) fn insert_page(&self, offset: usize, page: Page) {
+        let mut write_lock = self.inner.write().unwrap();
+        if write_lock.pages.len() >= Self::CAPACITY {
+            let oldest_offset = write_lock.queue.pop_front().unwrap();
+            write_lock.pages.remove(&oldest_offset).unwrap();
+        }
+        write_lock.pages.insert(offset, page);
+        write_lock.queue.push_back(offset);
+    }
+}
+
+pub(crate) struct CachedPageReader<R: ChunkReader> {
+    inner: SerializedPageReader<R>,
+    cache: Arc<PageCache>,
+}
+
+impl<R: ChunkReader> CachedPageReader<R> {
+    pub(crate) fn new(inner: SerializedPageReader<R>, cache: Arc<PageCache>) -> Self {
+        Self { inner, cache }
+    }
+}
+
+impl<R: ChunkReader> Iterator for CachedPageReader<R> {
+    type Item = Result<Page, ParquetError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
+    }
+}
+
+impl<R: ChunkReader> PageReader for CachedPageReader<R> {
+    fn get_next_page(&mut self) -> Result<Option<Page>, ParquetError> {
+        // self.inner.get_next_page()
+        let next_page_offset = self.inner.peek_next_page_offset()?;
+
+        let Some(offset) = next_page_offset else {
+            return Ok(None);
+        };
+
+        let page = self.cache.get_page(offset);
+        if let Some(page) = page {
+            self.inner.skip_next_page()?;
+            Ok(Some(page))
+        } else {
+            let inner_page = self.inner.get_next_page()?;
+            let Some(inner_page) = inner_page else {
+                return Ok(None);
+            };
+            self.cache.insert_page(offset, inner_page.clone());
+            Ok(Some(inner_page))
+        }
+    }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>, ParquetError> {
+        self.inner.peek_next_page()
+    }
+
+    fn skip_next_page(&mut self) -> Result<(), ParquetError> {
+        self.inner.skip_next_page()
+    }
+
+    fn at_record_boundary(&mut self) -> Result<bool, ParquetError> {
+        self.inner.at_record_boundary()
     }
 }
 

@@ -371,7 +371,7 @@ fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
-    buffer: Bytes,
+    buffer: Vec<u8>,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
@@ -406,8 +406,8 @@ pub(crate) fn decode_page(
         Some(decompressor) if can_decompress => {
             let uncompressed_size = page_header.uncompressed_page_size as usize;
             let mut decompressed = Vec::with_capacity(uncompressed_size);
-            let compressed = &buffer.as_ref()[offset..];
-            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            let compressed = &buffer[offset..];
+            decompressed.extend_from_slice(&buffer[..offset]);
             decompressor.decompress(
                 compressed,
                 &mut decompressed,
@@ -422,10 +422,11 @@ pub(crate) fn decode_page(
                 ));
             }
 
-            Bytes::from(decompressed)
+            decompressed
         }
         _ => buffer,
     };
+    let buffer = Bytes::from(buffer);
 
     let result = match page_header.type_ {
         PageType::DICTIONARY_PAGE => {
@@ -568,6 +569,57 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             physical_type: meta.column_type(),
         })
     }
+
+    pub(crate) fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+        match &mut self.state {
+            SerializedPageReaderState::Values {
+                offset,
+                remaining_bytes,
+                next_page_header,
+            } => {
+                loop {
+                    if *remaining_bytes == 0 {
+                        return Ok(None);
+                    }
+                    return if let Some(header) = next_page_header.as_ref() {
+                        if let Ok(_page_meta) = PageMetadata::try_from(&**header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            *next_page_header = None;
+                            continue;
+                        }
+                    } else {
+                        let mut read = self.reader.get_read(*offset as u64)?;
+                        let (header_len, header) = read_page_header_len(&mut read)?;
+                        *offset += header_len;
+                        *remaining_bytes -= header_len;
+                        let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            continue;
+                        };
+                        *next_page_header = Some(Box::new(header));
+                        page_meta
+                    };
+                }
+            }
+            SerializedPageReaderState::Pages {
+                page_locations,
+                dictionary_page,
+                ..
+            } => {
+                if let Some(page) = dictionary_page {
+                    Ok(Some(page.offset as usize))
+                } else if let Some(page) = page_locations.front() {
+                    Ok(Some(page.offset as usize))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
 }
 
 impl<R: ChunkReader> Iterator for SerializedPageReader<R> {
@@ -621,7 +673,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     decode_page(
                         header,
-                        Bytes::from(buffer),
+                        buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
@@ -650,7 +702,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
-                        bytes,
+                        bytes.to_vec(),
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
