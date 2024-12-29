@@ -366,12 +366,6 @@ impl RowSelection {
         self
     }
 
-    /// Returns the internal selectors of this [`RowSelection`], testing only
-    #[cfg(test)]
-    pub(crate) fn selectors(&self) -> &[RowSelector] {
-        &self.selectors
-    }
-
     /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
     pub(crate) fn offset(mut self, offset: usize) -> Self {
         if offset == 0 {
@@ -446,6 +440,10 @@ impl RowSelection {
     /// Returns the number of de-selected rows
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
+    }
+
+    pub(crate) fn extend(&mut self, other: Self) {
+        self.selectors.extend(other.selectors);
     }
 }
 

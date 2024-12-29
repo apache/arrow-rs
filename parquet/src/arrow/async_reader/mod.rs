@@ -83,6 +83,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow_reader::{CachedPageReader, FilteredParquetRecordBatchReader, PageCache};
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -94,8 +95,7 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
-    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
-    ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
+    ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
 
@@ -120,6 +120,8 @@ mod store;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
+
+use super::arrow_reader::RowSelector;
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 ///
@@ -470,7 +472,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 }
 
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
+type ReadResult<T> = Result<(ReaderFactory<T>, Option<FilteredParquetRecordBatchReader>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
 /// [`ParquetRecordBatchReader`]
@@ -498,18 +500,16 @@ where
     async fn read_row_group(
         mut self,
         row_group_idx: usize,
-        mut selection: Option<RowSelection>,
+        selection: Option<RowSelection>,
         projection: ProjectionMask,
         batch_size: usize,
     ) -> ReadResult<T> {
-        // TODO: calling build_array multiple times is wasteful
-
         let meta = self.metadata.row_group(row_group_idx);
         let offset_index = self
             .metadata
             .offset_index()
             // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
-            .filter(|index| !index.is_empty())
+            .filter(|index| index.first().map(|v| !v.is_empty()).unwrap_or(false))
             .map(|x| x[row_group_idx].as_slice());
 
         let mut row_group = InMemoryRowGroup {
@@ -518,48 +518,47 @@ where
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
+            cache: Arc::new(PageCache::new()),
         };
 
+        let mut selection =
+            selection.unwrap_or_else(|| vec![RowSelector::select(row_group.row_count)].into());
+
+        let mut filter_readers = Vec::new();
         if let Some(filter) = self.filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
-                if !selects_any(selection.as_ref()) {
+                if !selection.selects_any() {
                     return Ok((self, None));
                 }
 
                 let predicate_projection = predicate.projection();
                 row_group
-                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
+                    .fetch(&mut self.input, predicate_projection, Some(&selection))
                     .await?;
 
                 let array_reader =
                     build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
-
-                selection = Some(evaluate_predicate(
-                    batch_size,
-                    array_reader,
-                    selection,
-                    predicate.as_mut(),
-                )?);
+                filter_readers.push(array_reader);
             }
         }
 
         // Compute the number of rows in the selection before applying limit and offset
-        let rows_before = selection
-            .as_ref()
-            .map(|s| s.row_count())
-            .unwrap_or(row_group.row_count);
+        let rows_before = selection.row_count();
 
         if rows_before == 0 {
             return Ok((self, None));
         }
 
-        selection = apply_range(selection, row_group.row_count, self.offset, self.limit);
+        if let Some(offset) = self.offset {
+            selection = selection.offset(offset);
+        }
+
+        if let Some(limit) = self.limit {
+            selection = selection.limit(limit);
+        }
 
         // Compute the number of rows in the selection after applying limit and offset
-        let rows_after = selection
-            .as_ref()
-            .map(|s| s.row_count())
-            .unwrap_or(row_group.row_count);
+        let rows_after = selection.row_count();
 
         // Update offset if necessary
         if let Some(offset) = &mut self.offset {
@@ -577,13 +576,16 @@ where
         }
 
         row_group
-            .fetch(&mut self.input, &projection, selection.as_ref())
+            .fetch(&mut self.input, &projection, Some(&selection))
             .await?;
 
-        let reader = ParquetRecordBatchReader::new(
+        let array_reader = build_array_reader(self.fields.as_deref(), &projection, &row_group)?;
+        let reader = FilteredParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
+            array_reader,
             selection,
+            filter_readers,
+            self.filter.take(),
         );
 
         Ok((self, Some(reader)))
@@ -594,7 +596,7 @@ enum StreamState<T> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
+    Decoding(FilteredParquetRecordBatchReader),
     /// Reading data from input
     Reading(BoxFuture<'static, ReadResult<T>>),
     /// Error
@@ -739,7 +741,12 @@ where
                         self.state = StreamState::Error;
                         return Poll::Ready(Some(Err(ParquetError::ArrowError(e.to_string()))));
                     }
-                    None => self.state = StreamState::Init,
+                    None => {
+                        // this is ugly, but works for now.
+                        let filter = batch_reader.take_filter();
+                        self.reader.as_mut().unwrap().filter = filter;
+                        self.state = StreamState::Init
+                    }
                 },
                 StreamState::Init => {
                     let row_group_idx = match self.row_groups.pop_front() {
@@ -791,6 +798,7 @@ struct InMemoryRowGroup<'a> {
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
+    cache: Arc<PageCache>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -902,12 +910,23 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-                let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
-                    data.clone(),
-                    self.metadata.column(i),
-                    self.row_count,
-                    page_locations,
-                )?);
+
+                // let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
+                //     data.clone(),
+                //     self.metadata.column(i),
+                //     self.row_count,
+                //     page_locations,
+                // )?);
+
+                let page_reader: Box<dyn PageReader> = Box::new(CachedPageReader::new(
+                    SerializedPageReader::new(
+                        data.clone(),
+                        self.metadata.column(i),
+                        self.row_count,
+                        page_locations,
+                    )?,
+                    self.cache.clone(),
+                ));
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),

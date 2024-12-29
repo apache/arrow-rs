@@ -80,6 +80,7 @@ where
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: RecordReader<T>,
+    #[allow(unused)]
     column_idx: usize,
 }
 
@@ -417,9 +418,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None, 0)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                0,
+            )
+            .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -624,9 +629,13 @@ mod tests {
 
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None, 0)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                0,
+            )
+            .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -700,9 +709,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None, 0)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                0,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(8,2)
@@ -759,9 +772,13 @@ mod tests {
             );
             let page_iterator = InMemoryPageIterator::new(page_lists);
 
-            let mut array_reader =
-                PrimitiveArrayReader::<Int64Type>::new(Box::new(page_iterator), column_desc, None, 0)
-                    .unwrap();
+            let mut array_reader = PrimitiveArrayReader::<Int64Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+                0,
+            )
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(18,4)
