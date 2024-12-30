@@ -911,22 +911,28 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
 
-                // let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
-                //     data.clone(),
-                //     self.metadata.column(i),
-                //     self.row_count,
-                //     page_locations,
-                // )?);
-
-                let page_reader: Box<dyn PageReader> = Box::new(CachedPageReader::new(
-                    SerializedPageReader::new(
+                let page_reader: Box<dyn PageReader> = if std::env::var("CACHE_PAGES")
+                    .map(|v| v == "1")
+                    .unwrap_or(false)
+                {
+                    Box::new(CachedPageReader::new(
+                        SerializedPageReader::new(
+                            data.clone(),
+                            self.metadata.column(i),
+                            self.row_count,
+                            page_locations,
+                        )?,
+                        self.cache.clone(),
+                        i,
+                    ))
+                } else {
+                    Box::new(SerializedPageReader::new(
                         data.clone(),
                         self.metadata.column(i),
                         self.row_count,
                         page_locations,
-                    )?,
-                    self.cache.clone(),
-                ));
+                    )?)
+                };
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),

@@ -441,10 +441,6 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
-
-    pub(crate) fn extend(&mut self, other: Self) {
-        self.selectors.extend(other.selectors);
-    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {

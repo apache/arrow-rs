@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 use std::{collections::VecDeque, sync::Arc};
 
-use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::ArrayRef;
+use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
@@ -45,7 +46,7 @@ pub struct FilteredParquetRecordBatchReader {
 fn read_selection(
     reader: &mut dyn ArrayReader,
     selection: &RowSelection,
-) -> Result<StructArray, ParquetError> {
+) -> Result<ArrayRef, ParquetError> {
     for selector in selection.iter() {
         if selector.skip {
             let skipped = reader.skip_records(selector.row_count)?;
@@ -55,11 +56,7 @@ fn read_selection(
             debug_assert_eq!(read_records, selector.row_count, "failed to read rows");
         }
     }
-    let array = reader.consume_batch()?;
-    let struct_array = array
-        .as_struct_opt()
-        .ok_or_else(|| general_err!("Struct array reader should return struct array"))?;
-    Ok(struct_array.clone())
+    reader.consume_batch()
 }
 
 /// Take the next selection from the selection queue, and return the selection
@@ -142,7 +139,9 @@ impl FilteredParquetRecordBatchReader {
                     .zip(self.predicate_readers.iter_mut())
                 {
                     let array = read_selection(reader.as_mut(), &selection)?;
-                    let batch = RecordBatch::from(array);
+                    let batch = RecordBatch::from(array.as_struct_opt().ok_or_else(|| {
+                        general_err!("Struct array reader should return struct array")
+                    })?);
                     let input_rows = batch.num_rows();
                     let predicate_filter = predicate.evaluate(batch)?;
                     if predicate_filter.len() != input_rows {
@@ -178,7 +177,6 @@ impl Iterator for FilteredParquetRecordBatchReader {
         // It boils down to leveraging array_reader's ability to collect large batches natively,
         //    rather than concatenating multiple small batches.
 
-        let mut selection = RowSelection::default();
         let mut selected = 0;
         while let Some(cur_selection) =
             take_next_selection(&mut self.selection, self.batch_size - selected)
@@ -187,21 +185,29 @@ impl Iterator for FilteredParquetRecordBatchReader {
                 Ok(selection) => selection,
                 Err(e) => return Some(Err(e)),
             };
+
+            for selector in filtered_selection.iter() {
+                if selector.skip {
+                    self.array_reader.skip_records(selector.row_count).ok()?;
+                } else {
+                    self.array_reader.read_records(selector.row_count).ok()?;
+                }
+            }
             selected += filtered_selection.row_count();
-            selection.extend(filtered_selection);
             if selected >= (self.batch_size / 4 * 3) {
                 break;
             }
         }
-        if !selection.selects_any() {
+        if selected == 0 {
             return None;
         }
 
-        let rt = read_selection(&mut *self.array_reader, &selection);
-        match rt {
-            Ok(array) => Some(Ok(RecordBatch::from(array))),
-            Err(e) => Some(Err(e.into())),
-        }
+        let array = self.array_reader.consume_batch().ok()?;
+        let struct_array = array
+            .as_struct_opt()
+            .ok_or_else(|| general_err!("Struct array reader should return struct array"))
+            .ok()?;
+        Some(Ok(RecordBatch::from(struct_array.clone())))
     }
 }
 
@@ -212,11 +218,11 @@ impl RecordBatchReader for FilteredParquetRecordBatchReader {
 }
 
 struct PageCacheInner {
-    queue: VecDeque<usize>,
-    pages: HashMap<usize, Page>,
+    pages: HashMap<usize, (usize, Page)>, // col_id -> (offset, page)
 }
 
-/// A simple FIFO cache for pages.
+/// A simple cache for decompressed pages.
+/// We cache only one page per column
 pub(crate) struct PageCache {
     inner: RwLock<PageCacheInner>,
 }
@@ -227,36 +233,49 @@ impl PageCache {
     pub(crate) fn new() -> Self {
         Self {
             inner: RwLock::new(PageCacheInner {
-                queue: VecDeque::with_capacity(Self::CAPACITY),
                 pages: HashMap::with_capacity(Self::CAPACITY),
             }),
         }
     }
 
-    pub(crate) fn get_page(&self, offset: usize) -> Option<Page> {
+    pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
         let read_lock = self.inner.read().unwrap();
-        read_lock.pages.get(&offset).cloned()
+        read_lock
+            .pages
+            .get(&col_id)
+            .and_then(|(cached_offset, page)| {
+                if *cached_offset == offset {
+                    Some(page)
+                } else {
+                    None
+                }
+            })
+            .cloned()
     }
 
-    pub(crate) fn insert_page(&self, offset: usize, page: Page) {
+    pub(crate) fn insert_page(&self, col_id: usize, offset: usize, page: Page) {
         let mut write_lock = self.inner.write().unwrap();
-        if write_lock.pages.len() >= Self::CAPACITY {
-            let oldest_offset = write_lock.queue.pop_front().unwrap();
-            write_lock.pages.remove(&oldest_offset).unwrap();
-        }
-        write_lock.pages.insert(offset, page);
-        write_lock.queue.push_back(offset);
+        write_lock.pages.insert(col_id, (offset, page));
     }
 }
 
 pub(crate) struct CachedPageReader<R: ChunkReader> {
     inner: SerializedPageReader<R>,
     cache: Arc<PageCache>,
+    col_id: usize,
 }
 
 impl<R: ChunkReader> CachedPageReader<R> {
-    pub(crate) fn new(inner: SerializedPageReader<R>, cache: Arc<PageCache>) -> Self {
-        Self { inner, cache }
+    pub(crate) fn new(
+        inner: SerializedPageReader<R>,
+        cache: Arc<PageCache>,
+        col_id: usize,
+    ) -> Self {
+        Self {
+            inner,
+            cache,
+            col_id,
+        }
     }
 }
 
@@ -277,7 +296,7 @@ impl<R: ChunkReader> PageReader for CachedPageReader<R> {
             return Ok(None);
         };
 
-        let page = self.cache.get_page(offset);
+        let page = self.cache.get_page(self.col_id, offset);
         if let Some(page) = page {
             self.inner.skip_next_page()?;
             Ok(Some(page))
@@ -286,7 +305,8 @@ impl<R: ChunkReader> PageReader for CachedPageReader<R> {
             let Some(inner_page) = inner_page else {
                 return Ok(None);
             };
-            self.cache.insert_page(offset, inner_page.clone());
+            self.cache
+                .insert_page(self.col_id, offset, inner_page.clone());
             Ok(Some(inner_page))
         }
     }
