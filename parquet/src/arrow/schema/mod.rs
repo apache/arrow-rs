@@ -170,7 +170,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 }
 
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
-fn encode_arrow_schema(schema: &Schema) -> String {
+pub fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
     #[allow(deprecated)]
     let mut dictionary_tracker =
@@ -192,7 +192,7 @@ fn encode_arrow_schema(schema: &Schema) -> String {
 
 /// Mutates writer metadata by storing the encoded Arrow schema.
 /// If there is an existing Arrow schema metadata, it is replaced.
-pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
+pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
     let encoded = encode_arrow_schema(schema);
 
     let schema_kv = KeyValue {
