@@ -123,8 +123,8 @@ use arrow_schema::{FieldRef, Schema};
 pub use self::schema::arrow_to_parquet_schema;
 
 pub use self::schema::{
-    parquet_to_arrow_field_levels, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
-    ArrowSchemaConverter, FieldLevels,
+    add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
+    parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, ArrowSchemaConverter, FieldLevels,
 };
 
 /// Schema metadata key used to store serialized Arrow IPC schema
