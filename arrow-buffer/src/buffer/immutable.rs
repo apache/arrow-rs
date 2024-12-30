@@ -60,6 +60,15 @@ unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
     /// Auxiliary method to create a new Buffer
+    ///
+    /// This can be used with a `bytes::Bytes` via `into()`:
+    ///
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let bytes = bytes::Bytes::from_static(b"foo");
+    /// let buffer = Buffer::from_bytes(bytes.into());
+    /// ```
+    /// Though the Arrow bytes type is not public,
     #[inline]
     pub fn from_bytes(bytes: Bytes) -> Self {
         let length = bytes.len();
