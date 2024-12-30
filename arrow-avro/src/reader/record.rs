@@ -144,6 +144,9 @@ impl Decoder {
                 }
                 Self::Record(arrow_fields.into(), encodings)
             }
+            _ => {
+                Self::Null(0) // TODO: Add decoders for Enum, Map, and Decimal
+            }
         };
 
         Ok(match data_type.nullability() {
