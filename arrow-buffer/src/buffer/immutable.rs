@@ -68,7 +68,6 @@ impl Buffer {
     /// let bytes = bytes::Bytes::from_static(b"foo");
     /// let buffer = Buffer::from_bytes(bytes.into());
     /// ```
-    /// Though the Arrow bytes type is not public,
     #[inline]
     pub fn from_bytes(bytes: Bytes) -> Self {
         let length = bytes.len();
