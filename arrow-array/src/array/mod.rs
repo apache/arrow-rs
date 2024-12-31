@@ -620,52 +620,6 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
-/// A trait for Arrow Binary Arrays, currently the following types are supported:
-/// - `BinaryArray`
-/// - `LargeBinaryArray`
-/// - `BinaryViewArray`
-/// - `FixedSizeBinaryArray`
-///
-/// This trait helps to abstract over the different types of binary arrays
-/// so that we don't need to duplicate the implementation for each type.
-pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
-    /// Returns true if all data within this binary array is ASCII
-    fn is_ascii(&self) -> bool;
-
-    /// Constructs a new iterator
-    fn iter(&self) -> ArrayIter<Self>;
-}
-
-impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
-    fn is_ascii(&self) -> bool {
-        GenericBinaryArray::<O>::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericBinaryArray::<O>::iter(self)
-    }
-}
-
-impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
-    fn is_ascii(&self) -> bool {
-        BinaryViewArray::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        BinaryViewArray::iter(self)
-    }
-}
-
-impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
-    fn is_ascii(&self) -> bool {
-        FixedSizeBinaryArray::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        FixedSizeBinaryArray::iter(self)
-    }
-}
-
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
