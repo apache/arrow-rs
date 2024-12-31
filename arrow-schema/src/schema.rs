@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -413,79 +413,76 @@ impl Schema {
         &self.metadata
     }
 
-    /// Returns a new schema, normalized based on the max_level
-    /// This carries metadata from the parent schema over as well
+    /// Returns a new schema, normalized based on the max_level field.
+    /// If `max_level` is 0, normalizes all levels.
+    /// 
+    /// This carries metadata from the parent schema over.
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::{DataType, Field, Fields, Schema};
+    /// 
+    /// let schema = Schema::new(vec![
+    ///     Field::new(
+    ///         "a",
+    ///         DataType::Struct(Fields::from(vec![
+    ///             Arc::new(Field::new("animals", DataType::Utf8, true)),
+    ///             Arc::new(Field::new("n_legs", DataType::Int64, true)),
+    ///         ])),
+    ///         false,
+    ///     ),
+    /// ])
+    /// .normalize(".", 0)
+    /// .expect("valid normalization");
+    ///
+    /// let expected = Schema::new(vec![
+    ///     Field::new("a.animals", DataType::Utf8, true),
+    ///     Field::new("a.n_legs", DataType::Int64, true),
+    /// ]);
+    ///
+    /// assert_eq!(schema, expected);
+    /// ```
     pub fn normalize(&self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
         if max_level == 0 {
             max_level = usize::MAX;
         }
-        let mut new_fields: Vec<FieldRef> = vec![];
-        for field in self.fields() {
-            match field.data_type() {
-                DataType::Struct(nested_fields) => {
-                    let field_name = field.name().as_str();
-                    new_fields = [
-                        new_fields,
-                        Self::normalizer(
-                            nested_fields.to_vec(),
-                            field_name,
-                            separator,
-                            max_level - 1,
-                        ),
-                    ]
-                    .concat();
-                }
-                _ => new_fields.push(Arc::new(Field::new(
-                    field.name(),
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                ))),
-            };
+        let mut queue: VecDeque<(usize, Vec<&str>, &DataType, bool)> = VecDeque::new();
+        for f in self.fields() {
+            let name_vec: Vec<&str> = vec![f.name()];
+            queue.push_back((0, name_vec, f.data_type(), f.is_nullable()));
         }
-        Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
-    }
+        let mut fields: Vec<FieldRef> = Vec::new();
 
-    fn normalizer(
-        fields: Vec<FieldRef>,
-        key_string: &str,
-        separator: &str,
-        max_level: usize,
-    ) -> Vec<FieldRef> {
-        let mut new_fields: Vec<FieldRef> = vec![];
-        if max_level > 0 {
-            for field in fields {
-                match field.data_type() {
-                    DataType::Struct(nested_fields) => {
-                        let field_name = field.name().as_str();
-                        let new_key = format!("{key_string}{separator}{field_name}");
-                        new_fields = [
-                            new_fields,
-                            Self::normalizer(
-                                nested_fields.to_vec(),
-                                new_key.as_str(),
-                                separator,
-                                max_level - 1,
-                            ),
-                        ]
-                        .concat();
+        while let Some((depth, name, data_type, nullable)) = queue.pop_front() {
+            if depth < max_level {
+                match data_type {
+                    DataType::Struct(ff) => {
+                        // Need to zip these in reverse to maintain original order
+                        for fff in ff.into_iter().rev() {
+                            let mut name = name.clone();
+                            name.push(separator);
+                            name.push(fff.name().as_str());
+                            queue.push_front((
+                                depth + 1,
+                                name.clone(),
+                                fff.data_type(),
+                                fff.is_nullable(),
+                            ))
+                        }
                     }
-                    _ => new_fields.push(Arc::new(Field::new(
-                        format!("{key_string}{separator}{}", field.name()),
-                        field.data_type().clone(),
-                        field.is_nullable(),
-                    ))),
-                };
-            }
-        } else {
-            for field in fields {
-                new_fields.push(Arc::new(Field::new(
-                    format!("{key_string}{separator}{}", field.name()),
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                )));
+                    _ => {
+                        let updated_field = Field::new(name.concat(), data_type.clone(), nullable);
+                        fields.push(Arc::new(updated_field));
+                    }
+                }
+            } else {
+                let updated_field = Field::new(name.concat(), data_type.clone(), nullable);
+                fields.push(Arc::new(updated_field));
             }
         }
-        new_fields
+        Ok(Schema::new(fields))
     }
 
     /// Look up a column by name and return a immutable reference to the column along with
