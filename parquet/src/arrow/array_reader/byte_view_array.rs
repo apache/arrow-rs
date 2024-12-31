@@ -33,9 +33,9 @@ use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+// use std::collections::hash_map::Entry;
+// use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 pub fn make_byte_view_array_reader(
@@ -135,8 +135,8 @@ struct ByteViewArrayColumnValueDecoder {
     validate_utf8: bool,
 }
 
-pub(crate) static DICT_CACHE: LazyLock<Mutex<HashMap<usize, Arc<ViewBuffer>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+// pub(crate) static DICT_CACHE: LazyLock<Mutex<HashMap<usize, Arc<ViewBuffer>>>> =
+//     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     type Buffer = ViewBuffer;
@@ -168,31 +168,43 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let buf_id = buf.as_ptr() as usize;
+        let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
+        let mut decoder = ByteViewArrayDecoderPlain::new(
+            buf,
+            num_values as usize,
+            Some(num_values as usize),
+            self.validate_utf8,
+        );
+        decoder.read(&mut buffer, usize::MAX)?;
 
-        let mut cache = DICT_CACHE.lock().unwrap();
+        let dict = Arc::new(buffer);
+        self.dict = Some(dict);
 
-        match cache.entry(buf_id) {
-            Entry::Vacant(v) => {
-                let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
-                let mut decoder = ByteViewArrayDecoderPlain::new(
-                    buf,
-                    num_values as usize,
-                    Some(num_values as usize),
-                    self.validate_utf8,
-                );
-                decoder.read(&mut buffer, usize::MAX)?;
+        // let buf_id = buf.as_ptr() as usize;
 
-                let dict = Arc::new(buffer);
-                v.insert(dict.clone());
-                self.dict = Some(dict);
-            }
-            Entry::Occupied(e) => {
-                // Remove and take ownership of the existing dictionary
-                self.dict = Some(e.remove());
-                // self.dict = Some(e.get().clone());
-            }
-        }
+        // let mut cache = DICT_CACHE.lock().unwrap();
+
+        // match cache.entry(buf_id) {
+        //     Entry::Vacant(v) => {
+        //         let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
+        //         let mut decoder = ByteViewArrayDecoderPlain::new(
+        //             buf,
+        //             num_values as usize,
+        //             Some(num_values as usize),
+        //             self.validate_utf8,
+        //         );
+        //         decoder.read(&mut buffer, usize::MAX)?;
+
+        //         let dict = Arc::new(buffer);
+        //         v.insert(dict.clone());
+        //         self.dict = Some(dict);
+        //     }
+        //     Entry::Occupied(e) => {
+        //         // Remove and take ownership of the existing dictionary
+        //         self.dict = Some(e.remove());
+        //         // self.dict = Some(e.get().clone());
+        //     }
+        // }
         Ok(())
     }
 
