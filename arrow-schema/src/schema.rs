@@ -416,12 +416,13 @@ impl Schema {
     /// Returns a new schema, normalized based on the max_level field.
     /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
     /// separator= "." and the schema:
-    ///
+    /// ```text
     ///     "foo": StructArray<"bar": Utf8>
-    ///
+    /// ```
     /// will generate:
-    ///
+    /// ```text
     ///     "foo.bar": Utf8
+    /// ```
     ///
     /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`,
     /// normalizes all levels.
