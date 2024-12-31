@@ -748,15 +748,13 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
                 let mut dt = AvroDataType::from_codec(Codec::Enum(vec![]));
                 dt.metadata.extend(md);
                 Codec::Enum(vec![])
-            } else {
-                // fallback
+            } else { // fallback
                 Codec::Utf8
             }
         }
-        // For map => "type":"map" => in Arrow: DataType::Map
         Map(field, _keys_sorted) => {
             if let Struct(child_fields) = field.data_type() {
-                let value_field = &child_fields[1]; // name="value"
+                let value_field = &child_fields[1];
                 let sub_codec = arrow_type_to_codec(value_field.data_type());
                 Codec::Map(Arc::new(AvroDataType {
                     nullability: value_field.is_nullable().then(|| Nullability::NullFirst),
