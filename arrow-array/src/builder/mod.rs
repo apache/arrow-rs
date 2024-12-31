@@ -22,7 +22,7 @@
 //! Builders can be used to build simple, non-nested arrays
 //!
 //! ```
-//! # use arrow_array::builder::Int32Builder;
+//! # use arrow_array::builder::{Int32Builder, ValuesBuilder};
 //! # use arrow_array::PrimitiveArray;
 //! let mut a = Int32Builder::new();
 //! a.append_value(1);
@@ -34,7 +34,7 @@
 //! ```
 //!
 //! ```
-//! # use arrow_array::builder::StringBuilder;
+//! # use arrow_array::builder::{StringBuilder, ValuesBuilder};
 //! # use arrow_array::{Array, StringArray};
 //! let mut a = StringBuilder::new();
 //! a.append_value("foo");
@@ -50,7 +50,7 @@
 //! Builders can also be used to build more complex nested arrays, such as lists
 //!
 //! ```
-//! # use arrow_array::builder::{Int32Builder, ListBuilder};
+//! # use arrow_array::builder::{Int32Builder, ListBuilder, ValuesBuilder};
 //! # use arrow_array::ListArray;
 //! # use arrow_array::types::Int32Type;
 //! let mut a = ListBuilder::new(Int32Builder::new());
@@ -87,7 +87,7 @@
 //!
 //! ```
 //! # use std::any::Any;
-//! # use arrow_array::builder::{ArrayBuilder, Int32Builder, ListBuilder, StringBuilder};
+//! # use arrow_array::builder::{ArrayBuilder, Int32Builder, ListBuilder, StringBuilder, ValuesBuilder};
 //! # use arrow_array::{ArrayRef, RecordBatch, StructArray};
 //! # use arrow_schema::{DataType, Field};
 //! # use std::sync::Arc;
@@ -194,7 +194,7 @@ use std::any::Any;
 /// ```
 /// // Create
 /// # use arrow_array::{ArrayRef, StringArray};
-/// # use arrow_array::builder::{ArrayBuilder, Float64Builder, Int64Builder, StringBuilder};
+/// # use arrow_array::builder::{ArrayBuilder, Float64Builder, Int64Builder, StringBuilder, ValuesBuilder};
 ///
 /// let mut data_builders: Vec<Box<dyn ArrayBuilder>> = vec![
 ///     Box::new(Float64Builder::new()),

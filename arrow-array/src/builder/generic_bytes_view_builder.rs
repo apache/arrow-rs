@@ -474,7 +474,7 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 ///
 /// # Example
 /// ```
-/// # use arrow_array::builder::StringViewBuilder;
+/// # use arrow_array::builder::{StringViewBuilder, ValuesBuilder};
 /// # use arrow_array::StringViewArray;
 /// let mut builder = StringViewBuilder::new();
 /// builder.append_value("hello");
@@ -495,7 +495,7 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 ///
 /// # Example
 /// ```
-/// # use arrow_array::builder::BinaryViewBuilder;
+/// # use arrow_array::builder::{BinaryViewBuilder, ValuesBuilder};
 /// use arrow_array::BinaryViewArray;
 /// let mut builder = BinaryViewBuilder::new();
 /// builder.append_value("hello");

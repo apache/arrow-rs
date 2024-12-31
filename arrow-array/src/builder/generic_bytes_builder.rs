@@ -255,7 +255,7 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 ///
 /// # Example writing strings with `append_value`
 /// ```
-/// # use arrow_array::builder::GenericStringBuilder;
+/// # use arrow_array::builder::{GenericStringBuilder, ValuesBuilder};
 /// let mut builder = GenericStringBuilder::<i32>::new();
 ///
 /// // Write one string value
@@ -273,7 +273,7 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 ///
 /// ```
 /// # use std::fmt::Write;
-/// # use arrow_array::builder::GenericStringBuilder;
+/// # use arrow_array::builder::{GenericStringBuilder, ValuesBuilder};
 /// let mut builder = GenericStringBuilder::<i32>::new();
 ///
 /// // Write data in multiple `write!` calls
@@ -308,7 +308,7 @@ impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
 ///
 /// # Example
 /// ```
-/// # use arrow_array::builder::GenericBinaryBuilder;
+/// # use arrow_array::builder::{GenericBinaryBuilder, ValuesBuilder};
 /// let mut builder = GenericBinaryBuilder::<i32>::new();
 ///
 /// // Write data
@@ -327,7 +327,7 @@ impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
 ///
 /// ```
 /// # use std::io::Write;
-/// # use arrow_array::builder::GenericBinaryBuilder;
+/// # use arrow_array::builder::{GenericBinaryBuilder, ValuesBuilder};
 /// let mut builder = GenericBinaryBuilder::<i32>::new();
 ///
 /// // Write data in multiple `write_bytes` calls

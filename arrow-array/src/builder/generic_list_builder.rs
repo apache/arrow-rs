@@ -34,7 +34,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{builder::ListBuilder, builder::StringBuilder, ArrayRef, StringArray, Array};
+/// # use arrow_array::{builder::{ListBuilder, StringBuilder, ValuesBuilder}, ArrayRef, StringArray, Array};
 /// #
 /// let values_builder = StringBuilder::new();
 /// let mut builder = ListBuilder::new(values_builder);

@@ -33,7 +33,7 @@ use arrow_buffer::ArrowNativeType;
 ///
 /// ```
 ///
-/// # use arrow_array::builder::GenericByteRunBuilder;
+/// # use arrow_array::builder::{GenericByteRunBuilder, ValuesBuilder};
 /// # use arrow_array::{GenericByteArray, BinaryArray};
 /// # use arrow_array::types::{BinaryType, Int16Type};
 /// # use arrow_array::{Array, Int16Array};
@@ -309,7 +309,7 @@ where
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
 /// // The encoded values are Strings.
 ///
-/// # use arrow_array::builder::StringRunBuilder;
+/// # use arrow_array::builder::{StringRunBuilder, ValuesBuilder};
 /// # use arrow_array::{Int16Array, StringArray};
 /// # use arrow_array::types::Int16Type;
 /// # use arrow_array::cast::AsArray;
@@ -345,7 +345,7 @@ pub type LargeStringRunBuilder<K> = GenericByteRunBuilder<K, LargeUtf8Type>;
 /// // Create a run-end encoded array with run-end indexes data type as `i16`.
 /// // The encoded data is binary values.
 ///
-/// # use arrow_array::builder::BinaryRunBuilder;
+/// # use arrow_array::builder::{BinaryRunBuilder, ValuesBuilder};
 /// # use arrow_array::{BinaryArray, Int16Array};
 /// # use arrow_array::cast::AsArray;
 /// # use arrow_array::types::Int16Type;

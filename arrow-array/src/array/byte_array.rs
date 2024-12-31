@@ -69,7 +69,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// # use arrow_array::Array;
-/// # use arrow_array::builder::GenericByteBuilder;
+/// # use arrow_array::builder::{GenericByteBuilder, ValuesBuilder};
 /// # use arrow_array::types::Utf8Type;
 /// let mut builder = GenericByteBuilder::<Utf8Type>::new();
 /// builder.append_value("hello");

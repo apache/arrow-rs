@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// For a practical example see the code below:
 ///
 /// ```rust
-///    use arrow_array::builder::{ArrayBuilder, ListBuilder, StringBuilder, StructBuilder};
+///    use arrow_array::builder::{ArrayBuilder, ListBuilder, StringBuilder, StructBuilder, ValuesBuilder};
 ///    use arrow_schema::{DataType, Field, Fields};
 ///    use std::sync::Arc;
 ///
