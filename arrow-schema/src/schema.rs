@@ -414,16 +414,25 @@ impl Schema {
     }
 
     /// Returns a new schema, normalized based on the max_level field.
-    /// If `max_level` is 0, normalizes all levels.
-    /// 
+    /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
+    /// separator= "." and the schema:
+    ///
+    ///     "foo": StructArray<"bar": Utf8>
+    ///
+    /// will generate:
+    ///
+    ///     "foo.bar": Utf8
+    ///
+    /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`, 
+    /// normalizes all levels.
+    ///
     /// This carries metadata from the parent schema over.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow_schema::{DataType, Field, Fields, Schema};
-    /// 
     /// let schema = Schema::new(vec![
     ///     Field::new(
     ///         "a",
@@ -436,12 +445,10 @@ impl Schema {
     /// ])
     /// .normalize(".", 0)
     /// .expect("valid normalization");
-    ///
     /// let expected = Schema::new(vec![
     ///     Field::new("a.animals", DataType::Utf8, true),
     ///     Field::new("a.n_legs", DataType::Int64, true),
     /// ]);
-    ///
     /// assert_eq!(schema, expected);
     /// ```
     pub fn normalize(&self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {

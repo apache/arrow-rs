@@ -397,7 +397,18 @@ impl RecordBatch {
     }
 
     /// Normalize a semi-structured [`RecordBatch`] into a flat table.
-    /// If `max_level` is 0, normalizes all levels.
+    /// 
+    /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
+    /// separator= "." and the schema:
+    /// 
+    ///     "foo": StructArray<"bar": Utf8>
+    /// 
+    /// will generate:
+    ///
+    ///     "foo.bar": Utf8
+    /// 
+    /// `max_level`: The maximum number of levels (depth of the `Schema` and `Columns`) to
+    /// normalize. If `0`, normalizes all levels.
     ///
     /// # Example
     ///
