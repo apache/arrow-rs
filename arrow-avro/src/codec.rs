@@ -740,7 +740,8 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
             *prec as usize,
             Some(*scale as usize),
             Some(32),
-        ),Dictionary(index_type, value_type) => {
+        ),
+        Dictionary(index_type, value_type) => {
             let mut md = HashMap::new();
             md.insert("dictionary_index_type".to_string(), format!("{:?}", index_type));
             if matches!(value_type.as_ref(), Utf8 | LargeUtf8) {
