@@ -23,7 +23,7 @@ use crate::schema::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
-use arrow_schema::{ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
 use std::collections::HashMap;
 use std::io::Read;
 use std::ptr::null;
@@ -76,6 +76,7 @@ impl RecordDecoder {
     }
 }
 
+/// Enum representing different decoders for various data types.
 #[derive(Debug)]
 enum Decoder {
     Null(usize),
@@ -95,51 +96,59 @@ enum Decoder {
     Record(Fields, Vec<Decoder>),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
     Enum(Vec<String>, Vec<i32>),
-    Map(FieldRef, OffsetBufferBuilder<i32>, OffsetBufferBuilder<i32>, Vec<u8>, Box<Decoder>, usize),
-    Decimal(usize, usize, Option<usize>, Vec<Vec<u8>>),
+    Map(
+        FieldRef,
+        OffsetBufferBuilder<i32>, // key_offsets
+        OffsetBufferBuilder<i32>, // map_offsets
+        Vec<u8>,                  // key_data
+        Box<Decoder>,             // values_decoder_inner
+        usize,                    // current_entry_count
+    ),
+    Decimal(usize, Option<usize>, Option<usize>, DecimalBuilder),
 }
 
 impl Decoder {
-    /// Checks if the Decoder is nullable
+    /// Checks if the Decoder is nullable.
     fn is_nullable(&self) -> bool {
         matches!(self, Decoder::Nullable(_, _, _))
     }
 
+    /// Creates a new `Decoder` based on the provided `AvroDataType`.
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         let nyi = |s: &str| Err(ArrowError::NotYetImplemented(s.to_string()));
 
         let decoder = match data_type.codec() {
-            Codec::Null => Self::Null(0),
-            Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
-            Codec::Int32 => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Int64 => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float32 => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float64 => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Binary => Self::Binary(
+            Codec::Null => Decoder::Null(0),
+            Codec::Boolean => Decoder::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
+            Codec::Int32 => Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Int64 => Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float32 => Decoder::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float64 => Decoder::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Binary => Decoder::Binary(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Utf8 => Self::String(
+            Codec::Utf8 => Decoder::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Date32 => Decoder::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMillis => Decoder::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMicros => Decoder::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::TimestampMillis(is_utc) => {
-                Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+                Decoder::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
             Codec::TimestampMicros(is_utc) => {
-                Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+                Decoder::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
             Codec::Fixed(_) => return nyi("decoding fixed"),
             Codec::Interval => return nyi("decoding interval"),
             Codec::List(item) => {
-                let decoder = Self::try_new(item)?;
-                Self::List(
+                let decoder = Box::new(Self::try_new(item)?);
+                Decoder::List(
                     Arc::new(item.field_with_name("item")),
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                    Box::new(decoder),
+                    decoder,
                 )
             }
             Codec::Struct(fields) => {
@@ -150,14 +159,9 @@ impl Decoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
                 }
-                Self::Record(arrow_fields.into(), encodings)
+                Decoder::Record(arrow_fields.into(), encodings)
             }
-            Codec::Enum(symbols) => {
-                Decoder::Enum(
-                    symbols.clone(),
-                    Vec::with_capacity(DEFAULT_CAPACITY),
-                )
-            }
+            Codec::Enum(symbols) => Decoder::Enum(symbols.clone(), Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::Map(value_type) => {
                 let map_field = Arc::new(ArrowField::new(
                     "entries",
@@ -170,54 +174,58 @@ impl Decoder {
                 Decoder::Map(
                     map_field,
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY), // key_offsets
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),  // map_offsets
-                    Vec::with_capacity(DEFAULT_CAPACITY),         // key_data
-                    Box::new(Self::try_new(value_type)?),       // values_decoder_inner
+                    OffsetBufferBuilder::new(DEFAULT_CAPACITY), // map_offsets
+                    Vec::with_capacity(DEFAULT_CAPACITY),        // key_data
+                    Box::new(Self::try_new(value_type)?),      // values_decoder_inner
                     0,                                           // current_entry_count
                 )
             }
             Codec::Decimal(precision, scale, size) => {
-                Decoder::Decimal(
-                    *precision,
-                    scale.unwrap_or(0),
-                    *size,
-                    Vec::with_capacity(DEFAULT_CAPACITY),
-                )
+                let builder = DecimalBuilder::new(*precision, *scale, *size)?;
+                Decoder::Decimal(*precision, *scale, *size, builder)
             }
         };
-        Ok(match data_type.nullability() {
-            Some(nullability) => Self::Nullable(
+
+        // Wrap the decoder in Nullable if necessary
+        match data_type.nullability() {
+            Some(nullability) => Ok(Decoder::Nullable(
                 nullability,
                 NullBufferBuilder::new(DEFAULT_CAPACITY),
                 Box::new(decoder),
-            ),
-            None => decoder,
-        })
+            )),
+            None => Ok(decoder),
+        }
     }
 
-    /// Append a null record
+    /// Appends a null value to the decoder.
     fn append_null(&mut self) {
         match self {
-            Self::Null(count) => *count += 1,
-            Self::Boolean(b) => b.append(false),
-            Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
-            Self::Int64(v)
-            | Self::TimeMicros(v)
-            | Self::TimestampMillis(_, v)
-            | Self::TimestampMicros(_, v) => v.push(0),
-            Self::Float32(v) => v.push(0.),
-            Self::Float64(v) => v.push(0.),
-            Self::Binary(offsets, _) | Self::String(offsets, _) => offsets.push_length(0),
-            Self::List(_, offsets, e) => {
+            Decoder::Null(count) => *count += 1,
+            Decoder::Boolean(b) => b.append(false),
+            Decoder::Int32(v) | Decoder::Date32(v) | Decoder::TimeMillis(v) => v.push(0),
+            Decoder::Int64(v)
+            | Decoder::TimeMicros(v)
+            | Decoder::TimestampMillis(_, v)
+            | Decoder::TimestampMicros(_, v) => v.push(0),
+            Decoder::Float32(v) => v.push(0.0),
+            Decoder::Float64(v) => v.push(0.0),
+            Decoder::Binary(offsets, _) | Decoder::String(offsets, _) => {
+                offsets.push_length(0);
+            }
+            Decoder::List(_, offsets, e) => {
                 offsets.push_length(0);
                 e.append_null();
             }
-            Self::Record(_, e) => e.iter_mut().for_each(|e| e.append_null()),
-            Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
-            Self::Enum(_, _) => {
-                // For Enum, appending a null is not straightforward. Handle accordingly if needed.
+            Decoder::Record(_, encodings) => {
+                for encoding in encodings.iter_mut() {
+                    encoding.append_null();
+                }
             }
-            Self::Map(
+            Decoder::Enum(_, indices) => {
+                // Append a placeholder index for null entries
+                indices.push(0);
+            }
+            Decoder::Map(
                 _,
                 key_offsets,
                 map_offsets_builder,
@@ -228,55 +236,60 @@ impl Decoder {
                 key_offsets.push_length(0);
                 map_offsets_builder.push_length(*current_entry_count);
             }
-            Self::Decimal(_, _, _, _) => {
-                // For Decimal, appending a null doesn't make sense as per current implementation
+            Decoder::Decimal(_, _, _, builder) => {
+                builder.append_null();
             }
+            Decoder::Nullable(_, _, _) => { /* Nulls are handled by the Nullable variant */ }
         }
     }
 
-    /// Decode a single record from `buf`
+    /// Decodes a single record from the provided buffer `buf`.
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         match self {
-            Self::Null(x) => *x += 1,
-            Self::Boolean(values) => values.append(buf.get_bool()?),
-            Self::Int32(values) | Self::Date32(values) | Self::TimeMillis(values) => {
-                values.push(buf.get_int()?)
+            Decoder::Null(x) => *x += 1,
+            Decoder::Boolean(values) => values.append(buf.get_bool()?),
+            Decoder::Int32(values) => values.push(buf.get_int()?),
+            Decoder::Date32(values) => values.push(buf.get_int()?),
+            Decoder::Int64(values) => values.push(buf.get_long()?),
+            Decoder::TimeMillis(values) => values.push(buf.get_int()?),
+            Decoder::TimeMicros(values) => values.push(buf.get_long()?),
+            Decoder::TimestampMillis(is_utc, values) => {
+                values.push(buf.get_long()?);
             }
-            Self::Int64(values)
-            | Self::TimeMicros(values)
-            | Self::TimestampMillis(_, values)
-            | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
-            Self::Float32(values) => values.push(buf.get_float()?),
-            Self::Float64(values) => values.push(buf.get_double()?),
-            Self::Binary(offsets, values) | Self::String(offsets, values) => {
+            Decoder::TimestampMicros(is_utc, values) => {
+                values.push(buf.get_long()?);
+            }
+            Decoder::Float32(values) => values.push(buf.get_float()?),
+            Decoder::Float64(values) => values.push(buf.get_double()?),
+            Decoder::Binary(offsets, values) | Decoder::String(offsets, values) => {
                 let data = buf.get_bytes()?;
                 offsets.push_length(data.len());
                 values.extend_from_slice(data);
             }
-            Self::List(_, _, _) => {
+            Decoder::List(_, _, _) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding ListArray".to_string(),
-                ))
+                ));
             }
-            Self::Record(_, encodings) => {
-                for encoding in encodings {
+            Decoder::Record(fields, encodings) => {
+                for encoding in encodings.iter_mut() {
                     encoding.decode(buf)?;
                 }
             }
-            Self::Nullable(nullability, nulls, e) => {
-                let is_valid = buf.get_bool()? == matches!(nullability, Nullability::NullFirst);
+            Decoder::Nullable(_, nulls, e) => {
+                let is_valid = buf.get_bool()?;
                 nulls.append(is_valid);
                 match is_valid {
                     true => e.decode(buf)?,
                     false => e.append_null(),
                 }
             }
-            Self::Enum(symbols, indices) => {
-                // Encodes enum by writing its zero-based index as an int
+            Decoder::Enum(symbols, indices) => {
+                // Enums are encoded as zero-based indices using zigzag encoding
                 let index = buf.get_int()?;
                 indices.push(index);
             }
-            Self::Map(
+            Decoder::Map(
                 field,
                 key_offsets,
                 map_offsets_builder,
@@ -301,83 +314,79 @@ impl Decoder {
                     map_offsets_builder.push_length(*current_entry_count);
                 }
             }
-            Self::Decimal(
-                precision,
-                scale,
-                size,
-                data
-            ) => {
-                let raw = if let Some(fixed_len) = size {
-                    // get_fixed used to get exactly fixed_len bytes
-                    buf.get_fixed(*fixed_len)?
+            Decoder::Decimal(_precision, _scale, _size, builder) => {
+                if let Some(size) = _size {
+                    // Fixed-size decimal
+                    let raw = buf.get_fixed(*size)?;
+                    builder.append_bytes(raw)?;
                 } else {
-                    // get_bytes used for variable-length
-                    buf.get_bytes()?
-                };
-                data.push(raw.to_vec());
+                    // Variable-size decimal
+                    let bytes = buf.get_bytes()?;
+                    builder.append_bytes(bytes)?;
+                }
             }
         }
         Ok(())
     }
 
-    /// Flush decoded records to an [`ArrayRef`]
+    /// Flushes decoded records to an [`ArrayRef`].
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         match self {
-            Self::Nullable(_, n, e) => e.flush(n.finish()),
-            Self::Null(size) => Ok(Arc::new(NullArray::new(std::mem::replace(size, 0)))),
-            Self::Boolean(b) => Ok(Arc::new(BooleanArray::new(b.finish(), nulls))),
-            Self::Int32(values) => Ok(Arc::new(flush_primitive::<Int32Type>(values, nulls))),
-            Self::Date32(values) => Ok(Arc::new(flush_primitive::<Date32Type>(values, nulls))),
-            Self::Int64(values) => Ok(Arc::new(flush_primitive::<Int64Type>(values, nulls))),
-            Self::TimeMillis(values) => {
+            Decoder::Nullable(_, n, e) => e.flush(n.finish()),
+            Decoder::Null(size) => Ok(Arc::new(NullArray::new(std::mem::replace(size, 0)))),
+            Decoder::Boolean(b) => Ok(Arc::new(BooleanArray::new(b.finish(), nulls))),
+            Decoder::Int32(values) => Ok(Arc::new(flush_primitive::<Int32Type>(values, nulls))),
+            Decoder::Date32(values) => Ok(Arc::new(flush_primitive::<Date32Type>(values, nulls))),
+            Decoder::Int64(values) => Ok(Arc::new(flush_primitive::<Int64Type>(values, nulls))),
+            Decoder::TimeMillis(values) => {
                 Ok(Arc::new(flush_primitive::<Time32MillisecondType>(values, nulls)))
             }
-            Self::TimeMicros(values) => {
+            Decoder::TimeMicros(values) => {
                 Ok(Arc::new(flush_primitive::<Time64MicrosecondType>(values, nulls)))
             }
-            Self::TimestampMillis(is_utc, values) => Ok(Arc::new(
+            Decoder::TimestampMillis(is_utc, values) => Ok(Arc::new(
                 flush_primitive::<TimestampMillisecondType>(values, nulls)
-                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into())),
             )),
-            Self::TimestampMicros(is_utc, values) => Ok(Arc::new(
+            Decoder::TimestampMicros(is_utc, values) => Ok(Arc::new(
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
-                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into())),
             )),
-            Self::Float32(values) => Ok(Arc::new(flush_primitive::<Float32Type>(values, nulls))),
-            Self::Float64(values) => Ok(Arc::new(flush_primitive::<Float64Type>(values, nulls))),
-            Self::Binary(offsets, values) => {
+            Decoder::Float32(values) => Ok(Arc::new(flush_primitive::<Float32Type>(values, nulls))),
+            Decoder::Float64(values) => Ok(Arc::new(flush_primitive::<Float64Type>(values, nulls))),
+            Decoder::Binary(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Ok(Arc::new(BinaryArray::new(offsets, values, nulls)))
             }
-            Self::String(offsets, values) => {
+            Decoder::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Ok(Arc::new(StringArray::new(offsets, values, nulls)))
             }
-            Self::List(field, offsets, values) => {
+            Decoder::List(field, offsets, values) => {
                 let values = values.flush(None)?;
                 let offsets = flush_offsets(offsets);
                 Ok(Arc::new(ListArray::new(field.clone(), offsets, values, nulls)))
             }
-            Self::Record(fields, encodings) => {
+            Decoder::Record(fields, encodings) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Arc::new(StructArray::new(fields.clone(), arrays, nulls)))
             }
-            Self::Enum(symbols, indices) => {
+            Decoder::Enum(symbols, indices) => {
                 let dict_values = StringArray::from_iter_values(symbols.iter());
-                let flushed_indices = flush_values(indices); // Vec<i32>
                 let indices_array: Int32Array = match nulls {
                     Some(buf) => {
-                        let buffer = Buffer::from_slice_ref(&flushed_indices);
-                        PrimitiveArray::<Int32Type>::try_new(ScalarBuffer::from(buffer), Some(buf.clone()))?
-                    },
-                    None => {
-                        Int32Array::from_iter_values(flushed_indices)
+                        let buffer = arrow_buffer::Buffer::from_slice_ref(&indices);
+                        PrimitiveArray::<Int32Type>::try_new(
+                            arrow_buffer::ScalarBuffer::from(buffer),
+                            Some(buf.clone()),
+                        )?
                     }
+                    None => Int32Array::from_iter_values(indices.iter().cloned()),
                 };
                 let dict_array = DictionaryArray::<Int32Type>::try_new(
                     indices_array,
@@ -385,7 +394,7 @@ impl Decoder {
                 )?;
                 Ok(Arc::new(dict_array))
             }
-            Self::Map(
+            Decoder::Map(
                 field,
                 key_offsets_builder,
                 map_offsets_builder,
@@ -401,36 +410,37 @@ impl Decoder {
                 let is_nullable = matches!(**values_decoder_inner, Decoder::Nullable(_, _, _));
                 let struct_fields = vec![
                     Arc::new(ArrowField::new("key", DataType::Utf8, false)),
-                    Arc::new(ArrowField::new("value", val_array.data_type().clone(), is_nullable)),
+                    Arc::new(ArrowField::new(
+                        "value",
+                        val_array.data_type().clone(),
+                        is_nullable,
+                    )),
                 ];
                 let struct_array = StructArray::new(
                     Fields::from(struct_fields),
                     vec![Arc::new(key_array), val_array],
                     None,
                 );
-                let map_array = MapArray::new(field.clone(), map_offsets.clone(), struct_array.clone(), nulls, false);
+                let map_array = MapArray::new(
+                    field.clone(),
+                    map_offsets.clone(),
+                    struct_array.clone(),
+                    nulls,
+                    false,
+                );
                 Ok(Arc::new(map_array))
             }
-            Self::Decimal(
-                precision,
-                scale,
-                size,
-                data,
-            ) => {
-                let mut array_builder = DecimalBuilder::new(*precision, *scale, *size)?;
-                for raw in data.drain(..) {
-                    if let Some(s) = size {
-                        if raw.len() < *s {
-                            let extended = sign_extend(&raw, *s);
-                            array_builder.append_bytes(&extended)?;
-                            continue;
-                        }
-                    }
-                    array_builder.append_bytes(&raw)?;
-                }
-                let arr = array_builder.finish()?;
-                Ok(Arc::new(arr))
+            Decoder::Decimal(_precision, _scale, _size, builder) => {
+                let precision = *_precision;
+                let scale = _scale.unwrap_or(0); // Default scale if None
+                let size = _size.clone();
+                let builder = std::mem::replace(
+                    builder,
+                    DecimalBuilder::new(precision, *_scale, *_size)?,
+                );
+                Ok(builder.finish(nulls, precision, scale)?) // Pass precision and scale
             }
+
         }
     }
 }
@@ -440,22 +450,23 @@ fn field_with_type(name: &str, dt: DataType, nullable: bool) -> FieldRef {
     Arc::new(ArrowField::new(name, dt, nullable))
 }
 
+/// Extends raw bytes to the target length with sign extension.
 fn sign_extend(raw: &[u8], target_len: usize) -> Vec<u8> {
     if raw.is_empty() {
         return vec![0; target_len];
     }
     let sign_bit = raw[0] & 0x80;
     let mut extended = Vec::with_capacity(target_len);
-    if sign_bit != 0 {  // negative
+    if sign_bit != 0 {
         extended.resize(target_len - raw.len(), 0xFF);
-    } else {            // positive
+    } else {
         extended.resize(target_len - raw.len(), 0x00);
     }
     extended.extend_from_slice(raw);
     extended
 }
 
-/// Extend raw bytes to 16 bytes (for Decimal128)
+/// Extends raw bytes to 16 bytes (for Decimal128).
 fn extend_to_16_bytes(raw: &[u8]) -> Result<[u8; 16], ArrowError> {
     let extended = sign_extend(raw, 16);
     if extended.len() != 16 {
@@ -464,10 +475,12 @@ fn extend_to_16_bytes(raw: &[u8]) -> Result<[u8; 16], ArrowError> {
             extended.len()
         )));
     }
-    Ok(extended.try_into().unwrap())
+    let mut arr = [0u8; 16];
+    arr.copy_from_slice(&extended);
+    Ok(arr)
 }
 
-/// Extend raw bytes to 32 bytes (for Decimal256)
+/// Extends raw bytes to 32 bytes (for Decimal256).
 fn extend_to_32_bytes(raw: &[u8]) -> Result<[u8; 32], ArrowError> {
     let extended = sign_extend(raw, 32);
     if extended.len() != 32 {
@@ -476,30 +489,67 @@ fn extend_to_32_bytes(raw: &[u8]) -> Result<[u8; 32], ArrowError> {
             extended.len()
         )));
     }
-    Ok(extended.try_into().unwrap())
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&extended);
+    Ok(arr)
 }
 
-/// Trait for building decimal arrays
+/// Enum representing the builder for Decimal arrays.
+#[derive(Debug)]
 enum DecimalBuilder {
     Decimal128(Decimal128Builder),
     Decimal256(Decimal256Builder),
 }
 
 impl DecimalBuilder {
-
-    fn new(precision: usize, scale: usize, size: Option<usize>) -> Result<Self, ArrowError> {
+    /// Initializes a new `DecimalBuilder` based on precision, scale, and size.
+    fn new(
+        precision: usize,
+        scale: Option<usize>,
+        size: Option<usize>,
+    ) -> Result<Self, ArrowError> {
         match size {
-            Some(s) if s > 16 => {
-                // decimal256
-                Ok(Self::Decimal256(Decimal256Builder::new().with_precision_and_scale(precision as u8, scale as i8)?))
+            Some(s) if s > 16 && s <= 32 => {
+                // Decimal256
+                Ok(Self::Decimal256(
+                    Decimal256Builder::new()
+                        .with_precision_and_scale(precision as u8, scale.unwrap_or(0) as i8)?,
+                ))
             }
-            _ => {
-                // decimal128
-                Ok(Self::Decimal128(Decimal128Builder::new().with_precision_and_scale(precision as u8, scale as i8)?))
+            Some(s) if s <= 16 => {
+                // Decimal128
+                Ok(Self::Decimal128(
+                    Decimal128Builder::new()
+                        .with_precision_and_scale(precision as u8, scale.unwrap_or(0) as i8)?,
+                ))
             }
+            None => {
+                // Infer based on precision
+                if precision <= DECIMAL128_MAX_PRECISION as usize {
+                    Ok(Self::Decimal128(
+                        Decimal128Builder::new()
+                            .with_precision_and_scale(precision as u8, scale.unwrap_or(0) as i8)?,
+                    ))
+                } else if precision <= DECIMAL256_MAX_PRECISION as usize {
+                    Ok(Self::Decimal256(
+                        Decimal256Builder::new()
+                            .with_precision_and_scale(precision as u8, scale.unwrap_or(0) as i8)?,
+                    ))
+                } else {
+                    Err(ArrowError::ParseError(format!(
+                        "Decimal precision {} exceeds maximum supported",
+                        precision
+                    )))
+                }
+            }
+            _ => Err(ArrowError::ParseError(format!(
+                "Unsupported decimal size: {:?}",
+                size
+            ))),
         }
     }
 
+    /// Appends bytes to the decimal builder.
     fn append_bytes(&mut self, bytes: &[u8]) -> Result<(), ArrowError> {
         match self {
             DecimalBuilder::Decimal128(b) => {
@@ -516,10 +566,46 @@ impl DecimalBuilder {
         Ok(())
     }
 
-    fn finish(self) -> Result<ArrayRef, ArrowError> {
+    /// Appends a null value to the decimal builder by appending placeholder bytes.
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         match self {
-            DecimalBuilder::Decimal128(mut b) => Ok(Arc::new(b.finish())),
-            DecimalBuilder::Decimal256(mut b) => Ok(Arc::new(b.finish())),
+            DecimalBuilder::Decimal128(b) => {
+                // Append zeroed bytes as placeholder
+                let placeholder = [0u8; 16];
+                let value = i128::from_be_bytes(placeholder);
+                b.append_value(value);
+            }
+            DecimalBuilder::Decimal256(b) => {
+                // Append zeroed bytes as placeholder
+                let placeholder = [0u8; 32];
+                let value = i256::from_be_bytes(placeholder);
+                b.append_value(value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Finalizes the decimal array and returns it as an `ArrayRef`.
+    fn finish(self, nulls: Option<NullBuffer>, precision: usize, scale: usize) -> Result<ArrayRef, ArrowError> {
+        match self {
+            DecimalBuilder::Decimal128(mut b) => {
+                let array = b.finish();
+                let values = array.values().clone();
+                let decimal_array = Decimal128Array::new(
+                    values,
+                    nulls,
+                ).with_precision_and_scale(precision as u8, scale as i8)?;
+                Ok(Arc::new(decimal_array))
+            }
+            DecimalBuilder::Decimal256(mut b) => {
+                let array = b.finish();
+                let values = array.values().clone();
+                let decimal_array = Decimal256Array::new(
+                    values,
+                    nulls,
+                ).with_precision_and_scale(precision as u8, scale as i8)?;
+                Ok(Arc::new(decimal_array))
+            }
         }
     }
 }
@@ -551,10 +637,12 @@ mod tests {
         Array, ArrayRef, Int32Array, MapArray, StringArray, StructArray,
         Decimal128Array, Decimal256Array, DictionaryArray,
     };
-    use arrow_array::cast::AsArray;
+    use arrow_buffer::Buffer;
     use arrow_schema::{Field as ArrowField, DataType as ArrowDataType};
+    use serde_json::json;
+    use arrow_array::cast::AsArray;
 
-    /// Helper functions for encoding test data
+    /// Helper functions for encoding test data.
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut v = (value << 1) ^ (value >> 31);
@@ -615,22 +703,23 @@ mod tests {
         let value_type = AvroDataType::from_codec(Codec::Utf8);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
         let mut decoder = Decoder::try_new(&map_type).unwrap();
+        // Encode a single map with one entry: {"hello": "world"}
         // Avro encoding for a map:
-        // - block_count: 1 (number of entries)
-        // - keys: "hello" (5 bytes)
-        // - values: "world" (5 bytes)
+        // - block_count: 1 (encoded as [2] due to ZigZag)
+        // - keys: "hello" (encoded with length prefix)
+        // - values: "world" (encoded with length prefix)
         let mut data = Vec::new();
-        data.extend_from_slice(&encode_avro_long(1));         // block_count = 1
+        data.extend_from_slice(&encode_avro_long(1)); // block_count = 1
         data.extend_from_slice(&encode_avro_bytes(b"hello")); // key = "hello"
         data.extend_from_slice(&encode_avro_bytes(b"world")); // value = "world"
         decoder.decode(&mut AvroCursor::new(&data)).unwrap();
         let array = decoder.flush(None).unwrap();
         let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(map_arr.len(), 1); // Verify 1 map
-        assert_eq!(map_arr.value_length(0), 1); // Verify 1 entry in the map
+        assert_eq!(map_arr.len(), 1); // One map
+        assert_eq!(map_arr.value_length(0), 1); // One entry in the map
         let entries = map_arr.value(0);
         let struct_entries = entries.as_any().downcast_ref::<StructArray>().unwrap();
-        assert_eq!(struct_entries.len(), 1); // Verify 1 entry in StructArray
+        assert_eq!(struct_entries.len(), 1); // One entry in StructArray
         let key = struct_entries
             .column_by_name("key")
             .unwrap()
@@ -643,7 +732,7 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        assert_eq!(key.value(0), "hello");  // Verify Key
+        assert_eq!(key.value(0), "hello"); // Verify Key
         assert_eq!(value.value(0), "world"); // Verify Value
     }
 
@@ -652,17 +741,18 @@ mod tests {
         let value_type = AvroDataType::from_codec(Codec::Utf8);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
         let mut decoder = Decoder::try_new(&map_type).unwrap();
+        // Encode an empty map
         // Avro encoding for an empty map:
-        // - block_count: 0 (no entries)
+        // - block_count: 0 (encoded as [0] due to ZigZag)
         let data = encode_avro_long(0); // block_count = 0
         decoder.decode(&mut AvroCursor::new(&data)).unwrap();
         let array = decoder.flush(None).unwrap();
         let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
-        assert_eq!(map_arr.len(), 1); // Verify 1 map
-        assert_eq!(map_arr.value_length(0), 0); // Verify 0 entries in the map
+        assert_eq!(map_arr.len(), 1); // One map
+        assert_eq!(map_arr.value_length(0), 0); // Zero entries in the map
         let entries = map_arr.value(0);
         let struct_entries = entries.as_any().downcast_ref::<StructArray>().unwrap();
-        assert_eq!(struct_entries.len(), 0); // // Verify 0 entries StructArray
+        assert_eq!(struct_entries.len(), 0); // Zero entries in StructArray
         let key = struct_entries
             .column_by_name("key")
             .unwrap()
@@ -710,32 +800,197 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal_decoding_bytes() {
+    fn test_decimal_decoding_bytes_with_nulls() {
         let dt = AvroDataType::from_codec(Codec::Decimal(4, Some(1), None));
         let mut decoder = Decoder::try_new(&dt).unwrap();
-        let unscaled_row1: i128 = 1234;   // 123.4
-        let unscaled_row2: i128 = -1234;  // -123.4
-        // Note: convert unscaled values to big-endian bytes
-        let bytes_row1 = unscaled_row1.to_be_bytes();
-        let bytes_row2 = unscaled_row2.to_be_bytes();
-        // Row1: 1234 => 0x04D2 (2 bytes)
-        // Row2: -1234 => two's complement of 0x04D2 = 0xFB2E (2 bytes)
-        let row1_bytes = &bytes_row1[14..16]; // Last 2 bytes
-        let row2_bytes = &bytes_row2[14..16]; // Last 2 bytes
+        // Wrap the decimal in a Nullable decoder
+        let mut nullable_decoder = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(decoder),
+        );
+        // Row1: 123.4 => unscaled: 1234 => bytes: [0x04, 0xD2]
+        // Row2: null
+        // Row3: -123.4 => unscaled: -1234 => bytes: [0xFB, 0x2E]
         let mut data = Vec::new();
-        // Encode row1
-        data.extend_from_slice(&encode_avro_long(2)); // Length=2
-        data.extend_from_slice(row1_bytes);          // 0x04, 0xD2
-        // Encode row2
-        data.extend_from_slice(&encode_avro_long(2)); // Length=2
-        data.extend_from_slice(row2_bytes);          // 0xFB, 0x2E
+        // Row1: valid
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_bytes(&[0x04, 0xD2])); // 0x04D2 = 1234
+        // Row2: null
+        data.extend_from_slice(&[0u8]); // is_valid = false
+        // Row3: valid
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_bytes(&[0xFB, 0x2E])); // 0xFB2E = -1234
         let mut cursor = AvroCursor::new(&data);
-        decoder.decode(&mut cursor).unwrap();
-        decoder.decode(&mut cursor).unwrap();
-        let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(dec_arr.len(), 2);
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row1: 123.4
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row2: null
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row3: -123.4
+        let array = nullable_decoder.flush(None).unwrap();
+        let dec_arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec_arr.len(), 3);
+        assert!(dec_arr.is_valid(0));
+        assert!(!dec_arr.is_valid(1));
+        assert!(dec_arr.is_valid(2));
         assert_eq!(dec_arr.value_as_string(0), "123.4");
-        assert_eq!(dec_arr.value_as_string(1), "-123.4");
+        assert_eq!(dec_arr.value_as_string(2), "-123.4");
+    }
+
+    #[test]
+    fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
+        let dt = AvroDataType::from_codec(Codec::Decimal(6, Some(2), Some(16)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        // Wrap the decimal in a Nullable decoder
+        let mut nullable_decoder = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(decoder),
+        );
+        // Correct Byte Encoding:
+        // Row1: 1234.56 => unscaled: 123456 => bytes: [0x00; 12] + [0x00, 0x01, 0xE2, 0x40]
+        // Row2: null
+        // Row3: -1234.56 => unscaled: -123456 => bytes: [0xFF; 12] + [0xFE, 0x1D, 0xC0, 0x00]
+        let row1_bytes = &[
+            0x00, 0x00, 0x00, 0x00, // First 4 bytes
+            0x00, 0x00, 0x00, 0x00, // Next 4 bytes
+            0x00, 0x00, 0x00, 0x01, // Next 4 bytes
+            0xE2, 0x40, 0x00, 0x00, // Last 4 bytes
+        ];
+        let row3_bytes = &[
+            0xFF, 0xFF, 0xFF, 0xFF, // First 4 bytes (two's complement)
+            0xFF, 0xFF, 0xFF, 0xFF, // Next 4 bytes
+            0xFF, 0xFF, 0xFE, 0x1D, // Next 4 bytes
+            0xC0, 0x00, 0x00, 0x00, // Last 4 bytes
+        ];
+
+        let mut data = Vec::new();
+        // Row1: valid
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(row1_bytes); // 1234.56
+        // Row2: null
+        data.extend_from_slice(&[0u8]); // is_valid = false
+        // Row3: valid
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(row3_bytes); // -1234.56
+
+        let mut cursor = AvroCursor::new(&data);
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row1: 1234.56
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row2: null
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row3: -1234.56
+
+        let array = nullable_decoder.flush(None).unwrap();
+        let dec_arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec_arr.len(), 3);
+        assert!(dec_arr.is_valid(0));
+        assert!(!dec_arr.is_valid(1));
+        assert!(dec_arr.is_valid(2));
+        assert_eq!(dec_arr.value_as_string(0), "1234.56");
+        assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+    }
+
+    #[test]
+    fn test_enum_decoding_with_nulls() {
+        let symbols = vec!["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
+        let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols.clone()));
+        let mut decoder = Decoder::try_new(&enum_dt).unwrap();
+
+        // Wrap the enum in a Nullable decoder
+        let mut nullable_decoder = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(decoder),
+        );
+
+        // Encode the indices [1, null, 2] using ZigZag encoding
+        // Indices: 1 -> [2], null -> no index, 2 -> [4]
+        let mut data = Vec::new();
+        // Row1: valid (1)
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_int(1)); // Encodes to [2]
+        // Row2: null
+        data.extend_from_slice(&[0u8]); // is_valid = false
+        // Row3: valid (2)
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_int(2)); // Encodes to [4]
+
+        let mut cursor = AvroCursor::new(&data);
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row1: RED
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row2: null
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row3: BLUE
+
+        let array = nullable_decoder.flush(None).unwrap();
+        let dict_arr = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
+
+        assert_eq!(dict_arr.len(), 3);
+        let keys = dict_arr.keys();
+        let validity = dict_arr.is_valid(0); // Correctly access the null buffer
+
+        assert_eq!(keys.value(0), 1);
+        assert_eq!(keys.value(1), 0); // Placeholder index for null
+        assert_eq!(keys.value(2), 2);
+
+        assert!(dict_arr.is_valid(0));
+        assert!(!dict_arr.is_valid(1)); // Ensure the second entry is null
+        assert!(dict_arr.is_valid(2));
+
+        let dict_values = dict_arr.values().as_string::<i32>();
+        assert_eq!(dict_values.value(0), "RED");
+        assert_eq!(dict_values.value(1), "GREEN");
+        assert_eq!(dict_values.value(2), "BLUE");
+    }
+
+    #[test]
+    fn test_enum_with_nullable_entries() {
+        let symbols = vec!["APPLE".to_string(), "BANANA".to_string(), "CHERRY".to_string()];
+        let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols.clone()));
+        let mut decoder = Decoder::try_new(&enum_dt).unwrap();
+
+        // Wrap the enum in a Nullable decoder
+        let mut nullable_decoder = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(decoder),
+        );
+
+        // Encode the indices [0, null, 2, 1] using ZigZag encoding
+        let mut data = Vec::new();
+        // Row1: valid (0) -> "APPLE"
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_int(0)); // Encodes to [0]
+        // Row2: null
+        data.extend_from_slice(&[0u8]); // is_valid = false
+        // Row3: valid (2) -> "CHERRY"
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_int(2)); // Encodes to [4]
+        // Row4: valid (1) -> "BANANA"
+        data.extend_from_slice(&[1u8]); // is_valid = true
+        data.extend_from_slice(&encode_avro_int(1)); // Encodes to [2]
+
+        let mut cursor = AvroCursor::new(&data);
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row1: APPLE
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row2: null
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row3: CHERRY
+        nullable_decoder.decode(&mut cursor).unwrap(); // Row4: BANANA
+
+        let array = nullable_decoder.flush(None).unwrap();
+        let dict_arr = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
+
+        assert_eq!(dict_arr.len(), 4);
+        let keys = dict_arr.keys();
+        let validity = dict_arr.is_valid(0); // Correctly access the null buffer
+
+        assert_eq!(keys.value(0), 0);
+        assert_eq!(keys.value(1), 0); // Placeholder index for null
+        assert_eq!(keys.value(2), 2);
+        assert_eq!(keys.value(3), 1);
+
+        assert!(dict_arr.is_valid(0));
+        assert!(!dict_arr.is_valid(1)); // Ensure the second entry is null
+        assert!(dict_arr.is_valid(2));
+        assert!(dict_arr.is_valid(3));
+
+        let dict_values = dict_arr.values().as_string::<i32>();
+        assert_eq!(dict_values.value(0), "APPLE");
+        assert_eq!(dict_values.value(1), "BANANA");
+        assert_eq!(dict_values.value(2), "CHERRY");
     }
 }

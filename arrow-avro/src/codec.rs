@@ -29,6 +29,7 @@ use arrow_array::{ArrayRef, Int32Array, StringArray, StructArray, RecordBatch};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use arrow_schema::DataType::*;
 
 /// Avro types are not nullable, with nullability instead encoded as a union
 /// where one of the variants is the null type.
@@ -207,43 +208,43 @@ impl Codec {
     /// Convert this to an Arrow `DataType`
     fn data_type(&self) -> DataType {
         match self {
-            Self::Null => DataType::Null,
-            Self::Boolean => DataType::Boolean,
-            Self::Int32 => DataType::Int32,
-            Self::Int64 => DataType::Int64,
-            Self::Float32 => DataType::Float32,
-            Self::Float64 => DataType::Float64,
-            Self::Binary => DataType::Binary,
-            Self::Utf8 => DataType::Utf8,
-            Self::Date32 => DataType::Date32,
-            Self::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
-            Self::TimeMicros => DataType::Time64(TimeUnit::Microsecond),
+            Self::Null => Null,
+            Self::Boolean => Boolean,
+            Self::Int32 => Int32,
+            Self::Int64 => Int64,
+            Self::Float32 => Float32,
+            Self::Float64 => Float64,
+            Self::Binary => Binary,
+            Self::Utf8 => Utf8,
+            Self::Date32 => Date32,
+            Self::TimeMillis => Time32(TimeUnit::Millisecond),
+            Self::TimeMicros => Time64(TimeUnit::Microsecond),
             Self::TimestampMillis(is_utc) => {
-                DataType::Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
+                Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
             }
             Self::TimestampMicros(is_utc) => {
-                DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
+                Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
             }
-            Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
-            Self::Fixed(size) => DataType::FixedSizeBinary(*size),
+            Self::Interval => Interval(IntervalUnit::MonthDayNano),
+            Self::Fixed(size) => FixedSizeBinary(*size),
             Self::List(f) => {
-                DataType::List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
+                List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
             }
-            Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
+            Self::Struct(f) => Struct(f.iter().map(|x| x.field()).collect()),
             Self::Enum(_symbols) => {
                 // Produce a Dictionary type with index = Int32, value = Utf8
-                DataType::Dictionary(
+                Dictionary(
                     Box::new(DataType::Int32),
                     Box::new(DataType::Utf8),
                 )
             }
             Self::Map(values) => {
-                DataType::Map(
+                Map(
                     Arc::new(Field::new(
                         "entries",
-                        DataType::Struct(
+                        Struct(
                             Fields::from(vec![
-                                Field::new("key", DataType::Utf8, false),
+                                Field::new("key", Utf8, false),
                                 values.field_with_name("value"),
                             ])
                         ),
@@ -254,19 +255,19 @@ impl Codec {
             }
             Self::Decimal(precision, scale, size) => match size {
                 Some(s) if *s > 16 && *s <= 32 => {
-                    DataType::Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
+                    Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
                 },
                 Some(s) if *s <= 16 => {
-                    DataType::Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
+                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
                 },
                 _ => {
                     // Note: Infer based on precision when size is None
                     if *precision <= DECIMAL128_MAX_PRECISION as usize
                         && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize
                     {
-                        DataType::Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
+                        Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
                     } else {
-                        DataType::Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
+                        Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
                     }
                 }
             },
@@ -687,8 +688,6 @@ fn make_data_type<'a>(
 
 /// Convert an Arrow `Field` into an `AvroField`.
 pub fn arrow_field_to_avro_field(arrow_field: &Field) -> AvroField {
-    // Basic metadata logic:
-    // If arrow_field.metadata().get("namespace") is present, we store it below in AvroDataType
     let codec = arrow_type_to_codec(arrow_field.data_type());
     let nullability = if arrow_field.is_nullable() {
         Some(Nullability::NullFirst)
@@ -709,7 +708,6 @@ pub fn arrow_field_to_avro_field(arrow_field: &Field) -> AvroField {
 
 /// Maps an Arrow `DataType` to a `Codec`.
 fn arrow_type_to_codec(dt: &DataType) -> Codec {
-    use arrow_schema::DataType::*;
     match dt {
         Null => Codec::Null,
         Boolean => Codec::Boolean,
@@ -742,13 +740,9 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
             Some(32),
         ),
         Dictionary(index_type, value_type) => {
-            let mut md = HashMap::new();
-            md.insert("dictionary_index_type".to_string(), format!("{:?}", index_type));
-            if matches!(value_type.as_ref(), Utf8 | LargeUtf8) {
-                let mut dt = AvroDataType::from_codec(Codec::Enum(vec![]));
-                dt.metadata.extend(md);
+            if let Utf8 = **value_type {
                 Codec::Enum(vec![])
-            } else { // fallback
+            } else {  // Fallback to Utf8
                 Codec::Utf8
             }
         }
@@ -785,7 +779,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_tuple_variant_fixed() {
-        let c = arrow_type_to_codec(&DataType::Decimal256(60, 3));
+        let c = arrow_type_to_codec(&Decimal256(60, 3));
         match c {
             Codec::Decimal(p, s, Some(32)) => {
                 assert_eq!(p, 60);
@@ -813,7 +807,7 @@ mod tests {
         let c = Codec::Decimal(6, Some(2), Some(4));
         let dt = c.data_type();
         match dt {
-            DataType::Decimal128(p, s) => {
+            Decimal128(p, s) => {
                 assert_eq!(p, 6);
                 assert_eq!(s, 2);
             }
@@ -839,7 +833,7 @@ mod tests {
         let codec = Codec::Decimal(10, Some(3), Some(16));
         let dt = codec.data_type();
         match dt {
-            DataType::Decimal128(precision, scale) => {
+            Decimal128(precision, scale) => {
                 assert_eq!(precision, 10);
                 assert_eq!(scale, 3);
             }
@@ -848,7 +842,7 @@ mod tests {
         let codec = Codec::Decimal(18, Some(4), Some(32));
         let dt = codec.data_type();
         match dt {
-            DataType::Decimal256(precision, scale) => {
+            Decimal256(precision, scale) => {
                 assert_eq!(precision, 18);
                 assert_eq!(scale, 4);
             }
@@ -857,7 +851,7 @@ mod tests {
         let codec = Codec::Decimal(8, Some(2), None);
         let dt = codec.data_type();
         match dt {
-            DataType::Decimal128(precision, scale) => {
+            Decimal128(precision, scale) => {
                 assert_eq!(precision, 8);
                 assert_eq!(scale, 2);
             }
@@ -995,7 +989,7 @@ mod tests {
     fn test_arrow_field_to_avro_field() {
         let arrow_field = Field::new(
             "test_meta",
-            DataType::Utf8,
+            Utf8,
             true,
         ).with_metadata(HashMap::from([
             ("namespace".to_string(), "arrow_meta_ns".to_string())
@@ -1029,7 +1023,7 @@ mod tests {
         let codec = Codec::Struct(fields);
         let dt = codec.data_type();
         match dt {
-            DataType::Struct(fields) => {
+            Struct(fields) => {
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].name(), "a");
                 assert_eq!(fields[0].data_type(), &DataType::Boolean);
@@ -1045,7 +1039,7 @@ mod tests {
         let codec = Codec::Fixed(12);
         let dt = codec.data_type();
         match dt {
-            DataType::FixedSizeBinary(n) => assert_eq!(n, 12),
+            FixedSizeBinary(n) => assert_eq!(n, 12),
             _ => panic!("Expected FixedSizeBinary(12)"),
         }
     }
@@ -1054,7 +1048,7 @@ mod tests {
     fn test_utc_timestamp_millis() {
         let arrow_field = Field::new(
             "utc_ts_ms",
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
+            Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -1070,7 +1064,7 @@ mod tests {
     fn test_utc_timestamp_micros() {
         let arrow_field = Field::new(
             "utc_ts_us",
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -1086,7 +1080,7 @@ mod tests {
     fn test_local_timestamp_millis() {
         let arrow_field = Field::new(
             "local_ts_ms",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Timestamp(TimeUnit::Millisecond, None),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -1102,7 +1096,7 @@ mod tests {
     fn test_local_timestamp_micros() {
         let arrow_field = Field::new(
             "local_ts_us",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Timestamp(TimeUnit::Microsecond, None),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
