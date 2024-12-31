@@ -371,6 +371,53 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
 }
 );
 
+fn equals_bytes<Lhs: SupportedPredicateItem + ?Sized, Rhs: SupportedPredicateItem + ?Sized>(
+    lhs: &Lhs,
+    rhs: &Rhs,
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
+    lhs.len() == rhs.len() && zip(lhs.as_bytes(), rhs.as_bytes()).all(byte_eq_kernel)
+}
+
+/// This is faster than `str::starts_with` for small strings.
+/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
+fn starts_with<T: SupportedPredicateItem + ?Sized>(
+    haystack: &T,
+    needle: &T,
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
+    }
+}
+/// This is faster than `str::ends_with` for small strings.
+/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
+fn ends_with<T: SupportedPredicateItem + ?Sized>(
+    haystack: &T,
+    needle: &T,
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
+    if needle.len() > haystack.len() {
+        false
+    } else {
+        zip(
+            haystack.as_bytes().iter().rev(),
+            needle.as_bytes().iter().rev(),
+        )
+        .all(byte_eq_kernel)
+    }
+}
+
+fn equals_kernel((n, h): (&u8, &u8)) -> bool {
+    n == h
+}
+
+fn equals_ignore_ascii_case_kernel((n, h): (&u8, &u8)) -> bool {
+    n.eq_ignore_ascii_case(h)
+}
+
 /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
 ///
 /// 1. Replace `LIKE` multi-character wildcards `%` => `.*` (unless they're at the start or end of the pattern,
@@ -429,53 +476,6 @@ fn transform_pattern_like_to_regex_compatible_pattern<T: SupportedPredicateItem 
     }
 
     result
-}
-
-fn equals_bytes<Lhs: SupportedPredicateItem + ?Sized, Rhs: SupportedPredicateItem + ?Sized>(
-    lhs: &Lhs,
-    rhs: &Rhs,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
-    lhs.len() == rhs.len() && zip(lhs.as_bytes(), rhs.as_bytes()).all(byte_eq_kernel)
-}
-
-/// This is faster than `str::starts_with` for small strings.
-/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn starts_with<T: SupportedPredicateItem + ?Sized>(
-    haystack: &T,
-    needle: &T,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
-    if needle.len() > haystack.len() {
-        false
-    } else {
-        zip(haystack.as_bytes(), needle.as_bytes()).all(byte_eq_kernel)
-    }
-}
-/// This is faster than `str::ends_with` for small strings.
-/// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn ends_with<T: SupportedPredicateItem + ?Sized>(
-    haystack: &T,
-    needle: &T,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
-    if needle.len() > haystack.len() {
-        false
-    } else {
-        zip(
-            haystack.as_bytes().iter().rev(),
-            needle.as_bytes().iter().rev(),
-        )
-        .all(byte_eq_kernel)
-    }
-}
-
-fn equals_kernel((n, h): (&u8, &u8)) -> bool {
-    n == h
-}
-
-fn equals_ignore_ascii_case_kernel((n, h): (&u8, &u8)) -> bool {
-    n.eq_ignore_ascii_case(h)
 }
 
 fn contains_like_pattern<T: SupportedPredicateItem + ?Sized>(pattern: &T) -> bool {
