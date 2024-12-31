@@ -25,7 +25,7 @@ use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
 
-use crate::builder::ArrayBuilder;
+use crate::builder::{ArrayBuilder, ValuesBuilder};
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{ArrayRef, GenericByteViewArray};
@@ -272,6 +272,56 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
     }
 
+    /// Builds the [`GenericByteViewArray`] and reset this builder
+    pub fn finish(&mut self) -> GenericByteViewArray<T> {
+        self.flush_in_progress();
+        let completed = std::mem::take(&mut self.completed);
+        let len = self.views_builder.len();
+        let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
+        let nulls = self.null_buffer_builder.finish();
+        if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
+            ht.clear();
+        }
+        // SAFETY: valid by construction
+        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
+    }
+
+    /// Builds the [`GenericByteViewArray`] without resetting the builder
+    pub fn finish_cloned(&self) -> GenericByteViewArray<T> {
+        let mut completed = self.completed.clone();
+        if !self.in_progress.is_empty() {
+            completed.push(Buffer::from_slice_ref(&self.in_progress));
+        }
+        let len = self.views_builder.len();
+        let views = Buffer::from_slice_ref(self.views_builder.as_slice());
+        let views = ScalarBuffer::new(views, 0, len);
+        let nulls = self.null_buffer_builder.finish_cloned();
+        // SAFETY: valid by construction
+        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
+
+    /// Return the allocated size of this builder in bytes, useful for memory accounting.
+    pub fn allocated_size(&self) -> usize {
+        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
+        let null = self.null_buffer_builder.allocated_size();
+        let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
+        let in_progress = self.in_progress.capacity();
+        let tracker = match &self.string_tracker {
+            Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
+            None => 0,
+        };
+        buffer_size + in_progress + tracker + views + null
+    }
+}
+
+impl<T: ByteViewType + ?Sized> ValuesBuilder<T> for GenericByteViewBuilder<T> {
+    type Value = T::Native;
+
     /// Appends a value into the builder
     ///
     /// # Panics
@@ -280,7 +330,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String buffer count exceeds `u32::MAX`
     /// - String length exceeds `u32::MAX`
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+    fn append_value(&mut self, value: impl AsRef<Self::Value>) {
         let v: &[u8] = value.as_ref().as_ref();
         let length: u32 = v.len().try_into().unwrap();
         if length <= 12 {
@@ -347,7 +397,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Append an `Option` value into the builder
     #[inline]
-    pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
+    fn append_option(&mut self, value: Option<impl AsRef<Self::Value>>) {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
@@ -356,55 +406,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Append a null value into the builder
     #[inline]
-    pub fn append_null(&mut self) {
+    fn append_null(&mut self) {
         self.null_buffer_builder.append_null();
         self.views_builder.append(0);
-    }
-
-    /// Builds the [`GenericByteViewArray`] and reset this builder
-    pub fn finish(&mut self) -> GenericByteViewArray<T> {
-        self.flush_in_progress();
-        let completed = std::mem::take(&mut self.completed);
-        let len = self.views_builder.len();
-        let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
-        let nulls = self.null_buffer_builder.finish();
-        if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
-            ht.clear();
-        }
-        // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
-    }
-
-    /// Builds the [`GenericByteViewArray`] without resetting the builder
-    pub fn finish_cloned(&self) -> GenericByteViewArray<T> {
-        let mut completed = self.completed.clone();
-        if !self.in_progress.is_empty() {
-            completed.push(Buffer::from_slice_ref(&self.in_progress));
-        }
-        let len = self.views_builder.len();
-        let views = Buffer::from_slice_ref(self.views_builder.as_slice());
-        let views = ScalarBuffer::new(views, 0, len);
-        let nulls = self.null_buffer_builder.finish_cloned();
-        // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
-    }
-
-    /// Returns the current null buffer as a slice
-    pub fn validity_slice(&self) -> Option<&[u8]> {
-        self.null_buffer_builder.as_slice()
-    }
-
-    /// Return the allocated size of this builder in bytes, useful for memory accounting.
-    pub fn allocated_size(&self) -> usize {
-        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
-        let null = self.null_buffer_builder.allocated_size();
-        let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
-        let in_progress = self.in_progress.capacity();
-        let tracker = match &self.string_tracker {
-            Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
-            None => 0,
-        };
-        buffer_size + in_progress + tracker + views + null
     }
 }
 

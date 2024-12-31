@@ -24,6 +24,8 @@ use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
 
+use super::ValuesBuilder;
+
 /// Builder for [`GenericByteArray`]
 ///
 /// For building strings, see docs on [`GenericStringBuilder`].
@@ -84,49 +86,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     #[inline]
     fn next_offset(&self) -> T::Offset {
         T::Offset::from_usize(self.value_builder.len()).expect("byte array offset overflow")
-    }
-
-    /// Appends a value into the builder.
-    ///
-    /// See the [GenericStringBuilder] documentation for examples of
-    /// incrementally building string values with multiple `write!` calls.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the resulting length of [`Self::values_slice`] would exceed
-    /// `T::Offset::MAX` bytes.
-    ///
-    /// For example, this can happen with [`StringArray`] or [`BinaryArray`]
-    /// where the total length of all values exceeds 2GB
-    ///
-    /// [`StringArray`]: crate::StringArray
-    /// [`BinaryArray`]: crate::BinaryArray
-    #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
-        self.value_builder.append_slice(value.as_ref().as_ref());
-        self.null_buffer_builder.append(true);
-        self.offsets_builder.append(self.next_offset());
-    }
-
-    /// Append an `Option` value into the builder.
-    ///
-    /// - A `None` value will append a null value.
-    /// - A `Some` value will append the value.
-    ///
-    /// See [`Self::append_value`] for more panic information.
-    #[inline]
-    pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
-        match value {
-            None => self.append_null(),
-            Some(v) => self.append_value(v),
-        };
-    }
-
-    /// Append a null value into the builder.
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.null_buffer_builder.append(false);
-        self.offsets_builder.append(self.next_offset());
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -225,6 +184,53 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the boxed builder as a box of `Any`.
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
+    }
+}
+
+impl<T: ByteArrayType> ValuesBuilder<T> for GenericByteBuilder<T> {
+    type Value = T::Native;
+
+    /// Appends a value into the builder.
+    ///
+    /// See the [GenericStringBuilder] documentation for examples of
+    /// incrementally building string values with multiple `write!` calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resulting length of [`Self::values_slice`] would exceed
+    /// `T::Offset::MAX` bytes.
+    ///
+    /// For example, this can happen with [`StringArray`] or [`BinaryArray`]
+    /// where the total length of all values exceeds 2GB
+    ///
+    /// [`StringArray`]: crate::StringArray
+    /// [`BinaryArray`]: crate::BinaryArray
+    #[inline]
+    fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.value_builder.append_slice(value.as_ref().as_ref());
+        self.null_buffer_builder.append(true);
+        self.offsets_builder.append(self.next_offset());
+    }
+
+    /// Append an `Option` value into the builder.
+    ///
+    /// - A `None` value will append a null value.
+    /// - A `Some` value will append the value.
+    ///
+    /// See [`Self::append_value`] for more panic information.
+    #[inline]
+    fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
+        match value {
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
+        };
+    }
+
+    /// Append a null value into the builder.
+    #[inline]
+    fn append_null(&mut self) {
+        self.null_buffer_builder.append(false);
+        self.offsets_builder.append(self.next_offset());
     }
 }
 

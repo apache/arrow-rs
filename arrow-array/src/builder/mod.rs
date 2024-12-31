@@ -298,6 +298,22 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
     }
 }
 
+/// Trait for common interfaces used by [`ArrayBuilder`]s
+/// when building a list of values.
+pub trait ValuesBuilder<T: ?Sized>: ArrayBuilder + Send + Sync {
+    /// Type of value.
+    type Value: ?Sized;
+
+    /// Append a null value.
+    fn append_null(&mut self);
+
+    /// Append a non-null value.
+    fn append_value(&mut self, value: impl AsRef<Self::Value>);
+
+    /// Append a value, which may be null.
+    fn append_option(&mut self, value: Option<impl AsRef<Self::Value>>);
+}
+
 /// Builder for [`ListArray`](crate::array::ListArray)
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 

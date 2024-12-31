@@ -23,7 +23,7 @@ use crate::{
     ArrayRef, ArrowPrimitiveType, RunArray,
 };
 
-use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
+use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder, ValuesBuilder};
 
 use arrow_buffer::ArrowNativeType;
 
@@ -155,13 +155,11 @@ where
     }
 }
 
-impl<R, V> GenericByteRunBuilder<R, V>
-where
-    R: RunEndIndexType,
-    V: ByteArrayType,
-{
+impl<R: RunEndIndexType, T: ByteArrayType> ValuesBuilder<T> for GenericByteRunBuilder<R, T> {
+    type Value = T::Native;
+
     /// Appends optional value to the logical array encoded by the RunArray.
-    pub fn append_option(&mut self, input_value: Option<impl AsRef<V::Native>>) {
+    fn append_option(&mut self, input_value: Option<impl AsRef<Self::Value>>) {
         match input_value {
             Some(value) => self.append_value(value),
             None => self.append_null(),
@@ -169,7 +167,7 @@ where
     }
 
     /// Appends value to the logical array encoded by the RunArray.
-    pub fn append_value(&mut self, input_value: impl AsRef<V::Native>) {
+    fn append_value(&mut self, input_value: impl AsRef<Self::Value>) {
         let value: &[u8] = input_value.as_ref().as_ref();
         if !self.has_current_value {
             self.append_run_end();
@@ -184,7 +182,7 @@ where
     }
 
     /// Appends null to the logical array encoded by the RunArray.
-    pub fn append_null(&mut self) {
+    fn append_null(&mut self) {
         if self.has_current_value {
             self.append_run_end();
             self.current_value.clear();
@@ -192,7 +190,13 @@ where
         }
         self.current_run_end_index += 1;
     }
+}
 
+impl<R, V> GenericByteRunBuilder<R, V>
+where
+    R: RunEndIndexType,
+    V: ByteArrayType,
+{
     /// Creates the RunArray and resets the builder.
     /// Panics if RunArray cannot be built.
     pub fn finish(&mut self) -> RunArray<R> {
