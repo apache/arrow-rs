@@ -423,7 +423,7 @@ impl Schema {
     ///
     ///     "foo.bar": Utf8
     ///
-    /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`, 
+    /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`,
     /// normalizes all levels.
     ///
     /// This carries metadata from the parent schema over.
