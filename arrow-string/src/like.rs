@@ -17,7 +17,7 @@
 
 //! Provide SQL's LIKE operators for Arrow's string arrays
 
-use crate::predicate::Predicate;
+use crate::predicate::{BinaryPredicate, Predicate, PredicateImpl};
 
 use arrow_array::cast::AsArray;
 use arrow_array::*;
@@ -27,6 +27,7 @@ use arrow_select::take::take;
 use std::sync::Arc;
 
 pub use arrow_array::StringArrayType;
+use arrow_schema::DataType::{LargeUtf8, Utf8, Utf8View};
 
 #[derive(Debug)]
 enum Op {
@@ -133,12 +134,12 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
 
     match (l.data_type(), r.data_type()) {
         (Utf8, Utf8) => {
-            apply::<&GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+            apply::<Predicate, &GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v, |a| a.is_ascii(), |a| a.as_bytes())
         }
         (LargeUtf8, LargeUtf8) => {
-            apply::<&GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+            apply::<Predicate, &GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v, |a| a.is_ascii(), |a| a.as_bytes())
         }
-        (Utf8View, Utf8View) => apply::<&StringViewArray>(
+        (Utf8View, Utf8View) => apply::<Predicate, &StringViewArray>(
             op,
             l.as_string_view(),
             l_s,
@@ -146,6 +147,25 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
             r.as_string_view(),
             r_s,
             r_v,
+            |a| a.is_ascii(),
+            |a| a.as_bytes()
+        ),
+        (Binary, Binary) => {
+            apply::<BinaryPredicate, &GenericBinaryArray<i32>>(op, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v, |a| a.is_ascii(), |a| a)
+        }
+        (LargeBinary, LargeBinary) => {
+            apply::<BinaryPredicate, &GenericBinaryArray<i64>>(op, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v, |a| a.is_ascii(), |a| a)
+        }
+        (BinaryView, BinaryView) => apply::<BinaryPredicate, &BinaryViewArray>(
+            op,
+            l.as_binary_view(),
+            l_s,
+            l_v,
+            r.as_binary_view(),
+            r_s,
+            r_v,
+            |a| a.is_ascii(),
+            |a| a
         ),
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid string operation: {l_t} {op} {r_t}"
@@ -153,7 +173,7 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     }
 }
 
-fn apply<'a, T: StringArrayType<'a> + 'a>(
+fn apply<'a, Predicate: PredicateImpl<'a> + 'a, T: ArrayAccessor<Item = &'a Predicate::UnsizedItem> + IntoIterator<Item = Option<&'a Predicate::UnsizedItem>> + Sized + 'a>(
     op: Op,
     l: T,
     l_s: bool,
@@ -161,6 +181,8 @@ fn apply<'a, T: StringArrayType<'a> + 'a>(
     r: T,
     r_s: bool,
     r_v: Option<&'a dyn AnyDictionaryArray>,
+    is_ascii: impl Fn(&T) -> bool,
+    as_bytes: impl Fn(&'a Predicate::UnsizedItem) -> &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
@@ -172,50 +194,51 @@ fn apply<'a, T: StringArrayType<'a> + 'a>(
         if r.is_null(idx) {
             return Ok(BooleanArray::new_null(l_len));
         }
-        op_scalar::<T>(op, l, l_v, r.value(idx))
+        op_scalar::<Predicate, T>(op, l, l_v, r.value(idx), is_ascii)
     } else {
         match (l_s, l_v, r_v) {
             (true, None, None) => {
                 let v = l.is_valid(0).then(|| l.value(0));
-                op_binary(op, std::iter::repeat(v), r.iter())
+                op_binary::<Predicate>(op, std::iter::repeat(v), r.into_iter(), as_bytes)
             }
             (true, Some(l_v), None) => {
                 let idx = l_v.is_valid(0).then(|| l_v.normalized_keys()[0]);
                 let v = idx.and_then(|idx| l.is_valid(idx).then(|| l.value(idx)));
-                op_binary(op, std::iter::repeat(v), r.iter())
+                op_binary::<Predicate>(op, std::iter::repeat(v), r.into_iter(), as_bytes)
             }
             (true, None, Some(r_v)) => {
                 let v = l.is_valid(0).then(|| l.value(0));
-                op_binary(op, std::iter::repeat(v), vectored_iter(r, r_v))
+                op_binary::<Predicate>(op, std::iter::repeat(v), vectored_iter::<Predicate, T>(r, r_v), as_bytes)
             }
             (true, Some(l_v), Some(r_v)) => {
                 let idx = l_v.is_valid(0).then(|| l_v.normalized_keys()[0]);
                 let v = idx.and_then(|idx| l.is_valid(idx).then(|| l.value(idx)));
-                op_binary(op, std::iter::repeat(v), vectored_iter(r, r_v))
+                op_binary::<Predicate>(op, std::iter::repeat(v), vectored_iter::<Predicate, T>(r, r_v), as_bytes)
             }
-            (false, None, None) => op_binary(op, l.iter(), r.iter()),
-            (false, Some(l_v), None) => op_binary(op, vectored_iter(l, l_v), r.iter()),
-            (false, None, Some(r_v)) => op_binary(op, l.iter(), vectored_iter(r, r_v)),
+            (false, None, None) => op_binary::<Predicate>(op, l.into_iter(), r.into_iter(), as_bytes),
+            (false, Some(l_v), None) => op_binary::<Predicate>(op, vectored_iter::<Predicate, T>(l, l_v), r.into_iter(), as_bytes),
+            (false, None, Some(r_v)) => op_binary::<Predicate>(op, l.into_iter(), vectored_iter::<Predicate, T>(r, r_v), as_bytes),
             (false, Some(l_v), Some(r_v)) => {
-                op_binary(op, vectored_iter(l, l_v), vectored_iter(r, r_v))
+                op_binary::<Predicate>(op, vectored_iter::<Predicate, T>(l, l_v), vectored_iter::<Predicate, T>(r, r_v), as_bytes)
             }
         }
     }
 }
 
 #[inline(never)]
-fn op_scalar<'a, T: StringArrayType<'a>>(
+fn op_scalar<'a, Predicate: PredicateImpl<'a>, T: ArrayAccessor<Item = &'a Predicate::UnsizedItem>>(
     op: Op,
     l: T,
     l_v: Option<&dyn AnyDictionaryArray>,
-    r: &str,
+    r: &'a Predicate::UnsizedItem,
+    is_ascii: impl Fn(&T) -> bool,
 ) -> Result<BooleanArray, ArrowError> {
     let r = match op {
         Op::Like(neg) => Predicate::like(r)?.evaluate_array(l, neg),
-        Op::ILike(neg) => Predicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
+        Op::ILike(neg) => Predicate::ilike(r, is_ascii(&l))?.evaluate_array(l, neg),
         Op::Contains => Predicate::contains(r).evaluate_array(l, false),
-        Op::StartsWith => Predicate::StartsWith(r).evaluate_array(l, false),
-        Op::EndsWith => Predicate::EndsWith(r).evaluate_array(l, false),
+        Op::StartsWith => Predicate::starts_with(r).evaluate_array(l, false),
+        Op::EndsWith => Predicate::ends_with(r).evaluate_array(l, false),
     };
 
     Ok(match l_v {
@@ -224,10 +247,10 @@ fn op_scalar<'a, T: StringArrayType<'a>>(
     })
 }
 
-fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
+fn vectored_iter<'a, Predicate: PredicateImpl<'a> + 'a, T: ArrayAccessor<Item = &'a Predicate::UnsizedItem> + Sized + 'a>(
     a: T,
     a_v: &'a dyn AnyDictionaryArray,
-) -> impl Iterator<Item = Option<&'a str>> + 'a {
+) -> impl Iterator<Item = Option<&'a Predicate::UnsizedItem>> + 'a {
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
@@ -239,35 +262,36 @@ fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
 }
 
 #[inline(never)]
-fn op_binary<'a>(
+fn op_binary<'a, Predicate: PredicateImpl<'a> + 'a>(
     op: Op,
-    l: impl Iterator<Item = Option<&'a str>>,
-    r: impl Iterator<Item = Option<&'a str>>,
+    l: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
+    r: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
+    as_bytes: impl Fn(&'a Predicate::UnsizedItem) -> &[u8],
 ) -> Result<BooleanArray, ArrowError> {
     match op {
         Op::Like(neg) => binary_predicate(l, r, neg, Predicate::like),
         Op::ILike(neg) => binary_predicate(l, r, neg, |s| Predicate::ilike(s, false)),
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(l?, r?))).collect()),
+        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(as_bytes(l?), as_bytes(r?)))).collect()),
         Op::StartsWith => Ok(l
             .zip(r)
-            .map(|(l, r)| Some(Predicate::StartsWith(r?).evaluate(l?)))
+            .map(|(l, r)| Some(Predicate::starts_with(r?).evaluate(l?)))
             .collect()),
         Op::EndsWith => Ok(l
             .zip(r)
-            .map(|(l, r)| Some(Predicate::EndsWith(r?).evaluate(l?)))
+            .map(|(l, r)| Some(Predicate::ends_with(r?).evaluate(l?)))
             .collect()),
     }
 }
 
-fn str_contains(haystack: &str, needle: &str) -> bool {
-    memchr::memmem::find(haystack.as_bytes(), needle.as_bytes()).is_some()
+fn str_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
-fn binary_predicate<'a>(
-    l: impl Iterator<Item = Option<&'a str>>,
-    r: impl Iterator<Item = Option<&'a str>>,
+fn binary_predicate<'a, Predicate: PredicateImpl<'a> + 'a>(
+    l: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
+    r: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
     neg: bool,
-    f: impl Fn(&'a str) -> Result<Predicate<'a>, ArrowError>,
+    f: impl Fn(&'a Predicate::UnsizedItem) -> Result<Predicate, ArrowError>,
 ) -> Result<BooleanArray, ArrowError> {
     let mut previous = None;
     l.zip(r)
@@ -275,7 +299,7 @@ fn binary_predicate<'a>(
             (Some(l), Some(r)) => {
                 let p: &Predicate = match previous {
                     Some((expr, ref predicate)) if expr == r => predicate,
-                    _ => &previous.insert((r, f(r)?)).1,
+                    _ => &previous.insert((r, f(&r)?)).1,
                 };
                 Ok(Some(p.evaluate(l) != neg))
             }
@@ -291,6 +315,8 @@ fn make_scalar(data_type: &DataType, scalar: &str) -> Result<ArrayRef, ArrowErro
         DataType::Utf8 => Ok(Arc::new(StringArray::from_iter_values([scalar]))),
         DataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from_iter_values([scalar]))),
         DataType::Dictionary(_, v) => make_scalar(v.as_ref(), scalar),
+        DataType::Binary => Ok(Arc::new(BinaryArray::from_iter_values([scalar.as_bytes()]))),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter_values([scalar.as_bytes()]))),
         d => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported string scalar data type {d:?}",
         ))),
@@ -398,8 +424,35 @@ legacy_kernels!(
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use arrow_array::types::Int8Type;
+    use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
     use std::iter::zip;
+    use arrow_array::builder::BinaryDictionaryBuilder;
+
+
+    fn convert_binary_iterator_to_binary_dictionary<'a, K: ArrowDictionaryKeyType, I: IntoIterator<Item = &'a [u8]>>(iter: I) -> DictionaryArray<K> {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        it.for_each(|i| {
+            builder
+                .append(i)
+                .expect("Unable to append a value to a dictionary array.");
+        });
+
+        builder.finish()
+    }
+
+    fn convert_string_iterator_to_binary_dictionary<'a, K: ArrowDictionaryKeyType, I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> DictionaryArray<K> {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        it.for_each(|i| {
+            builder
+                .append_option(i.map(|i| i.as_bytes()))
+        });
+
+        builder.finish()
+    }
 
     /// Applying `op(left, right)`, both sides are arrays
     /// The macro tests four types of array implementations:
@@ -430,6 +483,25 @@ mod tests {
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let expected = BooleanArray::from($expected);
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(right_binary);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
             }
@@ -467,8 +539,43 @@ mod tests {
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.as_bytes();
+                let expected = BooleanArray::from($expected);
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
             }
         };
+    }
+
+
+    trait IntoBinaryScalar {
+        fn into_binary_scalar(self) -> Scalar<ArrayRef>;
+        fn into_large_binary_scalar(self) -> Scalar<ArrayRef>;
+    }
+
+    impl IntoBinaryScalar for &str {
+        fn into_binary_scalar(self) -> Scalar<ArrayRef> {
+            Scalar::new(make_scalar(&DataType::Binary, self).unwrap())
+        }
+
+        fn into_large_binary_scalar(self) -> Scalar<ArrayRef> {
+            Scalar::new(make_scalar(&DataType::LargeBinary, self).unwrap())
+        }
     }
 
     test_utf8!(
@@ -2884,6 +2991,1709 @@ mod tests {
             DataType::LargeUtf8 => Box::new(LargeStringArray::from_iter_values(values)),
             DataType::Utf8View => Box::new(StringViewArray::from_iter_values(values)),
             _ => unimplemented!(),
+        }
+    }
+
+
+    #[test]
+    fn test_binary_dict_like_kernels() {
+        let data = vec![
+            Some("Earth"),
+            Some("Fire"),
+            Some("Water"),
+            Some("Air"),
+            None,
+            Some("Air"),
+            Some("bbbbb\nAir"),
+        ];
+
+        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data);
+
+        assert_eq!(
+            like(&dict_array, &"Air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"Air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"Wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"Wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%r".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%r".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%i%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%i%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%a%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            like(&dict_array, &"%a%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_binary_dict_nlike_kernels() {
+        let data = vec![
+            Some("Earth"),
+            Some("Fire"),
+            Some("Water"),
+            Some("Air"),
+            None,
+            Some("Air"),
+            Some("bbbbb\nAir"),
+        ];
+
+        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data);
+
+        assert_eq!(
+            nlike(&dict_array, &"Air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"Air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"Wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"Wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%r".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%r".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%i%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%i%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%a%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nlike(&dict_array, &"%a%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_binary_dict_ilike_kernels() {
+        let data = vec![
+            Some("Earth"),
+            Some("Fire"),
+            Some("Water"),
+            Some("Air"),
+            None,
+            Some("Air"),
+            Some("bbbbb\nAir"),
+        ];
+
+        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data);
+
+        assert_eq!(
+            ilike(&dict_array, &"air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%R".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%R".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%I%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%I%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%A%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            ilike(&dict_array, &"%A%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_binary_dict_nilike_kernels() {
+        let data = vec![
+            Some("Earth"),
+            Some("Fire"),
+            Some("Water"),
+            Some("Air"),
+            None,
+            Some("Air"),
+            Some("bbbbb\nAir"),
+        ];
+
+        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data);
+
+        assert_eq!(
+            nilike(&dict_array, &"air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"air".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"wa%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%R".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%R".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%I%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%I%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%A%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+
+        assert_eq!(
+            nilike(&dict_array, &"%A%r%".into_binary_scalar()).unwrap(),
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ]),
+        );
+    }
+
+    #[test]
+    fn binary_null_like_pattern() {
+        // Different patterns have different execution code paths
+        for pattern in &[
+            "",           // can execute as equality check
+            "_",          // can execute as length check
+            "%",          // can execute as starts_with("") or non-null check
+            "a%",         // can execute as starts_with("a")
+            "%a",         // can execute as ends_with("")
+            "a%b",        // can execute as starts_with("a") && ends_with("b")
+            "%a%",        // can_execute as contains("a")
+            "%a%b_c_d%e", // can_execute as regular expression
+        ] {
+            // These tests focus on the null handling, but are case-insensitive
+            for like_f in [like, ilike, nlike, nilike] {
+                let a = Scalar::new(BinaryArray::new_null(1));
+                let b = BinaryArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = Scalar::new(BinaryArray::new_null(1));
+                let b = BinaryArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = BinaryArray::new_null(1);
+                let b = BinaryArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = BinaryArray::new_null(1);
+                let b = BinaryArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn binary_like_scalar_null() {
+        for like_f in [like, ilike, nlike, nilike] {
+            let a = BinaryArray::new_scalar("a");
+            let b = Scalar::new(BinaryArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::from_iter_values(["a"]);
+            let b = Scalar::new(BinaryArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::from_iter_values(["a"]);
+            let b = BinaryArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::new_scalar("a");
+            let b = BinaryArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+        }
+    }
+
+    #[test]
+    fn binary_like_escape() {
+        // (value, pattern, expected)
+        let test_cases = vec![
+            // Empty pattern
+            (r"", r"", true),
+            (r"\", r"", false),
+            // Sole (dangling) escape (some engines consider this invalid pattern)
+            (r"", r"\", false),
+            (r"\", r"\", true),
+            (r"\\", r"\", false),
+            (r"a", r"\", false),
+            (r"\a", r"\", false),
+            (r"\\a", r"\", false),
+            // Sole escape
+            (r"", r"\\", false),
+            (r"\", r"\\", true),
+            (r"\\", r"\\", false),
+            (r"a", r"\\", false),
+            (r"\a", r"\\", false),
+            (r"\\a", r"\\", false),
+            // Sole escape and dangling escape
+            (r"", r"\\\", false),
+            (r"\", r"\\\", false),
+            (r"\\", r"\\\", true),
+            (r"\\\", r"\\\", false),
+            (r"\\\\", r"\\\", false),
+            (r"a", r"\\\", false),
+            (r"\a", r"\\\", false),
+            (r"\\a", r"\\\", false),
+            // Sole two escapes
+            (r"", r"\\\\", false),
+            (r"\", r"\\\\", false),
+            (r"\\", r"\\\\", true),
+            (r"\\\", r"\\\\", false),
+            (r"\\\\", r"\\\\", false),
+            (r"\\\\\", r"\\\\", false),
+            (r"a", r"\\\\", false),
+            (r"\a", r"\\\\", false),
+            (r"\\a", r"\\\\", false),
+            // Escaped non-wildcard
+            (r"", r"\a", false),
+            (r"\", r"\a", false),
+            (r"\\", r"\a", false),
+            (r"a", r"\a", true),
+            (r"\a", r"\a", false),
+            (r"\\a", r"\a", false),
+            // Escaped _ wildcard
+            (r"", r"\_", false),
+            (r"\", r"\_", false),
+            (r"\\", r"\_", false),
+            (r"a", r"\_", false),
+            (r"_", r"\_", true),
+            (r"%", r"\_", false),
+            (r"\a", r"\_", false),
+            (r"\\a", r"\_", false),
+            (r"\_", r"\_", false),
+            (r"\\_", r"\_", false),
+            // Escaped % wildcard
+            (r"", r"\%", false),
+            (r"\", r"\%", false),
+            (r"\\", r"\%", false),
+            (r"a", r"\%", false),
+            (r"_", r"\%", false),
+            (r"%", r"\%", true),
+            (r"\a", r"\%", false),
+            (r"\\a", r"\%", false),
+            (r"\%", r"\%", false),
+            (r"\\%", r"\%", false),
+            // Escape and non-wildcard
+            (r"", r"\\a", false),
+            (r"\", r"\\a", false),
+            (r"\\", r"\\a", false),
+            (r"a", r"\\a", false),
+            (r"\a", r"\\a", true),
+            (r"\\a", r"\\a", false),
+            (r"\\\a", r"\\a", false),
+            // Escape and _ wildcard
+            (r"", r"\\_", false),
+            (r"\", r"\\_", false),
+            (r"\\", r"\\_", true),
+            (r"a", r"\\_", false),
+            (r"_", r"\\_", false),
+            (r"%", r"\\_", false),
+            (r"\a", r"\\_", true),
+            (r"\\a", r"\\_", false),
+            (r"\_", r"\\_", true),
+            (r"\\_", r"\\_", false),
+            (r"\\\_", r"\\_", false),
+            // Escape and % wildcard
+            (r"", r"\\%", false),
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"ab", r"\\%", false),
+            (r"a%", r"\\%", false),
+            (r"_", r"\\%", false),
+            (r"%", r"\\%", false),
+            (r"\a", r"\\%", true),
+            (r"\\a", r"\\%", true),
+            (r"\%", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"\\\%", r"\\%", true),
+            // %... pattern with dangling wildcard
+            (r"\", r"%\", true),
+            (r"\\", r"%\", true),
+            (r"%\", r"%\", true),
+            (r"%\\", r"%\", true),
+            (r"abc\", r"%\", true),
+            (r"abc", r"%\", false),
+            // %... pattern with wildcard
+            (r"\", r"%\\", true),
+            (r"\\", r"%\\", true),
+            (r"%\\", r"%\\", true),
+            (r"%\\\", r"%\\", true),
+            (r"abc\", r"%\\", true),
+            (r"abc", r"%\\", false),
+            // %... pattern including escaped non-wildcard
+            (r"ac", r"%a\c", true),
+            (r"xyzac", r"%a\c", true),
+            (r"abc", r"%a\c", false),
+            (r"a\c", r"%a\c", false),
+            (r"%a\c", r"%a\c", false),
+            // %... pattern including escape
+            (r"\", r"%a\\c", false),
+            (r"\\", r"%a\\c", false),
+            (r"ac", r"%a\\c", false),
+            (r"a\c", r"%a\\c", true),
+            (r"a\\c", r"%a\\c", false),
+            (r"abc", r"%a\\c", false),
+            (r"xyza\c", r"%a\\c", true),
+            (r"xyza\\c", r"%a\\c", false),
+            (r"%a\\c", r"%a\\c", false),
+            // ...% pattern with wildcard
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"\\\%", r"\\%", true),
+            (r"\abc", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"abc", r"\\%", false),
+            // ...% pattern including escaped non-wildcard
+            (r"ac", r"a\c%", true),
+            (r"acxyz", r"a\c%", true),
+            (r"abc", r"a\c%", false),
+            (r"a\c", r"a\c%", false),
+            (r"a\c%", r"a\c%", false),
+            (r"a\\c%", r"a\c%", false),
+            // ...% pattern including escape
+            (r"ac", r"a\\c%", false),
+            (r"a\c", r"a\\c%", true),
+            (r"a\cxyz", r"a\\c%", true),
+            (r"a\\c", r"a\\c%", false),
+            (r"a\\cxyz", r"a\\c%", false),
+            (r"abc", r"a\\c%", false),
+            (r"abcxyz", r"a\\c%", false),
+            (r"a\\c%", r"a\\c%", false),
+            // %...% pattern including escaped non-wildcard
+            (r"ac", r"%a\c%", true),
+            (r"xyzacxyz", r"%a\c%", true),
+            (r"abc", r"%a\c%", false),
+            (r"a\c", r"%a\c%", false),
+            (r"xyza\cxyz", r"%a\c%", false),
+            (r"%a\c%", r"%a\c%", false),
+            (r"%a\\c%", r"%a\c%", false),
+            // %...% pattern including escape
+            (r"ac", r"%a\\c%", false),
+            (r"a\c", r"%a\\c%", true),
+            (r"xyza\cxyz", r"%a\\c%", true),
+            (r"a\\c", r"%a\\c%", false),
+            (r"xyza\\cxyz", r"%a\\c%", false),
+            (r"abc", r"%a\\c%", false),
+            (r"xyzabcxyz", r"%a\\c%", false),
+            (r"%a\\c%", r"%a\\c%", false),
+            // Odd (7) backslashes and % wildcard
+            (r"\\%", r"\\\\\\\%", false),
+            (r"\\\", r"\\\\\\\%", false),
+            (r"\\\%", r"\\\\\\\%", true),
+            (r"\\\\", r"\\\\\\\%", false),
+            (r"\\\\%", r"\\\\\\\%", false),
+            (r"\\\\\\\%", r"\\\\\\\%", false),
+            // Odd (7) backslashes and _ wildcard
+            (r"\\\", r"\\\\\\\_", false),
+            (r"\\\\", r"\\\\\\\_", false),
+            (r"\\\_", r"\\\\\\\_", true),
+            (r"\\\\", r"\\\\\\\_", false),
+            (r"\\\a", r"\\\\\\\_", false),
+            (r"\\\\_", r"\\\\\\\_", false),
+            (r"\\\\\\\_", r"\\\\\\\_", false),
+            // Even (8) backslashes and % wildcard
+            (r"\\\", r"\\\\\\\\%", false),
+            (r"\\\\", r"\\\\\\\\%", true),
+            (r"\\\\\", r"\\\\\\\\%", true),
+            (r"\\\\xyz", r"\\\\\\\\%", true),
+            (r"\\\\\\\\%", r"\\\\\\\\%", true),
+            // Even (8) backslashes and _ wildcard
+            (r"\\\", r"\\\\\\\\_", false),
+            (r"\\\\", r"\\\\\\\\_", false),
+            (r"\\\\\", r"\\\\\\\\_", true),
+            (r"\\\\a", r"\\\\\\\\_", true),
+            (r"\\\\\a", r"\\\\\\\\_", false),
+            (r"\\\\ab", r"\\\\\\\\_", false),
+            (r"\\\\\\\\_", r"\\\\\\\\_", false),
+        ];
+
+        for (value, pattern, expected) in test_cases {
+            let unexpected = BooleanArray::from(vec![!expected]);
+            let expected = BooleanArray::from(vec![expected]);
+
+            for binary_type in [DataType::Binary, DataType::LargeBinary] {
+                for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
+                    make_binary_datums(value.as_bytes(), &binary_type),
+                    make_binary_datums(pattern.as_bytes(), &binary_type),
+                ) {
+                    let value_datum = value_datum.as_ref();
+                    let pattern_datum = pattern_datum.as_ref();
+                    assert_eq!(
+                        like(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» like {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        ilike(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» ilike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nlike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nlike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nilike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nilike {pattern_type:?} «{pattern}»"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn binary_like_escape_many() {
+        // (value, pattern, expected)
+        let test_cases = vec![
+            (r"", r"", true),
+            (r"\", r"", false),
+            (r"\\", r"", false),
+            (r"\\\", r"", false),
+            (r"\\\\", r"", false),
+            (r"a", r"", false),
+            (r"\a", r"", false),
+            (r"\\a", r"", false),
+            (r"%", r"", false),
+            (r"\%", r"", false),
+            (r"\\%", r"", false),
+            (r"%%", r"", false),
+            (r"\%%", r"", false),
+            (r"\\%%", r"", false),
+            (r"_", r"", false),
+            (r"\_", r"", false),
+            (r"\\_", r"", false),
+            (r"__", r"", false),
+            (r"\__", r"", false),
+            (r"\\__", r"", false),
+            (r"abc", r"", false),
+            (r"a_c", r"", false),
+            (r"a\bc", r"", false),
+            (r"a\_c", r"", false),
+            (r"%abc", r"", false),
+            (r"\%abc", r"", false),
+            (r"a\\_c%", r"", false),
+            (r"", r"\", false),
+            (r"\", r"\", true),
+            (r"\\", r"\", false),
+            (r"\\\", r"\", false),
+            (r"\\\\", r"\", false),
+            (r"a", r"\", false),
+            (r"\a", r"\", false),
+            (r"\\a", r"\", false),
+            (r"%", r"\", false),
+            (r"\%", r"\", false),
+            (r"\\%", r"\", false),
+            (r"%%", r"\", false),
+            (r"\%%", r"\", false),
+            (r"\\%%", r"\", false),
+            (r"_", r"\", false),
+            (r"\_", r"\", false),
+            (r"\\_", r"\", false),
+            (r"__", r"\", false),
+            (r"\__", r"\", false),
+            (r"\\__", r"\", false),
+            (r"abc", r"\", false),
+            (r"a_c", r"\", false),
+            (r"a\bc", r"\", false),
+            (r"a\_c", r"\", false),
+            (r"%abc", r"\", false),
+            (r"\%abc", r"\", false),
+            (r"a\\_c%", r"\", false),
+            (r"", r"\\", false),
+            (r"\", r"\\", true),
+            (r"\\", r"\\", false),
+            (r"\\\", r"\\", false),
+            (r"\\\\", r"\\", false),
+            (r"a", r"\\", false),
+            (r"\a", r"\\", false),
+            (r"\\a", r"\\", false),
+            (r"%", r"\\", false),
+            (r"\%", r"\\", false),
+            (r"\\%", r"\\", false),
+            (r"%%", r"\\", false),
+            (r"\%%", r"\\", false),
+            (r"\\%%", r"\\", false),
+            (r"_", r"\\", false),
+            (r"\_", r"\\", false),
+            (r"\\_", r"\\", false),
+            (r"__", r"\\", false),
+            (r"\__", r"\\", false),
+            (r"\\__", r"\\", false),
+            (r"abc", r"\\", false),
+            (r"a_c", r"\\", false),
+            (r"a\bc", r"\\", false),
+            (r"a\_c", r"\\", false),
+            (r"%abc", r"\\", false),
+            (r"\%abc", r"\\", false),
+            (r"a\\_c%", r"\\", false),
+            (r"", r"\\\", false),
+            (r"\", r"\\\", false),
+            (r"\\", r"\\\", true),
+            (r"\\\", r"\\\", false),
+            (r"\\\\", r"\\\", false),
+            (r"a", r"\\\", false),
+            (r"\a", r"\\\", false),
+            (r"\\a", r"\\\", false),
+            (r"%", r"\\\", false),
+            (r"\%", r"\\\", false),
+            (r"\\%", r"\\\", false),
+            (r"%%", r"\\\", false),
+            (r"\%%", r"\\\", false),
+            (r"\\%%", r"\\\", false),
+            (r"_", r"\\\", false),
+            (r"\_", r"\\\", false),
+            (r"\\_", r"\\\", false),
+            (r"__", r"\\\", false),
+            (r"\__", r"\\\", false),
+            (r"\\__", r"\\\", false),
+            (r"abc", r"\\\", false),
+            (r"a_c", r"\\\", false),
+            (r"a\bc", r"\\\", false),
+            (r"a\_c", r"\\\", false),
+            (r"%abc", r"\\\", false),
+            (r"\%abc", r"\\\", false),
+            (r"a\\_c%", r"\\\", false),
+            (r"", r"\\\\", false),
+            (r"\", r"\\\\", false),
+            (r"\\", r"\\\\", true),
+            (r"\\\", r"\\\\", false),
+            (r"\\\\", r"\\\\", false),
+            (r"a", r"\\\\", false),
+            (r"\a", r"\\\\", false),
+            (r"\\a", r"\\\\", false),
+            (r"%", r"\\\\", false),
+            (r"\%", r"\\\\", false),
+            (r"\\%", r"\\\\", false),
+            (r"%%", r"\\\\", false),
+            (r"\%%", r"\\\\", false),
+            (r"\\%%", r"\\\\", false),
+            (r"_", r"\\\\", false),
+            (r"\_", r"\\\\", false),
+            (r"\\_", r"\\\\", false),
+            (r"__", r"\\\\", false),
+            (r"\__", r"\\\\", false),
+            (r"\\__", r"\\\\", false),
+            (r"abc", r"\\\\", false),
+            (r"a_c", r"\\\\", false),
+            (r"a\bc", r"\\\\", false),
+            (r"a\_c", r"\\\\", false),
+            (r"%abc", r"\\\\", false),
+            (r"\%abc", r"\\\\", false),
+            (r"a\\_c%", r"\\\\", false),
+            (r"", r"a", false),
+            (r"\", r"a", false),
+            (r"\\", r"a", false),
+            (r"\\\", r"a", false),
+            (r"\\\\", r"a", false),
+            (r"a", r"a", true),
+            (r"\a", r"a", false),
+            (r"\\a", r"a", false),
+            (r"%", r"a", false),
+            (r"\%", r"a", false),
+            (r"\\%", r"a", false),
+            (r"%%", r"a", false),
+            (r"\%%", r"a", false),
+            (r"\\%%", r"a", false),
+            (r"_", r"a", false),
+            (r"\_", r"a", false),
+            (r"\\_", r"a", false),
+            (r"__", r"a", false),
+            (r"\__", r"a", false),
+            (r"\\__", r"a", false),
+            (r"abc", r"a", false),
+            (r"a_c", r"a", false),
+            (r"a\bc", r"a", false),
+            (r"a\_c", r"a", false),
+            (r"%abc", r"a", false),
+            (r"\%abc", r"a", false),
+            (r"a\\_c%", r"a", false),
+            (r"", r"\a", false),
+            (r"\", r"\a", false),
+            (r"\\", r"\a", false),
+            (r"\\\", r"\a", false),
+            (r"\\\\", r"\a", false),
+            (r"a", r"\a", true),
+            (r"\a", r"\a", false),
+            (r"\\a", r"\a", false),
+            (r"%", r"\a", false),
+            (r"\%", r"\a", false),
+            (r"\\%", r"\a", false),
+            (r"%%", r"\a", false),
+            (r"\%%", r"\a", false),
+            (r"\\%%", r"\a", false),
+            (r"_", r"\a", false),
+            (r"\_", r"\a", false),
+            (r"\\_", r"\a", false),
+            (r"__", r"\a", false),
+            (r"\__", r"\a", false),
+            (r"\\__", r"\a", false),
+            (r"abc", r"\a", false),
+            (r"a_c", r"\a", false),
+            (r"a\bc", r"\a", false),
+            (r"a\_c", r"\a", false),
+            (r"%abc", r"\a", false),
+            (r"\%abc", r"\a", false),
+            (r"a\\_c%", r"\a", false),
+            (r"", r"\\a", false),
+            (r"\", r"\\a", false),
+            (r"\\", r"\\a", false),
+            (r"\\\", r"\\a", false),
+            (r"\\\\", r"\\a", false),
+            (r"a", r"\\a", false),
+            (r"\a", r"\\a", true),
+            (r"\\a", r"\\a", false),
+            (r"%", r"\\a", false),
+            (r"\%", r"\\a", false),
+            (r"\\%", r"\\a", false),
+            (r"%%", r"\\a", false),
+            (r"\%%", r"\\a", false),
+            (r"\\%%", r"\\a", false),
+            (r"_", r"\\a", false),
+            (r"\_", r"\\a", false),
+            (r"\\_", r"\\a", false),
+            (r"__", r"\\a", false),
+            (r"\__", r"\\a", false),
+            (r"\\__", r"\\a", false),
+            (r"abc", r"\\a", false),
+            (r"a_c", r"\\a", false),
+            (r"a\bc", r"\\a", false),
+            (r"a\_c", r"\\a", false),
+            (r"%abc", r"\\a", false),
+            (r"\%abc", r"\\a", false),
+            (r"a\\_c%", r"\\a", false),
+            (r"", r"%", true),
+            (r"\", r"%", true),
+            (r"\\", r"%", true),
+            (r"\\\", r"%", true),
+            (r"\\\\", r"%", true),
+            (r"a", r"%", true),
+            (r"\a", r"%", true),
+            (r"\\a", r"%", true),
+            (r"%", r"%", true),
+            (r"\%", r"%", true),
+            (r"\\%", r"%", true),
+            (r"%%", r"%", true),
+            (r"\%%", r"%", true),
+            (r"\\%%", r"%", true),
+            (r"_", r"%", true),
+            (r"\_", r"%", true),
+            (r"\\_", r"%", true),
+            (r"__", r"%", true),
+            (r"\__", r"%", true),
+            (r"\\__", r"%", true),
+            (r"abc", r"%", true),
+            (r"a_c", r"%", true),
+            (r"a\bc", r"%", true),
+            (r"a\_c", r"%", true),
+            (r"%abc", r"%", true),
+            (r"\%abc", r"%", true),
+            (r"a\\_c%", r"%", true),
+            (r"", r"\%", false),
+            (r"\", r"\%", false),
+            (r"\\", r"\%", false),
+            (r"\\\", r"\%", false),
+            (r"\\\\", r"\%", false),
+            (r"a", r"\%", false),
+            (r"\a", r"\%", false),
+            (r"\\a", r"\%", false),
+            (r"%", r"\%", true),
+            (r"\%", r"\%", false),
+            (r"\\%", r"\%", false),
+            (r"%%", r"\%", false),
+            (r"\%%", r"\%", false),
+            (r"\\%%", r"\%", false),
+            (r"_", r"\%", false),
+            (r"\_", r"\%", false),
+            (r"\\_", r"\%", false),
+            (r"__", r"\%", false),
+            (r"\__", r"\%", false),
+            (r"\\__", r"\%", false),
+            (r"abc", r"\%", false),
+            (r"a_c", r"\%", false),
+            (r"a\bc", r"\%", false),
+            (r"a\_c", r"\%", false),
+            (r"%abc", r"\%", false),
+            (r"\%abc", r"\%", false),
+            (r"a\\_c%", r"\%", false),
+            (r"", r"\\%", false),
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"\\\", r"\\%", true),
+            (r"\\\\", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"\a", r"\\%", true),
+            (r"\\a", r"\\%", true),
+            (r"%", r"\\%", false),
+            (r"\%", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"%%", r"\\%", false),
+            (r"\%%", r"\\%", true),
+            (r"\\%%", r"\\%", true),
+            (r"_", r"\\%", false),
+            (r"\_", r"\\%", true),
+            (r"\\_", r"\\%", true),
+            (r"__", r"\\%", false),
+            (r"\__", r"\\%", true),
+            (r"\\__", r"\\%", true),
+            (r"abc", r"\\%", false),
+            (r"a_c", r"\\%", false),
+            (r"a\bc", r"\\%", false),
+            (r"a\_c", r"\\%", false),
+            (r"%abc", r"\\%", false),
+            (r"\%abc", r"\\%", true),
+            (r"a\\_c%", r"\\%", false),
+            (r"", r"%%", true),
+            (r"\", r"%%", true),
+            (r"\\", r"%%", true),
+            (r"\\\", r"%%", true),
+            (r"\\\\", r"%%", true),
+            (r"a", r"%%", true),
+            (r"\a", r"%%", true),
+            (r"\\a", r"%%", true),
+            (r"%", r"%%", true),
+            (r"\%", r"%%", true),
+            (r"\\%", r"%%", true),
+            (r"%%", r"%%", true),
+            (r"\%%", r"%%", true),
+            (r"\\%%", r"%%", true),
+            (r"_", r"%%", true),
+            (r"\_", r"%%", true),
+            (r"\\_", r"%%", true),
+            (r"__", r"%%", true),
+            (r"\__", r"%%", true),
+            (r"\\__", r"%%", true),
+            (r"abc", r"%%", true),
+            (r"a_c", r"%%", true),
+            (r"a\bc", r"%%", true),
+            (r"a\_c", r"%%", true),
+            (r"%abc", r"%%", true),
+            (r"\%abc", r"%%", true),
+            (r"a\\_c%", r"%%", true),
+            (r"", r"\%%", false),
+            (r"\", r"\%%", false),
+            (r"\\", r"\%%", false),
+            (r"\\\", r"\%%", false),
+            (r"\\\\", r"\%%", false),
+            (r"a", r"\%%", false),
+            (r"\a", r"\%%", false),
+            (r"\\a", r"\%%", false),
+            (r"%", r"\%%", true),
+            (r"\%", r"\%%", false),
+            (r"\\%", r"\%%", false),
+            (r"%%", r"\%%", true),
+            (r"\%%", r"\%%", false),
+            (r"\\%%", r"\%%", false),
+            (r"_", r"\%%", false),
+            (r"\_", r"\%%", false),
+            (r"\\_", r"\%%", false),
+            (r"__", r"\%%", false),
+            (r"\__", r"\%%", false),
+            (r"\\__", r"\%%", false),
+            (r"abc", r"\%%", false),
+            (r"a_c", r"\%%", false),
+            (r"a\bc", r"\%%", false),
+            (r"a\_c", r"\%%", false),
+            (r"%abc", r"\%%", true),
+            (r"\%abc", r"\%%", false),
+            (r"a\\_c%", r"\%%", false),
+            (r"", r"\\%%", false),
+            (r"\", r"\\%%", true),
+            (r"\\", r"\\%%", true),
+            (r"\\\", r"\\%%", true),
+            (r"\\\\", r"\\%%", true),
+            (r"a", r"\\%%", false),
+            (r"\a", r"\\%%", true),
+            (r"\\a", r"\\%%", true),
+            (r"%", r"\\%%", false),
+            (r"\%", r"\\%%", true),
+            (r"\\%", r"\\%%", true),
+            (r"%%", r"\\%%", false),
+            (r"\%%", r"\\%%", true),
+            (r"\\%%", r"\\%%", true),
+            (r"_", r"\\%%", false),
+            (r"\_", r"\\%%", true),
+            (r"\\_", r"\\%%", true),
+            (r"__", r"\\%%", false),
+            (r"\__", r"\\%%", true),
+            (r"\\__", r"\\%%", true),
+            (r"abc", r"\\%%", false),
+            (r"a_c", r"\\%%", false),
+            (r"a\bc", r"\\%%", false),
+            (r"a\_c", r"\\%%", false),
+            (r"%abc", r"\\%%", false),
+            (r"\%abc", r"\\%%", true),
+            (r"a\\_c%", r"\\%%", false),
+            (r"", r"_", false),
+            (r"\", r"_", true),
+            (r"\\", r"_", false),
+            (r"\\\", r"_", false),
+            (r"\\\\", r"_", false),
+            (r"a", r"_", true),
+            (r"\a", r"_", false),
+            (r"\\a", r"_", false),
+            (r"%", r"_", true),
+            (r"\%", r"_", false),
+            (r"\\%", r"_", false),
+            (r"%%", r"_", false),
+            (r"\%%", r"_", false),
+            (r"\\%%", r"_", false),
+            (r"_", r"_", true),
+            (r"\_", r"_", false),
+            (r"\\_", r"_", false),
+            (r"__", r"_", false),
+            (r"\__", r"_", false),
+            (r"\\__", r"_", false),
+            (r"abc", r"_", false),
+            (r"a_c", r"_", false),
+            (r"a\bc", r"_", false),
+            (r"a\_c", r"_", false),
+            (r"%abc", r"_", false),
+            (r"\%abc", r"_", false),
+            (r"a\\_c%", r"_", false),
+            (r"", r"\_", false),
+            (r"\", r"\_", false),
+            (r"\\", r"\_", false),
+            (r"\\\", r"\_", false),
+            (r"\\\\", r"\_", false),
+            (r"a", r"\_", false),
+            (r"\a", r"\_", false),
+            (r"\\a", r"\_", false),
+            (r"%", r"\_", false),
+            (r"\%", r"\_", false),
+            (r"\\%", r"\_", false),
+            (r"%%", r"\_", false),
+            (r"\%%", r"\_", false),
+            (r"\\%%", r"\_", false),
+            (r"_", r"\_", true),
+            (r"\_", r"\_", false),
+            (r"\\_", r"\_", false),
+            (r"__", r"\_", false),
+            (r"\__", r"\_", false),
+            (r"\\__", r"\_", false),
+            (r"abc", r"\_", false),
+            (r"a_c", r"\_", false),
+            (r"a\bc", r"\_", false),
+            (r"a\_c", r"\_", false),
+            (r"%abc", r"\_", false),
+            (r"\%abc", r"\_", false),
+            (r"a\\_c%", r"\_", false),
+            (r"", r"\\_", false),
+            (r"\", r"\\_", false),
+            (r"\\", r"\\_", true),
+            (r"\\\", r"\\_", false),
+            (r"\\\\", r"\\_", false),
+            (r"a", r"\\_", false),
+            (r"\a", r"\\_", true),
+            (r"\\a", r"\\_", false),
+            (r"%", r"\\_", false),
+            (r"\%", r"\\_", true),
+            (r"\\%", r"\\_", false),
+            (r"%%", r"\\_", false),
+            (r"\%%", r"\\_", false),
+            (r"\\%%", r"\\_", false),
+            (r"_", r"\\_", false),
+            (r"\_", r"\\_", true),
+            (r"\\_", r"\\_", false),
+            (r"__", r"\\_", false),
+            (r"\__", r"\\_", false),
+            (r"\\__", r"\\_", false),
+            (r"abc", r"\\_", false),
+            (r"a_c", r"\\_", false),
+            (r"a\bc", r"\\_", false),
+            (r"a\_c", r"\\_", false),
+            (r"%abc", r"\\_", false),
+            (r"\%abc", r"\\_", false),
+            (r"a\\_c%", r"\\_", false),
+            (r"", r"__", false),
+            (r"\", r"__", false),
+            (r"\\", r"__", true),
+            (r"\\\", r"__", false),
+            (r"\\\\", r"__", false),
+            (r"a", r"__", false),
+            (r"\a", r"__", true),
+            (r"\\a", r"__", false),
+            (r"%", r"__", false),
+            (r"\%", r"__", true),
+            (r"\\%", r"__", false),
+            (r"%%", r"__", true),
+            (r"\%%", r"__", false),
+            (r"\\%%", r"__", false),
+            (r"_", r"__", false),
+            (r"\_", r"__", true),
+            (r"\\_", r"__", false),
+            (r"__", r"__", true),
+            (r"\__", r"__", false),
+            (r"\\__", r"__", false),
+            (r"abc", r"__", false),
+            (r"a_c", r"__", false),
+            (r"a\bc", r"__", false),
+            (r"a\_c", r"__", false),
+            (r"%abc", r"__", false),
+            (r"\%abc", r"__", false),
+            (r"a\\_c%", r"__", false),
+            (r"", r"\__", false),
+            (r"\", r"\__", false),
+            (r"\\", r"\__", false),
+            (r"\\\", r"\__", false),
+            (r"\\\\", r"\__", false),
+            (r"a", r"\__", false),
+            (r"\a", r"\__", false),
+            (r"\\a", r"\__", false),
+            (r"%", r"\__", false),
+            (r"\%", r"\__", false),
+            (r"\\%", r"\__", false),
+            (r"%%", r"\__", false),
+            (r"\%%", r"\__", false),
+            (r"\\%%", r"\__", false),
+            (r"_", r"\__", false),
+            (r"\_", r"\__", false),
+            (r"\\_", r"\__", false),
+            (r"__", r"\__", true),
+            (r"\__", r"\__", false),
+            (r"\\__", r"\__", false),
+            (r"abc", r"\__", false),
+            (r"a_c", r"\__", false),
+            (r"a\bc", r"\__", false),
+            (r"a\_c", r"\__", false),
+            (r"%abc", r"\__", false),
+            (r"\%abc", r"\__", false),
+            (r"a\\_c%", r"\__", false),
+            (r"", r"\\__", false),
+            (r"\", r"\\__", false),
+            (r"\\", r"\\__", false),
+            (r"\\\", r"\\__", true),
+            (r"\\\\", r"\\__", false),
+            (r"a", r"\\__", false),
+            (r"\a", r"\\__", false),
+            (r"\\a", r"\\__", true),
+            (r"%", r"\\__", false),
+            (r"\%", r"\\__", false),
+            (r"\\%", r"\\__", true),
+            (r"%%", r"\\__", false),
+            (r"\%%", r"\\__", true),
+            (r"\\%%", r"\\__", false),
+            (r"_", r"\\__", false),
+            (r"\_", r"\\__", false),
+            (r"\\_", r"\\__", true),
+            (r"__", r"\\__", false),
+            (r"\__", r"\\__", true),
+            (r"\\__", r"\\__", false),
+            (r"abc", r"\\__", false),
+            (r"a_c", r"\\__", false),
+            (r"a\bc", r"\\__", false),
+            (r"a\_c", r"\\__", false),
+            (r"%abc", r"\\__", false),
+            (r"\%abc", r"\\__", false),
+            (r"a\\_c%", r"\\__", false),
+            (r"", r"abc", false),
+            (r"\", r"abc", false),
+            (r"\\", r"abc", false),
+            (r"\\\", r"abc", false),
+            (r"\\\\", r"abc", false),
+            (r"a", r"abc", false),
+            (r"\a", r"abc", false),
+            (r"\\a", r"abc", false),
+            (r"%", r"abc", false),
+            (r"\%", r"abc", false),
+            (r"\\%", r"abc", false),
+            (r"%%", r"abc", false),
+            (r"\%%", r"abc", false),
+            (r"\\%%", r"abc", false),
+            (r"_", r"abc", false),
+            (r"\_", r"abc", false),
+            (r"\\_", r"abc", false),
+            (r"__", r"abc", false),
+            (r"\__", r"abc", false),
+            (r"\\__", r"abc", false),
+            (r"abc", r"abc", true),
+            (r"a_c", r"abc", false),
+            (r"a\bc", r"abc", false),
+            (r"a\_c", r"abc", false),
+            (r"%abc", r"abc", false),
+            (r"\%abc", r"abc", false),
+            (r"a\\_c%", r"abc", false),
+            (r"", r"a_c", false),
+            (r"\", r"a_c", false),
+            (r"\\", r"a_c", false),
+            (r"\\\", r"a_c", false),
+            (r"\\\\", r"a_c", false),
+            (r"a", r"a_c", false),
+            (r"\a", r"a_c", false),
+            (r"\\a", r"a_c", false),
+            (r"%", r"a_c", false),
+            (r"\%", r"a_c", false),
+            (r"\\%", r"a_c", false),
+            (r"%%", r"a_c", false),
+            (r"\%%", r"a_c", false),
+            (r"\\%%", r"a_c", false),
+            (r"_", r"a_c", false),
+            (r"\_", r"a_c", false),
+            (r"\\_", r"a_c", false),
+            (r"__", r"a_c", false),
+            (r"\__", r"a_c", false),
+            (r"\\__", r"a_c", false),
+            (r"abc", r"a_c", true),
+            (r"a_c", r"a_c", true),
+            (r"a\bc", r"a_c", false),
+            (r"a\_c", r"a_c", false),
+            (r"%abc", r"a_c", false),
+            (r"\%abc", r"a_c", false),
+            (r"a\\_c%", r"a_c", false),
+            (r"", r"a\bc", false),
+            (r"\", r"a\bc", false),
+            (r"\\", r"a\bc", false),
+            (r"\\\", r"a\bc", false),
+            (r"\\\\", r"a\bc", false),
+            (r"a", r"a\bc", false),
+            (r"\a", r"a\bc", false),
+            (r"\\a", r"a\bc", false),
+            (r"%", r"a\bc", false),
+            (r"\%", r"a\bc", false),
+            (r"\\%", r"a\bc", false),
+            (r"%%", r"a\bc", false),
+            (r"\%%", r"a\bc", false),
+            (r"\\%%", r"a\bc", false),
+            (r"_", r"a\bc", false),
+            (r"\_", r"a\bc", false),
+            (r"\\_", r"a\bc", false),
+            (r"__", r"a\bc", false),
+            (r"\__", r"a\bc", false),
+            (r"\\__", r"a\bc", false),
+            (r"abc", r"a\bc", true),
+            (r"a_c", r"a\bc", false),
+            (r"a\bc", r"a\bc", false),
+            (r"a\_c", r"a\bc", false),
+            (r"%abc", r"a\bc", false),
+            (r"\%abc", r"a\bc", false),
+            (r"a\\_c%", r"a\bc", false),
+            (r"", r"a\_c", false),
+            (r"\", r"a\_c", false),
+            (r"\\", r"a\_c", false),
+            (r"\\\", r"a\_c", false),
+            (r"\\\\", r"a\_c", false),
+            (r"a", r"a\_c", false),
+            (r"\a", r"a\_c", false),
+            (r"\\a", r"a\_c", false),
+            (r"%", r"a\_c", false),
+            (r"\%", r"a\_c", false),
+            (r"\\%", r"a\_c", false),
+            (r"%%", r"a\_c", false),
+            (r"\%%", r"a\_c", false),
+            (r"\\%%", r"a\_c", false),
+            (r"_", r"a\_c", false),
+            (r"\_", r"a\_c", false),
+            (r"\\_", r"a\_c", false),
+            (r"__", r"a\_c", false),
+            (r"\__", r"a\_c", false),
+            (r"\\__", r"a\_c", false),
+            (r"abc", r"a\_c", false),
+            (r"a_c", r"a\_c", true),
+            (r"a\bc", r"a\_c", false),
+            (r"a\_c", r"a\_c", false),
+            (r"%abc", r"a\_c", false),
+            (r"\%abc", r"a\_c", false),
+            (r"a\\_c%", r"a\_c", false),
+            (r"", r"%abc", false),
+            (r"\", r"%abc", false),
+            (r"\\", r"%abc", false),
+            (r"\\\", r"%abc", false),
+            (r"\\\\", r"%abc", false),
+            (r"a", r"%abc", false),
+            (r"\a", r"%abc", false),
+            (r"\\a", r"%abc", false),
+            (r"%", r"%abc", false),
+            (r"\%", r"%abc", false),
+            (r"\\%", r"%abc", false),
+            (r"%%", r"%abc", false),
+            (r"\%%", r"%abc", false),
+            (r"\\%%", r"%abc", false),
+            (r"_", r"%abc", false),
+            (r"\_", r"%abc", false),
+            (r"\\_", r"%abc", false),
+            (r"__", r"%abc", false),
+            (r"\__", r"%abc", false),
+            (r"\\__", r"%abc", false),
+            (r"abc", r"%abc", true),
+            (r"a_c", r"%abc", false),
+            (r"a\bc", r"%abc", false),
+            (r"a\_c", r"%abc", false),
+            (r"%abc", r"%abc", true),
+            (r"\%abc", r"%abc", true),
+            (r"a\\_c%", r"%abc", false),
+            (r"", r"\%abc", false),
+            (r"\", r"\%abc", false),
+            (r"\\", r"\%abc", false),
+            (r"\\\", r"\%abc", false),
+            (r"\\\\", r"\%abc", false),
+            (r"a", r"\%abc", false),
+            (r"\a", r"\%abc", false),
+            (r"\\a", r"\%abc", false),
+            (r"%", r"\%abc", false),
+            (r"\%", r"\%abc", false),
+            (r"\\%", r"\%abc", false),
+            (r"%%", r"\%abc", false),
+            (r"\%%", r"\%abc", false),
+            (r"\\%%", r"\%abc", false),
+            (r"_", r"\%abc", false),
+            (r"\_", r"\%abc", false),
+            (r"\\_", r"\%abc", false),
+            (r"__", r"\%abc", false),
+            (r"\__", r"\%abc", false),
+            (r"\\__", r"\%abc", false),
+            (r"abc", r"\%abc", false),
+            (r"a_c", r"\%abc", false),
+            (r"a\bc", r"\%abc", false),
+            (r"a\_c", r"\%abc", false),
+            (r"%abc", r"\%abc", true),
+            (r"\%abc", r"\%abc", false),
+            (r"a\\_c%", r"\%abc", false),
+            (r"", r"a\\_c%", false),
+            (r"\", r"a\\_c%", false),
+            (r"\\", r"a\\_c%", false),
+            (r"\\\", r"a\\_c%", false),
+            (r"\\\\", r"a\\_c%", false),
+            (r"a", r"a\\_c%", false),
+            (r"\a", r"a\\_c%", false),
+            (r"\\a", r"a\\_c%", false),
+            (r"%", r"a\\_c%", false),
+            (r"\%", r"a\\_c%", false),
+            (r"\\%", r"a\\_c%", false),
+            (r"%%", r"a\\_c%", false),
+            (r"\%%", r"a\\_c%", false),
+            (r"\\%%", r"a\\_c%", false),
+            (r"_", r"a\\_c%", false),
+            (r"\_", r"a\\_c%", false),
+            (r"\\_", r"a\\_c%", false),
+            (r"__", r"a\\_c%", false),
+            (r"\__", r"a\\_c%", false),
+            (r"\\__", r"a\\_c%", false),
+            (r"abc", r"a\\_c%", false),
+            (r"a_c", r"a\\_c%", false),
+            (r"a\bc", r"a\\_c%", true),
+            (r"a\_c", r"a\\_c%", true),
+            (r"%abc", r"a\\_c%", false),
+            (r"\%abc", r"a\\_c%", false),
+            (r"a\\_c%", r"a\\_c%", false),
+        ];
+
+        let values = test_cases
+            .iter()
+            .map(|(value, _, _)| *value)
+            .collect::<Vec<_>>();
+        let patterns = test_cases
+            .iter()
+            .map(|(_, pattern, _)| *pattern)
+            .collect::<Vec<_>>();
+        let expected = BooleanArray::from(
+            test_cases
+                .iter()
+                .map(|(_, _, expected)| *expected)
+                .collect::<Vec<_>>(),
+        );
+        let unexpected = BooleanArray::from(
+            test_cases
+                .iter()
+                .map(|(_, _, expected)| !*expected)
+                .collect::<Vec<_>>(),
+        );
+
+        for string_type in [DataType::Binary, DataType::LargeBinary] {
+            let values = make_binary_array(values.iter(), &string_type);
+            let patterns = make_binary_array(patterns.iter(), &string_type);
+            let (values, patterns) = (values.as_ref(), patterns.as_ref());
+
+            assert_eq!(like(&values, &patterns).unwrap(), expected,);
+            assert_eq!(ilike(&values, &patterns).unwrap(), expected,);
+            assert_eq!(nlike(&values, &patterns).unwrap(), unexpected,);
+            assert_eq!(nilike(&values, &patterns).unwrap(), unexpected,);
+        }
+    }
+
+    fn make_binary_datums(
+        value: impl AsRef<[u8]>,
+        data_type: &DataType,
+    ) -> Vec<(Box<dyn Datum>, DatumType)> {
+        match data_type {
+            DataType::Binary => {
+                let array = BinaryArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            DataType::LargeBinary => {
+                let array = LargeBinaryArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    fn make_binary_array(
+        values: impl IntoIterator<Item: AsRef<[u8]>>,
+        data_type: &DataType,
+    ) -> Box<dyn Array> {
+        match data_type {
+            DataType::Binary => Box::new(BinaryArray::from_iter_values(values)),
+            DataType::LargeBinary => Box::new(LargeBinaryArray::from_iter_values(values)),
+            _ => unimplemented!("Unsupported data type: {:?}", data_type),
         }
     }
 

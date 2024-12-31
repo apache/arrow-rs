@@ -59,6 +59,17 @@ pub struct FixedSizeBinaryArray {
 }
 
 impl FixedSizeBinaryArray {
+
+    /// Returns true if all data within this array is ASCII
+    pub fn is_ascii(&self) -> bool {
+        // TODO - check if we can do similar to BinaryArray
+        //        as this is expensive
+        self.iter().all(|v| match v {
+            Some(v) => v.is_ascii(),
+            None => true,
+        })
+    }
+
     /// Create a new [`FixedSizeBinaryArray`] with `size` element size, panicking on failure
     ///
     /// # Panics
