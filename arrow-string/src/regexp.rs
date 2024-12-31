@@ -247,71 +247,75 @@ where
     Ok(BooleanArray::from(data))
 }
 
-macro_rules! process_regexp_array_match {
-    ($array:expr, $regex_array:expr, $flags_array:expr, $list_builder:expr) => {
-        let mut patterns: HashMap<String, Regex> = HashMap::new();
+fn process_regexp_array_match<
+    'a,
+    T: ?Sized,
+    A: ArrayAccessor<Item = &'a str>,
+    O: OffsetSizeTrait,
+    B: ValuesBuilder<T, Value = str>,
+>(
+    array: ArrayIter<A>,
+    regex_array: ArrayIter<A>,
+    flags_array: Option<ArrayIter<A>>,
+    list_builder: &mut GenericListBuilder<O, B>,
+) -> Result<(), ArrowError> {
+    let mut patterns: HashMap<String, Regex> = HashMap::new();
 
-        let complete_pattern = match $flags_array {
-            Some(flags) => Box::new($regex_array.iter().zip(flags.iter()).map(
-                |(pattern, flags)| {
-                    pattern.map(|pattern| match flags {
-                        Some(value) => format!("(?{value}){pattern}"),
-                        None => pattern.to_string(),
-                    })
-                },
-            )) as Box<dyn Iterator<Item = Option<String>>>,
-            None => Box::new(
-                $regex_array
-                    .iter()
-                    .map(|pattern| pattern.map(|pattern| pattern.to_string())),
-            ),
-        };
-
-        $array
-            .iter()
-            .zip(complete_pattern)
-            .map(|(value, pattern)| {
-                match (value, pattern) {
-                    // Required for Postgres compatibility:
-                    // SELECT regexp_match('foobarbequebaz', ''); = {""}
-                    (Some(_), Some(pattern)) if pattern == *"" => {
-                        $list_builder.values().append_value("");
-                        $list_builder.append(true);
-                    }
-                    (Some(value), Some(pattern)) => {
-                        let existing_pattern = patterns.get(&pattern);
-                        let re = match existing_pattern {
-                            Some(re) => re,
-                            None => {
-                                let re = Regex::new(pattern.as_str()).map_err(|e| {
-                                    ArrowError::ComputeError(format!(
-                                        "Regular expression did not compile: {e:?}"
-                                    ))
-                                })?;
-                                patterns.entry(pattern).or_insert(re)
-                            }
-                        };
-                        match re.captures(value) {
-                            Some(caps) => {
-                                let mut iter = caps.iter();
-                                if caps.len() > 1 {
-                                    iter.next();
-                                }
-                                for m in iter.flatten() {
-                                    $list_builder.values().append_value(m.as_str());
-                                }
-
-                                $list_builder.append(true);
-                            }
-                            None => $list_builder.append(false),
-                        }
-                    }
-                    _ => $list_builder.append(false),
-                }
-                Ok(())
+    let complete_pattern = match flags_array {
+        Some(flags) => Box::new(regex_array.zip(flags).map(|(pattern, flags)| {
+            pattern.map(|pattern| match flags {
+                Some(value) => format!("(?{value}){pattern}"),
+                None => pattern.to_string(),
             })
-            .collect::<Result<Vec<()>, ArrowError>>()?;
+        })) as Box<dyn Iterator<Item = Option<String>>>,
+        None => Box::new(regex_array.map(|pattern| pattern.map(|pattern| pattern.to_string()))),
     };
+
+    array
+        .zip(complete_pattern)
+        .map(|(value, pattern)| {
+            match (value, pattern) {
+                // Required for Postgres compatibility:
+                // SELECT regexp_match('foobarbequebaz', ''); = {""}
+                (Some(_), Some(pattern)) if pattern == *"" => {
+                    list_builder.values().append_value("");
+                    list_builder.append(true);
+                }
+                (Some(value), Some(pattern)) => {
+                    let existing_pattern = patterns.get(&pattern);
+                    let re = match existing_pattern {
+                        Some(re) => re,
+                        None => {
+                            let re = Regex::new(pattern.as_str()).map_err(|e| {
+                                ArrowError::ComputeError(format!(
+                                    "Regular expression did not compile: {e:?}"
+                                ))
+                            })?;
+                            patterns.entry(pattern).or_insert(re)
+                        }
+                    };
+                    match re.captures(value) {
+                        Some(caps) => {
+                            let mut iter = caps.iter();
+                            if caps.len() > 1 {
+                                iter.next();
+                            }
+                            for m in iter.flatten() {
+                                list_builder.values().append_value(m.as_str());
+                            }
+
+                            list_builder.append(true);
+                        }
+                        None => list_builder.append(false),
+                    }
+                }
+                _ => list_builder.append(false),
+            }
+            Ok(())
+        })
+        .collect::<Result<Vec<()>, ArrowError>>()?;
+
+    Ok(())
 }
 
 fn regexp_array_match<OffsetSize: OffsetSizeTrait>(
@@ -322,7 +326,12 @@ fn regexp_array_match<OffsetSize: OffsetSizeTrait>(
     let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
 
-    process_regexp_array_match!(array, regex_array, flags_array, list_builder);
+    process_regexp_array_match(
+        array.iter(),
+        regex_array.iter(),
+        flags_array.map(|fa| fa.iter()),
+        &mut list_builder,
+    )?;
 
     Ok(Arc::new(list_builder.finish()))
 }
@@ -335,7 +344,12 @@ fn regexp_array_match_utf8view(
     let builder = StringViewBuilder::with_capacity(0);
     let mut list_builder = ListBuilder::new(builder);
 
-    process_regexp_array_match!(array, regex_array, flags_array, list_builder);
+    process_regexp_array_match(
+        array.iter(),
+        regex_array.iter(),
+        flags_array.map(|fa| fa.iter()),
+        &mut list_builder,
+    )?;
 
     Ok(Arc::new(list_builder.finish()))
 }
