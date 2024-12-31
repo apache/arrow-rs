@@ -476,6 +476,7 @@ impl RecordBatch {
                 }
             } else {
                 let updated_field = Field::new(name.concat(), data_type.clone(), nullable);
+                columns.push(c.clone());
                 fields.push(Arc::new(updated_field));
             }
         }
