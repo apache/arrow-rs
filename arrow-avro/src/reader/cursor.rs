@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use crate::reader::vlq::read_varint;
 use arrow_schema::ArrowError;
 
@@ -65,27 +64,32 @@ impl<'a> AvroCursor<'a> {
         Ok(val)
     }
 
+    /// Decode a zig-zag encoded Avro int (32-bit).
     #[inline]
     pub(crate) fn get_int(&mut self) -> Result<i32, ArrowError> {
         let varint = self.read_vlq()?;
         let val: u32 = varint
             .try_into()
             .map_err(|_| ArrowError::ParseError("varint overflow".to_string()))?;
+        // Zig-zag decode
         Ok((val >> 1) as i32 ^ -((val & 1) as i32))
     }
 
+    /// Decode a zig-zag encoded Avro long (64-bit).
     #[inline]
     pub(crate) fn get_long(&mut self) -> Result<i64, ArrowError> {
         let val = self.read_vlq()?;
+        // Zig-zag decode
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
+    /// Read a variable-length byte array from Avro (where the length is stored as an Avro long).
     pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8], ArrowError> {
         let len: usize = self.get_long()?.try_into().map_err(|_| {
             ArrowError::ParseError("offset overflow reading avro bytes".to_string())
         })?;
 
-        if (self.buf.len() < len) {
+        if self.buf.len() < len {
             return Err(ArrowError::ParseError(
                 "Unexpected EOF reading bytes".to_string(),
             ));
@@ -95,9 +99,10 @@ impl<'a> AvroCursor<'a> {
         Ok(ret)
     }
 
+    /// Read a little-endian 32-bit float
     #[inline]
     pub(crate) fn get_float(&mut self) -> Result<f32, ArrowError> {
-        if (self.buf.len() < 4) {
+        if self.buf.len() < 4 {
             return Err(ArrowError::ParseError(
                 "Unexpected EOF reading float".to_string(),
             ));
@@ -107,15 +112,28 @@ impl<'a> AvroCursor<'a> {
         Ok(ret)
     }
 
+    /// Read a little-endian 64-bit float
     #[inline]
     pub(crate) fn get_double(&mut self) -> Result<f64, ArrowError> {
-        if (self.buf.len() < 8) {
+        if self.buf.len() < 8 {
             return Err(ArrowError::ParseError(
-                "Unexpected EOF reading float".to_string(),
+                "Unexpected EOF reading double".to_string(),
             ));
         }
         let ret = f64::from_le_bytes(self.buf[..8].try_into().unwrap());
         self.buf = &self.buf[8..];
+        Ok(ret)
+    }
+
+    /// Read exactly `n` bytes from the buffer (e.g. for Avro `fixed`).
+    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8], ArrowError> {
+        if self.buf.len() < n {
+            return Err(ArrowError::ParseError(
+                "Unexpected EOF reading fixed".to_string(),
+            ));
+        }
+        let ret = &self.buf[..n];
+        self.buf = &self.buf[n..];
         Ok(ret)
     }
 }

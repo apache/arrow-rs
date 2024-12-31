@@ -53,7 +53,6 @@ pub struct AvroDataType {
 
 impl AvroDataType {
     /// Create a new AvroDataType with the given parts.
-    /// This helps you construct it from outside `codec.rs` without exposing internals.
     pub fn new(
         codec: Codec,
         nullability: Option<Nullability>,
@@ -261,7 +260,7 @@ impl Codec {
                     DataType::Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
                 },
                 _ => {
-                    // Infer based on precision when size is None
+                    // Note: Infer based on precision when size is None
                     if *precision <= DECIMAL128_MAX_PRECISION as usize
                         && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize
                     {
@@ -409,7 +408,6 @@ impl Codec {
             Codec::Decimal(precision, scale, size) => {
                 // If size is Some(n), produce Avro "fixed", else "bytes".
                 if let Some(n) = size {
-                    // fixed with logicalType=decimal, plus precision/scale
                     Schema::Complex(ComplexType::Fixed(AvroFixed {
                         name,
                         namespace: None,
@@ -532,7 +530,6 @@ fn make_data_type<'a>(
                         })
                     })
                     .collect::<Result<_, ArrowError>>()?;
-
                 let field = AvroDataType {
                     nullability: None,
                     codec: Codec::Struct(fields),
@@ -554,7 +551,6 @@ fn make_data_type<'a>(
                 let size = f.size.try_into().map_err(|e| {
                     ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
                 })?;
-
                 if let Some("decimal") = f.attributes.logical_type {
                     let precision = f
                         .attributes
@@ -578,7 +574,6 @@ fn make_data_type<'a>(
                         .get("scale")
                         .and_then(|v| v.as_u64())
                         .or_else(|| Some(0));
-
                     let field = AvroDataType {
                         nullability: None,
                         metadata: f.attributes.field_metadata(),
@@ -624,7 +619,6 @@ fn make_data_type<'a>(
             // Possibly decimal, or other logical types
             let mut field =
                 make_data_type(&Schema::TypeName(t.r#type.clone()), namespace, resolver)?;
-
             match (t.attributes.logical_type, &mut field.codec) {
                 (Some("decimal"), c @ Codec::Fixed(_)) => {
                     *c = Codec::Decimal(
@@ -792,7 +786,6 @@ mod tests {
 
     #[test]
     fn test_decimal256_tuple_variant_fixed() {
-        // Arrow decimal(60,3) => Codec::Decimal(60,3,Some(32))
         let c = arrow_type_to_codec(&DataType::Decimal256(60, 3));
         match c {
             Codec::Decimal(p, s, Some(32)) => {
@@ -818,8 +811,6 @@ mod tests {
 
     #[test]
     fn test_decimal128_tuple_variant_fixed() {
-        // Avro "fixed" => decimal(6,2,Some(4))
-        // arrow => decimal(6,2)
         let c = Codec::Decimal(6, Some(2), Some(4));
         let dt = c.data_type();
         match dt {
@@ -829,8 +820,6 @@ mod tests {
             }
             _ => panic!("Expected decimal(6,2) arrow type"),
         }
-
-        // Convert back to Avro schema => "fixed"
         let avro_dt = AvroDataType::from_codec(c);
         let schema = avro_dt.to_avro_schema("FixedDec");
         let j = serde_json::to_value(&schema).unwrap();
@@ -848,7 +837,6 @@ mod tests {
 
     #[test]
     fn test_decimal_size_decision() {
-        // Decimal128 (size <= 16)
         let codec = Codec::Decimal(10, Some(3), Some(16));
         let dt = codec.data_type();
         match dt {
@@ -858,8 +846,6 @@ mod tests {
             }
             _ => panic!("Expected Decimal128"),
         }
-
-        // Decimal256 (size > 16)
         let codec = Codec::Decimal(18, Some(4), Some(32));
         let dt = codec.data_type();
         match dt {
@@ -869,8 +855,6 @@ mod tests {
             }
             _ => panic!("Expected Decimal256"),
         }
-
-        // Default to Decimal128 (size not specified)
         let codec = Codec::Decimal(8, Some(2), None);
         let dt = codec.data_type();
         match dt {
@@ -889,16 +873,13 @@ mod tests {
             Some(Nullability::NullFirst),
             HashMap::from([("namespace".into(), "my.ns".into())]),
         );
-
         let actual_str = format!("{:?}", dt1.nullability());
         let expected_str = format!("{:?}", Some(Nullability::NullFirst));
         assert_eq!(actual_str, expected_str);
-
         let actual_str2 = format!("{:?}", dt1.codec());
         let expected_str2 = format!("{:?}", &Codec::Int32);
         assert_eq!(actual_str2, expected_str2);
         assert_eq!(dt1.metadata.get("namespace"), Some(&"my.ns".to_string()));
-
         let dt2 = AvroDataType::from_codec(Codec::Float64);
         let actual_str4 = format!("{:?}", dt2.codec());
         let expected_str4 = format!("{:?}", &Codec::Float64);
@@ -937,7 +918,6 @@ mod tests {
         let top_level = AvroDataType::new(Codec::Struct(fields), None, meta);
         let avro_schema = top_level.to_avro_schema("TopRecord");
         let json_val = serde_json::to_value(&avro_schema).unwrap();
-
         let expected = json!({
             "type": "record",
             "name": "TopRecord",
@@ -981,12 +961,9 @@ mod tests {
     fn test_avro_data_type_to_avro_schema_with_namespace_fixed() {
         let mut meta = HashMap::new();
         meta.insert("namespace".to_string(), "com.example.fixed".to_string());
-
         let fixed_dt = AvroDataType::new(Codec::Fixed(8), None, meta);
-
         let avro_schema = fixed_dt.to_avro_schema("MyFixed");
         let json_val = serde_json::to_value(&avro_schema).unwrap();
-
         let expected = json!({
             "type": "fixed",
             "name": "MyFixed",
@@ -1005,13 +982,10 @@ mod tests {
             name: "long_col".to_string(),
             data_type: field_codec.clone(),
         };
-
         assert_eq!(avro_field.name(), "long_col");
-
         let actual_str = format!("{:?}", avro_field.data_type().codec());
         let expected_str = format!("{:?}", &Codec::Int64);
         assert_eq!(actual_str, expected_str, "Codec debug output mismatch");
-
         let arrow_field = avro_field.field();
         assert_eq!(arrow_field.name(), "long_col");
         assert_eq!(arrow_field.data_type(), &DataType::Int64);
@@ -1024,22 +998,17 @@ mod tests {
             "test_meta",
             DataType::Utf8,
             true,
-        )
-            .with_metadata(HashMap::from([
-                ("namespace".to_string(), "arrow_meta_ns".to_string())
-            ]));
+        ).with_metadata(HashMap::from([
+            ("namespace".to_string(), "arrow_meta_ns".to_string())
+        ]));
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert_eq!(avro_field.name(), "test_meta");
-
         let actual_str = format!("{:?}", avro_field.data_type().codec());
         let expected_str = format!("{:?}", &Codec::Utf8);
         assert_eq!(actual_str, expected_str);
-
         let actual_str = format!("{:?}", avro_field.data_type().nullability());
         let expected_str = format!("{:?}", Some(Nullability::NullFirst));
         assert_eq!(actual_str, expected_str);
-
-        // Confirm we kept the metadata
         assert_eq!(
             avro_field.data_type().metadata.get("namespace"),
             Some(&"arrow_meta_ns".to_string())
@@ -1089,10 +1058,8 @@ mod tests {
             DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
             false,
         );
-
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
-
         assert!(
             matches!(codec, Codec::TimestampMillis(true)),
             "Expected Codec::TimestampMillis(true), got: {:?}",
@@ -1107,10 +1074,8 @@ mod tests {
             DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             false,
         );
-
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
-
         assert!(
             matches!(codec, Codec::TimestampMicros(true)),
             "Expected Codec::TimestampMicros(true), got: {:?}",
@@ -1125,10 +1090,8 @@ mod tests {
             DataType::Timestamp(TimeUnit::Millisecond, None),
             false,
         );
-
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
-
         assert!(
             matches!(codec, Codec::TimestampMillis(false)),
             "Expected Codec::TimestampMillis(false), got: {:?}",
@@ -1143,10 +1106,8 @@ mod tests {
             DataType::Timestamp(TimeUnit::Microsecond, None),
             false,
         );
-
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
-
         assert!(
             matches!(codec, Codec::TimestampMicros(false)),
             "Expected Codec::TimestampMicros(false), got: {:?}",
