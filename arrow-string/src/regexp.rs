@@ -28,6 +28,8 @@ use arrow_array::*;
 use arrow_buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
+use builder::GenericListBuilder;
+use iterator::ArrayIter;
 use regex::Regex;
 
 use std::collections::HashMap;
@@ -368,37 +370,46 @@ fn get_scalar_pattern_flag_utf8view<'a>(
     }
 }
 
-macro_rules! process_regexp_match {
-    ($array:expr, $regex:expr, $list_builder:expr) => {
-        $array
-            .iter()
-            .map(|value| {
-                match value {
-                    // Required for Postgres compatibility:
-                    // SELECT regexp_match('foobarbequebaz', ''); = {""}
-                    Some(_) if $regex.as_str().is_empty() => {
-                        $list_builder.values().append_value("");
-                        $list_builder.append(true);
-                    }
-                    Some(value) => match $regex.captures(value) {
-                        Some(caps) => {
-                            let mut iter = caps.iter();
-                            if caps.len() > 1 {
-                                iter.next();
-                            }
-                            for m in iter.flatten() {
-                                $list_builder.values().append_value(m.as_str());
-                            }
-                            $list_builder.append(true);
-                        }
-                        None => $list_builder.append(false),
-                    },
-                    None => $list_builder.append(false),
+fn process_regexp_match<
+    'a,
+    T: ?Sized,
+    A: ArrayAccessor<Item = &'a str>,
+    O: OffsetSizeTrait,
+    B: ValuesBuilder<T, Value = str>,
+>(
+    array: ArrayIter<A>,
+    regex: &Regex,
+    list_builder: &mut GenericListBuilder<O, B>,
+) -> Result<(), ArrowError> {
+    array
+        .map(|value| {
+            match value {
+                // Required for Postgres compatibility:
+                // SELECT regexp_match('foobarbequebaz', ''); = {""}
+                Some(_) if regex.as_str().is_empty() => {
+                    list_builder.values().append_value("");
+                    list_builder.append(true);
                 }
-                Ok(())
-            })
-            .collect::<Result<Vec<()>, ArrowError>>()?
-    };
+                Some(value) => match regex.captures(value) {
+                    Some(caps) => {
+                        let mut iter = caps.iter();
+                        if caps.len() > 1 {
+                            iter.next();
+                        }
+                        for m in iter.flatten() {
+                            list_builder.values().append_value(m.as_str());
+                        }
+                        list_builder.append(true);
+                    }
+                    None => list_builder.append(false),
+                },
+                None => list_builder.append(false),
+            }
+            Ok(())
+        })
+        .collect::<Result<Vec<()>, ArrowError>>()?;
+
+    Ok(())
 }
 
 fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
@@ -408,7 +419,7 @@ fn regexp_scalar_match<OffsetSize: OffsetSizeTrait>(
     let builder: GenericStringBuilder<OffsetSize> = GenericStringBuilder::with_capacity(0, 0);
     let mut list_builder = ListBuilder::new(builder);
 
-    process_regexp_match!(array, regex, list_builder);
+    process_regexp_match(array.iter(), regex, &mut list_builder)?;
 
     Ok(Arc::new(list_builder.finish()))
 }
@@ -420,7 +431,7 @@ fn regexp_scalar_match_utf8view(
     let builder = StringViewBuilder::with_capacity(0);
     let mut list_builder = ListBuilder::new(builder);
 
-    process_regexp_match!(array, regex, list_builder);
+    process_regexp_match(array.iter(), regex, &mut list_builder)?;
 
     Ok(Arc::new(list_builder.finish()))
 }
