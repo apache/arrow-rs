@@ -71,7 +71,6 @@ impl<'a> AvroCursor<'a> {
         let val: u32 = varint
             .try_into()
             .map_err(|_| ArrowError::ParseError("varint overflow".to_string()))?;
-        // Zig-zag decode
         Ok((val >> 1) as i32 ^ -((val & 1) as i32))
     }
 
@@ -79,7 +78,6 @@ impl<'a> AvroCursor<'a> {
     #[inline]
     pub(crate) fn get_long(&mut self) -> Result<i64, ArrowError> {
         let val = self.read_vlq()?;
-        // Zig-zag decode
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
