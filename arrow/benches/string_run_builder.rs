@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::StringRunBuilder;
+use arrow::array::{StringRunBuilder, ValuesBuilder};
 use arrow::datatypes::Int32Type;
 use arrow::util::bench_util::create_string_array_for_runs;
 use criterion::{criterion_group, criterion_main, Criterion};

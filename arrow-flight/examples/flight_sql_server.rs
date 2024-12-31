@@ -32,7 +32,7 @@ use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
-use arrow_array::builder::StringBuilder;
+use arrow_array::builder::{StringBuilder, ValuesBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::metadata::{

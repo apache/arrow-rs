@@ -1056,7 +1056,7 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::StringRunBuilder;
+    use arrow_array::builder::{StringRunBuilder, ValuesBuilder};
 
     use super::*;
 

@@ -734,6 +734,7 @@ mod tests {
     use crate::decode::{DecodedPayload, FlightDataDecoder};
     use arrow_array::builder::{
         GenericByteDictionaryBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
+        ValuesBuilder,
     };
     use arrow_array::*;
     use arrow_array::{cast::downcast_array, types::*};

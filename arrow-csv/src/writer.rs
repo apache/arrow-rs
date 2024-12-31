@@ -419,7 +419,7 @@ mod tests {
     use crate::ReaderBuilder;
     use arrow_array::builder::{
         BinaryBuilder, Decimal128Builder, Decimal256Builder, FixedSizeBinaryBuilder,
-        LargeBinaryBuilder,
+        LargeBinaryBuilder, ValuesBuilder,
     };
     use arrow_array::types::*;
     use arrow_buffer::i256;

@@ -21,7 +21,7 @@
 use crate::like::StringArrayType;
 
 use arrow_array::builder::{
-    BooleanBufferBuilder, GenericStringBuilder, ListBuilder, StringViewBuilder,
+    BooleanBufferBuilder, GenericStringBuilder, ListBuilder, StringViewBuilder, ValuesBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::*;

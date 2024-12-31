@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
+use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder, ValuesBuilder};
 use arrow_array::{Array, BinaryViewArray, StringViewArray};
 use pyo3::Python;
 use std::sync::Arc;

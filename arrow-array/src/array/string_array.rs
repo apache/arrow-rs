@@ -156,7 +156,7 @@ pub type LargeStringArray = GenericStringArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
+    use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder, ValuesBuilder};
     use crate::types::UInt8Type;
     use crate::Array;
     use arrow_buffer::Buffer;

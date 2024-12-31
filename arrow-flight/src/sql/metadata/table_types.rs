@@ -21,7 +21,10 @@
 
 use std::sync::Arc;
 
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
+use arrow_array::{
+    builder::{StringBuilder, ValuesBuilder},
+    ArrayRef, RecordBatch,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::take::take;
 use once_cell::sync::Lazy;

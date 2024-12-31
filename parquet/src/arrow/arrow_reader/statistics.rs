@@ -30,7 +30,7 @@ use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
-    StringViewBuilder,
+    StringViewBuilder, ValuesBuilder,
 };
 use arrow_array::{
     new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,

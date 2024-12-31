@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::{ArrayBuilder, GenericByteViewBuilder};
+use crate::builder::{ArrayBuilder, GenericByteViewBuilder, ValuesBuilder};
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
@@ -841,7 +841,7 @@ impl From<Vec<Option<String>>> for StringViewArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{BinaryViewBuilder, StringViewBuilder};
+    use crate::builder::{BinaryViewBuilder, StringViewBuilder, ValuesBuilder};
     use crate::{Array, BinaryViewArray, StringViewArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;

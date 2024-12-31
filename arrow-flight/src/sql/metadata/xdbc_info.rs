@@ -26,7 +26,9 @@
 //!
 use std::sync::Arc;
 
-use arrow_array::builder::{BooleanBuilder, Int32Builder, ListBuilder, StringBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, Int32Builder, ListBuilder, StringBuilder, ValuesBuilder,
+};
 use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch, Scalar};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};

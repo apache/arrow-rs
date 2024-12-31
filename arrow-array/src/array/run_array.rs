@@ -23,7 +23,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringRunBuilder,
+    builder::{StringRunBuilder, ValuesBuilder},
     make_array,
     run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},

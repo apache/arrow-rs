@@ -1304,7 +1304,7 @@ mod tests_from_ffi {
     use arrow_schema::{DataType, Field};
 
     use super::{ImportedArrowArray, Result};
-    use crate::builder::GenericByteViewBuilder;
+    use crate::builder::{GenericByteViewBuilder, ValuesBuilder};
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
         array::{

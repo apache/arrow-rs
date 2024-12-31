@@ -117,6 +117,7 @@ mod tests {
 
     use arrow_array::builder::{
         ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
+        ValuesBuilder,
     };
     use arrow_array::types::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano};

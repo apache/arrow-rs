@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, or};
-use arrow_array::builder::{BinaryBuilder, StringBuilder};
+use arrow_array::builder::{BinaryBuilder, StringBuilder, ValuesBuilder};
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::GenericStringBuilder;
+use arrow_array::builder::{GenericStringBuilder, ValuesBuilder};
 use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;

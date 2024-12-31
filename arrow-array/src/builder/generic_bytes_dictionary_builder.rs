@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
+use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder, ValuesBuilder};
 use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray, TypedDictionaryArray};
 use arrow_buffer::ArrowNativeType;

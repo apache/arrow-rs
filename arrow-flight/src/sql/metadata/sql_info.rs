@@ -31,7 +31,7 @@ use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
 use arrow_array::builder::{
     ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder,
-    StringBuilder, UInt32Builder,
+    StringBuilder, UInt32Builder, ValuesBuilder,
 };
 use arrow_array::{RecordBatch, Scalar};
 use arrow_data::ArrayData;
