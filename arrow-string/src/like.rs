@@ -20,6 +20,7 @@
 use crate::predicate::{BinaryPredicate, Predicate, PredicateImpl};
 
 use arrow_array::cast::AsArray;
+use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -115,10 +116,13 @@ pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arr
 trait LikeSupportedArray: Array {
     type UnsizedItem: ?Sized;
     type MatchingPredicate<'a>: PredicateImpl<'a, UnsizedItem = Self::UnsizedItem>;
+    type Iter<'a>: Iterator<Item = Option<&'a Self::UnsizedItem>>
+    where
+        Self: 'a;
 
     fn is_ascii(&self) -> bool;
 
-    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>>;
+    fn iter(&self) -> Self::Iter<'_>;
 
     fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8];
 }
@@ -126,12 +130,13 @@ trait LikeSupportedArray: Array {
 impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericStringArray<OffsetSize> {
     type UnsizedItem = str;
     type MatchingPredicate<'a> = Predicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
 
     fn is_ascii(&self) -> bool {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
 
@@ -143,12 +148,13 @@ impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericStringArray<Offs
 impl LikeSupportedArray for StringViewArray {
     type UnsizedItem = str;
     type MatchingPredicate<'a> = Predicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
 
     fn is_ascii(&self) -> bool {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
 
@@ -160,12 +166,13 @@ impl LikeSupportedArray for StringViewArray {
 impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericBinaryArray<OffsetSize> {
     type UnsizedItem = [u8];
     type MatchingPredicate<'a> = BinaryPredicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
 
     fn is_ascii(&self) -> bool {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
 
@@ -177,12 +184,13 @@ impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericBinaryArray<Offs
 impl LikeSupportedArray for BinaryViewArray {
     type UnsizedItem = [u8];
     type MatchingPredicate<'a> = BinaryPredicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
 
     fn is_ascii(&self) -> bool {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
 
