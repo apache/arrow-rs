@@ -23,12 +23,14 @@ use memchr::memmem::Finder;
 use regex::{
     bytes::Regex as BinaryRegex, bytes::RegexBuilder as BinaryRegexBuilder, Regex, RegexBuilder,
 };
-use std::iter::zip;
+use std::{iter::zip, str::Chars};
 
 pub trait SupportedPredicateItem: PartialEq
 where
     Self: 'static,
 {
+    type CharIter<'a>: Iterator<Item = char>;
+
     const PERCENT: &'static Self;
     const PERCENT_ESCAPED: &'static Self;
 
@@ -36,10 +38,14 @@ where
 
     fn as_bytes(&self) -> &[u8];
 
-    fn to_char_iter(&self) -> impl Iterator<Item = char>;
+    // After the minimum supported Rust version is >= 1.75.0 we can change the return type to be
+    // `impl Iterator<Item = char>`
+    fn to_char_iter(&self) -> Self::CharIter<'_>;
 }
 
 impl SupportedPredicateItem for str {
+    type CharIter<'a> = Chars<'a>;
+
     const PERCENT: &'static str = "%";
     const PERCENT_ESCAPED: &'static str = "\\%";
 
@@ -54,12 +60,14 @@ impl SupportedPredicateItem for str {
     }
 
     #[inline]
-    fn to_char_iter(&self) -> impl Iterator<Item = char> {
+    fn to_char_iter(&self) -> Self::CharIter<'_> {
         self.chars()
     }
 }
 
 impl SupportedPredicateItem for [u8] {
+    type CharIter<'a> = std::iter::Map<std::slice::Iter<'a, u8>, for<'b> fn(&'b u8) -> char>;
+
     const PERCENT: &'static [u8] = b"%";
     const PERCENT_ESCAPED: &'static [u8] = b"\\%";
 
@@ -74,7 +82,7 @@ impl SupportedPredicateItem for [u8] {
     }
 
     #[inline]
-    fn to_char_iter(&self) -> impl Iterator<Item = char> {
+    fn to_char_iter(&self) -> Self::CharIter<'_> {
         self.iter().map(|&b| b as char)
     }
 }
