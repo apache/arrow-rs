@@ -33,6 +33,9 @@ use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 pub fn make_byte_view_array_reader(
@@ -127,10 +130,13 @@ impl ArrayReader for ByteViewArrayReader {
 
 /// A [`ColumnValueDecoder`] for variable length byte arrays
 struct ByteViewArrayColumnValueDecoder {
-    dict: Option<ViewBuffer>,
+    dict: Option<Arc<ViewBuffer>>,
     decoder: Option<ByteViewArrayDecoder>,
     validate_utf8: bool,
 }
+
+pub(crate) static DICT_CACHE: LazyLock<Mutex<HashMap<usize, Arc<ViewBuffer>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
     type Buffer = ViewBuffer;
@@ -144,6 +150,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         }
     }
 
+    #[inline(never)]
     fn set_dict(
         &mut self,
         buf: Bytes,
@@ -161,18 +168,35 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
-        let mut decoder = ByteViewArrayDecoderPlain::new(
-            buf,
-            num_values as usize,
-            Some(num_values as usize),
-            self.validate_utf8,
-        );
-        decoder.read(&mut buffer, usize::MAX)?;
-        self.dict = Some(buffer);
+        let buf_id = buf.as_ptr() as usize;
+
+        let mut cache = DICT_CACHE.lock().unwrap();
+
+        match cache.entry(buf_id) {
+            Entry::Vacant(v) => {
+                let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
+                let mut decoder = ByteViewArrayDecoderPlain::new(
+                    buf,
+                    num_values as usize,
+                    Some(num_values as usize),
+                    self.validate_utf8,
+                );
+                decoder.read(&mut buffer, usize::MAX)?;
+
+                let dict = Arc::new(buffer);
+                v.insert(dict.clone());
+                self.dict = Some(dict);
+            }
+            Entry::Occupied(e) => {
+                // Remove and take ownership of the existing dictionary
+                self.dict = Some(e.remove());
+                // self.dict = Some(e.get().clone());
+            }
+        }
         Ok(())
     }
 
+    #[inline(never)]
     fn set_data(
         &mut self,
         encoding: Encoding,
@@ -190,22 +214,24 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         Ok(())
     }
 
+    #[inline(never)]
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         let decoder = self
             .decoder
             .as_mut()
             .ok_or_else(|| general_err!("no decoder set"))?;
 
-        decoder.read(out, num_values, self.dict.as_ref())
+        decoder.read(out, num_values, self.dict.as_ref().map(|b| b.as_ref()))
     }
 
+    #[inline(never)]
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         let decoder = self
             .decoder
             .as_mut()
             .ok_or_else(|| general_err!("no decoder set"))?;
 
-        decoder.skip(num_values, self.dict.as_ref())
+        decoder.skip(num_values, self.dict.as_ref().map(|b| b.as_ref()))
     }
 }
 
@@ -255,6 +281,7 @@ impl ByteViewArrayDecoder {
     }
 
     /// Read up to `len` values to `out` with the optional dictionary
+    #[inline(never)]
     pub fn read(
         &mut self,
         out: &mut ViewBuffer,
@@ -290,7 +317,7 @@ impl ByteViewArrayDecoder {
 
 /// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
 pub struct ByteViewArrayDecoderPlain {
-    buf: Bytes,
+    buf: Buffer,
     offset: usize,
 
     validate_utf8: bool,
@@ -307,6 +334,9 @@ impl ByteViewArrayDecoderPlain {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Self {
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let buf = arrow_buffer::Buffer::from_bytes(buf.clone().into());
         Self {
             buf,
             offset: 0,
@@ -315,11 +345,21 @@ impl ByteViewArrayDecoderPlain {
         }
     }
 
+    #[inline(never)]
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
-        let block_id = output.append_block(buf);
+        let need_to_create_new_buffer = {
+            if let Some(last_buffer) = output.buffers.last() {
+                last_buffer.ptr_eq(&self.buf)
+            } else {
+                true
+            }
+        };
+
+        let block_id = if need_to_create_new_buffer {
+            output.append_block(self.buf.clone())
+        } else {
+            output.buffers.len() as u32 - 1
+        };
 
         let to_read = len.min(self.max_remaining_values);
 
@@ -433,6 +473,7 @@ impl ByteViewArrayDecoderDictionary {
     /// Assumptions / Optimization
     /// This function checks if dict.buffers() are the last buffers in `output`, and if so
     /// reuses the dictionary page buffers directly without copying data
+    #[inline(never)]
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
         if dict.is_empty() || len == 0 {
             return Ok(0);
