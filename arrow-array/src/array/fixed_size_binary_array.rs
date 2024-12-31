@@ -59,7 +59,6 @@ pub struct FixedSizeBinaryArray {
 }
 
 impl FixedSizeBinaryArray {
-
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
         // TODO - check if we can do similar to BinaryArray

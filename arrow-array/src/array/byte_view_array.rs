@@ -754,7 +754,6 @@ where
 pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 
 impl BinaryViewArray {
-
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
         // Alternative (but incorrect): directly check the underlying buffers

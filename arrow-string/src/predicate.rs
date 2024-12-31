@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 use arrow_array::{Array, ArrayAccessor, BinaryViewArray, BooleanArray, StringViewArray};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use memchr::memchr3;
 use memchr::memmem::Finder;
-use regex::{Regex, RegexBuilder, bytes::Regex as BinaryRegex, bytes::RegexBuilder as BinaryRegexBuilder};
+use regex::{
+    bytes::Regex as BinaryRegex, bytes::RegexBuilder as BinaryRegexBuilder, Regex, RegexBuilder,
+};
 use std::iter::zip;
 
 /// A string based predicate
@@ -59,7 +60,6 @@ pub enum BinaryPredicate<'a> {
 }
 
 pub trait PredicateImpl<'a>: Sized {
-
     type UnsizedItem: ?Sized + PartialEq;
     type RegexType;
 
@@ -86,7 +86,8 @@ pub trait PredicateImpl<'a>: Sized {
     #[inline(never)]
     fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
     where
-        T: ArrayAccessor<Item = &'i Self::UnsizedItem>, Self::UnsizedItem: 'i;
+        T: ArrayAccessor<Item = &'i Self::UnsizedItem>,
+        Self::UnsizedItem: 'i;
 
     /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
     ///
@@ -95,7 +96,10 @@ pub trait PredicateImpl<'a>: Sized {
     /// 2. Replace `LIKE` single-character wildcards `_` => `.`
     /// 3. Escape regex meta characters to match them and not be evaluated as regex special chars. e.g. `.` => `\\.`
     /// 4. Replace escaped `LIKE` wildcards removing the escape characters to be able to match it as a regex. e.g. `\\%` => `%`
-    fn regex_like(pattern: &'a Self::UnsizedItem, case_insensitive: bool) -> Result<Self::RegexType, ArrowError>;
+    fn regex_like(
+        pattern: &'a Self::UnsizedItem,
+        case_insensitive: bool,
+    ) -> Result<Self::RegexType, ArrowError>;
 }
 
 impl<'a> PredicateImpl<'a> for Predicate<'a> {
@@ -106,7 +110,9 @@ impl<'a> PredicateImpl<'a> for Predicate<'a> {
     fn like(pattern: &'a str) -> Result<Self, ArrowError> {
         if !contains_like_pattern(pattern.as_bytes()) {
             Ok(Self::Eq(pattern))
-        } else if pattern.ends_with('%') && !contains_like_pattern(&pattern[..pattern.len() - 1].as_bytes()) {
+        } else if pattern.ends_with('%')
+            && !contains_like_pattern(&pattern[..pattern.len() - 1].as_bytes())
+        {
             Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
         } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..].as_bytes()) {
             Ok(Self::EndsWith(&pattern[1..]))
@@ -156,11 +162,17 @@ impl<'a> PredicateImpl<'a> for Predicate<'a> {
             Self::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
             Self::Contains(finder) => finder.find(haystack.as_bytes()).is_some(),
             Self::StartsWith(v) => starts_with(haystack.as_bytes(), v.as_bytes(), equals_kernel),
-            Self::IStartsWithAscii(v) => {
-                starts_with(haystack.as_bytes(), v.as_bytes(), equals_ignore_ascii_case_kernel)
-            }
+            Self::IStartsWithAscii(v) => starts_with(
+                haystack.as_bytes(),
+                v.as_bytes(),
+                equals_ignore_ascii_case_kernel,
+            ),
             Self::EndsWith(v) => ends_with(haystack.as_bytes(), v.as_bytes(), equals_kernel),
-            Self::IEndsWithAscii(v) => ends_with(haystack.as_bytes(), v.as_bytes(), equals_ignore_ascii_case_kernel),
+            Self::IEndsWithAscii(v) => ends_with(
+                haystack.as_bytes(),
+                v.as_bytes(),
+                equals_ignore_ascii_case_kernel,
+            ),
             Self::Regex(v) => v.is_match(haystack),
         }
     }
@@ -219,7 +231,11 @@ impl<'a> PredicateImpl<'a> for Predicate<'a> {
                     BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
-                        starts_with(haystack.as_bytes(), v.as_bytes(), equals_ignore_ascii_case_kernel) != negate
+                        starts_with(
+                            haystack.as_bytes(),
+                            v.as_bytes(),
+                            equals_ignore_ascii_case_kernel,
+                        ) != negate
                     })
                 }
             }
@@ -259,7 +275,11 @@ impl<'a> PredicateImpl<'a> for Predicate<'a> {
                     BooleanArray::new(values, nulls)
                 } else {
                     BooleanArray::from_unary(array, |haystack| {
-                        ends_with(haystack.as_bytes(), v.as_bytes(), equals_ignore_ascii_case_kernel) != negate
+                        ends_with(
+                            haystack.as_bytes(),
+                            v.as_bytes(),
+                            equals_ignore_ascii_case_kernel,
+                        ) != negate
                     })
                 }
             }
@@ -393,9 +413,7 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
             Self::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
             Self::Contains(finder) => finder.find(haystack).is_some(),
             Self::StartsWith(v) => starts_with(haystack, v, equals_kernel),
-            Self::IStartsWithAscii(v) => {
-                starts_with(haystack, v, equals_ignore_ascii_case_kernel)
-            }
+            Self::IStartsWithAscii(v) => starts_with(haystack, v, equals_ignore_ascii_case_kernel),
             Self::EndsWith(v) => ends_with(haystack, v, equals_kernel),
             Self::IEndsWithAscii(v) => ends_with(haystack, v, equals_ignore_ascii_case_kernel),
             Self::Regex(v) => v.is_match(haystack),
@@ -426,9 +444,7 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
                     let values = BooleanBuffer::from(
                         binary_view_array
                             .prefix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v, equals_kernel) != negate
-                            })
+                            .map(|haystack| equals_bytes(haystack, v, equals_kernel) != negate)
                             .collect::<Vec<_>>(),
                     );
                     BooleanArray::new(values, nulls)
@@ -445,11 +461,7 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
                         binary_view_array
                             .prefix_bytes_iter(v.len())
                             .map(|haystack| {
-                                equals_bytes(
-                                    haystack,
-                                    v,
-                                    equals_ignore_ascii_case_kernel,
-                                ) != negate
+                                equals_bytes(haystack, v, equals_ignore_ascii_case_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
                     );
@@ -466,9 +478,7 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
                     let values = BooleanBuffer::from(
                         binary_view_array
                             .suffix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v, equals_kernel) != negate
-                            })
+                            .map(|haystack| equals_bytes(haystack, v, equals_kernel) != negate)
                             .collect::<Vec<_>>(),
                     );
                     BooleanArray::new(values, nulls)
@@ -485,11 +495,7 @@ impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
                         binary_view_array
                             .suffix_bytes_iter(v.len())
                             .map(|haystack| {
-                                equals_bytes(
-                                    haystack,
-                                    v,
-                                    equals_ignore_ascii_case_kernel,
-                                ) != negate
+                                equals_bytes(haystack, v, equals_ignore_ascii_case_kernel) != negate
                             })
                             .collect::<Vec<_>>(),
                     );
@@ -578,7 +584,11 @@ fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> b
 
 /// This is faster than `str::starts_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn starts_with(haystack: &[u8], needle: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+fn starts_with(
+    haystack: &[u8],
+    needle: &[u8],
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
@@ -591,11 +601,7 @@ fn ends_with(haystack: &[u8], needle: &[u8], byte_eq_kernel: impl Fn((&u8, &u8))
     if needle.len() > haystack.len() {
         false
     } else {
-        zip(
-            haystack.iter().rev(),
-            needle.iter().rev(),
-        )
-        .all(byte_eq_kernel)
+        zip(haystack.iter().rev(), needle.iter().rev()).all(byte_eq_kernel)
     }
 }
 

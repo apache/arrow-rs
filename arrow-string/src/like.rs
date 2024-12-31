@@ -132,7 +132,7 @@ impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericStringArray<Offs
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item=Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
         self.iter()
     }
 
@@ -149,7 +149,7 @@ impl LikeSupportedArray for StringViewArray {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item=Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
         self.iter()
     }
 
@@ -166,7 +166,7 @@ impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericBinaryArray<Offs
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item=Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
         self.iter()
     }
 
@@ -183,7 +183,7 @@ impl LikeSupportedArray for BinaryViewArray {
         self.is_ascii()
     }
 
-    fn iter(&self) -> impl Iterator<Item=Option<&Self::UnsizedItem>> {
+    fn iter(&self) -> impl Iterator<Item = Option<&Self::UnsizedItem>> {
         self.iter()
     }
 
@@ -256,7 +256,10 @@ fn apply<'a, T: LikeSupportedArray>(
     r: &'a T,
     r_s: bool,
     r_v: Option<&'a dyn AnyDictionaryArray>,
-) -> Result<BooleanArray, ArrowError> where &'a T: ArrayAccessor<Item = &'a T::UnsizedItem> {
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a T: ArrayAccessor<Item = &'a T::UnsizedItem>,
+{
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
         let idx = match r_v {
@@ -304,7 +307,10 @@ fn op_scalar<'a, T: LikeSupportedArray>(
     l: &'a T,
     l_v: Option<&dyn AnyDictionaryArray>,
     r: &'a T::UnsizedItem,
-) -> Result<BooleanArray, ArrowError> where &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem> {
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem>,
+{
     let r = match op {
         Op::Like(neg) => T::MatchingPredicate::like(r)?.evaluate_array(l, neg),
         Op::ILike(neg) => T::MatchingPredicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
@@ -322,7 +328,10 @@ fn op_scalar<'a, T: LikeSupportedArray>(
 fn vectored_iter<'a, T: LikeSupportedArray>(
     a: &'a T,
     a_v: &'a dyn AnyDictionaryArray,
-) -> impl Iterator<Item = Option<&'a T::UnsizedItem>> + 'a where &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem> + 'a {
+) -> impl Iterator<Item = Option<&'a T::UnsizedItem>> + 'a
+where
+    &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem> + 'a,
+{
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
@@ -342,7 +351,10 @@ fn op_binary<'a, T: LikeSupportedArray + 'a>(
     match op {
         Op::Like(neg) => binary_predicate(l, r, neg, T::MatchingPredicate::like),
         Op::ILike(neg) => binary_predicate(l, r, neg, |s| T::MatchingPredicate::ilike(s, false)),
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(T::item_as_bytes(l?), T::item_as_bytes(r?)))).collect()),
+        Op::Contains => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(str_contains(T::item_as_bytes(l?), T::item_as_bytes(r?))))
+            .collect()),
         Op::StartsWith => Ok(l
             .zip(r)
             .map(|(l, r)| Some(T::MatchingPredicate::starts_with(r?).evaluate(l?)))
@@ -387,7 +399,9 @@ fn make_scalar(data_type: &DataType, scalar: &str) -> Result<ArrayRef, ArrowErro
         DataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from_iter_values([scalar]))),
         DataType::Dictionary(_, v) => make_scalar(v.as_ref(), scalar),
         DataType::Binary => Ok(Arc::new(BinaryArray::from_iter_values([scalar.as_bytes()]))),
-        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter_values([scalar.as_bytes()]))),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter_values([
+            scalar.as_bytes()
+        ]))),
         d => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported string scalar data type {d:?}",
         ))),
@@ -495,12 +509,17 @@ legacy_kernels!(
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use arrow_array::builder::BinaryDictionaryBuilder;
     use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
     use std::iter::zip;
-    use arrow_array::builder::BinaryDictionaryBuilder;
 
-
-    fn convert_binary_iterator_to_binary_dictionary<'a, K: ArrowDictionaryKeyType, I: IntoIterator<Item = &'a [u8]>>(iter: I) -> DictionaryArray<K> {
+    fn convert_binary_iterator_to_binary_dictionary<
+        'a,
+        K: ArrowDictionaryKeyType,
+        I: IntoIterator<Item = &'a [u8]>,
+    >(
+        iter: I,
+    ) -> DictionaryArray<K> {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
         let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
@@ -513,14 +532,17 @@ mod tests {
         builder.finish()
     }
 
-    fn convert_string_iterator_to_binary_dictionary<'a, K: ArrowDictionaryKeyType, I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> DictionaryArray<K> {
+    fn convert_string_iterator_to_binary_dictionary<
+        'a,
+        K: ArrowDictionaryKeyType,
+        I: IntoIterator<Item = Option<&'a str>>,
+    >(
+        iter: I,
+    ) -> DictionaryArray<K> {
         let it = iter.into_iter();
         let (lower, _) = it.size_hint();
         let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
-        it.for_each(|i| {
-            builder
-                .append_option(i.map(|i| i.as_bytes()))
-        });
+        it.for_each(|i| builder.append_option(i.map(|i| i.as_bytes())));
 
         builder.finish()
     }
@@ -571,8 +593,10 @@ mod tests {
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
 
-                let left: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(left_binary);
-                let right: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(right_binary);
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(right_binary);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
             }
@@ -625,14 +649,15 @@ mod tests {
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
 
-                let left: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary(left_binary);
-                let right: DictionaryArray<Int8Type> = convert_binary_iterator_to_binary_dictionary([right_binary]);
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary([right_binary]);
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
             }
         };
     }
-
 
     trait IntoBinaryScalar {
         fn into_binary_scalar(self) -> Scalar<ArrayRef>;
@@ -1276,46 +1301,74 @@ mod tests {
         vec![true, false, true, true, true]
     );
 
-    fn like_utf8_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
+    fn like_utf8_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
         let dict_array: DictionaryArray<Int8Type> = data.clone().into_iter().collect();
         like_utf8_scalar_dyn(&dict_array, pattern)
     }
 
-    fn like_binary_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
-        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data.clone());
+    fn like_binary_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.clone());
 
         like(&dict_array, &pattern.into_binary_scalar())
     }
 
-    fn nlike_utf8_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
+    fn nlike_utf8_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
         let dict_array: DictionaryArray<Int8Type> = data.clone().into_iter().collect();
         nlike_utf8_scalar_dyn(&dict_array, pattern)
     }
 
-    fn nlike_binary_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
-        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data.clone());
+    fn nlike_binary_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.clone());
 
         nlike(&dict_array, &pattern.into_binary_scalar())
     }
 
-    fn ilike_utf8_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
+    fn ilike_utf8_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
         let dict_array: DictionaryArray<Int8Type> = data.clone().into_iter().collect();
         ilike_utf8_scalar_dyn(&dict_array, pattern)
     }
 
-    fn ilike_binary_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
-        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data.clone());
+    fn ilike_binary_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.clone());
 
         ilike(&dict_array, &pattern.into_binary_scalar())
     }
 
-    fn nilike_utf8_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
+    fn nilike_utf8_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
         let dict_array: DictionaryArray<Int8Type> = data.clone().into_iter().collect();
         nilike_utf8_scalar_dyn(&dict_array, pattern)
     }
 
-    fn nilike_binary_scalar(data: &Vec<Option<&str>>, pattern: &str) -> Result<BooleanArray, ArrowError> {
-        let dict_array: DictionaryArray<Int8Type> = convert_string_iterator_to_binary_dictionary(data.clone());
+    fn nilike_binary_scalar(
+        data: &Vec<Option<&str>>,
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.clone());
 
         nilike(&dict_array, &pattern.into_binary_scalar())
     }
@@ -1476,8 +1529,6 @@ mod tests {
             Some("Air"),
             Some("bbbbb\nAir"),
         ];
-
-
 
         for func in &[nlike_utf8_scalar, nlike_binary_scalar] {
             assert_eq!(
@@ -1768,8 +1819,6 @@ mod tests {
             Some("Air"),
             Some("bbbbb\nAir"),
         ];
-
-
 
         for func in &[nilike_utf8_scalar, nilike_binary_scalar] {
             assert_eq!(
