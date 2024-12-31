@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::{collections::VecDeque, sync::Arc};
@@ -24,6 +25,7 @@ use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 
+use crate::basic::PageType;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::errors::ParquetError;
 use crate::{
@@ -217,12 +219,17 @@ impl RecordBatchReader for FilteredParquetRecordBatchReader {
     }
 }
 
+struct CachedPage {
+    dict: Option<(usize, Page)>,
+    data: Option<(usize, Page)>,
+}
+
 struct PageCacheInner {
-    pages: HashMap<usize, (usize, Page)>, // col_id -> (offset, page)
+    pages: HashMap<usize, CachedPage>, // col_id -> CachedPage
 }
 
 /// A simple cache for decompressed pages.
-/// We cache only one page per column
+/// We cache only one dictionary page and one data page per column
 pub(crate) struct PageCache {
     inner: RwLock<PageCacheInner>,
 }
@@ -240,22 +247,45 @@ impl PageCache {
 
     pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
         let read_lock = self.inner.read().unwrap();
-        read_lock
-            .pages
-            .get(&col_id)
-            .and_then(|(cached_offset, page)| {
-                if *cached_offset == offset {
-                    Some(page)
-                } else {
-                    None
-                }
-            })
-            .cloned()
+        read_lock.pages.get(&col_id).and_then(|pages| {
+            pages
+                .dict
+                .iter()
+                .chain(pages.data.iter())
+                .find(|(page_offset, _)| *page_offset == offset)
+                .map(|(_, page)| page.clone())
+        })
     }
 
     pub(crate) fn insert_page(&self, col_id: usize, offset: usize, page: Page) {
         let mut write_lock = self.inner.write().unwrap();
-        write_lock.pages.insert(col_id, (offset, page));
+
+        let is_dict = page.page_type() == PageType::DICTIONARY_PAGE;
+
+        let cached_pages = write_lock.pages.entry(col_id);
+        match cached_pages {
+            Entry::Occupied(mut entry) => {
+                if is_dict {
+                    entry.get_mut().dict = Some((offset, page));
+                } else {
+                    entry.get_mut().data = Some((offset, page));
+                }
+            }
+            Entry::Vacant(entry) => {
+                let cached_page = if is_dict {
+                    CachedPage {
+                        dict: Some((offset, page)),
+                        data: None,
+                    }
+                } else {
+                    CachedPage {
+                        dict: None,
+                        data: Some((offset, page)),
+                    }
+                };
+                entry.insert(cached_page);
+            }
+        }
     }
 }
 

@@ -161,7 +161,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::default();
+        let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
         let mut decoder = ByteViewArrayDecoderPlain::new(
             buf,
             num_values as usize,
@@ -458,6 +458,8 @@ impl ByteViewArrayDecoderDictionary {
             }
         }
 
+        output.views.reserve(len);
+
         // Calculate the offset of the dictionary buffers in the output buffers
         // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
         // then the base_buffer_idx is 5 - 2 = 3
@@ -679,7 +681,7 @@ impl ByteViewArrayDecoderDelta {
 
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match std::str::from_utf8(val) {
+    match simdutf8::basic::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
     }
