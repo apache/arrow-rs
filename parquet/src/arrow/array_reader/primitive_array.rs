@@ -80,8 +80,6 @@ where
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
     record_reader: RecordReader<T>,
-    #[allow(unused)]
-    column_idx: usize,
 }
 
 impl<T> PrimitiveArrayReader<T>
@@ -95,7 +93,6 @@ where
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
-        column_idx: usize,
     ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
@@ -113,7 +110,6 @@ where
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
-            column_idx,
         })
     }
 }
@@ -375,7 +371,6 @@ mod tests {
             Box::<EmptyPageIterator>::default(),
             schema.column(0),
             None,
-            0,
         )
         .unwrap();
 
@@ -422,7 +417,6 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                0,
             )
             .unwrap();
 
@@ -493,7 +487,6 @@ mod tests {
                     Box::new(page_iterator),
                     column_desc.clone(),
                     None,
-                    0,
                 )
                 .expect("Unable to get array reader");
 
@@ -633,7 +626,6 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                0,
             )
             .unwrap();
 
@@ -713,7 +705,6 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                0,
             )
             .unwrap();
 
@@ -776,7 +767,6 @@ mod tests {
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                0,
             )
             .unwrap();
 
