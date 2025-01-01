@@ -220,27 +220,74 @@ impl RecordBatchReader for FilteredParquetRecordBatchReader {
 }
 
 struct CachedPage {
-    dict: Option<(usize, Page)>,
-    data: Option<(usize, Page)>,
+    dict: Option<(usize, Page)>, // page offset -> page
+    data: Option<(usize, Page)>, // page offset -> page
 }
 
-struct PageCacheInner {
-    pages: HashMap<usize, CachedPage>, // col_id -> CachedPage
+struct PredicatePageCacheInner {
+    pages: HashMap<usize, CachedPage>, // col_id (Parquet's leaf column index) -> CachedPage
 }
 
-/// A simple cache for decompressed pages.
-/// We cache only one dictionary page and one data page per column
-pub(crate) struct PageCache {
-    inner: RwLock<PageCacheInner>,
+/// A simple cache to avoid double-decompressing pages with filter pushdown.
+/// In filter pushdown, we first decompress a page, apply the filter, and then decompress the page again.
+/// This double decompression is expensive, so we cache the decompressed page.
+///
+/// This implementation contains subtle dynamics that can be hard to understand.
+///
+/// ## Which columns to cache
+///
+/// Let's consider this example: SELECT B, C FROM table WHERE A = 42 and B = 37;
+/// We have 3 columns, and the predicate is applied to column A and B, and projection is on B and C.
+///
+/// For column A, we need to decompress it, apply the filter (A=42), and never have to decompress it again, as it's not in the projection.
+/// For column B, we need to decompress it, apply the filter (B=37), and then decompress it again, as it's in the projection.
+/// For column C, we don't have predicate, so we only decompress it once.
+///
+/// A, C is only decompressed once, and B is decompressed twice (as it appears in both the predicate and the projection).
+/// The PredicatePageCache will only cache B.
+/// We use B's col_id (Parquet's leaf column index) to identify the cache entry.
+///
+/// ## How many pages to cache
+///
+/// Now we identified the columns to cache, next question is to determine the **minimal** number of pages to cache.
+///
+/// Let's revisit our decoding pipeline:
+/// Load batch 1 -> evaluate predicates -> filter 1 -> load & emit batch 1
+/// Load batch 2 -> evaluate predicates -> filter 2 -> load & emit batch 2
+/// ...
+/// Load batch N -> evaluate predicates -> filter N -> load & emit batch N
+///
+/// Assumption & observation: each page consists multiple batches.
+/// Then our pipeline looks like this:
+/// Load Page 1
+/// Load batch 1 -> evaluate predicates -> filter 1 -> load & emit batch 1
+/// Load batch 2 -> evaluate predicates -> filter 2 -> load & emit batch 2
+/// Load batch 3 -> evaluate predicates -> filter 3 -> load & emit batch 3
+/// Load Page 2
+/// Load batch 4 -> evaluate predicates -> filter 4 -> load & emit batch 4
+/// Load batch 5 -> evaluate predicates -> filter 5 -> load & emit batch 5
+/// ...
+///
+/// This means that we only need to cache one page per column,
+/// because the page that is used by the predicate is the same page, and is immediately used in loading the batch.
+///
+/// The only exception is the dictionary page -- the first page of each column.
+/// If we encountered a dict page, we will need to immediately read next page, and cache it.
+///
+/// To summarize, the cache only contains 2 pages per column: one dict page and one data page.
+/// This is a nice property as it means the caching memory consumption is negligible and constant to the number of columns.
+///
+/// ## How to identify a page
+/// We use the page offset (the offset to the Parquet file) to uniquely identify a page.
+pub(crate) struct PredicatePageCache {
+    inner: RwLock<PredicatePageCacheInner>,
 }
 
-impl PageCache {
-    const CAPACITY: usize = 16;
-
-    pub(crate) fn new() -> Self {
+impl PredicatePageCache {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            inner: RwLock::new(PageCacheInner {
-                pages: HashMap::with_capacity(Self::CAPACITY),
+            inner: RwLock::new(PredicatePageCacheInner {
+                pages: HashMap::with_capacity(capacity),
             }),
         }
     }
@@ -257,6 +304,9 @@ impl PageCache {
         })
     }
 
+    /// Insert a page into the cache.
+    /// Inserting a page will override the existing page, if any.
+    /// This is because we only need to cache 2 pages per column, see above.
     pub(crate) fn insert_page(&self, col_id: usize, offset: usize, page: Page) {
         let mut write_lock = self.inner.write().unwrap();
 
@@ -291,14 +341,14 @@ impl PageCache {
 
 pub(crate) struct CachedPageReader<R: ChunkReader> {
     inner: SerializedPageReader<R>,
-    cache: Arc<PageCache>,
+    cache: Arc<PredicatePageCache>,
     col_id: usize,
 }
 
 impl<R: ChunkReader> CachedPageReader<R> {
     pub(crate) fn new(
         inner: SerializedPageReader<R>,
-        cache: Arc<PageCache>,
+        cache: Arc<PredicatePageCache>,
         col_id: usize,
     ) -> Self {
         Self {
@@ -419,5 +469,104 @@ mod tests {
         // Queue should now be empty
         let selection = take_next_selection(&mut queue, 10);
         assert!(selection.is_none());
+    }
+
+    #[test]
+    fn test_predicate_page_cache_basic_operations() {
+        use super::*;
+
+        let cache = PredicatePageCache::new(2);
+        let page1 = Page::dummy_page(PageType::DATA_PAGE, 100);
+        let page2 = Page::dummy_page(PageType::DICTIONARY_PAGE, 200);
+
+        // Insert and retrieve a data page
+        cache.insert_page(0, 1000, page1.clone());
+        let retrieved = cache.get_page(0, 1000);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().page_type(), PageType::DATA_PAGE);
+
+        // Insert and retrieve a dictionary page for same column
+        cache.insert_page(0, 2000, page2.clone());
+        let retrieved = cache.get_page(0, 2000);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().page_type(), PageType::DICTIONARY_PAGE);
+
+        // Both pages should still be accessible
+        assert!(cache.get_page(0, 1000).is_some());
+        assert!(cache.get_page(0, 2000).is_some());
+    }
+
+    #[test]
+    fn test_predicate_page_cache_replacement() {
+        use super::*;
+
+        let cache = PredicatePageCache::new(2);
+        let data_page1 = Page::dummy_page(PageType::DATA_PAGE, 100);
+        let data_page2 = Page::dummy_page(PageType::DATA_PAGE_V2, 200);
+
+        // Insert first data page
+        cache.insert_page(0, 1000, data_page1.clone());
+        assert!(cache.get_page(0, 1000).is_some());
+
+        // Insert second data page - should replace first data page
+        cache.insert_page(0, 2000, data_page2.clone());
+        assert!(cache.get_page(0, 2000).is_some());
+        assert!(cache.get_page(0, 1000).is_none()); // First page should be gone
+    }
+
+    #[test]
+    fn test_predicate_page_cache_multiple_columns() {
+        use super::*;
+
+        let cache = PredicatePageCache::new(2);
+        let page1 = Page::dummy_page(PageType::DATA_PAGE, 100);
+        let page2 = Page::dummy_page(PageType::DATA_PAGE_V2, 200);
+
+        // Insert pages for different columns
+        cache.insert_page(0, 1000, page1.clone());
+        cache.insert_page(1, 1000, page2.clone());
+
+        // Both pages should be accessible
+        assert!(cache.get_page(0, 1000).is_some());
+        assert!(cache.get_page(1, 1000).is_some());
+
+        // Non-existent column should return None
+        assert!(cache.get_page(2, 1000).is_none());
+    }
+}
+
+// Helper implementation for testing
+#[cfg(test)]
+impl Page {
+    fn dummy_page(page_type: PageType, size: usize) -> Self {
+        use crate::basic::Encoding;
+        match page_type {
+            PageType::DATA_PAGE => Page::DataPage {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                def_level_encoding: Encoding::PLAIN,
+                rep_level_encoding: Encoding::PLAIN,
+                statistics: None,
+            },
+            PageType::DICTIONARY_PAGE => Page::DictionaryPage {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                is_sorted: false,
+            },
+            PageType::DATA_PAGE_V2 => Page::DataPageV2 {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                def_levels_byte_len: 0,
+                rep_levels_byte_len: 0,
+                is_compressed: false,
+                statistics: None,
+                num_nulls: 0,
+                num_rows: 0,
+            },
+            _ => unreachable!(),
+        }
     }
 }

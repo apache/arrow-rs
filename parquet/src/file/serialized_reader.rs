@@ -425,7 +425,6 @@ pub(crate) fn decode_page(
         }
         _ => buffer,
     };
-    let buffer = Bytes::from(buffer);
 
     let result = match page_header.type_ {
         PageType::DICTIONARY_PAGE => {
@@ -569,6 +568,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         })
     }
 
+    #[cfg(feature = "async")]
     pub(crate) fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
         match &mut self.state {
             SerializedPageReaderState::Values {
