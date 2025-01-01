@@ -294,6 +294,18 @@ impl ProjectionMask {
         }
     }
 
+    /// Intersect two projection masks
+    pub fn intersect(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) => self.mask = other.mask.clone(),
+            (_, None) => {}
+            (Some(a), Some(b)) => {
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a && b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
+
     /// Returns true if the mask contains the other mask
     pub fn contains(&self, other: &Self) -> bool {
         match (self.mask.as_ref(), other.mask.as_ref()) {
