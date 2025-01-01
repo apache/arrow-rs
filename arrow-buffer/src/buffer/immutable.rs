@@ -61,7 +61,7 @@ unsafe impl Sync for Buffer where Bytes: Sync {}
 impl Buffer {
     /// Auxiliary method to create a new Buffer
     ///
-    /// This can be used with a `bytes::Bytes` via `into()`:
+    /// This can be used with a [`bytes::Bytes`] via `into()`:
     ///
     /// ```
     /// # use arrow_buffer::Buffer;
