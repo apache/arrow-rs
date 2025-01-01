@@ -83,7 +83,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow_reader::{CachedPageReader, FilteredParquetRecordBatchReader, PageCache};
+use arrow_reader::{CachedPageReader, FilteredParquetRecordBatchReader, PredicatePageCache};
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
@@ -528,15 +528,7 @@ where
             p
         });
 
-        let mut row_group = InMemoryRowGroup {
-            metadata: meta,
-            // schema: meta.schema_descr_ptr(),
-            row_count: meta.num_rows() as usize,
-            column_chunks: vec![None; meta.columns().len()],
-            offset_index,
-            cache: Arc::new(PageCache::new()),
-            projection_to_cache,
-        };
+        let mut row_group = InMemoryRowGroup::new(meta, offset_index, projection_to_cache);
 
         let mut selection =
             selection.unwrap_or_else(|| vec![RowSelector::select(row_group.row_count)].into());
@@ -815,10 +807,36 @@ struct InMemoryRowGroup<'a> {
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
-    cache: Arc<PageCache>,
+    cache: Arc<PredicatePageCache>,
     projection_to_cache: Option<ProjectionMask>,
 }
 
+impl<'a> InMemoryRowGroup<'a> {
+    fn new(
+        metadata: &'a RowGroupMetaData,
+        offset_index: Option<&'a [OffsetIndexMetaData]>,
+        projection_to_cache: Option<ProjectionMask>,
+    ) -> Self {
+        let to_cache_column_cnt = projection_to_cache
+            .as_ref()
+            .map(|p| {
+                if let Some(mask) = &p.mask {
+                    mask.iter().filter(|&&b| b).count()
+                } else {
+                    metadata.columns().len()
+                }
+            })
+            .unwrap_or(0);
+        Self {
+            metadata,
+            offset_index,
+            column_chunks: vec![None; metadata.columns().len()],
+            row_count: metadata.num_rows() as usize,
+            cache: Arc::new(PredicatePageCache::new(to_cache_column_cnt)),
+            projection_to_cache,
+        }
+    }
+}
 impl<'a> InMemoryRowGroup<'a> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(
