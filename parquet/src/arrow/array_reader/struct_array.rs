@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 /// Implementation of struct array reader.
 pub struct StructArrayReader {
-    pub children: Vec<Box<dyn ArrayReader>>,
+    children: Vec<Box<dyn ArrayReader>>,
     data_type: ArrowType,
     struct_def_level: i16,
     struct_rep_level: i16,
