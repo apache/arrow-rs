@@ -245,7 +245,6 @@ fn build_primitive_reader(
             page_iterator,
             column_desc,
             arrow_type,
-            col_idx,
         )?) as _,
         PhysicalType::INT32 => {
             if let Some(DataType::Null) = arrow_type {
@@ -258,7 +257,6 @@ fn build_primitive_reader(
                     page_iterator,
                     column_desc,
                     arrow_type,
-                    col_idx,
                 )?) as _
             }
         }
@@ -266,25 +264,21 @@ fn build_primitive_reader(
             page_iterator,
             column_desc,
             arrow_type,
-            col_idx,
         )?) as _,
         PhysicalType::INT96 => Box::new(PrimitiveArrayReader::<Int96Type>::new(
             page_iterator,
             column_desc,
             arrow_type,
-            col_idx,
         )?) as _,
         PhysicalType::FLOAT => Box::new(PrimitiveArrayReader::<FloatType>::new(
             page_iterator,
             column_desc,
             arrow_type,
-            col_idx,
         )?) as _,
         PhysicalType::DOUBLE => Box::new(PrimitiveArrayReader::<DoubleType>::new(
             page_iterator,
             column_desc,
             arrow_type,
-            col_idx,
         )?) as _,
         PhysicalType::BYTE_ARRAY => match arrow_type {
             Some(DataType::Dictionary(_, _)) => {
