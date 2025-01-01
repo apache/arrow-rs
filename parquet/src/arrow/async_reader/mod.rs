@@ -512,6 +512,22 @@ where
             .filter(|index| index.first().map(|v| !v.is_empty()).unwrap_or(false))
             .map(|x| x[row_group_idx].as_slice());
 
+        let mut predicate_projection: Option<ProjectionMask> = None;
+        if let Some(filter) = self.filter.as_mut() {
+            for predicate in filter.predicates.iter_mut() {
+                let p_projection = predicate.projection();
+                if let Some(ref mut p) = predicate_projection {
+                    p.union(&p_projection);
+                } else {
+                    predicate_projection = Some(p_projection.clone());
+                }
+            }
+        }
+        let projection_to_cache = predicate_projection.map(|mut p| {
+            p.intersect(&projection);
+            p
+        });
+
         let mut row_group = InMemoryRowGroup {
             metadata: meta,
             // schema: meta.schema_descr_ptr(),
@@ -519,6 +535,7 @@ where
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
             cache: Arc::new(PageCache::new()),
+            projection_to_cache,
         };
 
         let mut selection =
@@ -531,13 +548,13 @@ where
                     return Ok((self, None));
                 }
 
-                let predicate_projection = predicate.projection();
+                let p_projection = predicate.projection();
                 row_group
-                    .fetch(&mut self.input, predicate_projection, Some(&selection))
+                    .fetch(&mut self.input, p_projection, Some(&selection))
                     .await?;
 
                 let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
+                    build_array_reader(self.fields.as_deref(), p_projection, &row_group)?;
                 filter_readers.push(array_reader);
             }
         }
@@ -799,6 +816,7 @@ struct InMemoryRowGroup<'a> {
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
     cache: Arc<PageCache>,
+    projection_to_cache: Option<ProjectionMask>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -911,10 +929,13 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
 
-                let page_reader: Box<dyn PageReader> = if std::env::var("CACHE_PAGES")
-                    .map(|v| v == "1")
-                    .unwrap_or(false)
-                {
+                let cached_reader = if let Some(projection_to_cache) = &self.projection_to_cache {
+                    projection_to_cache.leaf_included(i)
+                } else {
+                    false
+                };
+
+                let page_reader: Box<dyn PageReader> = if cached_reader {
                     Box::new(CachedPageReader::new(
                         SerializedPageReader::new(
                             data.clone(),
