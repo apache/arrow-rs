@@ -371,7 +371,7 @@ fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
-    buffer: Vec<u8>,
+    buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
@@ -406,8 +406,8 @@ pub(crate) fn decode_page(
         Some(decompressor) if can_decompress => {
             let uncompressed_size = page_header.uncompressed_page_size as usize;
             let mut decompressed = Vec::with_capacity(uncompressed_size);
-            let compressed = &buffer[offset..];
-            decompressed.extend_from_slice(&buffer[..offset]);
+            let compressed = &buffer.as_ref()[offset..];
+            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
             decompressor.decompress(
                 compressed,
                 &mut decompressed,
@@ -421,8 +421,7 @@ pub(crate) fn decode_page(
                     uncompressed_size
                 ));
             }
-
-            decompressed
+            Bytes::from(decompressed)
         }
         _ => buffer,
     };
@@ -700,7 +699,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     decode_page(
                         header,
-                        buffer,
+                        Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
@@ -729,7 +728,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let bytes = buffer.slice(offset..);
                     decode_page(
                         header,
-                        bytes.to_vec(),
+                        bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?
