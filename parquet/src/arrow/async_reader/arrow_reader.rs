@@ -17,7 +17,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, RwLock};
+use std::sync::{Mutex, MutexGuard};
 use std::{collections::VecDeque, sync::Arc};
 
 use arrow_array::ArrayRef;

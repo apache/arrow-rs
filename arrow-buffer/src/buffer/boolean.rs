@@ -204,51 +204,6 @@ impl BooleanBuffer {
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
         BitSliceIterator::new(self.values(), self.offset, self.len)
     }
-
-    /// Combines this [`BooleanBuffer`] with another using logical AND on the selected bits.
-    ///
-    /// Unlike intersection, the `other` [`BooleanBuffer`] must have exactly as many **set bits** as `self`,
-    /// i.e., self.count_set_bits() == other.len().
-    ///
-    /// This method will keep only the bits in `self` that are also set in `other`
-    /// at the positions corresponding to `self`'s set bits.
-    /// For example:
-    /// self:   NNYYYNNYYNYN
-    /// other:    YNY  NY N
-    /// result: NNYNYNNNYNNN
-    pub fn and_then(&self, other: &Self) -> Self {
-        // Ensure that 'other' has exactly as many set bits as 'self'
-        debug_assert_eq!(
-            self.count_set_bits(),
-            other.len(),
-            "The 'other' selection must have exactly as many set bits as 'self'."
-        );
-
-        if self.len() == other.len() {
-            // fast path if the two bool masks are the same length
-            // this happens when self selects all rows
-            debug_assert_eq!(self.count_set_bits(), self.len());
-            return other.clone();
-        }
-
-        let mut buffer = MutableBuffer::from_len_zeroed(self.values().len());
-        buffer.copy_from_slice(self.values());
-        let mut builder = BooleanBufferBuilder::new_from_buffer(buffer, self.len());
-
-        // Create iterators for 'self' and 'other' bits
-        let mut other_bits = other.iter();
-
-        for bit_idx in self.set_indices() {
-            let predicate = other_bits
-                .next()
-                .expect("Mismatch in set bits between self and other");
-            if !predicate {
-                builder.set_bit(bit_idx, false);
-            }
-        }
-
-        builder.finish()
-    }
 }
 
 impl Not for &BooleanBuffer {
