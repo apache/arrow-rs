@@ -161,7 +161,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::with_capacity(num_values as usize, 1);
+        let mut buffer = ViewBuffer::default();
         let mut decoder = ByteViewArrayDecoderPlain::new(
             buf,
             num_values as usize,
