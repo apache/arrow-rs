@@ -198,14 +198,21 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = [0_u8; FOOTER_SIZE];
             self.read_exact(&mut buf).await?;
 
-            let metadata_len = ParquetMetaDataReader::decode_footer(&buf)?;
+            let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
+            let metadata_len = footer.metadata_length();
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
 
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
+            // todo: use file_decryption_properties
+            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
+                &buf,
+                footer.encrypted_footer(),
+                #[cfg(feature = "encryption")]
+                None,
+            )?))
         }
         .boxed()
     }
@@ -906,6 +913,8 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     self.metadata.column(i),
                     self.row_count,
                     page_locations,
+                    #[cfg(feature = "encryption")]
+                    None,
                 )?);
 
                 Ok(Box::new(ColumnChunkIterator {
