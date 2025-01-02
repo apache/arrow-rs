@@ -17,7 +17,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Mutex, MutexGuard, RwLock};
 use std::{collections::VecDeque, sync::Arc};
 
 use arrow_array::ArrayRef;
@@ -228,6 +228,51 @@ struct PredicatePageCacheInner {
     pages: HashMap<usize, CachedPage>, // col_id (Parquet's leaf column index) -> CachedPage
 }
 
+impl PredicatePageCacheInner {
+    pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
+        self.pages.get(&col_id).and_then(|pages| {
+            pages
+                .dict
+                .iter()
+                .chain(pages.data.iter())
+                .find(|(page_offset, _)| *page_offset == offset)
+                .map(|(_, page)| page.clone())
+        })
+    }
+
+    /// Insert a page into the cache.
+    /// Inserting a page will override the existing page, if any.
+    /// This is because we only need to cache 2 pages per column, see below.
+    pub(crate) fn insert_page(&mut self, col_id: usize, offset: usize, page: Page) {
+        let is_dict = page.page_type() == PageType::DICTIONARY_PAGE;
+
+        let cached_pages = self.pages.entry(col_id);
+        match cached_pages {
+            Entry::Occupied(mut entry) => {
+                if is_dict {
+                    entry.get_mut().dict = Some((offset, page));
+                } else {
+                    entry.get_mut().data = Some((offset, page));
+                }
+            }
+            Entry::Vacant(entry) => {
+                let cached_page = if is_dict {
+                    CachedPage {
+                        dict: Some((offset, page)),
+                        data: None,
+                    }
+                } else {
+                    CachedPage {
+                        dict: None,
+                        data: Some((offset, page)),
+                    }
+                };
+                entry.insert(cached_page);
+            }
+        }
+    }
+}
+
 /// A simple cache to avoid double-decompressing pages with filter pushdown.
 /// In filter pushdown, we first decompress a page, apply the filter, and then decompress the page again.
 /// This double decompression is expensive, so we cache the decompressed page.
@@ -280,62 +325,20 @@ struct PredicatePageCacheInner {
 /// ## How to identify a page
 /// We use the page offset (the offset to the Parquet file) to uniquely identify a page.
 pub(crate) struct PredicatePageCache {
-    inner: RwLock<PredicatePageCacheInner>,
+    inner: Mutex<PredicatePageCacheInner>,
 }
 
 impl PredicatePageCache {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            inner: RwLock::new(PredicatePageCacheInner {
+            inner: Mutex::new(PredicatePageCacheInner {
                 pages: HashMap::with_capacity(capacity),
             }),
         }
     }
 
-    pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
-        let read_lock = self.inner.read().unwrap();
-        read_lock.pages.get(&col_id).and_then(|pages| {
-            pages
-                .dict
-                .iter()
-                .chain(pages.data.iter())
-                .find(|(page_offset, _)| *page_offset == offset)
-                .map(|(_, page)| page.clone())
-        })
-    }
-
-    /// Insert a page into the cache.
-    /// Inserting a page will override the existing page, if any.
-    /// This is because we only need to cache 2 pages per column, see above.
-    pub(crate) fn insert_page(&self, col_id: usize, offset: usize, page: Page) {
-        let mut write_lock = self.inner.write().unwrap();
-
-        let is_dict = page.page_type() == PageType::DICTIONARY_PAGE;
-
-        let cached_pages = write_lock.pages.entry(col_id);
-        match cached_pages {
-            Entry::Occupied(mut entry) => {
-                if is_dict {
-                    entry.get_mut().dict = Some((offset, page));
-                } else {
-                    entry.get_mut().data = Some((offset, page));
-                }
-            }
-            Entry::Vacant(entry) => {
-                let cached_page = if is_dict {
-                    CachedPage {
-                        dict: Some((offset, page)),
-                        data: None,
-                    }
-                } else {
-                    CachedPage {
-                        dict: None,
-                        data: Some((offset, page)),
-                    }
-                };
-                entry.insert(cached_page);
-            }
-        }
+    fn get(&self) -> MutexGuard<PredicatePageCacheInner> {
+        self.inner.lock().unwrap()
     }
 }
 
@@ -376,7 +379,9 @@ impl<R: ChunkReader> PageReader for CachedPageReader<R> {
             return Ok(None);
         };
 
-        let page = self.cache.get_page(self.col_id, offset);
+        let mut cache = self.cache.get();
+
+        let page = cache.get_page(self.col_id, offset);
         if let Some(page) = page {
             self.inner.skip_next_page()?;
             Ok(Some(page))
@@ -385,8 +390,7 @@ impl<R: ChunkReader> PageReader for CachedPageReader<R> {
             let Some(inner_page) = inner_page else {
                 return Ok(None);
             };
-            self.cache
-                .insert_page(self.col_id, offset, inner_page.clone());
+            cache.insert_page(self.col_id, offset, inner_page.clone());
             Ok(Some(inner_page))
         }
     }
@@ -480,20 +484,20 @@ mod tests {
         let page2 = Page::dummy_page(PageType::DICTIONARY_PAGE, 200);
 
         // Insert and retrieve a data page
-        cache.insert_page(0, 1000, page1.clone());
-        let retrieved = cache.get_page(0, 1000);
+        cache.get().insert_page(0, 1000, page1.clone());
+        let retrieved = cache.get().get_page(0, 1000);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().page_type(), PageType::DATA_PAGE);
 
         // Insert and retrieve a dictionary page for same column
-        cache.insert_page(0, 2000, page2.clone());
-        let retrieved = cache.get_page(0, 2000);
+        cache.get().insert_page(0, 2000, page2.clone());
+        let retrieved = cache.get().get_page(0, 2000);
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().page_type(), PageType::DICTIONARY_PAGE);
 
         // Both pages should still be accessible
-        assert!(cache.get_page(0, 1000).is_some());
-        assert!(cache.get_page(0, 2000).is_some());
+        assert!(cache.get().get_page(0, 1000).is_some());
+        assert!(cache.get().get_page(0, 2000).is_some());
     }
 
     #[test]
@@ -505,13 +509,13 @@ mod tests {
         let data_page2 = Page::dummy_page(PageType::DATA_PAGE_V2, 200);
 
         // Insert first data page
-        cache.insert_page(0, 1000, data_page1.clone());
-        assert!(cache.get_page(0, 1000).is_some());
+        cache.get().insert_page(0, 1000, data_page1.clone());
+        assert!(cache.get().get_page(0, 1000).is_some());
 
         // Insert second data page - should replace first data page
-        cache.insert_page(0, 2000, data_page2.clone());
-        assert!(cache.get_page(0, 2000).is_some());
-        assert!(cache.get_page(0, 1000).is_none()); // First page should be gone
+        cache.get().insert_page(0, 2000, data_page2.clone());
+        assert!(cache.get().get_page(0, 2000).is_some());
+        assert!(cache.get().get_page(0, 1000).is_none()); // First page should be gone
     }
 
     #[test]
@@ -523,15 +527,15 @@ mod tests {
         let page2 = Page::dummy_page(PageType::DATA_PAGE_V2, 200);
 
         // Insert pages for different columns
-        cache.insert_page(0, 1000, page1.clone());
-        cache.insert_page(1, 1000, page2.clone());
+        cache.get().insert_page(0, 1000, page1.clone());
+        cache.get().insert_page(1, 1000, page2.clone());
 
         // Both pages should be accessible
-        assert!(cache.get_page(0, 1000).is_some());
-        assert!(cache.get_page(1, 1000).is_some());
+        assert!(cache.get().get_page(0, 1000).is_some());
+        assert!(cache.get().get_page(1, 1000).is_some());
 
         // Non-existent column should return None
-        assert!(cache.get_page(2, 1000).is_none());
+        assert!(cache.get().get_page(2, 1000).is_none());
     }
 }
 
