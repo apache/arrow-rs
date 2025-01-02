@@ -54,6 +54,10 @@ jobs:
       # targets.
       - name: Run clippy with default features
         run: cargo clippy -- -D warnings
+      - name: Run clippy without default features
+        run: cargo clippy --no-default-features -- -D warnings
+      - name: Run clippy with fs features
+        run: cargo clippy --no-default-features --features fs -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy --features aws -- -D warnings
       - name: Run clippy with gcp feature
