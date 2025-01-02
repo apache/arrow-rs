@@ -33,7 +33,6 @@ use percent_encoding::utf8_percent_encode;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use serde::Deserialize;
-use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
@@ -54,36 +53,39 @@ const DEFAULT_GCS_SIGN_BLOB_HOST: &str = "storage.googleapis.com";
 const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
 const DEFAULT_METADATA_IP: &str = "169.254.169.254";
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Unable to open service account file from {}: {}", path.display(), source))]
+    #[error("Unable to open service account file from {}: {}", path.display(), source)]
     OpenCredentials {
         source: std::io::Error,
         path: PathBuf,
     },
 
-    #[snafu(display("Unable to decode service account file: {}", source))]
+    #[error("Unable to decode service account file: {}", source)]
     DecodeCredentials { source: serde_json::Error },
 
-    #[snafu(display("No RSA key found in pem file"))]
+    #[error("No RSA key found in pem file")]
     MissingKey,
 
-    #[snafu(display("Invalid RSA key: {}", source), context(false))]
-    InvalidKey { source: ring::error::KeyRejected },
+    #[error("Invalid RSA key: {}", source)]
+    InvalidKey {
+        #[from]
+        source: ring::error::KeyRejected,
+    },
 
-    #[snafu(display("Error signing: {}", source))]
+    #[error("Error signing: {}", source)]
     Sign { source: ring::error::Unspecified },
 
-    #[snafu(display("Error encoding jwt payload: {}", source))]
+    #[error("Error encoding jwt payload: {}", source)]
     Encode { source: serde_json::Error },
 
-    #[snafu(display("Unsupported key encoding: {}", encoding))]
+    #[error("Unsupported key encoding: {}", encoding)]
     UnsupportedKey { encoding: String },
 
-    #[snafu(display("Error performing token request: {}", source))]
+    #[error("Error performing token request: {}", source)]
     TokenRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting token response body: {}", source))]
+    #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: reqwest::Error },
 }
 
@@ -153,7 +155,7 @@ impl ServiceAccountKey {
                 string_to_sign.as_bytes(),
                 &mut signature,
             )
-            .context(SignSnafu)?;
+            .map_err(|source| Error::Sign { source })?;
 
         Ok(hex_encode(&signature))
     }
@@ -289,7 +291,7 @@ impl TokenProvider for SelfSignedJwt {
                 message.as_bytes(),
                 &mut sig_bytes,
             )
-            .context(SignSnafu)?;
+            .map_err(|source| Error::Sign { source })?;
 
         let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
         let bearer = [message, signature].join(".");
@@ -305,11 +307,12 @@ fn read_credentials_file<T>(service_account_path: impl AsRef<std::path::Path>) -
 where
     T: serde::de::DeserializeOwned,
 {
-    let file = File::open(&service_account_path).context(OpenCredentialsSnafu {
-        path: service_account_path.as_ref().to_owned(),
+    let file = File::open(&service_account_path).map_err(|source| {
+        let path = service_account_path.as_ref().to_owned();
+        Error::OpenCredentials { source, path }
     })?;
     let reader = BufReader::new(file);
-    serde_json::from_reader(reader).context(DecodeCredentialsSnafu)
+    serde_json::from_reader(reader).map_err(|source| Error::DecodeCredentials { source })
 }
 
 /// A deserialized `service-account-********.json`-file.
@@ -341,7 +344,7 @@ impl ServiceAccountCredentials {
 
     /// Create a new [`ServiceAccountCredentials`] from a string.
     pub(crate) fn from_key(key: &str) -> Result<Self> {
-        serde_json::from_str(key).context(DecodeCredentialsSnafu)
+        serde_json::from_str(key).map_err(|source| Error::DecodeCredentials { source })
     }
 
     /// Create a [`SelfSignedJwt`] from this credentials struct.
@@ -380,7 +383,7 @@ fn seconds_since_epoch() -> u64 {
 }
 
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
-    let string = serde_json::to_string(obj).context(EncodeSnafu)?;
+    let string = serde_json::to_string(obj).map_err(|source| Error::Encode { source })?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(string))
 }
 
@@ -404,10 +407,10 @@ async fn make_metadata_request(
         .query(&[("audience", "https://www.googleapis.com/oauth2/v4/token")])
         .send_retry(retry)
         .await
-        .context(TokenRequestSnafu)?
+        .map_err(|source| Error::TokenRequest { source })?
         .json()
         .await
-        .context(TokenResponseBodySnafu)?;
+        .map_err(|source| Error::TokenResponseBody { source })?;
     Ok(response)
 }
 
@@ -467,10 +470,10 @@ async fn make_metadata_request_for_email(
         .header("Metadata-Flavor", "Google")
         .send_retry(retry)
         .await
-        .context(TokenRequestSnafu)?
+        .map_err(|source| Error::TokenRequest { source })?
         .text()
         .await
-        .context(TokenResponseBodySnafu)?;
+        .map_err(|source| Error::TokenResponseBody { source })?;
     Ok(response)
 }
 
@@ -608,10 +611,10 @@ impl AuthorizedUserSigningCredentials {
             .query(&[("access_token", &self.credential.refresh_token)])
             .send_retry(retry)
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json::<EmailResponse>()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(response.email)
     }
@@ -659,10 +662,10 @@ impl TokenProvider for AuthorizedUserCredentials {
             .idempotent(true)
             .send()
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json::<TokenResponse>()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {

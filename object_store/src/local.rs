@@ -30,7 +30,6 @@ use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
 use parking_lot::Mutex;
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
@@ -43,117 +42,80 @@ use crate::{
 };
 
 /// A specialized `Error` for filesystem object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[snafu(display("File size for {} did not fit in a usize: {}", path, source))]
+    #[error("File size for {} did not fit in a usize: {}", path, source)]
     FileSizeOverflowedUsize {
         source: std::num::TryFromIntError,
         path: String,
     },
 
-    #[snafu(display("Unable to walk dir: {}", source))]
-    UnableToWalkDir {
-        source: walkdir::Error,
-    },
+    #[error("Unable to walk dir: {}", source)]
+    UnableToWalkDir { source: walkdir::Error },
 
-    #[snafu(display("Unable to access metadata for {}: {}", path, source))]
+    #[error("Unable to access metadata for {}: {}", path, source)]
     Metadata {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
         path: String,
     },
 
-    #[snafu(display("Unable to copy data to file: {}", source))]
-    UnableToCopyDataToFile {
-        source: io::Error,
-    },
+    #[error("Unable to copy data to file: {}", source)]
+    UnableToCopyDataToFile { source: io::Error },
 
-    #[snafu(display("Unable to rename file: {}", source))]
-    UnableToRenameFile {
-        source: io::Error,
-    },
+    #[error("Unable to rename file: {}", source)]
+    UnableToRenameFile { source: io::Error },
 
-    #[snafu(display("Unable to create dir {}: {}", path.display(), source))]
-    UnableToCreateDir {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Unable to create dir {}: {}", path.display(), source)]
+    UnableToCreateDir { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Unable to create file {}: {}", path.display(), source))]
-    UnableToCreateFile {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Unable to create file {}: {}", path.display(), source)]
+    UnableToCreateFile { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Unable to delete file {}: {}", path.display(), source))]
-    UnableToDeleteFile {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Unable to delete file {}: {}", path.display(), source)]
+    UnableToDeleteFile { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Unable to open file {}: {}", path.display(), source))]
-    UnableToOpenFile {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Unable to open file {}: {}", path.display(), source)]
+    UnableToOpenFile { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Unable to read data from file {}: {}", path.display(), source))]
-    UnableToReadBytes {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Unable to read data from file {}: {}", path.display(), source)]
+    UnableToReadBytes { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Out of range of file {}, expected: {}, actual: {}", path.display(), expected, actual))]
+    #[error("Out of range of file {}, expected: {}, actual: {}", path.display(), expected, actual)]
     OutOfRange {
         path: PathBuf,
         expected: usize,
         actual: usize,
     },
 
-    #[snafu(display("Requested range was invalid"))]
-    InvalidRange {
-        source: InvalidGetRange,
-    },
+    #[error("Requested range was invalid")]
+    InvalidRange { source: InvalidGetRange },
 
-    #[snafu(display("Unable to copy file from {} to {}: {}", from.display(), to.display(), source))]
+    #[error("Unable to copy file from {} to {}: {}", from.display(), to.display(), source)]
     UnableToCopyFile {
         from: PathBuf,
         to: PathBuf,
         source: io::Error,
     },
 
-    NotFound {
-        path: PathBuf,
-        source: io::Error,
-    },
+    #[error("NotFound")]
+    NotFound { path: PathBuf, source: io::Error },
 
-    #[snafu(display("Error seeking file {}: {}", path.display(), source))]
-    Seek {
-        source: io::Error,
-        path: PathBuf,
-    },
+    #[error("Error seeking file {}: {}", path.display(), source)]
+    Seek { source: io::Error, path: PathBuf },
 
-    #[snafu(display("Unable to convert URL \"{}\" to filesystem path", url))]
-    InvalidUrl {
-        url: Url,
-    },
+    #[error("Unable to convert URL \"{}\" to filesystem path", url)]
+    InvalidUrl { url: Url },
 
-    AlreadyExists {
-        path: String,
-        source: io::Error,
-    },
+    #[error("AlreadyExists")]
+    AlreadyExists { path: String, source: io::Error },
 
-    #[snafu(display("Unable to canonicalize filesystem root: {}", path.display()))]
-    UnableToCanonicalize {
-        path: PathBuf,
-        source: io::Error,
-    },
+    #[error("Unable to canonicalize filesystem root: {}", path.display())]
+    UnableToCanonicalize { path: PathBuf, source: io::Error },
 
-    #[snafu(display("Filenames containing trailing '/#\\d+/' are not supported: {}", path))]
-    InvalidPath {
-        path: String,
-    },
+    #[error("Filenames containing trailing '/#\\d+/' are not supported: {}", path)]
+    InvalidPath { path: String },
 
-    #[snafu(display("Upload aborted"))]
+    #[error("Upload aborted")]
     Aborted,
 }
 
@@ -276,8 +238,9 @@ impl LocalFileSystem {
     /// Returns an error if the path does not exist
     ///
     pub fn new_with_prefix(prefix: impl AsRef<std::path::Path>) -> Result<Self> {
-        let path = std::fs::canonicalize(&prefix).context(UnableToCanonicalizeSnafu {
-            path: prefix.as_ref(),
+        let path = std::fs::canonicalize(&prefix).map_err(|source| {
+            let path = prefix.as_ref().into();
+            Error::UnableToCanonicalize { source, path }
         })?;
 
         Ok(Self {
@@ -290,12 +253,12 @@ impl LocalFileSystem {
 
     /// Return an absolute filesystem path of the given file location
     pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
-        ensure!(
-            is_valid_file_path(location),
-            InvalidPathSnafu {
-                path: location.as_ref()
-            }
-        );
+        if !is_valid_file_path(location) {
+            let path = location.as_ref().into();
+            let error = Error::InvalidPath { path };
+            return Err(error.into());
+        }
+
         let path = self.config.prefix_to_filesystem(location)?;
 
         #[cfg(target_os = "windows")]
@@ -451,7 +414,9 @@ impl ObjectStore for LocalFileSystem {
             options.check_preconditions(&meta)?;
 
             let range = match options.range {
-                Some(r) => r.as_range(meta.size).context(InvalidRangeSnafu)?,
+                Some(r) => r
+                    .as_range(meta.size)
+                    .map_err(|source| Error::InvalidRange { source })?,
                 None => 0..meta.size,
             };
 
@@ -721,12 +686,15 @@ impl ObjectStore for LocalFileSystem {
 
 /// Creates the parent directories of `path` or returns an error based on `source` if no parent
 fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| Error::UnableToCreateFile {
-        path: path.to_path_buf(),
-        source,
+    let parent = path.parent().ok_or_else(|| {
+        let path = path.to_path_buf();
+        Error::UnableToCreateFile { path, source }
     })?;
 
-    std::fs::create_dir_all(parent).context(UnableToCreateDirSnafu { path: parent })?;
+    std::fs::create_dir_all(parent).map_err(|source| {
+        let path = parent.into();
+        Error::UnableToCreateDir { source, path }
+    })?;
     Ok(())
 }
 
@@ -796,12 +764,14 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             let mut file = s.file.lock();
-            file.seek(SeekFrom::Start(offset))
-                .context(SeekSnafu { path: &s.dest })?;
+            file.seek(SeekFrom::Start(offset)).map_err(|source| {
+                let path = s.dest.clone();
+                Error::Seek { source, path }
+            })?;
 
             data.iter()
                 .try_for_each(|x| file.write_all(x))
-                .context(UnableToCopyDataToFileSnafu)?;
+                .map_err(|source| Error::UnableToCopyDataToFile { source })?;
 
             Ok(())
         })
@@ -809,12 +779,13 @@ impl MultipartUpload for LocalUpload {
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        let src = self.src.take().context(AbortedSnafu)?;
+        let src = self.src.take().ok_or(Error::Aborted)?;
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
             let file = s.file.lock();
-            std::fs::rename(&src, &s.dest).context(UnableToRenameFileSnafu)?;
+            std::fs::rename(&src, &s.dest)
+                .map_err(|source| Error::UnableToRenameFile { source })?;
             let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
@@ -829,9 +800,10 @@ impl MultipartUpload for LocalUpload {
     }
 
     async fn abort(&mut self) -> Result<()> {
-        let src = self.src.take().context(AbortedSnafu)?;
+        let src = self.src.take().ok_or(Error::Aborted)?;
         maybe_spawn_blocking(move || {
-            std::fs::remove_file(&src).context(UnableToDeleteFileSnafu { path: &src })?;
+            std::fs::remove_file(&src)
+                .map_err(|source| Error::UnableToDeleteFile { source, path: src })?;
             Ok(())
         })
         .await
@@ -898,22 +870,30 @@ pub(crate) fn chunked_stream(
 pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
     let to_read = range.end - range.start;
     file.seek(SeekFrom::Start(range.start as u64))
-        .context(SeekSnafu { path })?;
+        .map_err(|source| {
+            let path = path.into();
+            Error::Seek { source, path }
+        })?;
 
     let mut buf = Vec::with_capacity(to_read);
     let read = file
         .take(to_read as u64)
         .read_to_end(&mut buf)
-        .context(UnableToReadBytesSnafu { path })?;
+        .map_err(|source| {
+            let path = path.into();
+            Error::UnableToReadBytes { source, path }
+        })?;
 
-    ensure!(
-        read == to_read,
-        OutOfRangeSnafu {
-            path,
+    if read != to_read {
+        let error = Error::OutOfRange {
+            path: path.into(),
             expected: to_read,
-            actual: read
-        }
-    );
+            actual: read,
+        };
+
+        return Err(error.into());
+    }
+
     Ok(buf.into())
 }
 
@@ -982,8 +962,9 @@ fn get_etag(metadata: &Metadata) -> String {
 
 fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
     let last_modified = last_modified(&metadata);
-    let size = usize::try_from(metadata.len()).context(FileSizeOverflowedUsizeSnafu {
-        path: location.as_ref(),
+    let size = usize::try_from(metadata.len()).map_err(|source| {
+        let path = location.as_ref().into();
+        Error::FileSizeOverflowedUsize { source, path }
     })?;
 
     Ok(ObjectMeta {
