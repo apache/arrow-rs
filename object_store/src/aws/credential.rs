@@ -29,23 +29,22 @@ use percent_encoding::utf8_percent_encode;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
-use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 use url::Url;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 #[allow(clippy::enum_variant_names)]
 enum Error {
-    #[snafu(display("Error performing CreateSession request: {source}"))]
+    #[error("Error performing CreateSession request: {source}")]
     CreateSessionRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting CreateSession response: {source}"))]
+    #[error("Error getting CreateSession response: {source}")]
     CreateSessionResponse { source: reqwest::Error },
 
-    #[snafu(display("Invalid CreateSessionOutput response: {source}"))]
+    #[error("Invalid CreateSessionOutput response: {source}")]
     CreateSessionOutput { source: quick_xml::DeError },
 }
 
@@ -726,13 +725,13 @@ impl TokenProvider for SessionProvider {
             .with_aws_sigv4(Some(authorizer), None)
             .send_retry(retry)
             .await
-            .context(CreateSessionRequestSnafu)?
+            .map_err(|source| Error::CreateSessionRequest { source })?
             .bytes()
             .await
-            .context(CreateSessionResponseSnafu)?;
+            .map_err(|source| Error::CreateSessionResponse { source })?;
 
-        let resp: CreateSessionOutput =
-            quick_xml::de::from_reader(bytes.reader()).context(CreateSessionOutputSnafu)?;
+        let resp: CreateSessionOutput = quick_xml::de::from_reader(bytes.reader())
+            .map_err(|source| Error::CreateSessionOutput { source })?;
 
         let creds = resp.credentials;
         Ok(TemporaryToken {
