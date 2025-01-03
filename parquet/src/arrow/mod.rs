@@ -281,6 +281,45 @@ impl ProjectionMask {
     pub fn leaf_included(&self, leaf_idx: usize) -> bool {
         self.mask.as_ref().map(|m| m[leaf_idx]).unwrap_or(true)
     }
+
+    /// Union two projection masks
+    ///
+    /// Example:
+    /// ```text
+    /// mask1 = [true, false, true]
+    /// mask2 = [false, true, true]
+    /// union(mask1, mask2) = [true, true, true]
+    /// ```
+    pub fn union(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) | (_, None) => self.mask = None,
+            (Some(a), Some(b)) => {
+                debug_assert_eq!(a.len(), b.len());
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a || b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
+
+    /// Intersect two projection masks
+    ///
+    /// Example:
+    /// ```text
+    /// mask1 = [true, false, true]
+    /// mask2 = [false, true, true]
+    /// intersect(mask1, mask2) = [false, false, true]
+    /// ```
+    pub fn intersect(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) => self.mask = other.mask.clone(),
+            (_, None) => {}
+            (Some(a), Some(b)) => {
+                debug_assert_eq!(a.len(), b.len());
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a && b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
 }
 
 /// Lookups up the parquet column by name
@@ -550,5 +589,67 @@ mod test {
 
         let mask = ProjectionMask::columns(&schema, ["a", "e"]);
         assert_eq!(mask.mask.unwrap(), [true, false, true, false, true]);
+    }
+
+    #[test]
+    fn test_projection_mask_union() {
+        let mut mask1 = ProjectionMask {
+            mask: Some(vec![true, false, true]),
+        };
+        let mask2 = ProjectionMask {
+            mask: Some(vec![false, true, true]),
+        };
+        mask1.union(&mask2);
+        assert_eq!(mask1.mask, Some(vec![true, true, true]));
+
+        let mut mask1 = ProjectionMask { mask: None };
+        let mask2 = ProjectionMask {
+            mask: Some(vec![false, true, true]),
+        };
+        mask1.union(&mask2);
+        assert_eq!(mask1.mask, None);
+
+        let mut mask1 = ProjectionMask {
+            mask: Some(vec![true, false, true]),
+        };
+        let mask2 = ProjectionMask { mask: None };
+        mask1.union(&mask2);
+        assert_eq!(mask1.mask, None);
+
+        let mut mask1 = ProjectionMask { mask: None };
+        let mask2 = ProjectionMask { mask: None };
+        mask1.union(&mask2);
+        assert_eq!(mask1.mask, None);
+    }
+
+    #[test]
+    fn test_projection_mask_intersect() {
+        let mut mask1 = ProjectionMask {
+            mask: Some(vec![true, false, true]),
+        };
+        let mask2 = ProjectionMask {
+            mask: Some(vec![false, true, true]),
+        };
+        mask1.intersect(&mask2);
+        assert_eq!(mask1.mask, Some(vec![false, false, true]));
+
+        let mut mask1 = ProjectionMask { mask: None };
+        let mask2 = ProjectionMask {
+            mask: Some(vec![false, true, true]),
+        };
+        mask1.intersect(&mask2);
+        assert_eq!(mask1.mask, Some(vec![false, true, true]));
+
+        let mut mask1 = ProjectionMask {
+            mask: Some(vec![true, false, true]),
+        };
+        let mask2 = ProjectionMask { mask: None };
+        mask1.intersect(&mask2);
+        assert_eq!(mask1.mask, Some(vec![true, false, true]));
+
+        let mut mask1 = ProjectionMask { mask: None };
+        let mask2 = ProjectionMask { mask: None };
+        mask1.intersect(&mask2);
+        assert_eq!(mask1.mask, None);
     }
 }
