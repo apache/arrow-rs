@@ -1189,12 +1189,12 @@ pub fn cast_with_options(
             let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
             Ok(Arc::new(array) as ArrayRef)
         }
-        (Struct(_), _) => Err(ArrowError::CastError(
-            "Cannot cast from struct to other types except struct".to_string(),
-        )),
-        (_, Struct(_)) => Err(ArrowError::CastError(
-            "Cannot cast to struct from other types except struct".to_string(),
-        )),
+        (Struct(_), _) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type:?} to {to_type:?} not supported"
+        ))),
+        (_, Struct(_)) => Err(ArrowError::CastError(format!(
+            "Casting from {from_type:?} to {to_type:?} not supported"
+        ))),
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
             UInt16 => cast_numeric_to_bool::<UInt16Type>(array),
@@ -9938,6 +9938,32 @@ mod tests {
         );
         cast(&struct_array, &to_type).expect_err(
             "Cast non-nullable to non-nullable struct field returning null should fail",
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_to_non_struct() {
+        let boolean = Arc::new(BooleanArray::from(vec![true, false]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Boolean, false)),
+            boolean.clone() as ArrayRef,
+        )]);
+        let to_type = DataType::Utf8;
+        let result = cast(&struct_array, &to_type);
+        assert_eq!(
+            r#"Cast error: Casting from Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) to Utf8 not supported"#,
+            result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_cast_non_struct_to_struct() {
+        let array = StringArray::from(vec!["a", "b"]);
+        let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
+        let result = cast(&array, &to_type);
+        assert_eq!(
+            r#"Cast error: Casting from Utf8 to Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) not supported"#,
+            result.unwrap_err().to_string()
         );
     }
 

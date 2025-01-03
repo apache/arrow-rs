@@ -29,7 +29,6 @@ use hyper::header::{
 use hyper::StatusCode;
 use reqwest::header::ToStrError;
 use reqwest::Response;
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
 /// A client that can perform a get request
 #[async_trait]
@@ -95,49 +94,51 @@ impl ContentRange {
 }
 
 /// A specialized `Error` for get-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum GetResultError {
-    #[snafu(context(false))]
+    #[error(transparent)]
     Header {
+        #[from]
         source: crate::client::header::Error,
     },
 
-    #[snafu(transparent)]
+    #[error(transparent)]
     InvalidRangeRequest {
+        #[from]
         source: crate::util::InvalidGetRange,
     },
 
-    #[snafu(display("Received non-partial response when range requested"))]
+    #[error("Received non-partial response when range requested")]
     NotPartial,
 
-    #[snafu(display("Content-Range header not present in partial response"))]
+    #[error("Content-Range header not present in partial response")]
     NoContentRange,
 
-    #[snafu(display("Failed to parse value for CONTENT_RANGE header: \"{value}\""))]
+    #[error("Failed to parse value for CONTENT_RANGE header: \"{value}\"")]
     ParseContentRange { value: String },
 
-    #[snafu(display("Content-Range header contained non UTF-8 characters"))]
+    #[error("Content-Range header contained non UTF-8 characters")]
     InvalidContentRange { source: ToStrError },
 
-    #[snafu(display("Cache-Control header contained non UTF-8 characters"))]
+    #[error("Cache-Control header contained non UTF-8 characters")]
     InvalidCacheControl { source: ToStrError },
 
-    #[snafu(display("Content-Disposition header contained non UTF-8 characters"))]
+    #[error("Content-Disposition header contained non UTF-8 characters")]
     InvalidContentDisposition { source: ToStrError },
 
-    #[snafu(display("Content-Encoding header contained non UTF-8 characters"))]
+    #[error("Content-Encoding header contained non UTF-8 characters")]
     InvalidContentEncoding { source: ToStrError },
 
-    #[snafu(display("Content-Language header contained non UTF-8 characters"))]
+    #[error("Content-Language header contained non UTF-8 characters")]
     InvalidContentLanguage { source: ToStrError },
 
-    #[snafu(display("Content-Type header contained non UTF-8 characters"))]
+    #[error("Content-Type header contained non UTF-8 characters")]
     InvalidContentType { source: ToStrError },
 
-    #[snafu(display("Metadata value for \"{key:?}\" contained non UTF-8 characters"))]
+    #[error("Metadata value for \"{key:?}\" contained non UTF-8 characters")]
     InvalidMetadata { key: String },
 
-    #[snafu(display("Requested {expected:?}, got {actual:?}"))]
+    #[error("Requested {expected:?}, got {actual:?}")]
     UnexpectedRange {
         expected: Range<usize>,
         actual: Range<usize>,
@@ -153,17 +154,24 @@ fn get_result<T: GetClient>(
 
     // ensure that we receive the range we asked for
     let range = if let Some(expected) = range {
-        ensure!(
-            response.status() == StatusCode::PARTIAL_CONTENT,
-            NotPartialSnafu
-        );
+        if response.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(GetResultError::NotPartial);
+        }
+
         let val = response
             .headers()
             .get(CONTENT_RANGE)
-            .context(NoContentRangeSnafu)?;
+            .ok_or(GetResultError::NoContentRange)?;
 
-        let value = val.to_str().context(InvalidContentRangeSnafu)?;
-        let value = ContentRange::from_str(value).context(ParseContentRangeSnafu { value })?;
+        let value = val
+            .to_str()
+            .map_err(|source| GetResultError::InvalidContentRange { source })?;
+
+        let value = ContentRange::from_str(value).ok_or_else(|| {
+            let value = value.into();
+            GetResultError::ParseContentRange { value }
+        })?;
+
         let actual = value.range;
 
         // Update size to reflect full size of object (#5272)
@@ -171,10 +179,9 @@ fn get_result<T: GetClient>(
 
         let expected = expected.as_range(meta.size)?;
 
-        ensure!(
-            actual == expected,
-            UnexpectedRangeSnafu { expected, actual }
-        );
+        if actual != expected {
+            return Err(GetResultError::UnexpectedRange { expected, actual });
+        }
 
         actual
     } else {
@@ -182,11 +189,11 @@ fn get_result<T: GetClient>(
     };
 
     macro_rules! parse_attributes {
-        ($headers:expr, $(($header:expr, $attr:expr, $err:expr)),*) => {{
+        ($headers:expr, $(($header:expr, $attr:expr, $map_err:expr)),*) => {{
             let mut attributes = Attributes::new();
             $(
             if let Some(x) = $headers.get($header) {
-                let x = x.to_str().context($err)?;
+                let x = x.to_str().map_err($map_err)?;
                 attributes.insert($attr, x.to_string().into());
             }
             )*
@@ -196,31 +203,23 @@ fn get_result<T: GetClient>(
 
     let mut attributes = parse_attributes!(
         response.headers(),
-        (
-            CACHE_CONTROL,
-            Attribute::CacheControl,
-            InvalidCacheControlSnafu
-        ),
+        (CACHE_CONTROL, Attribute::CacheControl, |source| {
+            GetResultError::InvalidCacheControl { source }
+        }),
         (
             CONTENT_DISPOSITION,
             Attribute::ContentDisposition,
-            InvalidContentDispositionSnafu
+            |source| GetResultError::InvalidContentDisposition { source }
         ),
-        (
-            CONTENT_ENCODING,
-            Attribute::ContentEncoding,
-            InvalidContentEncodingSnafu
-        ),
-        (
-            CONTENT_LANGUAGE,
-            Attribute::ContentLanguage,
-            InvalidContentLanguageSnafu
-        ),
-        (
-            CONTENT_TYPE,
-            Attribute::ContentType,
-            InvalidContentTypeSnafu
-        )
+        (CONTENT_ENCODING, Attribute::ContentEncoding, |source| {
+            GetResultError::InvalidContentEncoding { source }
+        }),
+        (CONTENT_LANGUAGE, Attribute::ContentLanguage, |source| {
+            GetResultError::InvalidContentLanguage { source }
+        }),
+        (CONTENT_TYPE, Attribute::ContentType, |source| {
+            GetResultError::InvalidContentType { source }
+        })
     );
 
     // Add attributes that match the user-defined metadata prefix (e.g. x-amz-meta-)

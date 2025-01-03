@@ -35,7 +35,6 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
-use snafu::{OptionExt, ResultExt, Snafu};
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -49,18 +48,18 @@ use crate::{
 
 mod client;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Must specify a URL"))]
+    #[error("Must specify a URL")]
     MissingUrl,
 
-    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    #[error("Unable parse source url. Url: {}, Error: {}", url, source)]
     UnableToParseUrl {
         source: url::ParseError,
         url: String,
     },
 
-    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    #[error("Unable to extract metadata from headers: {}", source)]
     Metadata {
         source: crate::client::header::Error,
     },
@@ -235,8 +234,8 @@ impl HttpBuilder {
 
     /// Build an [`HttpStore`] with the configured options
     pub fn build(self) -> Result<HttpStore> {
-        let url = self.url.context(MissingUrlSnafu)?;
-        let parsed = Url::parse(&url).context(UnableToParseUrlSnafu { url })?;
+        let url = self.url.ok_or(Error::MissingUrl)?;
+        let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
 
         Ok(HttpStore {
             client: Client::new(parsed, self.client_options, self.retry_config)?,

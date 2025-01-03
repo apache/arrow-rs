@@ -66,10 +66,13 @@
 //! By default, this crate provides the following implementations:
 //!
 //! * Memory: [`InMemory`](memory::InMemory)
-//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
 //! Feature flags are used to enable support for other implementations:
 //!
+#![cfg_attr(
+    feature = "fs",
+    doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
+)]
 #![cfg_attr(
     feature = "gcp",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
@@ -513,7 +516,7 @@ pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod limit;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
 pub mod memory;
 pub mod path;
@@ -557,15 +560,14 @@ pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
 use crate::path::Path;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
@@ -1028,6 +1030,7 @@ pub struct GetResult {
 /// be able to optimise the case of a file already present on local disk
 pub enum GetResultPayload {
     /// The file, path
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     File(std::fs::File, std::path::PathBuf),
     /// An opaque stream of bytes
     Stream(BoxStream<'static, Result<Bytes>>),
@@ -1036,6 +1039,7 @@ pub enum GetResultPayload {
 impl Debug for GetResultPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             Self::File(_, _) => write!(f, "GetResultPayload(File)"),
             Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
         }
@@ -1047,7 +1051,7 @@ impl GetResult {
     pub async fn bytes(self) -> Result<Bytes> {
         let len = self.range.end - self.range.start;
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
                     file.seek(SeekFrom::Start(self.range.start as _))
@@ -1087,7 +1091,7 @@ impl GetResult {
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
@@ -1224,11 +1228,11 @@ pub struct PutResult {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A fallback error type when no variant matches
-    #[snafu(display("Generic {} error: {}", store, source))]
+    #[error("Generic {} error: {}", store, source)]
     Generic {
         /// The store this error originated from
         store: &'static str,
@@ -1237,7 +1241,7 @@ pub enum Error {
     },
 
     /// Error when the object is not found at given location
-    #[snafu(display("Object at location {} not found: {}", path, source))]
+    #[error("Object at location {} not found: {}", path, source)]
     NotFound {
         /// The path to file
         path: String,
@@ -1246,31 +1250,30 @@ pub enum Error {
     },
 
     /// Error for invalid path
-    #[snafu(
-        display("Encountered object with invalid path: {}", source),
-        context(false)
-    )]
+    #[error("Encountered object with invalid path: {}", source)]
     InvalidPath {
         /// The wrapped error
+        #[from]
         source: path::Error,
     },
 
     /// Error when `tokio::spawn` failed
-    #[snafu(display("Error joining spawned task: {}", source), context(false))]
+    #[error("Error joining spawned task: {}", source)]
     JoinError {
         /// The wrapped error
+        #[from]
         source: tokio::task::JoinError,
     },
 
     /// Error when the attempted operation is not supported
-    #[snafu(display("Operation not supported: {}", source))]
+    #[error("Operation not supported: {}", source)]
     NotSupported {
         /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
     /// Error when the object already exists
-    #[snafu(display("Object at location {} already exists: {}", path, source))]
+    #[error("Object at location {} already exists: {}", path, source)]
     AlreadyExists {
         /// The path to the
         path: String,
@@ -1279,7 +1282,7 @@ pub enum Error {
     },
 
     /// Error when the required conditions failed for the operation
-    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    #[error("Request precondition failure for path {}: {}", path, source)]
     Precondition {
         /// The path to the file
         path: String,
@@ -1288,7 +1291,7 @@ pub enum Error {
     },
 
     /// Error when the object at the location isn't modified
-    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    #[error("Object at location {} not modified: {}", path, source)]
     NotModified {
         /// The path to the file
         path: String,
@@ -1297,16 +1300,16 @@ pub enum Error {
     },
 
     /// Error when an operation is not implemented
-    #[snafu(display("Operation not yet implemented."))]
+    #[error("Operation not yet implemented.")]
     NotImplemented,
 
     /// Error when the used credentials don't have enough permission
     /// to perform the requested operation
-    #[snafu(display(
+    #[error(
         "The operation lacked the necessary privileges to complete for path {}: {}",
         path,
         source
-    ))]
+    )]
     PermissionDenied {
         /// The path to the file
         path: String,
@@ -1315,11 +1318,11 @@ pub enum Error {
     },
 
     /// Error when the used credentials lack valid authentication
-    #[snafu(display(
+    #[error(
         "The operation lacked valid authentication credentials for path {}: {}",
         path,
         source
-    ))]
+    )]
     Unauthenticated {
         /// The path to the file
         path: String,
@@ -1328,7 +1331,7 @@ pub enum Error {
     },
 
     /// Error when a configuration key is invalid for the store used
-    #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
+    #[error("Configuration key: '{}' is not valid for store '{}'.", key, store)]
     UnknownConfigurationKey {
         /// The object store used
         store: &'static str,
