@@ -285,9 +285,11 @@ impl ProjectionMask {
     /// Union two projection masks
     ///
     /// Example:
+    /// ```text
     /// mask1 = [true, false, true]
     /// mask2 = [false, true, true]
     /// union(mask1, mask2) = [true, true, true]
+    /// ```
     pub fn union(&mut self, other: &Self) {
         match (self.mask.as_ref(), other.mask.as_ref()) {
             (None, _) | (_, None) => self.mask = None,
@@ -302,9 +304,11 @@ impl ProjectionMask {
     /// Intersect two projection masks
     ///
     /// Example:
+    /// ```text
     /// mask1 = [true, false, true]
     /// mask2 = [false, true, true]
     /// intersect(mask1, mask2) = [false, false, true]
+    /// ```
     pub fn intersect(&mut self, other: &Self) {
         match (self.mask.as_ref(), other.mask.as_ref()) {
             (None, _) => self.mask = other.mask.clone(),
