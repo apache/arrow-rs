@@ -421,7 +421,6 @@ pub(crate) fn decode_page(
                     uncompressed_size
                 ));
             }
-
             Bytes::from(decompressed)
         }
         _ => buffer,
@@ -567,6 +566,61 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             state,
             physical_type: meta.column_type(),
         })
+    }
+
+    /// Similar to `peek_next_page`, but returns the offset of the next page instead of the page metadata.
+    /// Unlike page metadata, an offset can uniquely identify a page.
+    /// Useful when we want to if the next page is being cached or read previously.
+    #[cfg(feature = "async")]
+    pub(crate) fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+        match &mut self.state {
+            SerializedPageReaderState::Values {
+                offset,
+                remaining_bytes,
+                next_page_header,
+            } => {
+                loop {
+                    if *remaining_bytes == 0 {
+                        return Ok(None);
+                    }
+                    return if let Some(header) = next_page_header.as_ref() {
+                        if let Ok(_page_meta) = PageMetadata::try_from(&**header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            *next_page_header = None;
+                            continue;
+                        }
+                    } else {
+                        let mut read = self.reader.get_read(*offset as u64)?;
+                        let (header_len, header) = read_page_header_len(&mut read)?;
+                        *offset += header_len;
+                        *remaining_bytes -= header_len;
+                        let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            continue;
+                        };
+                        *next_page_header = Some(Box::new(header));
+                        page_meta
+                    };
+                }
+            }
+            SerializedPageReaderState::Pages {
+                page_locations,
+                dictionary_page,
+                ..
+            } => {
+                if let Some(page) = dictionary_page {
+                    Ok(Some(page.offset as usize))
+                } else if let Some(page) = page_locations.front() {
+                    Ok(Some(page.offset as usize))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
     }
 }
 

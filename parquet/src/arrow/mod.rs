@@ -281,6 +281,30 @@ impl ProjectionMask {
     pub fn leaf_included(&self, leaf_idx: usize) -> bool {
         self.mask.as_ref().map(|m| m[leaf_idx]).unwrap_or(true)
     }
+
+    /// Union two projection masks
+    pub fn union(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) | (_, None) => self.mask = None,
+            (Some(a), Some(b)) => {
+                assert_eq!(a.len(), b.len());
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a || b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
+
+    /// Intersect two projection masks
+    pub fn intersect(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) => self.mask = other.mask.clone(),
+            (_, None) => {}
+            (Some(a), Some(b)) => {
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a && b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
 }
 
 /// Lookups up the parquet column by name

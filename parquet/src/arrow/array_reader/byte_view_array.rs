@@ -169,7 +169,9 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             self.validate_utf8,
         );
         decoder.read(&mut buffer, usize::MAX)?;
+
         self.dict = Some(buffer);
+
         Ok(())
     }
 
@@ -290,7 +292,7 @@ impl ByteViewArrayDecoder {
 
 /// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
 pub struct ByteViewArrayDecoderPlain {
-    buf: Bytes,
+    buf: Buffer,
     offset: usize,
 
     validate_utf8: bool,
@@ -307,6 +309,9 @@ impl ByteViewArrayDecoderPlain {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Self {
+        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
+        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
+        let buf = arrow_buffer::Buffer::from_bytes(buf.clone().into());
         Self {
             buf,
             offset: 0,
@@ -316,10 +321,20 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
-        let block_id = output.append_block(buf);
+        // let block_id = output.append_block(self.buf.clone());
+        let need_to_create_new_buffer = {
+            if let Some(last_buffer) = output.buffers.last() {
+                !last_buffer.ptr_eq(&self.buf)
+            } else {
+                true
+            }
+        };
+
+        let block_id = if need_to_create_new_buffer {
+            output.append_block(self.buf.clone())
+        } else {
+            output.buffers.len() as u32 - 1
+        };
 
         let to_read = len.min(self.max_remaining_values);
 
@@ -457,6 +472,8 @@ impl ByteViewArrayDecoderDictionary {
                 output.buffers.push(b.clone());
             }
         }
+
+        output.views.reserve(len);
 
         // Calculate the offset of the dictionary buffers in the output buffers
         // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
@@ -679,7 +696,7 @@ impl ByteViewArrayDecoderDelta {
 
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match std::str::from_utf8(val) {
+    match simdutf8::basic::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
     }
