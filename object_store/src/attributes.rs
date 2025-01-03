@@ -18,6 +18,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Deref;
+use crate::checksum::ChecksumAlgorithm;
 
 /// Additional object attribute types
 #[non_exhaustive]
@@ -45,6 +46,8 @@ pub enum Attribute {
     ///
     /// See [Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control)
     CacheControl,
+    /// Provides a checksum used to verify object data integrity
+    Checksum(ChecksumAlgorithm),
     /// Specifies a user-defined metadata field for the object
     ///
     /// The String is a user-defined key
@@ -188,21 +191,23 @@ impl<'a> Iterator for AttributesIter<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::checksum::ChecksumAlgorithm;
     use super::*;
 
     #[test]
     fn test_attributes_basic() {
         let mut attributes = Attributes::from_iter([
+            (Attribute::CacheControl, "control"),
+            (Attribute::Checksum(ChecksumAlgorithm::MD5), "checksumValue"),
             (Attribute::ContentDisposition, "inline"),
             (Attribute::ContentEncoding, "gzip"),
             (Attribute::ContentLanguage, "en-US"),
             (Attribute::ContentType, "test"),
-            (Attribute::CacheControl, "control"),
             (Attribute::Metadata("key1".into()), "value1"),
         ]);
 
         assert!(!attributes.is_empty());
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
         assert_eq!(
             attributes.get(&Attribute::ContentType),
@@ -215,19 +220,23 @@ mod tests {
             attributes.insert(Attribute::CacheControl, "v1".into()),
             Some(metav)
         );
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
         assert_eq!(
             attributes.remove(&Attribute::CacheControl).unwrap(),
             "v1".into()
         );
-        assert_eq!(attributes.len(), 5);
+        assert_eq!(attributes.len(), 6);
 
         let metav: AttributeValue = "v2".into();
         attributes.insert(Attribute::CacheControl, metav.clone());
         assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
+        assert_eq!(
+            attributes.get(&Attribute::Checksum(ChecksumAlgorithm::MD5)),
+            Some(&"checksumValue".into())
+        );
         assert_eq!(
             attributes.get(&Attribute::ContentDisposition),
             Some(&"inline".into())
