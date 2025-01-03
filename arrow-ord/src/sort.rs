@@ -806,9 +806,10 @@ mod tests {
     mod build_arrays_helper {
         use crate::sort::tests::get_same_lists_length;
         use arrow_array::{
-            ArrayRef, ArrowPrimitiveType, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
-            FixedSizeListArray, GenericBinaryArray, GenericListArray, LargeStringArray,
-            OffsetSizeTrait, PrimitiveArray, StringArray, StringViewArray,
+            ArrayRef, ArrowPrimitiveType, BinaryArray, Decimal128Array, Decimal256Array,
+            FixedSizeBinaryArray, FixedSizeListArray, GenericListArray,
+            LargeBinaryArray, LargeStringArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+            StringViewArray,
         };
         use arrow_buffer::i256;
         use std::sync::Arc;
@@ -848,20 +849,14 @@ mod tests {
         }
 
         pub fn binary_arrays(data: Vec<Option<Vec<u8>>>) -> Vec<ArrayRef> {
-            // Generic size binary array
-            fn generic_binary_array<S: OffsetSizeTrait>(
-                data: &[Option<Vec<u8>>],
-            ) -> Arc<GenericBinaryArray<S>> {
-                Arc::new(GenericBinaryArray::<S>::from_opt_vec(
-                    data.iter()
-                        .map(|binary| binary.as_ref().map(Vec::as_slice))
-                        .collect(),
-                ))
-            }
+            let binary_data = data
+                .iter()
+                .map(|binary| binary.as_ref().map(Vec::as_slice))
+                .collect::<Vec<_>>();
 
             let mut arrays = vec![
-                generic_binary_array::<i32>(&data) as ArrayRef,
-                generic_binary_array::<i64>(&data) as ArrayRef,
+                Arc::new(BinaryArray::from_opt_vec(binary_data.clone())) as ArrayRef,
+                Arc::new(LargeBinaryArray::from_opt_vec(binary_data)) as ArrayRef,
             ];
 
             if let Some(first_length) = get_same_lists_length(&data) {
@@ -883,7 +878,6 @@ mod tests {
         where
             OffsetSize: OffsetSizeTrait,
             T: ArrowPrimitiveType,
-            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
         {
             Arc::new(GenericListArray::<OffsetSize>::from_iter_primitive::<T, _, _>(data.to_vec()))
         }
@@ -894,7 +888,6 @@ mod tests {
         ) -> ArrayRef
         where
             T: ArrowPrimitiveType,
-            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
         {
             Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
                 data.to_vec(),
@@ -905,7 +898,6 @@ mod tests {
         pub fn primitive_list_arrays<T>(data: Vec<Option<Vec<Option<T::Native>>>>) -> Vec<ArrayRef>
         where
             T: ArrowPrimitiveType,
-            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
         {
             let mut arrays = vec![
                 primitive_generic_list_array::<i32, T>(&data),
