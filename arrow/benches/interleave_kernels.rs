@@ -72,6 +72,7 @@ fn add_benchmark(c: &mut Criterion) {
     let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
     let values = create_string_array_with_len::<i32>(10, 0.0, 20);
     let dict = create_dict_from_values::<Int32Type>(1024, 0.0, &values);
+    let string_view = create_string_view_array_with_len(1024, 0.5, 50, true);
 
     let values = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let sparse_dict = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
@@ -83,6 +84,7 @@ fn add_benchmark(c: &mut Criterion) {
         ("str(20, 0.5)", &string_opt),
         ("dict(20, 0.0)", &dict),
         ("dict_sparse(20, 0.0)", &sparse_dict),
+        ("string_view(0.5, 50, true)", &string_view),
     ];
 
     for (prefix, base) in cases {
