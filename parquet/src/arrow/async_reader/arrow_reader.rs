@@ -120,7 +120,6 @@ impl FilteredParquetRecordBatchReader {
         self.row_filter.take()
     }
 
-    #[inline(never)]
     /// Take a selection, and return the new selection where the rows are filtered by the predicate.
     fn build_predicate_filter(
         &mut self,
@@ -372,7 +371,6 @@ impl<R: ChunkReader> Iterator for CachedPageReader<R> {
 
 impl<R: ChunkReader> PageReader for CachedPageReader<R> {
     fn get_next_page(&mut self) -> Result<Option<Page>, ParquetError> {
-        // self.inner.get_next_page()
         let next_page_offset = self.inner.peek_next_page_offset()?;
 
         let Some(offset) = next_page_offset else {

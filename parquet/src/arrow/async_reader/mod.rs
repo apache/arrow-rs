@@ -686,7 +686,7 @@ where
     /// - `Ok(None)` if the stream has ended.
     /// - `Err(error)` if the stream has errored. All subsequent calls will return `Ok(None)`.
     /// - `Ok(Some(reader))` which holds all the data for the row group.
-    pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
+    pub async fn next_row_group(&mut self) -> Result<Option<FilteredParquetRecordBatchReader>> {
         loop {
             match &mut self.state {
                 StreamState::Decoding(_) | StreamState::Reading(_) => {

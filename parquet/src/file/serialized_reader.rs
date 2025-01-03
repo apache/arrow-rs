@@ -568,6 +568,9 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         })
     }
 
+    /// Similar to `peek_next_page`, but returns the offset of the next page instead of the page metadata.
+    /// Unlike page metadata, an offset can uniquely identify a page.
+    /// Useful when we want to if the next page is being cached or read previously.
     #[cfg(feature = "async")]
     pub(crate) fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
         match &mut self.state {
