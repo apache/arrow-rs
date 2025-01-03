@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder};
+use crate::builder::{
+    BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder,
+};
 use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
@@ -691,6 +693,61 @@ impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a str> for DictionaryArray<T>
     }
 }
 
+/// Constructs a `DictionaryArray` from an iterator of optional bytes.
+///
+/// # Example:
+/// ```
+/// use arrow_array::{DictionaryArray, PrimitiveArray, BinaryArray, types::Int8Type};
+///
+/// let test: Vec<&[u8]> = vec![&[1, 3], &[4], &[2, 7], &[5, 6]];
+/// let array: DictionaryArray<Int8Type> = test
+///     .iter()
+///     .map(|&x| if x == &[2, 7] { None } else { Some(x) })
+///     .collect();
+/// assert_eq!(
+///     "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  1,\n  null,\n  2,\n] values: BinaryArray\n[\n  [1, 3],\n  [4],\n  [5, 6],\n]}\n",
+///     format!("{:?}", array)
+/// );
+/// ```
+impl<'a, T: ArrowDictionaryKeyType> FromIterator<Option<&'a [u8]>> for DictionaryArray<T> {
+    fn from_iter<I: IntoIterator<Item = Option<&'a [u8]>>>(iter: I) -> Self {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        builder.extend(it);
+        builder.finish()
+    }
+}
+
+/// Constructs a `DictionaryArray` from an iterator of bytes.
+///
+/// # Example:
+///
+/// ```
+/// use arrow_array::{DictionaryArray, PrimitiveArray, BinaryArray, types::Int8Type};
+///
+/// let test: Vec<&[u8]> = vec![&[1, 3], &[4], &[2, 7], &[5, 6]];
+/// let array: DictionaryArray<Int8Type> = test.into_iter().collect();
+/// assert_eq!(
+///     "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  1,\n  2,\n  3,\n] values: BinaryArray\n[\n  [1, 3],\n  [4],\n  [2, 7],\n  [5, 6],\n]}\n",
+///     format!("{:?}", array)
+/// );
+/// ```
+impl<'a, T: ArrowDictionaryKeyType> FromIterator<&'a [u8]> for DictionaryArray<T> {
+    fn from_iter<I: IntoIterator<Item = &'a [u8]>>(iter: I) -> Self {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        it.for_each(|i| {
+            builder
+                .append(i)
+                .expect("Unable to append a value to a dictionary array.");
+        });
+
+        builder.finish()
+    }
+}
+
 impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -1193,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_array_from_iter() {
+    fn test_string_dictionary_array_from_iter() {
         let test = vec!["a", "a", "b", "c"];
         let array: DictionaryArray<Int8Type> = test
             .iter()
@@ -1207,6 +1264,25 @@ mod tests {
         let array: DictionaryArray<Int8Type> = test.into_iter().collect();
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  0,\n  1,\n  2,\n] values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
+            format!("{array:?}")
+        );
+    }
+
+    #[test]
+    fn test_binary_dictionary_array_from_iter() {
+        let test: Vec<&[u8]> = vec![&[1, 3], &[4], &[2, 7], &[5, 6]];
+        let array: DictionaryArray<Int8Type> = test
+            .iter()
+            .map(|&x| if x == [2, 7] { None } else { Some(x) })
+            .collect();
+        assert_eq!(
+            "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  1,\n  null,\n  2,\n] values: BinaryArray\n[\n  [1, 3],\n  [4],\n  [5, 6],\n]}\n",
+            format!("{array:?}")
+        );
+
+        let array: DictionaryArray<Int8Type> = test.into_iter().collect();
+        assert_eq!(
+            "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  1,\n  2,\n  3,\n] values: BinaryArray\n[\n  [1, 3],\n  [4],\n  [2, 7],\n  [5, 6],\n]}\n",
             format!("{array:?}")
         );
     }
@@ -1227,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_keys_as_primitive_array() {
+    fn test_string_dictionary_keys_as_primitive_array() {
         let test = vec!["a", "b", "c", "a"];
         let array: DictionaryArray<Int8Type> = test.into_iter().collect();
 
@@ -1238,7 +1314,23 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_keys_as_primitive_array_with_null() {
+    fn test_binary_dictionary_keys_as_primitive_array() {
+        let test = vec![
+            "a".as_bytes(),
+            "b".as_bytes(),
+            "c".as_bytes(),
+            "a".as_bytes(),
+        ];
+        let array: DictionaryArray<Int8Type> = test.into_iter().collect();
+
+        let keys = array.keys();
+        assert_eq!(&DataType::Int8, keys.data_type());
+        assert_eq!(0, keys.null_count());
+        assert_eq!(&[0, 1, 2, 0], keys.values());
+    }
+
+    #[test]
+    fn test_string_dictionary_keys_as_primitive_array_with_null() {
         let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
         let array: DictionaryArray<Int32Type> = test.into_iter().collect();
 
@@ -1259,8 +1351,46 @@ mod tests {
     }
 
     #[test]
-    fn test_dictionary_all_nulls() {
-        let test = vec![None, None, None];
+    fn test_binary_dictionary_keys_as_primitive_array_with_null() {
+        let test = vec![
+            Some("a".as_bytes()),
+            None,
+            Some("b".as_bytes()),
+            None,
+            None,
+            Some("a".as_bytes()),
+        ];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+
+        let keys = array.keys();
+        assert_eq!(&DataType::Int32, keys.data_type());
+        assert_eq!(3, keys.null_count());
+
+        assert!(keys.is_valid(0));
+        assert!(!keys.is_valid(1));
+        assert!(keys.is_valid(2));
+        assert!(!keys.is_valid(3));
+        assert!(!keys.is_valid(4));
+        assert!(keys.is_valid(5));
+
+        assert_eq!(0, keys.value(0));
+        assert_eq!(1, keys.value(2));
+        assert_eq!(0, keys.value(5));
+    }
+
+    #[test]
+    fn test_dictionary_all_string_nulls() {
+        let test: Vec<Option<&str>> = vec![None, None, None];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+        array
+            .into_data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_dictionary_all_binary_nulls() {
+        let test: Vec<Option<&[u8]>> = vec![None, None, None];
         let array: DictionaryArray<Int32Type> = test.into_iter().collect();
         array
             .into_data()
