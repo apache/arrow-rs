@@ -15,6 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/*
+Workaround https://github.com/PyO3/pyo3/issues/4743
+
+Newer versions of Rust signal an error on older py03 versions. This is fixed in 0.23.0
+but we need to work around for 0.22.x in arrow's 53.x line
+
+warning: unexpected `cfg` condition value: `gil-refs`
+  --> arrow/src/pyarrow.rs:80:1
+   |
+80 | import_exception!(pyarrow, ArrowException);
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `arrow-csv`, `arrow-ipc`, `arrow-json`, `chrono-tz`, `csv`, `default`, `ffi`, `force_validate`, `ipc`, `ipc_compression`, `json`, `prettyprint`, `pyarrow`, `pyo3`, `rand`, and `test_utils`
+   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `$crate::impl_exception_boilerplate` crate for guidance on how handle this unexpected cfg
+   = help: the macro `$crate::impl_exception_boilerplate` may come from an old version of the `pyo3` crate, try updating your dependency with `cargo update -p pyo3`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this warning originates in the macro `$crate::impl_exception_boilerplate` which comes from the expansion of the macro `import_exception` (in Nightly builds, run with -Z macro-backtrace for more info)
+ */
+#![allow(unexpected_cfgs)]
+
 //! Pass Arrow objects from and to PyArrow, using Arrow's
 //! [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 //! and [pyo3](https://docs.rs/pyo3/latest/pyo3/).
