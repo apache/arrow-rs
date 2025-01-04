@@ -325,10 +325,23 @@ impl FileDecryptor {
         self.footer_decryptor.unwrap()
     }
 
-    pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> RingGcmBlockDecryptor {
+    pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> FileDecryptor {
+        if self.decryption_properties.column_keys.is_none() {
+            return self.clone();
+        }
         let column_keys = &self.decryption_properties.column_keys.clone().unwrap();
-        let column_key = column_keys[&column_name.to_vec()].clone();
-        RingGcmBlockDecryptor::new(&column_key)
+        let decryptor = if let Some(column_key) = column_keys.get(column_name) {
+            Some(RingGcmBlockDecryptor::new(&column_key))
+        } else {
+            None
+        };
+
+        FileDecryptor {
+            decryption_properties: self.decryption_properties.clone(),
+            footer_decryptor: decryptor,
+            aad_file_unique: self.aad_file_unique.clone(),
+            aad_prefix: self.aad_prefix.clone(),
+        }
     }
 
     pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {
@@ -345,6 +358,10 @@ impl FileDecryptor {
 
     pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
         &self.aad_prefix
+    }
+
+    pub(crate) fn has_footer_key(&self) -> bool {
+        self.decryption_properties.has_footer_key()
     }
 }
 
