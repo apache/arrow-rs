@@ -42,6 +42,8 @@ pub struct StreamDecoder {
     buf: MutableBuffer,
     /// Whether or not array data in input buffers are required to be aligned
     require_alignment: bool,
+    /// Whether or not to skip validation for underlying array creations
+    skip_validations: bool,
 }
 
 #[derive(Debug)]
@@ -99,6 +101,19 @@ impl StreamDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies whether or not to skip validations when creating [`ArrayData`].
+    /// This can lead to undefined behavior if the data is not correctly formatted.
+    /// Set `skip_validations` to true only if you are certain.
+    ///
+    /// Notes:
+    /// * If `skip_validations` is true, `require_alignment` is ignored.
+    /// * If `skip_validations` is true, it uses [`arrow_data::ArrayDataBuilder::build_unchecked`] to
+    ///   construct [`arrow_data::ArrayData`] under the hood.
+    pub fn with_skip_validations(mut self, skip_validations: bool) -> Self {
+        self.skip_validations = skip_validations;
         self
     }
 
@@ -219,6 +234,7 @@ impl StreamDecoder {
                                 None,
                                 &version,
                                 self.require_alignment,
+                                self.skip_validations,
                             )?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -235,6 +251,7 @@ impl StreamDecoder {
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
+                                self.skip_validations,
                             )?;
                             self.state = DecoderState::default();
                         }
