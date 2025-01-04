@@ -27,7 +27,7 @@ use arrow_schema::ArrowError;
 /// - Where `mask` is `true`, values of `truthy` are taken
 /// - Where `mask` is `false` or `NULL`, values of `falsy` are taken
 ///
-/// # Example
+/// # Example: `zip` two arrays
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::{ArrayRef, BooleanArray, Int32Array};
@@ -54,6 +54,33 @@ use arrow_schema::ArrowError;
 /// assert_eq!(&result, &expected);
 /// ```
 ///
+/// # Example: `zip` and array with a scalar
+///
+/// Use `zip` to replace certain values in an array with a scalar
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, BooleanArray, Int32Array};
+/// # use arrow_select::zip::zip;
+/// // mask: [true, true, false, NULL, true]
+/// let mask = BooleanArray::from(vec![
+///   Some(true), Some(true), Some(false), None, Some(true)
+/// ]);
+/// //  array: [1, NULL, 3, 4, 5]
+/// let arr = Int32Array::from(vec![
+///   Some(1), None, Some(3), Some(4), Some(5)
+/// ]);
+/// // scalar: 42
+/// let scalar = Int32Array::new_scalar(42);
+/// // zip the array with the  mask select the first, second and last value from `arr`
+/// // and fill the third and fourth value with the scalar 42
+/// let result = zip(&mask, &arr, &scalar).unwrap();
+/// // Expected: [1, NULL, 42, 42, 5]
+/// let expected: ArrayRef = Arc::new(Int32Array::from(vec![
+///   Some(1), None, Some(42), Some(42), Some(5)
+/// ]));
+/// assert_eq!(&result, &expected);
+/// ```
 pub fn zip(
     mask: &BooleanArray,
     truthy: &dyn Datum,
