@@ -94,9 +94,9 @@ unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
-    /// Create a new Buffer from a (internal) [`Bytes`].
+    /// Create a new Buffer from a (internal) `Bytes`
     ///
-    /// NOTE despite the same name, [`Bytes`] is an internal struct in arrow-rs
+    /// NOTE despite the same name, `Bytes` is an internal struct in arrow-rs
     /// and is different than [`bytes::Bytes`].
     ///
     /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
@@ -460,14 +460,14 @@ impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
     }
 }
 
-/// Convert from internal [`Bytes`], not [`bytes::Bytes`] to `Buffer`
+/// Convert from internal `Bytes`, not [`bytes::Bytes`] to `Buffer`
 impl From<Bytes> for Buffer {
     fn from(bytes: Bytes) -> Self {
         Self::from_bytes(bytes)
     }
 }
 
-/// Convert from [`bytes::Bytes`], not internal [`Bytes`] to `Buffer`
+/// Convert from [`bytes::Bytes`], not internal `Bytes` to `Buffer`
 impl From<bytes::Bytes> for Buffer {
     fn from(bytes: bytes::Bytes) -> Self {
         let bytes: Bytes = bytes.into();
