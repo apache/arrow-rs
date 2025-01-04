@@ -32,6 +32,7 @@ use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -41,6 +42,7 @@ mod filter;
 mod selection;
 pub mod statistics;
 
+use crate::encryption::ciphers::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{CryptoContext, FileDecryptionProperties};
 
@@ -709,13 +711,17 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         #[cfg(feature = "encryption")]
         let crypto_context = if self.metadata.file_decryptor().is_some() {
             let file_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
+            let metadata_decryptor = Arc::new(self.metadata.file_decryptor().clone().unwrap());
+            let column_name = self
+                .metadata
+                .file_metadata()
+                .schema_descr()
+                .column(self.column_idx);
+            let data_decryptor =
+                Arc::new(file_decryptor.get_column_decryptor(column_name.name().as_bytes()));
 
-            let crypto_context = CryptoContext::new(
-                rg_idx,
-                self.column_idx,
-                file_decryptor.clone(),
-                file_decryptor,
-            );
+            let crypto_context =
+                CryptoContext::new(rg_idx, self.column_idx, metadata_decryptor, data_decryptor);
             Some(Arc::new(crypto_context))
         } else {
             None
@@ -1888,7 +1894,7 @@ mod tests {
         assert_eq!(file_metadata.schema_descr().num_columns(), 8);
         assert_eq!(
             file_metadata.created_by().unwrap(),
-            "parquet-cpp-arrow version 14.0.0-SNAPSHOT"
+            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
         );
 
         metadata.metadata.row_groups().iter().for_each(|rg| {

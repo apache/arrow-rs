@@ -22,6 +22,7 @@ use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
+use crate::encryption::ciphers::RingGcmBlockDecryptor;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 use crate::errors::{ParquetError, Result};
@@ -42,7 +43,6 @@ use std::collections::VecDeque;
 use std::iter;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 use thrift::protocol::TCompactInputProtocol;
-use crate::encryption::ciphers::RingGcmBlockDecryptor;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -347,42 +347,44 @@ pub(crate) fn read_page_header<T: Read>(
     #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<PageHeader> {
     #[cfg(feature = "encryption")]
-    // if let Some(crypto_context) = crypto_context {
-    //     // crypto_context.data_decryptor().get_column_decryptor()
-    //     let decryptor = &crypto_context.data_decryptor();
-    //     // todo: get column decryptor
-    //     // let file_decryptor = decryptor.ge(crypto_context.column_ordinal);
-    //     // if !decryptor.decryption_properties().has_footer_key() {
-    //     //     return Err(general_err!("Missing footer decryptor"));
-    //     // }
-    //     let file_decryptor = decryptor.footer_decryptor();
-    //     let aad_file_unique = decryptor.aad_file_unique();
-    //     let aad_prefix = decryptor.aad_prefix();
-    //
-    //     let module_type = if crypto_context.dictionary_page {
-    //         ModuleType::DictionaryPageHeader
-    //     } else {
-    //         ModuleType::DataPageHeader
-    //     };
-    //     let aad = create_page_aad(
-    //         [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat().as_slice(),
-    //         module_type,
-    //         crypto_context.row_group_ordinal,
-    //         crypto_context.column_ordinal,
-    //         crypto_context.page_ordinal,
-    //     )?;
-    //
-    //     let mut len_bytes = [0; 4];
-    //     input.read_exact(&mut len_bytes)?;
-    //     let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
-    //     let mut ciphertext = vec![0; 4 + ciphertext_len];
-    //     input.read_exact(&mut ciphertext[4..])?;
-    //     let buf = file_decryptor.unwrap().decrypt(&ciphertext, aad.as_ref())?;
-    //
-    //     let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-    //     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-    //     return Ok(page_header);
-    // }
+    if let Some(crypto_context) = crypto_context {
+        // crypto_context.data_decryptor().get_column_decryptor()
+        let decryptor = &crypto_context.data_decryptor();
+        // todo: get column decryptor
+        // let file_decryptor = decryptor.ge(crypto_context.column_ordinal);
+        // if !decryptor.decryption_properties().has_footer_key() {
+        //     return Err(general_err!("Missing footer decryptor"));
+        // }
+        let file_decryptor = decryptor.footer_decryptor();
+        let aad_file_unique = decryptor.aad_file_unique();
+        let aad_prefix = decryptor.aad_prefix();
+
+        let module_type = if crypto_context.dictionary_page {
+            ModuleType::DictionaryPageHeader
+        } else {
+            ModuleType::DataPageHeader
+        };
+        let aad = create_page_aad(
+            [aad_prefix.as_slice(), aad_file_unique.as_slice()]
+                .concat()
+                .as_slice(),
+            module_type,
+            crypto_context.row_group_ordinal,
+            crypto_context.column_ordinal,
+            crypto_context.page_ordinal,
+        )?;
+
+        let mut len_bytes = [0; 4];
+        input.read_exact(&mut len_bytes)?;
+        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut ciphertext = vec![0; 4 + ciphertext_len];
+        input.read_exact(&mut ciphertext[4..])?;
+        let buf = file_decryptor.unwrap().decrypt(&ciphertext, aad.as_ref())?;
+
+        let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
+        let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+        return Ok(page_header);
+    }
 
     let mut prot = TCompactInputProtocol::new(input);
     let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
@@ -457,27 +459,38 @@ pub(crate) fn decode_page(
     let buffer: Bytes = if crypto_context.is_some() {
         let crypto_context = crypto_context.as_ref().unwrap();
         let decryptor = crypto_context.data_decryptor();
-        let Some(file_decryptor) = if let Some(f) = decryptor.footer_decryptor().clone() {
-            // Some(RingGcmBlockDecryptor::new(decryptor..as_ref()))
-        } else {
-            decryptor.
-        };
+        // let footer_decryptor
+        // let file_decryptor = if decryptor.has_footer_key() {
+        //     decryptor.footer_decryptor()
+        // } else {
+        //     // CryptoMetaData::from_thrift(&crypto_context.meta_data)
+        //     //     .and_then(|meta| meta.get_page_decryptor(crypto_context.page_ordinal))
+        //     //     .ok_or_else(|| general_err!("Missing footer decryptor"))?
+        //     // page_header.data_page_header
+        //     // decryptor.get_column_decryptor(crypto_context.column_ordinal)
+        //     // decryptor.get_column_decryptor(crypto_context.column_ordinal)
+        //     return Err(general_err!("Missing footer decryptor"));
+        //     // TODO: decryptor should have keys for columns
+        // };
         let file_decryptor = decryptor.footer_decryptor();
-
-        let module_type = if crypto_context.dictionary_page {
-            ModuleType::DictionaryPage
+        if file_decryptor.is_none() {
+            buffer
         } else {
-            ModuleType::DataPage
-        };
-        let aad = create_page_aad(
-            decryptor.aad_file_unique().as_slice(),
-            module_type,
-            crypto_context.row_group_ordinal,
-            crypto_context.column_ordinal,
-            crypto_context.page_ordinal,
-        )?;
-        let decrypted = file_decryptor.unwrap().decrypt(&buffer.as_ref(), &aad)?;
-        Bytes::from(decrypted)
+            let module_type = if crypto_context.dictionary_page {
+                ModuleType::DictionaryPage
+            } else {
+                ModuleType::DataPage
+            };
+            let aad = create_page_aad(
+                decryptor.aad_file_unique().as_slice(),
+                module_type,
+                crypto_context.row_group_ordinal,
+                crypto_context.column_ordinal,
+                crypto_context.page_ordinal,
+            )?;
+            let decrypted = file_decryptor.unwrap().decrypt(&buffer.as_ref(), &aad)?;
+            Bytes::from(decrypted)
+        }
     } else {
         buffer
     };
