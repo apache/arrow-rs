@@ -100,15 +100,9 @@ impl Buffer {
     /// and is different than [`bytes::Bytes`].
     ///
     /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
-    #[inline]
+    #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
     pub fn from_bytes(bytes: Bytes) -> Self {
-        let length = bytes.len();
-        let ptr = bytes.as_ptr();
-        Buffer {
-            data: Arc::new(bytes),
-            ptr,
-            length,
-        }
+        Self::from(bytes)
     }
 
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
@@ -462,8 +456,15 @@ impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
 
 /// Convert from internal `Bytes`, not [`bytes::Bytes`] to `Buffer`
 impl From<Bytes> for Buffer {
+    #[inline]
     fn from(bytes: Bytes) -> Self {
-        Self::from_bytes(bytes)
+        let length = bytes.len();
+        let ptr = bytes.as_ptr();
+        Self {
+            data: Arc::new(bytes),
+            ptr,
+            length,
+        }
     }
 }
 
