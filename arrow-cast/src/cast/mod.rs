@@ -4072,7 +4072,6 @@ mod tests {
             Arc::new(StringViewArray::from(vec![Some("1.5"), Some("2.5"), None]));
 
         for array in inputs {
-            println!("type: {}", array.data_type());
             assert!(can_cast_types(array.data_type(), &DataType::Utf8View));
             let arr = cast(&array, &DataType::Utf8View).unwrap();
             assert_eq!(expected.as_ref(), arr.as_ref());
@@ -10318,7 +10317,6 @@ mod tests {
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_same_scale() {
         let array = vec![Some(123456789)];
         let array = create_decimal128_array(array, 24, 2).unwrap();
-        println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal128(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
@@ -10336,7 +10334,6 @@ mod tests {
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_lower_scale() {
         let array = vec![Some(123456789)];
         let array = create_decimal128_array(array, 24, 2).unwrap();
-        println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 4);
         let output_type = DataType::Decimal128(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
@@ -10347,14 +10344,13 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 1234568 is too large to store in a Decimal128 of precision 6. Max is 999999");
     }
 
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_greater_scale() {
         let array = vec![Some(123456789)];
         let array = create_decimal128_array(array, 24, 2).unwrap();
-        println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal128(6, 3);
         assert!(can_cast_types(&input_type, &output_type));
@@ -10372,7 +10368,6 @@ mod tests {
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_diff_type() {
         let array = vec![Some(123456789)];
         let array = create_decimal128_array(array, 24, 2).unwrap();
-        println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal256(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
