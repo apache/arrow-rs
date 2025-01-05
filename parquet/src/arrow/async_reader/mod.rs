@@ -792,7 +792,7 @@ struct InMemoryRowGroup<'a> {
     row_count: usize,
 }
 
-impl<'a> InMemoryRowGroup<'a> {
+impl InMemoryRowGroup<'_> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,

@@ -1833,7 +1833,7 @@ mod tests {
             .flight_descriptor
             .as_ref()
             .map(|descriptor| {
-                let path_len: usize = descriptor.path.iter().map(|p| p.as_bytes().len()).sum();
+                let path_len: usize = descriptor.path.iter().map(|p| p.len()).sum();
 
                 std::mem::size_of_val(descriptor) + descriptor.cmd.len() + path_len
             })
