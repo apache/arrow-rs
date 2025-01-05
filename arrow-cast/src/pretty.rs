@@ -296,7 +296,7 @@ mod tests {
     fn test_pretty_format_fixed_size_list() {
         // define a schema.
         let field_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
         let keys_builder = Int32Array::builder(3);

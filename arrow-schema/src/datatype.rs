@@ -40,7 +40,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 /// # use arrow_schema::{DataType, Field};
 /// # use std::sync::Arc;
 /// // create a new list of 32-bit signed integers directly
-/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// // Create the same list type with constructor
 /// let list_data_type2 = DataType::new_list(DataType::Int32, true);
 /// assert_eq!(list_data_type, list_data_type2);
@@ -196,6 +196,14 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    ///
+    /// Timezone string parsing
+    /// -----------------------
+    /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
+    ///
+    /// When feature `chrono-tz` is enabled, additional strings supported by [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
+    /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+    /// timezones.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
@@ -837,21 +845,21 @@ mod tests {
     #[test]
     fn test_list_datatype_equality() {
         // tests that list type equality is checked while ignoring list names
-        let list_a = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_a = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_b = DataType::List(Arc::new(Field::new("array", DataType::Int32, true)));
-        let list_c = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
-        let list_d = DataType::List(Arc::new(Field::new("item", DataType::UInt32, true)));
+        let list_c = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_d = DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true)));
         assert!(list_a.equals_datatype(&list_b));
         assert!(!list_a.equals_datatype(&list_c));
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(list_a.clone(), false)), 3);
         let list_f =
             DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            Arc::new(Field::new_list_field(DataType::FixedSizeBinary(3), true)),
             3,
         );
         assert!(list_e.equals_datatype(&list_f));

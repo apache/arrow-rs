@@ -1152,6 +1152,13 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
@@ -1480,24 +1487,6 @@ def_numeric_from_vec!(TimestampMicrosecondType);
 def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<i64>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<Option<i64>>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
     /// Returns the timezone of this array if any
     pub fn timezone(&self) -> Option<&str> {
         match self.data_type() {

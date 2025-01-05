@@ -307,8 +307,10 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
 }
 
 fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
+    #[allow(clippy::infallible_destructuring_match)]
     let s = match result.payload {
         GetResultPayload::Stream(s) => s,
+        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         GetResultPayload::File(_, _) => unimplemented!(),
     };
 

@@ -97,7 +97,7 @@ fn main() {
     let value_offsets = Buffer::from([0, 3, 6, 8].to_byte_slice());
 
     // Construct a list array from the above two
-    let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+    let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)

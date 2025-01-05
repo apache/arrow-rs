@@ -136,7 +136,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Override the size of buffers to allocate for holding string data
     /// Use `with_fixed_block_size` instead.
-    #[deprecated(note = "Use `with_fixed_block_size` instead")]
+    #[deprecated(since = "53.0.0", note = "Use `with_fixed_block_size` instead")]
     pub fn with_block_size(self, block_size: u32) -> Self {
         self.with_fixed_block_size(block_size)
     }

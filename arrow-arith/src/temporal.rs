@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use cast::as_primitive_array;
-use chrono::{Datelike, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
+use chrono::{Datelike, TimeZone, Timelike, Utc};
 
 use arrow_array::temporal_conversions::{
     date32_to_datetime, date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
@@ -82,6 +82,7 @@ impl std::fmt::Display for DatePart {
 /// Returns function to extract relevant [`DatePart`] from types like a
 /// [`NaiveDateTime`] or [`DateTime`].
 ///
+/// [`NaiveDateTime`]: chrono::NaiveDateTime
 /// [`DateTime`]: chrono::DateTime
 fn get_date_time_part_extract_fn<T>(part: DatePart) -> fn(T) -> i32
 where
@@ -662,20 +663,6 @@ impl<T: Datelike> ChronoDateExt for T {
     fn num_days_from_sunday(&self) -> i32 {
         self.weekday().num_days_from_sunday() as i32
     }
-}
-
-/// Parse the given string into a string representing fixed-offset that is correct as of the given
-/// UTC NaiveDateTime.
-///
-/// Note that the offset is function of time and can vary depending on whether daylight savings is
-/// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
-#[deprecated(note = "Use arrow_array::timezone::Tz instead")]
-pub fn using_chrono_tz_and_utc_naive_date_time(
-    tz: &str,
-    utc: NaiveDateTime,
-) -> Option<chrono::offset::FixedOffset> {
-    let tz: Tz = tz.parse().ok()?;
-    Some(tz.offset_from_utc_datetime(&utc).fix())
 }
 
 /// Extracts the hours of a given array as an array of integers within

@@ -22,30 +22,29 @@ use crate::PutPayload;
 use futures::future::BoxFuture;
 use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
-use snafu::Error as SnafuError;
-use snafu::Snafu;
+use std::error::Error as StdError;
 use std::time::{Duration, Instant};
 use tracing::info;
 
 /// Retry request error
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Received redirect without LOCATION, this normally indicates an incorrectly configured region"))]
+    #[error("Received redirect without LOCATION, this normally indicates an incorrectly configured region")]
     BareRedirect,
 
-    #[snafu(display("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    #[error("Server error, body contains Error, with status {status}: {}", body.as_deref().unwrap_or("No Body"))]
     Server {
         status: StatusCode,
         body: Option<String>,
     },
 
-    #[snafu(display("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body")))]
+    #[error("Client error with status {status}: {}", body.as_deref().unwrap_or("No Body"))]
     Client {
         status: StatusCode,
         body: Option<String>,
     },
 
-    #[snafu(display("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}"))]
+    #[error("Error after {retries} retries in {elapsed:?}, max_retries:{max_retries}, retry_timeout:{retry_timeout:?}, source:{source}")]
     Reqwest {
         retries: usize,
         max_retries: usize,
@@ -200,6 +199,7 @@ pub(crate) struct RetryableRequest {
 
     sensitive: bool,
     idempotent: Option<bool>,
+    retry_on_conflict: bool,
     payload: Option<PutPayload>,
 
     retry_error_body: bool,
@@ -213,6 +213,15 @@ impl RetryableRequest {
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self {
             idempotent: Some(idempotent),
+            ..self
+        }
+    }
+
+    /// Set whether this request should be retried on a 409 Conflict response.
+    #[cfg(feature = "aws")]
+    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
+        Self {
+            retry_on_conflict,
             ..self
         }
     }
@@ -340,7 +349,8 @@ impl RetryableRequest {
                         let status = r.status();
                         if retries == max_retries
                             || now.elapsed() > retry_timeout
-                            || !status.is_server_error()
+                            || !(status.is_server_error()
+                                || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
                             return Err(match status.is_client_error() {
                                 true => match r.text().await {
@@ -467,6 +477,7 @@ impl RetryExt for reqwest::RequestBuilder {
             idempotent: None,
             payload: None,
             sensitive: false,
+            retry_on_conflict: false,
             retry_error_body: false,
         }
     }

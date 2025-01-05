@@ -24,12 +24,6 @@ use arrow_schema::DataType;
 pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
-    /// Get the data type of the array.
-    #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
-    pub const fn get_data_type() -> DataType {
-        Self::DATA_TYPE
-    }
-
     /// Creates a [GenericBinaryArray] from a vector of byte slices
     ///
     /// See also [`Self::from_iter_values`]
@@ -372,11 +366,9 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt8,
-            false,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt8, false),
+        ));
 
         let array_data2 = ArrayData::builder(data_type)
             .len(3)
@@ -421,11 +413,9 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref([0b101]);
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt8,
-            false,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt8, false),
+        ));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -466,11 +456,9 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(Field::new(
-            "item",
-            DataType::UInt8,
-            true,
-        )));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Arc::new(
+            Field::new_list_field(DataType::UInt8, true),
+        ));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -558,7 +546,7 @@ mod tests {
             .unwrap();
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::UInt32, false)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, false)));
         let array_data = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(offsets))

@@ -19,8 +19,6 @@
 
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow-rs/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-rs?branch=master)
-
 Welcome to the [Rust][rust] implementation of [Apache Arrow], the popular in-memory columnar format.
 
 This repo contains the following main components:
@@ -58,20 +56,21 @@ breaking API changes) at most once a quarter, and release incremental minor
 versions in the intervening months. See [this ticket] for more details.
 
 To keep our maintenance burden down, we do regularly scheduled releases (major
-and minor) from the `master` branch. How we handle PRs with breaking API changes
+and minor) from the `main` branch. How we handle PRs with breaking API changes
 is described in the [contributing] guide.
 
 [contributing]: CONTRIBUTING.md#breaking-changes
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Nov 2024         | `53.3.0` | Minor, NO breaking API changes          |
-| Dec 2024         | `54.0.0` | Major, potentially breaking API changes |
-| Jan 2025         | `54.1.0` | Minor, NO breaking API changes          |
-| Feb 2025         | `54.2.0` | Minor, NO breaking API changes          |
-| Mar 2025         | `55.0.0` | Major, potentially breaking API changes |
+| Approximate Date | Version  | Notes                                      |
+| ---------------- | -------- | ------------------------------------------ |
+| Nov 2024         | `53.3.0` | Minor, NO breaking API changes             |
+| Dec 2024         | `54.0.0` | Major, potentially breaking API changes    |
+| Jan 2025         | `53.4.0` | Minor, NO breaking API changes (`53` line) |
+| Jan 2025         | `54.1.0` | Minor, NO breaking API changes             |
+| Feb 2025         | `54.2.0` | Minor, NO breaking API changes             |
+| Mar 2025         | `55.0.0` | Major, potentially breaking API changes    |
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
@@ -83,6 +82,40 @@ The [`object_store`] crate is released independently of the `arrow` and
 versions approximately every 2 months.
 
 [`object_store`]: https://crates.io/crates/object_store
+
+Planned Release Schedule
+
+| Approximate Date | Version  | Notes                                   |
+| ---------------- | -------- | --------------------------------------- |
+| Dec 2024         | `0.11.2` | Minor, NO breaking API changes          |
+| Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
+
+### Deprecation Guidelines
+
+Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
+downstream Rust programs to still compile, but generate compiler warnings. This
+gives downstream crates time to migrate prior to API removal.
+
+To deprecate an API:
+
+- Mark the API as deprecated using `#[deprecated]` and specify the exact arrow-rs version in which it was deprecated
+- Concisely describe the preferred API to help the user transition
+
+The deprecated version is the next version which will be released (please
+consult the list above). To mark the API as deprecated, use the
+`#[deprecated(since = "...", note = "...")]` attribute.
+
+Foe example
+
+```rust
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
+```
+
+In general, deprecated APIs will remain in the codebase for at least two major releases after
+they were deprecated (typically between 6 - 9 months later). For example, an API
+deprecated in `51.3.0` can be removed in `54.0.0` (or later). Deprecated APIs
+may be removed earlier or later than these guidelines at the discretion of the
+maintainers.
 
 ## Related Projects
 

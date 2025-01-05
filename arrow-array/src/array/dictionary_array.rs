@@ -249,7 +249,7 @@ pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     /// map to the real values.
     keys: PrimitiveArray<K>,
 
-    /// Array of dictionary values (can by any DataType).
+    /// Array of dictionary values (can be any DataType).
     values: ArrayRef,
 
     /// Values are ordered.
@@ -718,6 +718,11 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
 
     fn is_empty(&self) -> bool {
         self.keys.is_empty()
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.keys.shrink_to_fit();
+        self.values.shrink_to_fit();
     }
 
     fn offset(&self) -> usize {

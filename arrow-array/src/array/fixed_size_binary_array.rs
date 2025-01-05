@@ -237,6 +237,7 @@ impl FixedSizeBinaryArray {
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
     #[deprecated(
+        since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
     )]
     pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
@@ -602,6 +603,13 @@ impl Array for FixedSizeBinaryArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.value_data.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
@@ -721,7 +729,7 @@ mod tests {
         // [null, [10, 11, 12, 13]]
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(2)
@@ -757,7 +765,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Binary, false)),
+                Arc::new(Field::new_list_field(DataType::Binary, false)),
                 4,
             ))
             .len(3)
@@ -781,7 +789,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(3)

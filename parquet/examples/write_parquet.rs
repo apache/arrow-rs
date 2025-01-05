@@ -28,7 +28,7 @@ use parquet::arrow::ArrowWriter as ParquetWriter;
 use parquet::basic::Encoding;
 use parquet::errors::Result;
 use parquet::file::properties::{BloomFilterPosition, WriterProperties};
-use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 #[derive(ValueEnum, Clone)]
 enum BloomFilterPositionArg {
@@ -97,8 +97,7 @@ fn main() -> Result<()> {
     let file = File::create(args.path).unwrap();
     let mut writer = ParquetWriter::try_new(file, schema.clone(), Some(properties))?;
 
-    let mut system =
-        System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()));
+    let mut system = System::new_with_specifics(RefreshKind::everything());
     eprintln!(
         "{} Writing {} batches of {} rows. RSS = {}",
         now(),

@@ -29,7 +29,7 @@ use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
-    InitiateMultipartUploadResult, ListResponse,
+    InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::GetOptionsExt;
 use crate::multipart::PartId;
@@ -56,64 +56,64 @@ use reqwest::{Client as ReqwestClient, Method, RequestBuilder, Response};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
+const ALGORITHM: &str = "x-amz-checksum-algorithm";
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[snafu(display("Error performing DeleteObjects request: {}", source))]
+    #[error("Error performing DeleteObjects request: {}", source)]
     DeleteObjectsRequest { source: crate::client::retry::Error },
 
-    #[snafu(display(
+    #[error(
         "DeleteObjects request failed for key {}: {} (code: {})",
         path,
         message,
         code
-    ))]
+    )]
     DeleteFailed {
         path: String,
         code: String,
         message: String,
     },
 
-    #[snafu(display("Error getting DeleteObjects response body: {}", source))]
+    #[error("Error getting DeleteObjects response body: {}", source)]
     DeleteObjectsResponse { source: reqwest::Error },
 
-    #[snafu(display("Got invalid DeleteObjects response: {}", source))]
+    #[error("Got invalid DeleteObjects response: {}", source)]
     InvalidDeleteObjectsResponse {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
-    #[snafu(display("Error performing list request: {}", source))]
+    #[error("Error performing list request: {}", source)]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list response body: {}", source))]
+    #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error getting create multipart response body: {}", source))]
+    #[error("Error getting create multipart response body: {}", source)]
     CreateMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error performing complete multipart request: {}: {}", path, source))]
+    #[error("Error performing complete multipart request: {}: {}", path, source)]
     CompleteMultipartRequest {
         source: crate::client::retry::Error,
         path: String,
     },
 
-    #[snafu(display("Error getting complete multipart response body: {}", source))]
+    #[error("Error getting complete multipart response body: {}", source)]
     CompleteMultipartResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Got invalid list response: {}", source))]
+    #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Got invalid multipart response: {}", source))]
+    #[error("Got invalid multipart response: {}", source)]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    #[error("Unable to extract metadata from headers: {}", source)]
     Metadata {
         source: crate::client::header::Error,
     },
@@ -246,7 +246,7 @@ struct SessionCredential<'a> {
     config: &'a S3Config,
 }
 
-impl<'a> SessionCredential<'a> {
+impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
         let mut authorizer =
             AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
@@ -262,10 +262,15 @@ impl<'a> SessionCredential<'a> {
     }
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum RequestError {
-    #[snafu(context(false))]
-    Generic { source: crate::Error },
+    #[error(transparent)]
+    Generic {
+        #[from]
+        source: crate::Error,
+    },
+
+    #[error("Retry")]
     Retry {
         source: crate::client::retry::Error,
         path: String,
@@ -290,6 +295,7 @@ pub(crate) struct Request<'a> {
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
+    retry_on_conflict: bool,
     retry_error_body: bool,
 }
 
@@ -315,6 +321,13 @@ impl<'a> Request<'a> {
 
     pub(crate) fn idempotent(self, idempotent: bool) -> Self {
         Self { idempotent, ..self }
+    }
+
+    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
+        Self {
+            retry_on_conflict,
+            ..self
+        }
     }
 
     pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
@@ -382,10 +395,9 @@ impl<'a> Request<'a> {
             let payload_sha256 = sha256.finish();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
-                self.builder = self.builder.header(
-                    "x-amz-checksum-sha256",
-                    BASE64_STANDARD.encode(payload_sha256),
-                );
+                self.builder = self
+                    .builder
+                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(payload_sha256));
             }
             self.payload_sha256 = Some(payload_sha256);
         }
@@ -412,17 +424,22 @@ impl<'a> Request<'a> {
         self.builder
             .with_aws_sigv4(credential.authorizer(), sha)
             .retryable(&self.config.retry_config)
+            .retry_on_conflict(self.retry_on_conflict)
             .idempotent(self.idempotent)
             .retry_error_body(self.retry_error_body)
             .payload(self.payload)
             .send()
             .await
-            .context(RetrySnafu { path })
+            .map_err(|source| {
+                let path = path.into();
+                RequestError::Retry { source, path }
+            })
     }
 
     pub(crate) async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?)
     }
 }
 
@@ -448,6 +465,7 @@ impl S3Client {
             config: &self.config,
             use_session_creds: true,
             idempotent: false,
+            retry_on_conflict: false,
             retry_error_body: false,
         }
     }
@@ -525,10 +543,10 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
             .send_retry(&self.config.retry_config)
             .await
-            .context(DeleteObjectsRequestSnafu {})?
+            .map_err(|source| Error::DeleteObjectsRequest { source })?
             .bytes()
             .await
-            .context(DeleteObjectsResponseSnafu {})?;
+            .map_err(|source| Error::DeleteObjectsResponse { source })?;
 
         let response: BatchDeleteResponse =
             quick_xml::de::from_reader(response.reader()).map_err(|err| {
@@ -607,8 +625,15 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
-        let response = self
-            .request(Method::POST, location)
+        let mut request = self.request(Method::POST, location);
+        if let Some(algorithm) = self.config.checksum {
+            match algorithm {
+                Checksum::SHA256 => {
+                    request = request.header(ALGORITHM, "SHA256");
+                }
+            }
+        }
+        let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
             .with_attributes(opts.attributes)
@@ -618,10 +643,10 @@ impl S3Client {
             .await?
             .bytes()
             .await
-            .context(CreateMultipartResponseBodySnafu)?;
+            .map_err(|source| Error::CreateMultipartResponseBody { source })?;
 
-        let response: InitiateMultipartUploadResult =
-            quick_xml::de::from_reader(response.reader()).context(InvalidMultipartResponseSnafu)?;
+        let response: InitiateMultipartUploadResult = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidMultipartResponse { source })?;
 
         Ok(response.upload_id)
     }
@@ -659,19 +684,35 @@ impl S3Client {
             request = request.with_encryption_headers();
         }
         let response = request.send().await?;
+        let checksum_sha256 = response
+            .headers()
+            .get(SHA256_CHECKSUM)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_string());
 
-        let content_id = match is_copy {
-            false => get_etag(response.headers()).context(MetadataSnafu)?,
+        let e_tag = match is_copy {
+            false => get_etag(response.headers()).map_err(|source| Error::Metadata { source })?,
             true => {
                 let response = response
                     .bytes()
                     .await
-                    .context(CreateMultipartResponseBodySnafu)?;
+                    .map_err(|source| Error::CreateMultipartResponseBody { source })?;
                 let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
-                    .context(InvalidMultipartResponseSnafu)?;
+                    .map_err(|source| Error::InvalidMultipartResponse { source })?;
                 response.e_tag
             }
         };
+
+        let content_id = if self.config.checksum == Some(Checksum::SHA256) {
+            let meta = PartMetadata {
+                e_tag,
+                checksum_sha256,
+            };
+            quick_xml::se::to_string(&meta).unwrap()
+        } else {
+            e_tag
+        };
+
         Ok(PartId { content_id })
     }
 
@@ -731,19 +772,21 @@ impl S3Client {
             .retry_error_body(true)
             .send()
             .await
-            .context(CompleteMultipartRequestSnafu {
-                path: location.as_ref(),
+            .map_err(|source| Error::CompleteMultipartRequest {
+                source,
+                path: location.as_ref().to_string(),
             })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER).context(MetadataSnafu)?;
+        let version = get_version(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?;
 
         let data = response
             .bytes()
             .await
-            .context(CompleteMultipartResponseBodySnafu)?;
+            .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
 
-        let response: CompleteMultipartUploadResult =
-            quick_xml::de::from_reader(data.reader()).context(InvalidMultipartResponseSnafu)?;
+        let response: CompleteMultipartUploadResult = quick_xml::de::from_reader(data.reader())
+            .map_err(|source| Error::InvalidMultipartResponse { source })?;
 
         Ok(PutResult {
             e_tag: Some(response.e_tag),
@@ -851,13 +894,14 @@ impl ListClient for S3Client {
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
-            .context(ListRequestSnafu)?
+            .map_err(|source| Error::ListRequest { source })?
             .bytes()
             .await
-            .context(ListResponseBodySnafu)?;
+            .map_err(|source| Error::ListResponseBody { source })?;
 
-        let mut response: ListResponse =
-            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
+        let mut response: ListResponse = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidListResponse { source })?;
+
         let token = response.next_continuation_token.take();
 
         Ok((response.try_into()?, token))

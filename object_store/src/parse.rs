@@ -15,21 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::path::Path;
 use crate::ObjectStore;
-use snafu::Snafu;
 use url::Url;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Unable to recognise URL \"{}\"", url))]
+    #[error("Unable to recognise URL \"{}\"", url)]
     Unrecognised { url: Url },
 
-    #[snafu(context(false))]
-    Path { source: crate::path::Error },
+    #[error(transparent)]
+    Path {
+        #[from]
+        source: crate::path::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -179,7 +181,7 @@ where
     let path = Path::parse(path)?;
 
     let store = match scheme {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         ObjectStoreScheme::Local => Box::new(LocalFileSystem::new()) as _,
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
         #[cfg(feature = "aws")]

@@ -83,7 +83,7 @@ impl Column {
             Column::RequiredI32List => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
                     true,
                 );
                 create_random_array(&field, size, 0., 1.).unwrap()
@@ -91,7 +91,7 @@ impl Column {
             Column::OptionalI32List => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                     true,
                 );
                 create_random_array(&field, size, 0.2, 1.).unwrap()
@@ -99,7 +99,7 @@ impl Column {
             Column::Required4CharStringList => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, false))),
                     true,
                 );
                 create_random_array(&field, size, 0., 1.).unwrap()
@@ -107,7 +107,7 @@ impl Column {
             Column::Optional4CharStringList => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 );
                 create_random_array(&field, size, 0.2, 1.).unwrap()
