@@ -236,7 +236,7 @@ impl Buffer {
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
     ///
-    /// This function is `O(1)` and does not copy any data, and allows the
+    /// This function is `O(1)` and does not copy any data, allowing the
     /// same memory region to be shared between buffers.
     ///
     /// # Panics
@@ -272,7 +272,7 @@ impl Buffer {
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
     /// with `length` bytes.
     ///
-    /// This function is `O(1)` and does not copy any data and  allows the same
+    /// This function is `O(1)` and does not copy any data, allowing the same
     /// memory region to be shared between buffers.
     ///
     /// # Panics
@@ -454,7 +454,7 @@ impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
     }
 }
 
-/// Convert from internal `Bytes`, not [`bytes::Bytes`] to `Buffer`
+/// Convert from internal `Bytes` (not [`bytes::Bytes`]) to `Buffer`
 impl From<Bytes> for Buffer {
     #[inline]
     fn from(bytes: Bytes) -> Self {
