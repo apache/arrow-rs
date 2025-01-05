@@ -3275,8 +3275,8 @@ mod tests {
     fn test_truncate_utf8() {
         // No-op
         let data = "❤️🧡💛💚💙💜";
-        let r = truncate_utf8(data, data.as_bytes().len()).unwrap();
-        assert_eq!(r.len(), data.as_bytes().len());
+        let r = truncate_utf8(data, data.len()).unwrap();
+        assert_eq!(r.len(), data.len());
         assert_eq!(&r, data.as_bytes());
 
         // We slice it away from the UTF8 boundary

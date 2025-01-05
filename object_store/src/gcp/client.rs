@@ -173,7 +173,7 @@ pub(crate) struct Request<'a> {
     idempotent: bool,
 }
 
-impl<'a> Request<'a> {
+impl Request<'_> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
