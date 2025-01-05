@@ -456,38 +456,32 @@ impl Schema {
         if max_level == 0 {
             max_level = usize::MAX;
         }
-        let mut queue: VecDeque<(usize, Vec<&str>, &DataType, bool)> = VecDeque::new();
+        let mut queue: VecDeque<(usize, Vec<&str>, &FieldRef)> = VecDeque::new();
         for f in self.fields() {
             let name_vec: Vec<&str> = vec![f.name()];
-            queue.push_back((0, name_vec, f.data_type(), f.is_nullable()));
+            queue.push_back((0, name_vec, f));
         }
         let mut fields: Vec<FieldRef> = Vec::new();
 
-        while let Some((depth, name, data_type, nullable)) = queue.pop_front() {
-            if depth < max_level {
-                match data_type {
-                    DataType::Struct(ff) => {
-                        // Need to zip these in reverse to maintain original order
-                        for fff in ff.into_iter().rev() {
-                            let mut name = name.clone();
-                            name.push(separator);
-                            name.push(fff.name().as_str());
-                            queue.push_front((
-                                depth + 1,
-                                name.clone(),
-                                fff.data_type(),
-                                fff.is_nullable(),
-                            ))
-                        }
-                    }
-                    _ => {
-                        let updated_field = Field::new(name.concat(), data_type.clone(), nullable);
-                        fields.push(Arc::new(updated_field));
+        while let Some((depth, name, field_ref)) = queue.pop_front() {
+            match field_ref.data_type() {
+                DataType::Struct(ff) if depth < max_level => {
+                    // Need to zip these in reverse to maintain original order
+                    for fff in ff.into_iter().rev() {
+                        let mut name = name.clone();
+                        name.push(separator);
+                        name.push(fff.name());
+                        queue.push_front((depth + 1, name, fff))
                     }
                 }
-            } else {
-                let updated_field = Field::new(name.concat(), data_type.clone(), nullable);
-                fields.push(Arc::new(updated_field));
+                _ => {
+                    let updated_field = Field::new(
+                        name.concat(),
+                        field_ref.data_type().clone(),
+                        field_ref.is_nullable(),
+                    );
+                    fields.push(Arc::new(updated_field));
+                }
             }
         }
         Ok(Schema::new(fields))
