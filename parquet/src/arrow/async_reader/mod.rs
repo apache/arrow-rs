@@ -811,7 +811,33 @@ struct InMemoryRowGroup<'a> {
     projection_to_cache: Option<ProjectionMask>,
 }
 
-impl InMemoryRowGroup<'_> {
+impl<'a> InMemoryRowGroup<'a> {
+    fn new(
+        metadata: &'a RowGroupMetaData,
+        offset_index: Option<&'a [OffsetIndexMetaData]>,
+        projection_to_cache: Option<ProjectionMask>,
+    ) -> Self {
+        let to_cache_column_cnt = projection_to_cache
+            .as_ref()
+            .map(|p| {
+                if let Some(mask) = &p.mask {
+                    mask.iter().filter(|&&b| b).count()
+                } else {
+                    metadata.columns().len()
+                }
+            })
+            .unwrap_or(0);
+        Self {
+            metadata,
+            offset_index,
+            column_chunks: vec![None; metadata.columns().len()],
+            row_count: metadata.num_rows() as usize,
+            cache: Arc::new(PredicatePageCache::new(to_cache_column_cnt)),
+            projection_to_cache,
+        }
+    }
+}
+impl<'a> InMemoryRowGroup<'a> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,
