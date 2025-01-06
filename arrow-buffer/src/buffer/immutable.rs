@@ -28,8 +28,43 @@ use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
-/// Buffer represents a contiguous memory region that can be shared with other buffers and across
-/// thread boundaries.
+/// A contiguous memory region that can be shared with other buffers and across
+/// thread boundaries that stores Arrow data.
+///
+/// `Buffer`s can be sliced and cloned without copying the underlying data and can
+/// be created from memory allocated by non-Rust sources such as C/C++.
+///
+/// # Example: Create a `Buffer` from a `Vec` (without copying)
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let vec: Vec<u32> = vec![1, 2, 3];
+/// let buffer = Buffer::from(vec);
+/// ```
+///
+/// # Example: Convert a `Buffer` to a `Vec` (without copying)
+///
+/// Use [`Self::into_vec`] to convert a `Buffer` back into a `Vec` if there are
+/// no other references and the types are aligned correctly.
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let vec: Vec<u32> = vec![1, 2, 3];
+/// # let buffer = Buffer::from(vec);
+/// // convert the buffer back into a Vec of u32
+/// // note this will fail if the buffer is shared or not aligned correctly
+/// let vec: Vec<u32> = buffer.into_vec().unwrap();
+/// ```
+///
+/// # Example: Create a `Buffer` from a [`bytes::Bytes`] (without copying)
+///
+/// [`bytes::Bytes`] is a common type in the Rust ecosystem for shared memory
+/// regions. You can create a buffer from a `Bytes` instance using the `From`
+/// implementation, also without copying.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let bytes = bytes::Bytes::from("hello");
+/// let buffer = Buffer::from(bytes);
+///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
@@ -59,24 +94,15 @@ unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
-    /// Auxiliary method to create a new Buffer
+    /// Create a new Buffer from a (internal) `Bytes`
     ///
-    /// This can be used with a [`bytes::Bytes`] via `into()`:
+    /// NOTE despite the same name, `Bytes` is an internal struct in arrow-rs
+    /// and is different than [`bytes::Bytes`].
     ///
-    /// ```
-    /// # use arrow_buffer::Buffer;
-    /// let bytes = bytes::Bytes::from_static(b"foo");
-    /// let buffer = Buffer::from_bytes(bytes.into());
-    /// ```
-    #[inline]
+    /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
+    #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
     pub fn from_bytes(bytes: Bytes) -> Self {
-        let length = bytes.len();
-        let ptr = bytes.as_ptr();
-        Buffer {
-            data: Arc::new(bytes),
-            ptr,
-            length,
-        }
+        Self::from(bytes)
     }
 
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
@@ -107,8 +133,11 @@ impl Buffer {
         buffer.into()
     }
 
-    /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
-    /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
+    /// Creates a buffer from an existing memory region.
+    ///
+    /// Ownership of the memory is tracked via reference counting
+    /// and the memory will be freed using the `drop` method of
+    /// [crate::alloc::Allocation] when the reference count reaches zero.
     ///
     /// # Arguments
     ///
@@ -155,7 +184,7 @@ impl Buffer {
         self.data.capacity()
     }
 
-    /// Tried to shrink the capacity of the buffer as much as possible, freeing unused memory.
+    /// Tries to shrink the capacity of the buffer as much as possible, freeing unused memory.
     ///
     /// If the buffer is shared, this is a no-op.
     ///
@@ -190,7 +219,7 @@ impl Buffer {
         }
     }
 
-    /// Returns whether the buffer is empty.
+    /// Returns true if the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
@@ -206,7 +235,9 @@ impl Buffer {
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the
+    /// same memory region to be shared between buffers.
     ///
     /// # Panics
     ///
@@ -240,7 +271,10 @@ impl Buffer {
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
     /// with `length` bytes.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the same
+    /// memory region to be shared between buffers.
+    ///
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
@@ -328,10 +362,16 @@ impl Buffer {
             })
     }
 
-    /// Returns `Vec` for mutating the buffer
+    /// Converts self into a `Vec`, if possible.
     ///
-    /// Returns `Err(self)` if this buffer does not have the same [`Layout`] as
-    /// the destination Vec or contains a non-zero offset
+    /// This can be used to reuse / mutate the underlying data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(self)` if
+    /// 1. this buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. contains a non-zero offset
+    /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
@@ -414,7 +454,29 @@ impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
     }
 }
 
-/// Creating a `Buffer` instance by storing the boolean values into the buffer
+/// Convert from internal `Bytes` (not [`bytes::Bytes`]) to `Buffer`
+impl From<Bytes> for Buffer {
+    #[inline]
+    fn from(bytes: Bytes) -> Self {
+        let length = bytes.len();
+        let ptr = bytes.as_ptr();
+        Self {
+            data: Arc::new(bytes),
+            ptr,
+            length,
+        }
+    }
+}
+
+/// Convert from [`bytes::Bytes`], not internal `Bytes` to `Buffer`
+impl From<bytes::Bytes> for Buffer {
+    fn from(bytes: bytes::Bytes) -> Self {
+        let bytes: Bytes = bytes.into();
+        Self::from(bytes)
+    }
+}
+
+/// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -447,7 +509,9 @@ impl<T: ArrowNativeType> From<BufferBuilder<T>> for Buffer {
 
 impl Buffer {
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length.
+    ///
     /// Prefer this to `collect` whenever possible, as it is ~60% faster.
+    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::buffer::Buffer;

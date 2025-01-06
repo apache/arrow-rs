@@ -28,14 +28,18 @@ use crate::buffer::dangling_ptr;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
-/// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
-/// global allocator nor u8 alignment.
+/// Note that this structure is an internal implementation detail of the
+/// arrow-rs crate. While it has the same name and similar API as
+/// [`bytes::Bytes`] it is not limited to rust's global allocator nor u8
+/// alignment. It is possible to create a `Bytes` from `bytes::Bytes` using the
+/// `From` implementation.
 ///
 /// In the most common case, this buffer is allocated using [`alloc`](std::alloc::alloc)
 /// with an alignment of [`ALIGNMENT`](crate::alloc::ALIGNMENT)
 ///
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
+///
 pub struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
