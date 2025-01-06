@@ -198,7 +198,7 @@ struct PutRequest<'a> {
     idempotent: bool,
 }
 
-impl<'a> PutRequest<'a> {
+impl PutRequest<'_> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
