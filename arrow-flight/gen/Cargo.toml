@@ -20,7 +20,7 @@ name = "gen"
 description = "Code generation for arrow-flight"
 version = "0.1.0"
 edition = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.71.1"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
