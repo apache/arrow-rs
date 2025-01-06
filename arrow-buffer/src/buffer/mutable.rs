@@ -328,7 +328,7 @@ impl MutableBuffer {
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
-        Buffer::from_bytes(bytes)
+        Buffer::from(bytes)
     }
 
     /// View this buffer as a mutable slice of a specific type.
