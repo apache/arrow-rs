@@ -435,7 +435,7 @@ pub(crate) fn decode_page(
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
-                num_values: dict_header.num_values as u32,
+                num_values: dict_header.num_values.try_into()?,
                 encoding: Encoding::try_from(dict_header.encoding)?,
                 is_sorted,
             }
@@ -446,7 +446,7 @@ pub(crate) fn decode_page(
                 .ok_or_else(|| ParquetError::General("Missing V1 data page header".to_string()))?;
             Page::DataPage {
                 buf: buffer,
-                num_values: header.num_values as u32,
+                num_values: header.num_values.try_into()?,
                 encoding: Encoding::try_from(header.encoding)?,
                 def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
                 rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
@@ -460,12 +460,12 @@ pub(crate) fn decode_page(
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
-                num_values: header.num_values as u32,
+                num_values: header.num_values.try_into()?,
                 encoding: Encoding::try_from(header.encoding)?,
-                num_nulls: header.num_nulls as u32,
-                num_rows: header.num_rows as u32,
-                def_levels_byte_len: header.definition_levels_byte_length as u32,
-                rep_levels_byte_len: header.repetition_levels_byte_length as u32,
+                num_nulls: header.num_nulls.try_into()?,
+                num_rows: header.num_rows.try_into()?,
+                def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
+                rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
                 statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
@@ -578,6 +578,27 @@ impl<R: ChunkReader> Iterator for SerializedPageReader<R> {
     }
 }
 
+fn verify_page_header_len(header_len: usize, remaining_bytes: usize) -> Result<()> {
+    if header_len > remaining_bytes {
+        return Err(eof_err!("Invalid page header"));
+    }
+    Ok(())
+}
+
+fn verify_page_size(
+    compressed_size: i32,
+    uncompressed_size: i32,
+    remaining_bytes: usize,
+) -> Result<()> {
+    // The page's compressed size should not exceed the remaining bytes that are
+    // available to read. The page's uncompressed size is the expected size
+    // after decompression, which can never be negative.
+    if compressed_size < 0 || compressed_size as usize > remaining_bytes || uncompressed_size < 0 {
+        return Err(eof_err!("Invalid page header"));
+    }
+    Ok(())
+}
+
 impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         loop {
@@ -596,10 +617,16 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *header
                     } else {
                         let (header_len, header) = read_page_header_len(&mut read)?;
+                        verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len;
                         *remaining -= header_len;
                         header
                     };
+                    verify_page_size(
+                        header.compressed_page_size,
+                        header.uncompressed_page_size,
+                        *remaining,
+                    )?;
                     let data_len = header.compressed_page_size as usize;
                     *offset += data_len;
                     *remaining -= data_len;
@@ -683,6 +710,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     } else {
                         let mut read = self.reader.get_read(*offset as u64)?;
                         let (header_len, header) = read_page_header_len(&mut read)?;
+                        verify_page_header_len(header_len, *remaining_bytes)?;
                         *offset += header_len;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(page_meta) = (&header).try_into() {
@@ -733,12 +761,23 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 next_page_header,
             } => {
                 if let Some(buffered_header) = next_page_header.take() {
+                    verify_page_size(
+                        buffered_header.compressed_page_size,
+                        buffered_header.uncompressed_page_size,
+                        *remaining_bytes,
+                    )?;
                     // The next page header has already been peeked, so just advance the offset
                     *offset += buffered_header.compressed_page_size as usize;
                     *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
                     let mut read = self.reader.get_read(*offset as u64)?;
                     let (header_len, header) = read_page_header_len(&mut read)?;
+                    verify_page_header_len(header_len, *remaining_bytes)?;
+                    verify_page_size(
+                        header.compressed_page_size,
+                        header.uncompressed_page_size,
+                        *remaining_bytes,
+                    )?;
                     let data_page_size = header.compressed_page_size as usize;
                     *offset += header_len + data_page_size;
                     *remaining_bytes -= header_len + data_page_size;
