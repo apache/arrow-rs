@@ -106,7 +106,7 @@ fn test_arrow_rs_gh_6229_dict_header() {
     let err = read_file("ARROW-RS-GH-6229-DICTHEADER.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: EOF: eof decoding byte array"
+        "External: Parquet argument error: Parquet error: Integer overflow: out of range integral type conversion attempted"
     );
 }
 

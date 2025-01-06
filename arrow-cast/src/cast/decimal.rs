@@ -111,9 +111,13 @@ where
         O::Native::from_decimal(adjusted)
     };
 
-    Ok(match cast_options.safe {
-        true => array.unary_opt(f),
-        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
@@ -137,15 +141,20 @@ where
 
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
-    Ok(match cast_options.safe {
-        true => array.unary_opt(f),
-        false => array.try_unary(|x| f(x).ok_or_else(|| error(x)))?,
+    Ok(if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x))
+                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+        })?
     })
 }
 
 // Only support one type of decimal cast operations
 pub(crate) fn cast_decimal_to_decimal_same_type<T>(
     array: &PrimitiveArray<T>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -155,20 +164,11 @@ where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let array: PrimitiveArray<T> = match input_scale.cmp(&output_scale) {
-        Ordering::Equal => {
-            // the scale doesn't change, the native value don't need to be changed
+    let array: PrimitiveArray<T> =
+        if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
-        }
-        Ordering::Greater => convert_to_smaller_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )?,
-        Ordering::Less => {
-            // input_scale < output_scale
+        } else if input_scale < output_scale {
+            // the scale doesn't change, but precision may change and cause overflow
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
@@ -176,8 +176,15 @@ where
                 output_scale,
                 cast_options,
             )?
-        }
-    };
+        } else {
+            convert_to_smaller_scale_decimal::<T, T>(
+                array,
+                input_scale,
+                output_precision,
+                output_scale,
+                cast_options,
+            )?
+        };
 
     Ok(Arc::new(array.with_precision_and_scale(
         output_precision,
@@ -323,8 +330,8 @@ where
     })
 }
 
-pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
-    from: &GenericStringArray<Offset>,
+pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
+    from: &'a S,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
@@ -332,6 +339,7 @@ pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
 where
     T: DecimalType,
     T::Native: DecimalCast + ArrowNativeTypeOp,
+    &'a S: StringArrayType<'a>,
 {
     if cast_options.safe {
         let iter = from.iter().map(|v| {
@@ -375,6 +383,37 @@ where
     }
 }
 
+pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
+    from: &GenericStringArray<Offset>,
+    precision: u8,
+    scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    generic_string_to_decimal_cast::<T, GenericStringArray<Offset>>(
+        from,
+        precision,
+        scale,
+        cast_options,
+    )
+}
+
+pub(crate) fn string_view_to_decimal_cast<T>(
+    from: &StringViewArray,
+    precision: u8,
+    scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: DecimalType,
+    T::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    generic_string_to_decimal_cast::<T, StringViewArray>(from, precision, scale, cast_options)
+}
+
 /// Cast Utf8 to decimal
 pub(crate) fn cast_string_to_decimal<T, Offset: OffsetSizeTrait>(
     from: &dyn Array,
@@ -399,14 +438,30 @@ where
         )));
     }
 
-    Ok(Arc::new(string_to_decimal_cast::<T, Offset>(
-        from.as_any()
-            .downcast_ref::<GenericStringArray<Offset>>()
-            .unwrap(),
-        precision,
-        scale,
-        cast_options,
-    )?))
+    let result = match from.data_type() {
+        DataType::Utf8View => string_view_to_decimal_cast::<T>(
+            from.as_any().downcast_ref::<StringViewArray>().unwrap(),
+            precision,
+            scale,
+            cast_options,
+        )?,
+        DataType::Utf8 | DataType::LargeUtf8 => string_to_decimal_cast::<T, Offset>(
+            from.as_any()
+                .downcast_ref::<GenericStringArray<Offset>>()
+                .unwrap(),
+            precision,
+            scale,
+            cast_options,
+        )?,
+        other => {
+            return Err(ArrowError::ComputeError(format!(
+                "Cannot cast {:?} to decimal",
+                other
+            )))
+        }
+    };
+
+    Ok(Arc::new(result))
 }
 
 pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(

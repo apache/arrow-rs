@@ -22,7 +22,6 @@ use crate::ObjectMeta;
 use chrono::{DateTime, TimeZone, Utc};
 use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use hyper::HeaderMap;
-use snafu::{OptionExt, ResultExt, Snafu};
 
 #[derive(Debug, Copy, Clone)]
 /// Configuration for header extraction
@@ -44,27 +43,27 @@ pub(crate) struct HeaderConfig {
     pub user_defined_metadata_prefix: Option<&'static str>,
 }
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[snafu(display("ETag Header missing from response"))]
+    #[error("ETag Header missing from response")]
     MissingEtag,
 
-    #[snafu(display("Received header containing non-ASCII data"))]
+    #[error("Received header containing non-ASCII data")]
     BadHeader { source: reqwest::header::ToStrError },
 
-    #[snafu(display("Last-Modified Header missing from response"))]
+    #[error("Last-Modified Header missing from response")]
     MissingLastModified,
 
-    #[snafu(display("Content-Length Header missing from response"))]
+    #[error("Content-Length Header missing from response")]
     MissingContentLength,
 
-    #[snafu(display("Invalid last modified '{}': {}", last_modified, source))]
+    #[error("Invalid last modified '{}': {}", last_modified, source)]
     InvalidLastModified {
         last_modified: String,
         source: chrono::ParseError,
     },
 
-    #[snafu(display("Invalid content length '{}': {}", content_length, source))]
+    #[error("Invalid content length '{}': {}", content_length, source)]
     InvalidContentLength {
         content_length: String,
         source: std::num::ParseIntError,
@@ -86,7 +85,11 @@ pub(crate) fn get_put_result(
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
-        Some(x) => Some(x.to_str().context(BadHeaderSnafu)?.to_string()),
+        Some(x) => Some(
+            x.to_str()
+                .map_err(|source| Error::BadHeader { source })?
+                .to_string(),
+        ),
         None => None,
     })
 }
@@ -94,7 +97,10 @@ pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<S
 /// Extracts an etag from the provided [`HeaderMap`]
 pub(crate) fn get_etag(headers: &HeaderMap) -> Result<String, Error> {
     let e_tag = headers.get(ETAG).ok_or(Error::MissingEtag)?;
-    Ok(e_tag.to_str().context(BadHeaderSnafu)?.to_string())
+    Ok(e_tag
+        .to_str()
+        .map_err(|source| Error::BadHeader { source })?
+        .to_string())
 }
 
 /// Extracts [`ObjectMeta`] from the provided [`HeaderMap`]
@@ -105,9 +111,15 @@ pub(crate) fn header_meta(
 ) -> Result<ObjectMeta, Error> {
     let last_modified = match headers.get(LAST_MODIFIED) {
         Some(last_modified) => {
-            let last_modified = last_modified.to_str().context(BadHeaderSnafu)?;
+            let last_modified = last_modified
+                .to_str()
+                .map_err(|source| Error::BadHeader { source })?;
+
             DateTime::parse_from_rfc2822(last_modified)
-                .context(InvalidLastModifiedSnafu { last_modified })?
+                .map_err(|source| Error::InvalidLastModified {
+                    last_modified: last_modified.into(),
+                    source,
+                })?
                 .with_timezone(&Utc)
         }
         None if cfg.last_modified_required => return Err(Error::MissingLastModified),
@@ -122,15 +134,25 @@ pub(crate) fn header_meta(
 
     let content_length = headers
         .get(CONTENT_LENGTH)
-        .context(MissingContentLengthSnafu)?;
+        .ok_or(Error::MissingContentLength)?;
 
-    let content_length = content_length.to_str().context(BadHeaderSnafu)?;
+    let content_length = content_length
+        .to_str()
+        .map_err(|source| Error::BadHeader { source })?;
+
     let size = content_length
         .parse()
-        .context(InvalidContentLengthSnafu { content_length })?;
+        .map_err(|source| Error::InvalidContentLength {
+            content_length: content_length.into(),
+            source,
+        })?;
 
     let version = match cfg.version_header.and_then(|h| headers.get(h)) {
-        Some(v) => Some(v.to_str().context(BadHeaderSnafu)?.to_string()),
+        Some(v) => Some(
+            v.to_str()
+                .map_err(|source| Error::BadHeader { source })?
+                .to_string(),
+        ),
         None => None,
     };
 

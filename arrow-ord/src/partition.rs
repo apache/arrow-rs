@@ -24,7 +24,6 @@ use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 
 use crate::cmp::distinct;
-use crate::sort::SortColumn;
 
 /// A computed set of partitions, see [`partition`]
 #[derive(Debug, Clone)]
@@ -158,21 +157,6 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     let v1 = v.slice(0, slice_len);
     let v2 = v.slice(1, slice_len);
     Ok(distinct(&v1, &v2)?.values().clone())
-}
-
-/// Use [`partition`] instead. Given a list of already sorted columns, find
-/// partition ranges that would partition lexicographically equal values across
-/// columns.
-///
-/// The returned vec would be of size k where k is cardinality of the sorted values; Consecutive
-/// values will be connected: (a, b) and (b, c), where start = 0 and end = n for the first and last
-/// range.
-#[deprecated(note = "Use partition")]
-pub fn lexicographical_partition_ranges(
-    columns: &[SortColumn],
-) -> Result<impl Iterator<Item = Range<usize>> + '_, ArrowError> {
-    let cols: Vec<_> = columns.iter().map(|x| x.values.clone()).collect();
-    Ok(partition(&cols)?.ranges().into_iter())
 }
 
 #[cfg(test)]

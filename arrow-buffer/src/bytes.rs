@@ -24,17 +24,22 @@ use std::ptr::NonNull;
 use std::{fmt::Debug, fmt::Formatter};
 
 use crate::alloc::Deallocation;
+use crate::buffer::dangling_ptr;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
-/// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
-/// global allocator nor u8 alignment.
+/// Note that this structure is an internal implementation detail of the
+/// arrow-rs crate. While it has the same name and similar API as
+/// [`bytes::Bytes`] it is not limited to rust's global allocator nor u8
+/// alignment. It is possible to create a `Bytes` from `bytes::Bytes` using the
+/// `From` implementation.
 ///
 /// In the most common case, this buffer is allocated using [`alloc`](std::alloc::alloc)
 /// with an alignment of [`ALIGNMENT`](crate::alloc::ALIGNMENT)
 ///
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
+///
 pub struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
@@ -94,6 +99,48 @@ impl Bytes {
             // its underlying capacity might be larger
             Deallocation::Custom(_, size) => size,
         }
+    }
+
+    /// Try to reallocate the underlying memory region to a new size (smaller or larger).
+    ///
+    /// Only works for bytes allocated with the standard allocator.
+    /// Returns `Err` if the memory was allocated with a custom allocator,
+    /// or the call to `realloc` failed, for whatever reason.
+    /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
+    pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+        if let Deallocation::Standard(old_layout) = self.deallocation {
+            if old_layout.size() == new_len {
+                return Ok(()); // Nothing to do
+            }
+
+            if let Ok(new_layout) = std::alloc::Layout::from_size_align(new_len, old_layout.align())
+            {
+                let old_ptr = self.ptr.as_ptr();
+
+                let new_ptr = match new_layout.size() {
+                    0 => {
+                        // SAFETY: Verified that old_layout.size != new_len (0)
+                        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), old_layout) };
+                        Some(dangling_ptr())
+                    }
+                    // SAFETY: the call to `realloc` is safe if all the following hold (from https://doc.rust-lang.org/stable/std/alloc/trait.GlobalAlloc.html#method.realloc):
+                    // * `old_ptr` must be currently allocated via this allocator (guaranteed by the invariant/contract of `Bytes`)
+                    // * `old_layout` must be the same layout that was used to allocate that block of memory (same)
+                    // * `new_len` must be greater than zero
+                    // * `new_len`, when rounded up to the nearest multiple of `layout.align()`, must not overflow `isize` (guaranteed by the success of `Layout::from_size_align`)
+                    _ => NonNull::new(unsafe { std::alloc::realloc(old_ptr, old_layout, new_len) }),
+                };
+
+                if let Some(ptr) = new_ptr {
+                    self.ptr = ptr;
+                    self.len = new_len;
+                    self.deallocation = Deallocation::Standard(new_layout);
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(())
     }
 
     #[inline]

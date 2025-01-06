@@ -302,6 +302,7 @@ pub enum Encoding {
     ///
     /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
     #[deprecated(
+        since = "51.0.0",
         note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
     )]
     BIT_PACKED,
@@ -425,14 +426,19 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), Pa
 
 fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
     if level.is_some() {
-        return Err(ParquetError::General("level is not support".to_string()));
+        return Err(ParquetError::General(
+            "compression level is not supported".to_string(),
+        ));
     }
 
     Ok(())
 }
 
 fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
-    level.ok_or(ParquetError::General(format!("{} require level", codec)))
+    level.ok_or(ParquetError::General(format!(
+        "{} requires a compression level",
+        codec
+    )))
 }
 
 impl FromStr for Compression {

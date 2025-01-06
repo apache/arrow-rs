@@ -265,7 +265,7 @@ fn compare_struct(
     Ok(f)
 }
 
-#[deprecated(note = "Use make_comparator")]
+#[deprecated(since = "52.0.0", note = "Use make_comparator")]
 #[doc(hidden)]
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
     make_comparator(left, right, SortOptions::default())
@@ -394,7 +394,7 @@ pub fn make_comparator(
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
     use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
@@ -849,7 +849,7 @@ pub mod tests {
     fn test_struct() {
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
-            Field::new_list("b", Field::new("item", DataType::Int32, true), true),
+            Field::new_list("b", Field::new_list_field(DataType::Int32, true), true),
         ]);
 
         let a = Int32Array::from(vec![Some(1), Some(2), None, None]);

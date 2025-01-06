@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// To accommodate this we special case two-variant unions where one of the
 /// variants is the null type, and use this to derive arrow's notion of nullability
 #[derive(Debug, Copy, Clone)]
-enum Nulls {
+pub enum Nullability {
     /// The nulls are encoded as the first union variant
     NullFirst,
     /// The nulls are encoded as the second union variant
@@ -39,7 +39,7 @@ enum Nulls {
 /// An Avro datatype mapped to the arrow data model
 #[derive(Debug, Clone)]
 pub struct AvroDataType {
-    nulls: Option<Nulls>,
+    nullability: Option<Nullability>,
     metadata: HashMap<String, String>,
     codec: Codec,
 }
@@ -48,7 +48,15 @@ impl AvroDataType {
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
         let d = self.codec.data_type();
-        Field::new(name, d, self.nulls.is_some()).with_metadata(self.metadata.clone())
+        Field::new(name, d, self.nullability.is_some()).with_metadata(self.metadata.clone())
+    }
+
+    pub fn codec(&self) -> &Codec {
+        &self.codec
+    }
+
+    pub fn nullability(&self) -> Option<Nullability> {
+        self.nullability
     }
 }
 
@@ -65,9 +73,13 @@ impl AvroField {
         self.data_type.field_with_name(&self.name)
     }
 
-    /// Returns the [`Codec`]
-    pub fn codec(&self) -> &Codec {
-        &self.data_type.codec
+    /// Returns the [`AvroDataType`]
+    pub fn data_type(&self) -> &AvroDataType {
+        &self.data_type
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -114,7 +126,7 @@ pub enum Codec {
     Fixed(i32),
     List(Arc<AvroDataType>),
     Struct(Arc<[AvroField]>),
-    Duration,
+    Interval,
 }
 
 impl Codec {
@@ -137,9 +149,11 @@ impl Codec {
             Self::TimestampMicros(is_utc) => {
                 DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
             }
-            Self::Duration => DataType::Interval(IntervalUnit::MonthDayNano),
+            Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
-            Self::List(f) => DataType::List(Arc::new(f.field_with_name("item"))),
+            Self::List(f) => {
+                DataType::List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
+            }
             Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
         }
     }
@@ -198,7 +212,7 @@ fn make_data_type<'a>(
 ) -> Result<AvroDataType, ArrowError> {
     match schema {
         Schema::TypeName(TypeName::Primitive(p)) => Ok(AvroDataType {
-            nulls: None,
+            nullability: None,
             metadata: Default::default(),
             codec: (*p).into(),
         }),
@@ -211,12 +225,12 @@ fn make_data_type<'a>(
             match (f.len() == 2, null) {
                 (true, Some(0)) => {
                     let mut field = make_data_type(&f[1], namespace, resolver)?;
-                    field.nulls = Some(Nulls::NullFirst);
+                    field.nullability = Some(Nullability::NullFirst);
                     Ok(field)
                 }
                 (true, Some(1)) => {
                     let mut field = make_data_type(&f[0], namespace, resolver)?;
-                    field.nulls = Some(Nulls::NullSecond);
+                    field.nullability = Some(Nullability::NullSecond);
                     Ok(field)
                 }
                 _ => Err(ArrowError::NotYetImplemented(format!(
@@ -239,7 +253,7 @@ fn make_data_type<'a>(
                     .collect::<Result<_, ArrowError>>()?;
 
                 let field = AvroDataType {
-                    nulls: None,
+                    nullability: None,
                     codec: Codec::Struct(fields),
                     metadata: r.attributes.field_metadata(),
                 };
@@ -249,7 +263,7 @@ fn make_data_type<'a>(
             ComplexType::Array(a) => {
                 let mut field = make_data_type(a.items.as_ref(), namespace, resolver)?;
                 Ok(AvroDataType {
-                    nulls: None,
+                    nullability: None,
                     metadata: a.attributes.field_metadata(),
                     codec: Codec::List(Arc::new(field)),
                 })
@@ -260,7 +274,7 @@ fn make_data_type<'a>(
                 })?;
 
                 let field = AvroDataType {
-                    nulls: None,
+                    nullability: None,
                     metadata: f.attributes.field_metadata(),
                     codec: Codec::Fixed(size),
                 };
@@ -296,7 +310,7 @@ fn make_data_type<'a>(
                 (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                     *c = Codec::TimestampMicros(false)
                 }
-                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Duration,
+                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata map
                     field.metadata.insert("logicalType".into(), logical.into());

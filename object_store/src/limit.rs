@@ -201,6 +201,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
 
 fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
     let payload = match r.payload {
+        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         v @ GetResultPayload::File(_, _) => v,
         GetResultPayload::Stream(s) => {
             GetResultPayload::Stream(PermitWrapper::new(s, permit).boxed())

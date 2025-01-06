@@ -19,7 +19,7 @@
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::reader::vlq::VLQDecoder;
-use crate::schema::Schema;
+use crate::schema::{Schema, SCHEMA_METADATA_KEY};
 use arrow_schema::ArrowError;
 
 #[derive(Debug)]
@@ -88,6 +88,17 @@ impl Header {
                 String::from_utf8_lossy(v)
             ))),
         }
+    }
+
+    /// Returns the [`Schema`] if any
+    pub fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
+        self.get(SCHEMA_METADATA_KEY)
+            .map(|x| {
+                serde_json::from_slice(x).map_err(|e| {
+                    ArrowError::ParseError(format!("Failed to parse Avro schema JSON: {e}"))
+                })
+            })
+            .transpose()
     }
 }
 
