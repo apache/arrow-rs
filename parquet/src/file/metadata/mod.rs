@@ -662,38 +662,30 @@ impl RowGroupMetaData {
                     let column_decryptor = decryptor
                         .unwrap()
                         .get_column_decryptor(column_name.as_bytes());
+                    let file_decryptor = column_decryptor.footer_decryptor().unwrap();
+
                     let aad_file_unique = decryptor.unwrap().aad_file_unique();
                     let aad_prefix = decryptor
                         .unwrap()
                         .decryption_properties()
                         .aad_prefix()
                         .unwrap();
-                    let aad = [aad_prefix.clone(), aad_file_unique.clone()].concat();
-                    // let s = aad.as_slice();
+                    let aad: Vec<u8> = [aad_prefix.clone(), aad_file_unique.clone()].concat();
                     let column_aad = create_page_aad(
                         aad.as_slice(),
                         ModuleType::ColumnMetaData,
                         rg.ordinal.unwrap() as usize,
-                        i as usize,
+                        i,
                         None,
                     )?;
 
                     let mut buf = c.encrypted_column_metadata.unwrap();
-                    // let mut prot = TCompactSliceInputProtocol::new(buf.as_slice().clone());
-                    // let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-                    // decrypted_fmd_buf =
-                    //     footer_decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
-                    let mut c2 = column_decryptor
-                        .footer_decryptor()
-                        .unwrap()
-                        .decrypt(buf.as_ref(), column_aad.as_ref())?;
-                    let mut prot = TCompactSliceInputProtocol::new(c2.as_slice());
-                    let c3 = ColumnChunk::read_from_in_protocol(&mut prot)?;
-                    // let md = ColumnMetaData::from_thrift(c2, d.clone())?;
-                    // c2.meta_data = Some(md);
-                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c3)?;
-                    // } else if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(x)) = c.crypto_metadata {
-                    //     todo!()
+                    let mut decrypted_cc_buf =
+                        file_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
+
+                    let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
+                    let c = ColumnChunk::read_from_in_protocol(&mut prot)?;
+                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                 }
             } else {
                 cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
