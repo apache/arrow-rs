@@ -318,18 +318,12 @@ impl ByteViewArrayDecoderPlain {
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
         // avoid creating a new buffer if the last buffer is the same as the current buffer
         // This is especially useful when row-level filtering is applied, where we call lots of small `read` over the same buffer.
-        let need_to_create_new_buffer = {
-            if let Some(last_buffer) = output.buffers.last() {
-                !last_buffer.ptr_eq(&self.buf)
+        let block_id = {
+            if output.buffers.last().is_some_and(|x| x.ptr_eq(&self.buf)) {
+                output.buffers.len() as u32 - 1
             } else {
-                true
+                output.append_block(self.buf.clone())
             }
-        };
-
-        let block_id = if need_to_create_new_buffer {
-            output.append_block(self.buf.clone())
-        } else {
-            output.buffers.len() as u32 - 1
         };
 
         let to_read = len.min(self.max_remaining_values);
