@@ -463,14 +463,11 @@ pub(crate) fn decode_page(
         // let file_decryptor = if decryptor.has_footer_key() {
         //     decryptor.footer_decryptor()
         // } else {
+        //     todo
+        //     // decryptor.get_column_decryptor(column_name)
         //     // CryptoMetaData::from_thrift(&crypto_context.meta_data)
         //     //     .and_then(|meta| meta.get_page_decryptor(crypto_context.page_ordinal))
         //     //     .ok_or_else(|| general_err!("Missing footer decryptor"))?
-        //     // page_header.data_page_header
-        //     // decryptor.get_column_decryptor(crypto_context.column_ordinal)
-        //     // decryptor.get_column_decryptor(crypto_context.column_ordinal)
-        //     return Err(general_err!("Missing footer decryptor"));
-        //     // TODO: decryptor should have keys for columns
         // };
         let file_decryptor = decryptor.footer_decryptor();
         if file_decryptor.is_none() {
