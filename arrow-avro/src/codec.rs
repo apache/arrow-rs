@@ -234,8 +234,8 @@ impl Codec {
             Self::Enum(_symbols) => {
                 // Produce a Dictionary type with index = Int32, value = Utf8
                 Dictionary(
-                    Box::new(DataType::Int32),
-                    Box::new(DataType::Utf8),
+                    Box::new(Int32),
+                    Box::new(Utf8),
                 )
             }
             Self::Map(values) => {
@@ -889,7 +889,7 @@ mod tests {
         );
         let f = dt.field_with_name("bin_col");
         assert_eq!(f.name(), "bin_col");
-        assert_eq!(f.data_type(), &DataType::Binary);
+        assert_eq!(f.data_type(), &Binary);
         assert!(!f.is_nullable());
         assert_eq!(f.metadata().get("something"), Some(&"else".to_string()));
     }
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(actual_str, expected_str, "Codec debug output mismatch");
         let arrow_field = avro_field.field();
         assert_eq!(arrow_field.name(), "long_col");
-        assert_eq!(arrow_field.data_type(), &DataType::Int64);
+        assert_eq!(arrow_field.data_type(), &Int64);
         assert!(!arrow_field.is_nullable());
     }
 
@@ -1026,9 +1026,9 @@ mod tests {
             Struct(fields) => {
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].name(), "a");
-                assert_eq!(fields[0].data_type(), &DataType::Boolean);
+                assert_eq!(fields[0].data_type(), &Boolean);
                 assert_eq!(fields[1].name(), "b");
-                assert_eq!(fields[1].data_type(), &DataType::Float64);
+                assert_eq!(fields[1].data_type(), &Float64);
             }
             _ => panic!("Expected Struct data type"),
         }

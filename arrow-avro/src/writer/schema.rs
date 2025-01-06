@@ -51,7 +51,7 @@ mod tests {
 
         // Convert the batch -> Avro `Schema`
         let avro_schema = to_avro_json_schema(&batch, "MyTestRecord")
-            .expect("Failed to convert RecordBatch to Avro JSON schema");;
+            .expect("Failed to convert RecordBatch to Avro JSON schema");
         let actual_json: Value = serde_json::from_str(&avro_schema)
             .expect("Invalid JSON returned by to_avro_json_schema");
 
