@@ -123,23 +123,6 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
         run: cargo install cargo-msrv
-      - name: Downgrade arrow dependencies
-        run: cargo update -p ahash --precise 0.8.7
-      - name: Check arrow
-        working-directory: arrow
-        run: |
-          # run `cd arrow; cargo msrv verify` to see problematic dependencies
-          cargo msrv verify --output-format=json
-      - name: Check parquet
-        working-directory: parquet
-        run: |
-          # run `cd parquet; cargo msrv verify` to see problematic dependencies
-          cargo msrv verify --output-format=json
-      - name: Check arrow-flight
-        working-directory: arrow-flight
-        run: |
-          # run `cd arrow-flight; cargo msrv verify` to see problematic dependencies
-          cargo msrv verify --output-format=json
       - name: Downgrade object_store dependencies
         working-directory: object_store
         # Necessary because tokio 1.30.0 updates MSRV to 1.63
@@ -147,8 +130,11 @@ jobs:
         run: |
           cargo update -p tokio --precise 1.29.1
           cargo update -p url --precise 2.5.0
-      - name: Check object_store
-        working-directory: object_store
+      - name: Check all packages
         run: |
-          # run `cd object_store; cargo msrv verify` to see problematic dependencies
-          cargo msrv verify --output-format=json
+          # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies
+          find . -mindepth 2 -name Cargo.toml | while read -r dir
+          do
+            echo "Checking package '$dir'"
+            cargo msrv verify --manifest-path "$dir" --output-format=json || exit 1
+          done
