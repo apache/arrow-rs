@@ -105,21 +105,6 @@ impl Buffer {
         Self::from(bytes)
     }
 
-    /// Auxiliary method to create a new Buffer
-    ///
-    /// This is convenient for converting a [`bytes::Bytes`] to a [`Buffer`] without copying.
-    ///
-    /// ```
-    /// # use arrow_buffer::Buffer;
-    /// let bytes = bytes::Bytes::from_static(b"foo");
-    /// let buffer = Buffer::from_external_bytes(bytes);
-    /// ```
-    #[inline]
-    pub fn from_external_bytes(bytes: bytes::Bytes) -> Self {
-        let inner_bytes = Bytes::from(bytes);
-        Self::from_bytes(inner_bytes)
-    }
-
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
     ///
     /// self.ptr and self.data can be different after slicing or advancing the buffer.

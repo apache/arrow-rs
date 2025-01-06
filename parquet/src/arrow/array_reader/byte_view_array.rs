@@ -308,7 +308,7 @@ impl ByteViewArrayDecoderPlain {
         validate_utf8: bool,
     ) -> Self {
         Self {
-            buf: Buffer::from_external_bytes(buf),
+            buf: Buffer::from(buf),
             offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
             validate_utf8,
