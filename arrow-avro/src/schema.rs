@@ -130,14 +130,14 @@ pub struct Record<'a> {
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
-    pub fields: Vec<Field<'a>>,
+    pub fields: Vec<RecordField<'a>>,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
 
 /// A field within a [`Record`]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Field<'a> {
+pub struct RecordField<'a> {
     #[serde(borrow)]
     pub name: &'a str,
     #[serde(borrow, default)]
@@ -309,7 +309,7 @@ mod tests {
                 namespace: None,
                 doc: None,
                 aliases: vec![],
-                fields: vec![Field {
+                fields: vec![RecordField {
                     name: "value",
                     doc: None,
                     r#type: Schema::Union(vec![
@@ -343,13 +343,13 @@ mod tests {
                 doc: None,
                 aliases: vec!["LinkedLongs"],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "value",
                         doc: None,
                         r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "next",
                         doc: None,
                         r#type: Schema::Union(vec![
@@ -402,7 +402,7 @@ mod tests {
                 doc: None,
                 aliases: vec![],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "id",
                         doc: None,
                         r#type: Schema::Union(vec![
@@ -411,7 +411,7 @@ mod tests {
                         ]),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "timestamp_col",
                         doc: None,
                         r#type: Schema::Union(vec![
@@ -463,7 +463,7 @@ mod tests {
                 doc: None,
                 aliases: vec![],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "clientHash",
                         doc: None,
                         r#type: Schema::Complex(ComplexType::Fixed(Fixed {
@@ -475,7 +475,7 @@ mod tests {
                         })),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "clientProtocol",
                         doc: None,
                         r#type: Schema::Union(vec![
@@ -484,13 +484,13 @@ mod tests {
                         ]),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "serverHash",
                         doc: None,
                         r#type: Schema::TypeName(TypeName::Ref("MD5")),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "meta",
                         doc: None,
                         r#type: Schema::Union(vec![

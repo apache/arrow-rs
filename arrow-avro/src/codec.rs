@@ -16,20 +16,19 @@
 // under the License.
 
 use crate::schema::{
-    Attributes, ComplexType, PrimitiveType, Schema, TypeName, Array, Fixed, Map, Record,
-    Field as AvroFieldDef,
-    Fixed as AvroFixed,
-    Enum as AvroEnum,
-    Map as AvroMap
+    Array, Attributes, ComplexType, Enum, Fixed, Map, PrimitiveType, Record, RecordField, Schema,
+    TypeName,
 };
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder,
-                   SchemaRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-                   DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE};
-use arrow_array::{ArrayRef, Int32Array, StringArray, StructArray, RecordBatch};
+use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
+use arrow_schema::DataType::*;
+use arrow_schema::{
+    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
+    TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use arrow_schema::DataType::*;
 
 /// Avro types are not nullable, with nullability instead encoded as a union
 /// where one of the variants is the null type.
@@ -227,39 +226,28 @@ impl Codec {
             }
             Self::Interval => Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => FixedSizeBinary(*size),
-            Self::List(f) => {
-                List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
-            }
+            Self::List(f) => List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME))),
             Self::Struct(f) => Struct(f.iter().map(|x| x.field()).collect()),
             Self::Enum(_symbols) => {
                 // Produce a Dictionary type with index = Int32, value = Utf8
-                Dictionary(
-                    Box::new(Int32),
-                    Box::new(Utf8),
-                )
+                Dictionary(Box::new(Int32), Box::new(Utf8))
             }
-            Self::Map(values) => {
-                Map(
-                    Arc::new(Field::new(
-                        "entries",
-                        Struct(
-                            Fields::from(vec![
-                                Field::new("key", Utf8, false),
-                                values.field_with_name("value"),
-                            ])
-                        ),
-                        false,
-                    )),
+            Self::Map(values) => Map(
+                Arc::new(Field::new(
+                    "entries",
+                    Struct(Fields::from(vec![
+                        Field::new("key", Utf8, false),
+                        values.field_with_name("value"),
+                    ])),
                     false,
-                )
-            }
+                )),
+                false,
+            ),
             Self::Decimal(precision, scale, size) => match size {
                 Some(s) if *s > 16 && *s <= 32 => {
                     Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
-                },
-                Some(s) if *s <= 16 => {
-                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
-                },
+                }
+                Some(s) if *s <= 16 => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
                 _ => {
                     // Note: Infer based on precision when size is None
                     if *precision <= DECIMAL128_MAX_PRECISION as usize
@@ -389,7 +377,7 @@ impl Codec {
             }
             Codec::Enum(symbols) => {
                 // If there's a namespace in metadata, we will apply it later in maybe_add_namespace.
-                Schema::Complex(ComplexType::Enum(AvroEnum {
+                Schema::Complex(ComplexType::Enum(Enum {
                     name,
                     namespace: None,
                     doc: None,
@@ -409,7 +397,7 @@ impl Codec {
             Codec::Decimal(precision, scale, size) => {
                 // If size is Some(n), produce Avro "fixed", else "bytes".
                 if let Some(n) = size {
-                    Schema::Complex(ComplexType::Fixed(AvroFixed {
+                    Schema::Complex(ComplexType::Fixed(Fixed {
                         name,
                         namespace: None,
                         aliases: vec![],
@@ -597,7 +585,11 @@ fn make_data_type<'a>(
                 }
             }
             ComplexType::Enum(e) => {
-                let symbols = e.symbols.iter().map(|sym| sym.to_string()).collect::<Vec<_>>();
+                let symbols = e
+                    .symbols
+                    .iter()
+                    .map(|sym| sym.to_string())
+                    .collect::<Vec<_>>();
                 let field = AvroDataType {
                     nullability: None,
                     metadata: e.attributes.field_metadata(),
@@ -666,8 +658,12 @@ fn make_data_type<'a>(
                 (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
                 (Some("timestamp-millis"), c @ Codec::Int64) => *c = Codec::TimestampMillis(true),
                 (Some("timestamp-micros"), c @ Codec::Int64) => *c = Codec::TimestampMicros(true),
-                (Some("local-timestamp-millis"), c @ Codec::Int64) => *c = Codec::TimestampMillis(false),
-                (Some("local-timestamp-micros"), c @ Codec::Int64) => *c = Codec::TimestampMicros(false),
+                (Some("local-timestamp-millis"), c @ Codec::Int64) => {
+                    *c = Codec::TimestampMillis(false)
+                }
+                (Some("local-timestamp-micros"), c @ Codec::Int64) => {
+                    *c = Codec::TimestampMicros(false)
+                }
                 (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata
@@ -729,20 +725,13 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
             Codec::TimestampMicros(true)
         }
         FixedSizeBinary(n) => Codec::Fixed(*n),
-        Decimal128(prec, scale) => Codec::Decimal(
-            *prec as usize,
-            Some(*scale as usize),
-            Some(16),
-        ),
-        Decimal256(prec, scale) => Codec::Decimal(
-            *prec as usize,
-            Some(*scale as usize),
-            Some(32),
-        ),
+        Decimal128(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(16)),
+        Decimal256(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(32)),
         Dictionary(index_type, value_type) => {
             if let Utf8 = **value_type {
                 Codec::Enum(vec![])
-            } else {  // Fallback to Utf8
+            } else {
+                // Fallback to Utf8
                 Codec::Utf8
             }
         }
@@ -774,8 +763,8 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
 mod tests {
     use super::*;
     use arrow_schema::{DataType, Field};
-    use std::sync::Arc;
     use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn test_decimal256_tuple_variant_fixed() {
@@ -905,8 +894,12 @@ mod tests {
             },
             AvroField {
                 name: "label".to_string(),
-                data_type: AvroDataType::new(Codec::Utf8, Some(Nullability::NullFirst), Default::default()),
-            }
+                data_type: AvroDataType::new(
+                    Codec::Utf8,
+                    Some(Nullability::NullFirst),
+                    Default::default(),
+                ),
+            },
         ]);
         let top_level = AvroDataType::new(Codec::Struct(fields), None, meta);
         let avro_schema = top_level.to_avro_schema("TopRecord");
@@ -987,13 +980,10 @@ mod tests {
 
     #[test]
     fn test_arrow_field_to_avro_field() {
-        let arrow_field = Field::new(
-            "test_meta",
-            Utf8,
-            true,
-        ).with_metadata(HashMap::from([
-            ("namespace".to_string(), "arrow_meta_ns".to_string())
-        ]));
+        let arrow_field = Field::new("test_meta", Utf8, true).with_metadata(HashMap::from([(
+            "namespace".to_string(),
+            "arrow_meta_ns".to_string(),
+        )]));
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert_eq!(avro_field.name(), "test_meta");
         let actual_str = format!("{:?}", avro_field.data_type().codec());
@@ -1078,11 +1068,7 @@ mod tests {
 
     #[test]
     fn test_local_timestamp_millis() {
-        let arrow_field = Field::new(
-            "local_ts_ms",
-            Timestamp(TimeUnit::Millisecond, None),
-            false,
-        );
+        let arrow_field = Field::new("local_ts_ms", Timestamp(TimeUnit::Millisecond, None), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
         assert!(
@@ -1094,11 +1080,7 @@ mod tests {
 
     #[test]
     fn test_local_timestamp_micros() {
-        let arrow_field = Field::new(
-            "local_ts_us",
-            Timestamp(TimeUnit::Microsecond, None),
-            false,
-        );
+        let arrow_field = Field::new("local_ts_us", Timestamp(TimeUnit::Microsecond, None), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = avro_field.data_type().codec();
         assert!(
