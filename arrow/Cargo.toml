@@ -66,6 +66,8 @@ csv = ["arrow-csv"]
 ipc = ["arrow-ipc"]
 json = ["arrow-json"]
 prettyprint = ["arrow-cast/prettyprint"]
+struct_display_json =["arrow-cast/struct_display_json"]
+
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown

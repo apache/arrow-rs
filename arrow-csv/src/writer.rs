@@ -93,6 +93,9 @@ pub struct Writer<W: Write> {
     beginning: bool,
     /// The value to represent null entries, defaults to [`DEFAULT_NULL_VALUE`]
     null_value: Option<String>,
+
+    /// Show nested types to csv
+    show_nested: bool,
 }
 
 impl<W: Write> Writer<W> {
@@ -132,7 +135,7 @@ impl<W: Write> Writer<W> {
             .columns()
             .iter()
             .map(|a| {
-                if a.data_type().is_nested() {
+                if a.data_type().is_nested() && !self.show_nested {
                     Err(ArrowError::CsvError(format!(
                         "Nested type {} is not supported in CSV",
                         a.data_type()
@@ -211,6 +214,8 @@ pub struct WriterBuilder {
     time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
+    /// Show nested types to csv
+    show_nested: bool,
 }
 
 impl Default for WriterBuilder {
@@ -227,6 +232,7 @@ impl Default for WriterBuilder {
             timestamp_tz_format: None,
             time_format: None,
             null_value: None,
+            show_nested: false,
         }
     }
 }
@@ -389,6 +395,12 @@ impl WriterBuilder {
         self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE)
     }
 
+    /// Set whether to show nested fields
+    pub fn with_show_nested(mut self, show_nested: bool) -> Self {
+        self.show_nested = show_nested;
+        self
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
@@ -408,6 +420,7 @@ impl WriterBuilder {
             timestamp_format: self.timestamp_format,
             timestamp_tz_format: self.timestamp_tz_format,
             null_value: self.null_value,
+            show_nested: self.show_nested,
         }
     }
 }
