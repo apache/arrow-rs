@@ -622,8 +622,9 @@ impl<T> std::fmt::Debug for StreamState<T> {
 /// (projection + filtering, etc) and decodes the rows from those buffered pages.
 ///
 /// For example, if all rows and columns are selected, the entire row group is
-/// buffered in memory during decode. This minimized the number of IO operations
-/// required.
+/// buffered in memory during decode. This minimizes the number of IO operations
+/// required, which is especially important for object stores, where IO operations
+/// have latencies in the hundreds of milliseconds
 ///
 ///
 /// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
