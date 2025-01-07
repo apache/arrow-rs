@@ -22,9 +22,8 @@ use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
-use crate::encryption::ciphers::RingGcmBlockDecryptor;
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
+use crate::encryption::ciphers::{create_module_aad, BlockDecryptor, CryptoContext, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -346,16 +345,13 @@ pub(crate) fn read_page_header<T: Read>(
     input: &mut T,
     #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<PageHeader> {
+    // todo: if column is not encrypted skip decryption
+
     #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
-        // crypto_context.data_decryptor().get_column_decryptor()
         let decryptor = &crypto_context.data_decryptor();
-        // todo: get column decryptor
-        // let file_decryptor = decryptor.ge(crypto_context.column_ordinal);
-        // if !decryptor.decryption_properties().has_footer_key() {
-        //     return Err(general_err!("Missing footer decryptor"));
-        // }
-        let file_decryptor = decryptor.footer_decryptor();
+
+        let file_decryptor = decryptor.column_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
         let aad_prefix = decryptor.aad_prefix();
 
@@ -364,7 +360,7 @@ pub(crate) fn read_page_header<T: Read>(
         } else {
             ModuleType::DataPageHeader
         };
-        let aad = create_page_aad(
+        let aad = create_module_aad(
             [aad_prefix.as_slice(), aad_file_unique.as_slice()]
                 .concat()
                 .as_slice(),
@@ -374,12 +370,19 @@ pub(crate) fn read_page_header<T: Read>(
             crypto_context.page_ordinal,
         )?;
 
-        let mut len_bytes = [0; 4];
-        input.read_exact(&mut len_bytes)?;
-        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
-        let mut ciphertext = vec![0; 4 + ciphertext_len];
-        input.read_exact(&mut ciphertext[4..])?;
-        let buf = file_decryptor.unwrap().decrypt(&ciphertext, aad.as_ref())?;
+        // let mut len_bytes = [0; 4];
+        // input.read_exact(&mut len_bytes)?;
+        // let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
+        // let mut ciphertext = vec![0; 4 + ciphertext_len];
+        // input.read_exact(&mut ciphertext[4..])?;
+        // let mut ciphertext = Vec::new();
+        // input.read_to_end(&mut ciphertext)?;
+
+        let mut ciphertext: Vec<u8> = vec![];
+        input.read_to_end(&mut ciphertext)?;
+
+        // let ciphertext = input.read_to_end();
+        let buf = file_decryptor.decrypt(&ciphertext, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
@@ -478,7 +481,7 @@ pub(crate) fn decode_page(
             } else {
                 ModuleType::DataPage
             };
-            let aad = create_page_aad(
+            let aad = create_module_aad(
                 decryptor.aad_file_unique().as_slice(),
                 module_type,
                 crypto_context.row_group_ordinal,

@@ -99,7 +99,9 @@ use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::data_type::AsBytes;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptor;
-use crate::encryption::ciphers::{create_footer_aad, create_page_aad, ModuleType};
+use crate::encryption::ciphers::{
+    create_footer_aad, create_module_aad, create_page_aad, ModuleType,
+};
 use crate::encryption::ciphers::{
     BlockDecryptor, DecryptionPropertiesBuilder, FileDecryptionProperties,
 };
@@ -659,29 +661,32 @@ impl RowGroupMetaData {
                     cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                 } else {
                     let column_name = crypto_metadata.path_in_schema.join(".");
-                    let column_decryptor = decryptor
-                        .unwrap()
-                        .get_column_decryptor(column_name.as_bytes());
-                    let file_decryptor = column_decryptor.footer_decryptor().unwrap();
-
                     let aad_file_unique = decryptor.unwrap().aad_file_unique();
                     let aad_prefix = decryptor
                         .unwrap()
                         .decryption_properties()
                         .aad_prefix()
                         .unwrap();
-                    let aad: Vec<u8> = [aad_prefix.clone(), aad_file_unique.clone()].concat();
-                    let column_aad = create_page_aad(
-                        aad.as_slice(),
+
+                    let column_decryptor = decryptor
+                        .unwrap()
+                        .get_column_decryptor(column_name.as_bytes())
+                        .footer_decryptor()
+                        .unwrap();
+
+                    let column_aad = create_module_aad(
+                        [aad_prefix.as_slice(), aad_file_unique.as_slice()]
+                            .concat()
+                            .as_slice(),
                         ModuleType::ColumnMetaData,
                         rg.ordinal.unwrap() as usize,
-                        i,
+                        i as usize,
                         None,
                     )?;
 
-                    let mut buf = c.encrypted_column_metadata.unwrap();
-                    let mut decrypted_cc_buf =
-                        file_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
+                    let buf = c.encrypted_column_metadata.unwrap();
+                    let decrypted_cc_buf =
+                        column_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
 
                     let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
                     let c = ColumnChunk::read_from_in_protocol(&mut prot)?;
