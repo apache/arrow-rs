@@ -16,19 +16,15 @@
 // under the License.
 
 use crate::codec::{AvroDataType, Codec, Nullability};
-use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
-use crate::reader::header::Header;
-use crate::schema::*;
 use arrow_array::builder::{Decimal128Builder, Decimal256Builder, PrimitiveBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit, Schema as ArrowSchema,
-    SchemaRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
+    Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
-use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -143,40 +139,40 @@ enum Decoder {
 impl Decoder {
     /// Checks if the Decoder is nullable, i.e. wrapped in `Nullable`.
     fn is_nullable(&self) -> bool {
-        matches!(self, Decoder::Nullable(_, _, _))
+        matches!(self, Self::Nullable(_, _, _))
     }
 
     /// Create a `Decoder` from an [`AvroDataType`].
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         let decoder = match data_type.codec() {
-            Codec::Null => Decoder::Null(0),
-            Codec::Boolean => Decoder::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
-            Codec::Int32 => Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Int64 => Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float32 => Decoder::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float64 => Decoder::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Binary => Decoder::Binary(
+            Codec::Null => Self::Null(0),
+            Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
+            Codec::Int32 => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Int64 => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float32 => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float64 => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Binary => Self::Binary(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Utf8 => Decoder::String(
+            Codec::Utf8 => Self::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Date32 => Decoder::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMillis => Decoder::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMicros => Decoder::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::TimestampMillis(is_utc) => {
-                Decoder::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+                Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
             Codec::TimestampMicros(is_utc) => {
-                Decoder::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+                Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            Codec::Fixed(n) => Decoder::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Interval => Decoder::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Fixed(n) => Self::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Interval => Self::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::List(item) => {
                 let item_decoder = Box::new(Self::try_new(item)?);
-                Decoder::List(
+                Self::List(
                     Arc::new(item.field_with_name("item")),
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                     item_decoder,
@@ -190,10 +186,10 @@ impl Decoder {
                     arrow_fields.push(avro_field.field());
                     decoders.push(d);
                 }
-                Decoder::Record(arrow_fields.into(), decoders)
+                Self::Record(arrow_fields.into(), decoders)
             }
             Codec::Enum(symbols) => {
-                Decoder::Enum(symbols.clone(), Vec::with_capacity(DEFAULT_CAPACITY))
+                Self::Enum(symbols.clone(), Vec::with_capacity(DEFAULT_CAPACITY))
             }
             Codec::Map(value_type) => {
                 let map_field = Arc::new(ArrowField::new(
@@ -204,7 +200,7 @@ impl Decoder {
                     ])),
                     false,
                 ));
-                Decoder::Map(
+                Self::Map(
                     map_field,
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
@@ -215,13 +211,13 @@ impl Decoder {
             }
             Codec::Decimal(precision, scale, size) => {
                 let builder = DecimalBuilder::new(*precision, *scale, *size)?;
-                Decoder::Decimal(*precision, *scale, *size, builder)
+                Self::Decimal(*precision, *scale, *size, builder)
             }
         };
 
         // Wrap in Nullable if needed
         match data_type.nullability() {
-            Some(nb) => Ok(Decoder::Nullable(
+            Some(nb) => Ok(Self::Nullable(
                 nb,
                 NullBufferBuilder::new(DEFAULT_CAPACITY),
                 Box::new(decoder),
@@ -233,36 +229,21 @@ impl Decoder {
     /// Append a null to this decoder.
     fn append_null(&mut self) {
         match self {
-            Decoder::Null(n) => {
-                *n += 1;
-            }
-            Decoder::Boolean(b) => {
-                b.append(false);
-            }
-            Decoder::Int32(v) | Decoder::Date32(v) | Decoder::TimeMillis(v) => {
-                v.push(0);
-            }
-            Decoder::Int64(v)
-            | Decoder::TimeMicros(v)
-            | Decoder::TimestampMillis(_, v)
-            | Decoder::TimestampMicros(_, v) => {
-                v.push(0);
-            }
-            Decoder::Float32(v) => {
-                v.push(0.0);
-            }
-            Decoder::Float64(v) => {
-                v.push(0.0);
-            }
-            Decoder::Binary(off, _) | Decoder::String(off, _) => {
-                off.push_length(0);
-            }
-            Decoder::Fixed(fsize, buf) => {
+            Self::Null(n) => *n += 1,
+            Self::Boolean(b) => b.append(false),
+            Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
+            Self::Int64(v)
+            | Self::TimeMicros(v)
+            | Self::TimestampMillis(_, v)
+            | Self::TimestampMicros(_, v) => v.push(0),
+            Self::Float32(v) => v.push(0.0),
+            Self::Float64(v) => v.push(0.0),
+            Self::Binary(off, _) | Self::String(off, _) => off.push_length(0),
+            Self::Fixed(fsize, buf) => {
                 // For a null, push `fsize` zeroed bytes
-                let n = *fsize as usize;
-                buf.extend(std::iter::repeat(0u8).take(n));
+                buf.extend(std::iter::repeat(0u8).take(*fsize as usize));
             }
-            Decoder::Interval(intervals) => {
+            Self::Interval(intervals) => {
                 // null => store a 12-byte zero => months=0, days=0, nanos=0
                 intervals.push(IntervalMonthDayNano {
                     months: 0,
@@ -270,82 +251,48 @@ impl Decoder {
                     nanoseconds: 0,
                 });
             }
-            Decoder::List(_, off, child) => {
+            Self::List(_, off, child) => {
                 off.push_length(0);
                 child.append_null();
             }
-            Decoder::Record(_, children) => {
+            Self::Record(_, children) => {
                 for c in children.iter_mut() {
                     c.append_null();
                 }
             }
-            Decoder::Enum(_, indices) => {
-                indices.push(0);
-            }
-            Decoder::Map(
-                _,
-                key_off,
-                map_off,
-                _,
-                _,
-                entry_count,
-            ) => {
+            Self::Enum(_, indices) => indices.push(0),
+            Self::Map(_, key_off, map_off, _, _, entry_count) => {
                 key_off.push_length(0);
                 map_off.push_length(*entry_count);
             }
-            Decoder::Decimal(_, _, _, builder) => {
+            Self::Decimal(_, _, _, builder) => {
                 let _ = builder.append_null();
             }
-            Decoder::Nullable(_, _, _) => { /* The null bit is stored in the NullBufferBuilder */ }
+            Self::Nullable(_, _, _) => { /* The null bit is stored in the NullBufferBuilder */ }
         }
     }
 
     /// Decode a single row of data from `buf`.
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         match self {
-            Decoder::Null(count) => {
-                *count += 1;
-            }
-            Decoder::Boolean(values) => {
-                values.append(buf.get_bool()?);
-            }
-            Decoder::Int32(values) => {
-                values.push(buf.get_int()?);
-            }
-            Decoder::Date32(values) => {
-                values.push(buf.get_int()?);
-            }
-            Decoder::Int64(values) => {
-                values.push(buf.get_long()?);
-            }
-            Decoder::TimeMillis(values) => {
-                values.push(buf.get_int()?);
-            }
-            Decoder::TimeMicros(values) => {
-                values.push(buf.get_long()?);
-            }
-            Decoder::TimestampMillis(_, values) => {
-                values.push(buf.get_long()?);
-            }
-            Decoder::TimestampMicros(_, values) => {
-                values.push(buf.get_long()?);
-            }
-            Decoder::Float32(values) => {
-                values.push(buf.get_float()?);
-            }
-            Decoder::Float64(values) => {
-                values.push(buf.get_double()?);
-            }
-            Decoder::Binary(off, data) | Decoder::String(off, data) => {
+            Self::Null(count) => *count += 1,
+            Self::Boolean(values) => values.append(buf.get_bool()?),
+            Self::Int32(values) => values.push(buf.get_int()?),
+            Self::Date32(values) => values.push(buf.get_int()?),
+            Self::Int64(values) => values.push(buf.get_long()?),
+            Self::TimeMillis(values) => values.push(buf.get_int()?),
+            Self::TimeMicros(values) => values.push(buf.get_long()?),
+            Self::TimestampMillis(_, values) => values.push(buf.get_long()?),
+            Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            Self::Float32(values) => values.push(buf.get_float()?),
+            Self::Float64(values) => values.push(buf.get_double()?),
+            Self::Binary(off, data) | Self::String(off, data) => {
                 let bytes = buf.get_bytes()?;
                 off.push_length(bytes.len());
                 data.extend_from_slice(bytes);
             }
-            Decoder::Fixed(fsize, accum) => {
-                let raw = buf.get_fixed(*fsize as usize)?;
-                accum.extend_from_slice(raw);
-            }
-            Decoder::Interval(intervals) => {
+            Self::Fixed(fsize, accum) => accum.extend_from_slice(buf.get_fixed(*fsize as usize)?),
+            Self::Interval(intervals) => {
                 let raw = buf.get_fixed(12)?;
                 let months = i32::from_le_bytes(raw[0..4].try_into().unwrap());
                 let days = i32::from_le_bytes(raw[4..8].try_into().unwrap());
@@ -358,38 +305,32 @@ impl Decoder {
                 };
                 intervals.push(val);
             }
-            Decoder::List(_, off, child) => {
+            Self::List(_, off, child) => {
                 let total_items = read_array_blocks(buf, |b| child.decode(b))?;
                 off.push_length(total_items);
             }
-            Decoder::Record(_, children) => {
+            Self::Record(_, children) => {
                 for c in children.iter_mut() {
                     c.decode(buf)?;
                 }
             }
-            Decoder::Nullable(_, nulls, child) => {
-                let branch_index = buf.get_int()?;
-                match branch_index {
-                    0 => {
-                        nulls.append(true);
-                        child.decode(buf)?;
-                    }
-                    1 => {
-                        nulls.append(false);
-                        child.append_null();
-                    }
-                    other => {
-                        return Err(ArrowError::ParseError(format!(
-                            "Unsupported union branch index {other} for Nullable"
-                        )));
-                    }
+            Self::Nullable(_, nulls, child) => match buf.get_int()? {
+                0 => {
+                    nulls.append(true);
+                    child.decode(buf)?;
                 }
-            }
-            Decoder::Enum(_, indices) => {
-                let idx = buf.get_int()?;
-                indices.push(idx);
-            }
-            Decoder::Map(_, key_off, map_off, key_data, val_decoder, entry_count) => {
+                1 => {
+                    nulls.append(false);
+                    child.append_null();
+                }
+                other => {
+                    return Err(ArrowError::ParseError(format!(
+                        "Unsupported union branch index {other} for Nullable"
+                    )));
+                }
+            },
+            Self::Enum(_, indices) => indices.push(buf.get_int()?),
+            Self::Map(_, key_off, map_off, key_data, val_decoder, entry_count) => {
                 let newly_added = read_map_blocks(buf, |b| {
                     let kb = b.get_bytes()?;
                     key_off.push_length(kb.len());
@@ -399,14 +340,12 @@ impl Decoder {
                 *entry_count += newly_added;
                 map_off.push_length(*entry_count);
             }
-            Decoder::Decimal(_, _, size, builder) => {
-                if let Some(sz) = *size {
-                    let raw = buf.get_fixed(sz)?;
-                    builder.append_bytes(raw)?;
-                } else {
-                    let variable = buf.get_bytes()?;
-                    builder.append_bytes(variable)?;
-                }
+            Self::Decimal(_, _, size, builder) => {
+                let bytes = match *size {
+                    Some(sz) => buf.get_fixed(sz)?,
+                    None => buf.get_bytes()?,
+                };
+                builder.append_bytes(bytes)?;
             }
         }
         Ok(())
@@ -416,81 +355,81 @@ impl Decoder {
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         match self {
             // For a nullable wrapper => flush the child with the built null buffer
-            Decoder::Nullable(_, nb, child) => {
+            Self::Nullable(_, nb, child) => {
                 let mask = nb.finish();
                 child.flush(mask)
             }
             // Null => produce NullArray
-            Decoder::Null(len) => {
+            Self::Null(len) => {
                 let count = std::mem::replace(len, 0);
                 Ok(Arc::new(NullArray::new(count)))
             }
             // boolean => flush to BooleanArray
-            Decoder::Boolean(b) => {
+            Self::Boolean(b) => {
                 let bits = b.finish();
                 Ok(Arc::new(BooleanArray::new(bits, nulls)))
             }
             // int32 => flush to Int32Array
-            Decoder::Int32(vals) => {
+            Self::Int32(vals) => {
                 let arr = flush_primitive::<Int32Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // date32 => flush to Date32Array
-            Decoder::Date32(vals) => {
+            Self::Date32(vals) => {
                 let arr = flush_primitive::<Date32Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // int64 => flush to Int64Array
-            Decoder::Int64(vals) => {
+            Self::Int64(vals) => {
                 let arr = flush_primitive::<Int64Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // time-millis => Time32Millisecond
-            Decoder::TimeMillis(vals) => {
+            Self::TimeMillis(vals) => {
                 let arr = flush_primitive::<Time32MillisecondType>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // time-micros => Time64Microsecond
-            Decoder::TimeMicros(vals) => {
+            Self::TimeMicros(vals) => {
                 let arr = flush_primitive::<Time64MicrosecondType>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // timestamp-millis => TimestampMillisecond
-            Decoder::TimestampMillis(is_utc, vals) => {
+            Self::TimestampMillis(is_utc, vals) => {
                 let arr = flush_primitive::<TimestampMillisecondType>(vals, nulls)
                     .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
                 Ok(Arc::new(arr))
             }
             // timestamp-micros => TimestampMicrosecond
-            Decoder::TimestampMicros(is_utc, vals) => {
+            Self::TimestampMicros(is_utc, vals) => {
                 let arr = flush_primitive::<TimestampMicrosecondType>(vals, nulls)
                     .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
                 Ok(Arc::new(arr))
             }
             // float32 => flush to Float32Array
-            Decoder::Float32(vals) => {
+            Self::Float32(vals) => {
                 let arr = flush_primitive::<Float32Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // float64 => flush to Float64Array
-            Decoder::Float64(vals) => {
+            Self::Float64(vals) => {
                 let arr = flush_primitive::<Float64Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
             // Avro bytes => BinaryArray
-            Decoder::Binary(off, data) => {
+            Self::Binary(off, data) => {
                 let offsets = flush_offsets(off);
                 let values = flush_values(data).into();
                 Ok(Arc::new(BinaryArray::new(offsets, values, nulls)))
             }
             // Avro string => StringArray
-            Decoder::String(off, data) => {
+            Self::String(off, data) => {
                 let offsets = flush_offsets(off);
                 let values = flush_values(data).into();
                 Ok(Arc::new(StringArray::new(offsets, values, nulls)))
             }
             // Avro fixed => FixedSizeBinaryArray
-            Decoder::Fixed(fsize, raw) => {
+            Self::Fixed(fsize, raw) => {
                 let size = *fsize;
                 let buf: Buffer = flush_values(raw).into();
                 let total_len = buf.len() / (size as usize);
@@ -499,31 +438,36 @@ impl Decoder {
                 Ok(Arc::new(array))
             }
             // Avro interval => IntervalMonthDayNanoType
-            Decoder::Interval(vals) => {
+            Self::Interval(vals) => {
                 let data_len = vals.len();
-                let mut builder = PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(data_len);
+                let mut builder =
+                    PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(data_len);
                 for v in vals.drain(..) {
                     builder.append_value(v);
                 }
-                let arr = builder.finish().with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
+                let arr = builder
+                    .finish()
+                    .with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
                 if let Some(nb) = nulls {
                     // "merge" the newly built array with the nulls
                     let arr_data = arr.into_data().into_builder().nulls(Some(nb));
                     let arr_data = unsafe { arr_data.build_unchecked() };
-                    Ok(Arc::new(PrimitiveArray::<IntervalMonthDayNanoType>::from(arr_data)))
+                    Ok(Arc::new(PrimitiveArray::<IntervalMonthDayNanoType>::from(
+                        arr_data,
+                    )))
                 } else {
                     Ok(Arc::new(arr))
                 }
             }
             // Avro array => ListArray
-            Decoder::List(field, off, item_dec) => {
+            Self::List(field, off, item_dec) => {
                 let child_arr = item_dec.flush(None)?;
                 let offsets = flush_offsets(off);
                 let arr = ListArray::new(field.clone(), offsets, child_arr, nulls);
                 Ok(Arc::new(arr))
             }
             // Avro record => StructArray
-            Decoder::Record(fields, children) => {
+            Self::Record(fields, children) => {
                 let mut arrays = Vec::with_capacity(children.len());
                 for c in children.iter_mut() {
                     let a = c.flush(None)?;
@@ -532,7 +476,7 @@ impl Decoder {
                 Ok(Arc::new(StructArray::new(fields.clone(), arrays, nulls)))
             }
             // Avro enum => DictionaryArray<int32 -> utf8>
-            Decoder::Enum(symbols, indices) => {
+            Self::Enum(symbols, indices) => {
                 let dict_values = StringArray::from_iter_values(symbols.iter());
                 let idxs: Int32Array = match nulls {
                     Some(b) => {
@@ -549,12 +493,12 @@ impl Decoder {
                 Ok(Arc::new(dict))
             }
             // Avro map => MapArray
-            Decoder::Map(field, key_off, map_off, key_data, val_dec, entry_count) => {
+            Self::Map(field, key_off, map_off, key_data, val_dec, entry_count) => {
                 let moff = flush_offsets(map_off);
                 let koff = flush_offsets(key_off);
                 let kd = flush_values(key_data).into();
                 let val_arr = val_dec.flush(None)?;
-                let is_nullable = matches!(**val_dec, Decoder::Nullable(_, _, _));
+                let is_nullable = matches!(**val_dec, Self::Nullable(_, _, _));
                 let key_arr = StringArray::new(koff, kd, None);
                 let struct_fields = vec![
                     Arc::new(ArrowField::new("key", DataType::Utf8, false)),
@@ -574,7 +518,7 @@ impl Decoder {
                 Ok(Arc::new(map_arr))
             }
             // Avro decimal => Arrow decimal
-            Decoder::Decimal(prec, sc, sz, builder) => {
+            Self::Decimal(prec, sc, sz, builder) => {
                 let precision = *prec;
                 let scale = sc.unwrap_or(0);
                 let new_builder = DecimalBuilder::new(precision, *sc, *sz)?;
@@ -812,14 +756,9 @@ fn field_with_type(name: &str, dt: DataType, nullable: bool) -> FieldRef {
 mod tests {
     use super::*;
     use arrow_array::{
-        cast::AsArray, Array, ArrayRef, Decimal128Array, Decimal256Array, DictionaryArray,
-        FixedSizeBinaryArray, Int32Array, IntervalMonthDayNanoArray, ListArray, MapArray,
-        StringArray, StructArray,
+        cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
+        IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
     };
-    use arrow_buffer::Buffer;
-    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
-    use serde_json::json;
-    use std::iter;
 
     // ---------------
     // Zig-Zag Helpers
@@ -927,12 +866,12 @@ mod tests {
         let mut dec = Decoder::try_new(&dt).unwrap();
         // row1 => months=1 => 01,00,00,00, days=2 => 02,00,00,00, ms=100 => 64,00,00,00
         // row2 => months=-1 => 0xFF,0xFF,0xFF,0xFF, days=10 => 0x0A,0x00,0x00,0x00, ms=9999 => 0x0F,0x27,0x00,0x00
-        let row1 = [0x01, 0x00, 0x00, 0x00,
-            0x02, 0x00, 0x00, 0x00,
-            0x64, 0x00, 0x00, 0x00];
-        let row2 = [0xFF, 0xFF, 0xFF, 0xFF,
-            0x0A, 0x00, 0x00, 0x00,
-            0x0F, 0x27, 0x00, 0x00];
+        let row1 = [
+            0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0x0A, 0x00, 0x00, 0x00, 0x0F, 0x27, 0x00, 0x00,
+        ];
         let mut data = Vec::new();
         data.extend_from_slice(&row1);
         data.extend_from_slice(&row2);
@@ -970,9 +909,11 @@ mod tests {
         // We'll decode 2 rows: row1 => interval => months=2, days=3, ms=500 => row2 => null
         // row1 => union=0 => child => 12 bytes
         // row2 => union=1 => null => no data
-        let row1 = [0x02, 0x00, 0x00, 0x00,   // months=2
-            0x03, 0x00, 0x00, 0x00,   // days=3
-            0xF4, 0x01, 0x00, 0x00];  // ms=500 => nanos=500_000_000
+        let row1 = [
+            0x02, 0x00, 0x00, 0x00, // months=2
+            0x03, 0x00, 0x00, 0x00, // days=3
+            0xF4, 0x01, 0x00, 0x00,
+        ]; // ms=500 => nanos=500_000_000
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0)); // union=0 => child
         data.extend_from_slice(&row1);
@@ -981,7 +922,10 @@ mod tests {
         dec.decode(&mut cursor).unwrap(); // row1
         dec.decode(&mut cursor).unwrap(); // row2 => null
         let arr = dec.flush(None).unwrap();
-        let intervals = arr.as_any().downcast_ref::<IntervalMonthDayNanoArray>().unwrap();
+        let intervals = arr
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
         assert_eq!(intervals.len(), 2);
         assert!(intervals.is_valid(0));
         assert!(!intervals.is_valid(1));
@@ -1009,7 +953,10 @@ mod tests {
         decoder.decode(&mut cursor).unwrap(); // => RED
         decoder.decode(&mut cursor).unwrap(); // => BLUE
         let array = decoder.flush(None).unwrap();
-        let dict_arr = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
+        let dict_arr = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
         assert_eq!(dict_arr.len(), 3);
         let keys = dict_arr.keys();
         assert_eq!(keys.value(0), 1);
@@ -1050,7 +997,10 @@ mod tests {
         nullable_decoder.decode(&mut cursor).unwrap(); // => null
         nullable_decoder.decode(&mut cursor).unwrap(); // => BLUE
         let array = nullable_decoder.flush(None).unwrap();
-        let dict_arr = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>().unwrap();
+        let dict_arr = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
         assert_eq!(dict_arr.len(), 3);
         // [GREEN, null, BLUE]
         assert!(dict_arr.is_valid(0));
@@ -1129,16 +1079,12 @@ mod tests {
         // Row1 => 123.45 => unscaled=12345 => i128 0x000...3039
         // Row2 => -1.23  => unscaled=-123  => i128 0xFFFF...FF85
         let row1 = [
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x30, 0x39,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x30, 0x39,
         ];
         let row2 = [
-            0xFF, 0xFF, 0xFF, 0xFF,
-            0xFF, 0xFF, 0xFF, 0xFF,
-            0xFF, 0xFF, 0xFF, 0xFF,
-            0xFF, 0xFF, 0xFF, 0x85,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0x85,
         ];
 
         let mut data = Vec::new();
@@ -1201,12 +1147,12 @@ mod tests {
         );
         // Decode [1234.56, null, -1234.56]
         let row1 = [
-            0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
-            0x00,0x00,0x00,0x00, 0x00,0x01,0xE2,0x40
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0xE2, 0x40,
         ];
         let row3 = [
-            0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0xFF,
-            0xFF,0xFF,0xFF,0xFF, 0xFF,0xFE,0x1D,0xC0
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0x1D, 0xC0,
         ];
         let mut data = Vec::new();
         // Row1 => child => [0x00]
@@ -1256,6 +1202,7 @@ mod tests {
         row1.extend_from_slice(&encode_avro_int(10)); // item=10
         row1.extend_from_slice(&encode_avro_int(20)); // item=20
         row1.extend_from_slice(&encode_avro_long(0)); // end of array
+
         // Row2 => block_count=0 => empty array
         let mut row2 = Vec::new();
         row2.extend_from_slice(&encode_avro_long(0));

@@ -19,14 +19,11 @@ use crate::schema::{
     Array, Attributes, ComplexType, Enum, Fixed, Map, PrimitiveType, Record, RecordField, Schema,
     TypeName,
 };
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::DataType::*;
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
-    TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE,
 };
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -93,14 +90,15 @@ impl AvroDataType {
     ///   (record, enum, fixed).
     pub fn to_avro_schema<'a>(&'a self, name: &'a str) -> Schema<'a> {
         let inner_schema = self.codec.to_avro_schema(name);
+        let schema_with_namespace = maybe_add_namespace(inner_schema, self);
         // If the field is nullable in Arrow, wrap Avro schema in a union: ["null", <type>].
-        if let Some(_) = self.nullability {
+        if self.nullability.is_some() {
             Schema::Union(vec![
                 Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
-                maybe_add_namespace(inner_schema, self),
+                schema_with_namespace,
             ])
         } else {
-            maybe_add_namespace(inner_schema, self)
+            schema_with_namespace
         }
     }
 }
@@ -108,19 +106,12 @@ impl AvroDataType {
 /// If this is a named complex type (Record, Enum, Fixed), attach `namespace`
 /// from `dt.metadata["namespace"]` if present. Otherwise, return as-is.
 fn maybe_add_namespace<'a>(mut schema: Schema<'a>, dt: &'a AvroDataType) -> Schema<'a> {
-    let ns = dt.metadata.get("namespace");
-    if let Some(ns_str) = ns {
+    if let Some(ns_str) = dt.metadata.get("namespace") {
         if let Schema::Complex(ref mut c) = schema {
             match c {
-                ComplexType::Record(r) => {
-                    r.namespace = Some(ns_str);
-                }
-                ComplexType::Enum(e) => {
-                    e.namespace = Some(ns_str);
-                }
-                ComplexType::Fixed(f) => {
-                    f.namespace = Some(ns_str);
-                }
+                ComplexType::Record(r) => r.namespace = Some(ns_str),
+                ComplexType::Enum(e) => e.namespace = Some(ns_str),
+                ComplexType::Fixed(f) => f.namespace = Some(ns_str),
                 // Arrays and Maps do not have a namespace field, so do nothing
                 _ => {}
             }
@@ -244,20 +235,14 @@ impl Codec {
                 false,
             ),
             Self::Decimal(precision, scale, size) => match size {
-                Some(s) if *s > 16 && *s <= 32 => {
-                    Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
+                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
+                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
+                None if *precision <= DECIMAL128_MAX_PRECISION as usize
+                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
+                {
+                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
                 }
-                Some(s) if *s <= 16 => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
-                _ => {
-                    // Note: Infer based on precision when size is None
-                    if *precision <= DECIMAL128_MAX_PRECISION as usize
-                        && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize
-                    {
-                        Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
-                    } else {
-                        Decimal256(*precision as u8, scale.unwrap_or(0) as i8)
-                    }
-                }
+                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
             },
         }
     }
@@ -299,30 +284,30 @@ impl Codec {
             }),
             // timestamp-millis => Avro long with logicalType=timestamp-millis or local-timestamp-millis
             Codec::TimestampMillis(is_utc) => {
-                let lt = if *is_utc {
-                    Some("timestamp-millis")
+                let logical_type = Some(if *is_utc {
+                    "timestamp-millis"
                 } else {
-                    Some("local-timestamp-millis")
-                };
+                    "local-timestamp-millis"
+                });
                 Schema::Type(crate::schema::Type {
                     r#type: TypeName::Primitive(PrimitiveType::Long),
                     attributes: Attributes {
-                        logical_type: lt,
+                        logical_type,
                         additional: Default::default(),
                     },
                 })
             }
             // timestamp-micros => Avro long with logicalType=timestamp-micros or local-timestamp-micros
             Codec::TimestampMicros(is_utc) => {
-                let lt = if *is_utc {
-                    Some("timestamp-micros")
+                let logical_type = Some(if *is_utc {
+                    "timestamp-micros"
                 } else {
-                    Some("local-timestamp-micros")
-                };
+                    "local-timestamp-micros"
+                });
                 Schema::Type(crate::schema::Type {
                     r#type: TypeName::Primitive(PrimitiveType::Long),
                     attributes: Attributes {
-                        logical_type: lt,
+                        logical_type,
                         additional: Default::default(),
                     },
                 })
@@ -358,7 +343,7 @@ impl Codec {
                     .iter()
                     .map(|f| {
                         let child_schema = f.data_type().to_avro_schema(f.name());
-                        AvroFieldDef {
+                        RecordField {
                             name: f.name(),
                             doc: None,
                             r#type: child_schema,
@@ -389,7 +374,7 @@ impl Codec {
             }
             Codec::Map(values) => {
                 let val_schema = values.to_avro_schema("values");
-                Schema::Complex(ComplexType::Map(AvroMap {
+                Schema::Complex(ComplexType::Map(Map {
                     values: Box::new(val_schema),
                     attributes: Attributes::default(),
                 }))
@@ -762,7 +747,7 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::Field;
     use serde_json::json;
     use std::sync::Arc;
 
