@@ -574,7 +574,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     ///
     /// This is used when we need to read parquet with row-filter, and we don't want to decompress the page twice.
     /// This function allows us to check if the next page is being cached or read previously.
-    pub fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+    #[cfg(test)]
+    fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
         match &mut self.state {
             SerializedPageReaderState::Values {
                 offset,
