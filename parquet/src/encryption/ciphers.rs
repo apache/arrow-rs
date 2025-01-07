@@ -180,7 +180,7 @@ pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordin
     create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
 }
 
-fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
+pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
                          column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
@@ -323,6 +323,10 @@ impl FileDecryptor {
     // todo decr: change to BlockDecryptor
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
         self.footer_decryptor.unwrap()
+    }
+
+    pub(crate) fn column_decryptor(&self) -> RingGcmBlockDecryptor {
+        RingGcmBlockDecryptor::new(self.decryption_properties.footer_key.as_ref().unwrap())
     }
 
     pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> FileDecryptor {
