@@ -438,8 +438,15 @@ macro_rules! primitive_display_float {
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
+
                 let mut buffer = ryu::Buffer::new();
-                f.write_str(buffer.format(value))?;
+                let string = buffer.format(value);
+
+                // Remove the `.0` suffix on integers that ryu always adds:
+                let string = string.strip_suffix(".0").unwrap_or(string);
+
+                f.write_str(string)?;
+
                 Ok(())
             }
         })+
@@ -1218,5 +1225,12 @@ mod tests {
             "input_value1",
             array_value_to_string(&map_array, 3).unwrap()
         );
+    }
+
+    #[test]
+    fn test_float_arry_to_string() {
+        let array = Float32Array::from(vec![0.0, 1.0, 2.0, 13.37, std::f32::consts::PI]);
+        let default_strings = format_array(&array, &Default::default());
+        assert_eq!(default_strings, ["0", "1", "2", "13.37", "3.1415927"]);
     }
 }
