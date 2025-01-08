@@ -492,18 +492,6 @@ fn bench_primitive_writer(c: &mut Criterion) {
         b.iter(|| write_batch(&batch).unwrap())
     });
 
-    let batch = create_float_bench_batch_with_nans(4096, 0.0).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values float with no NaNs", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
-
     group.finish();
 }
 
