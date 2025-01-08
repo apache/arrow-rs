@@ -148,13 +148,6 @@ done
 popd
 cargo +stable fmt -- src/gen/*
 
-if git apply gen.patch; then
-    echo "Applied gen.patch"
-else
-    echo "Error applying gen.patch"
-    exit 1
-fi
-
 echo "DONE!"
 echo "Please run 'cargo doc' and 'cargo test' with nightly and stable, "
 echo "and fix possible errors or warnings!"
