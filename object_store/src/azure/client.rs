@@ -925,7 +925,7 @@ impl GetClient for AzureClient {
 }
 
 #[async_trait]
-impl ListClient for AzureClient {
+impl ListClient for Arc<AzureClient> {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
     async fn list_request(
         &self,

@@ -855,7 +855,7 @@ impl GetClient for S3Client {
 }
 
 #[async_trait]
-impl ListClient for S3Client {
+impl ListClient for Arc<S3Client> {
     /// Make an S3 List request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
     async fn list_request(
         &self,
