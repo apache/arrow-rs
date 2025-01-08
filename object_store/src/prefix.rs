@@ -74,6 +74,28 @@ impl<T: ObjectStore> PrefixStore<T> {
     }
 }
 
+// Note: This is a relative hack to move these two functions to pure functions so they don't rely
+// on the `self` lifetime. Expected to be cleaned up before merge.
+//
+/// Strip the constant prefix from a given path
+fn strip_prefix(prefix: &Path, path: Path) -> Path {
+    // Note cannot use match because of borrow checker
+    if let Some(suffix) = path.prefix_match(prefix) {
+        return suffix.collect();
+    }
+    path
+}
+
+/// Strip the constant prefix from a given ObjectMeta
+fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
+    ObjectMeta {
+        last_modified: meta.last_modified,
+        size: meta.size,
+        location: strip_prefix(prefix, meta.location),
+        e_tag: meta.e_tag,
+        version: None,
+    }
+}
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
@@ -136,21 +158,23 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.delete(&full_path).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
         let s = self.inner.list(Some(&prefix));
-        s.map_ok(|meta| self.strip_meta(meta)).boxed()
+        let slf_prefix = self.prefix.clone();
+        s.map_ok(move |meta| strip_meta(&slf_prefix, meta)).boxed()
     }
 
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let offset = self.full_path(offset);
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
         let s = self.inner.list_with_offset(Some(&prefix), &offset);
-        s.map_ok(|meta| self.strip_meta(meta)).boxed()
+        let slf_prefix = self.prefix.clone();
+        s.map_ok(move |meta| strip_meta(&slf_prefix, meta)).boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

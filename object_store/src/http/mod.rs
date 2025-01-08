@@ -31,6 +31,8 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -79,7 +81,7 @@ impl From<Error> for crate::Error {
 /// See [`crate::http`] for more information
 #[derive(Debug)]
 pub struct HttpStore {
-    client: Client,
+    client: Arc<Client>,
 }
 
 impl std::fmt::Display for HttpStore {
@@ -130,19 +132,20 @@ impl ObjectStore for HttpStore {
         self.client.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
         let prefix = prefix.cloned();
+        let client = Arc::clone(&self.client);
         futures::stream::once(async move {
-            let status = self.client.list(prefix.as_ref(), "infinity").await?;
+            let status = client.list(prefix.as_ref(), "infinity").await?;
 
             let iter = status
                 .response
                 .into_iter()
                 .filter(|r| !r.is_dir())
-                .map(|response| {
+                .map(move |response| {
                     response.check_ok()?;
-                    response.object_meta(self.client.base_url())
+                    response.object_meta(client.base_url())
                 })
                 // Filter out exact prefix matches
                 .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
@@ -238,7 +241,7 @@ impl HttpBuilder {
         let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
 
         Ok(HttpStore {
-            client: Client::new(parsed, self.client_options, self.retry_config)?,
+            client: Arc::new(Client::new(parsed, self.client_options, self.retry_config)?),
         })
     }
 }
