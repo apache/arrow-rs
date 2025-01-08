@@ -611,6 +611,7 @@ pub(crate) mod private {
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;
     use crate::file::metadata::HeapSize;
+    use crate::util::interner::Intern;
 
     /// Sealed trait to start to remove specialisation from implementations
     ///
@@ -631,6 +632,7 @@ pub(crate) mod private {
         + HeapSize
         + crate::encodings::decoding::private::GetDecoder
         + crate::file::statistics::private::MakeStatistics
+        + Intern
     {
         const PHYSICAL_TYPE: Type;
 
@@ -1123,6 +1125,64 @@ pub(crate) mod private {
     impl HeapSize for super::FixedLenByteArray {
         fn heap_size(&self) -> usize {
             self.0.heap_size()
+        }
+    }
+
+    impl Intern for bool {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+
+    impl Intern for i32 {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+
+    impl Intern for i64 {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+
+    impl Intern for super::Int96 {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+
+    impl Intern for f32 {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            // Treat NaN == NaN when interning values
+            self.total_cmp(other) == std::cmp::Ordering::Equal
+        }
+    }
+
+    impl Intern for f64 {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            // Treat NaN == NaN when interning values
+            self.total_cmp(other) == std::cmp::Ordering::Equal
+        }
+    }
+
+    impl Intern for super::ByteArray {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+
+    impl Intern for super::FixedLenByteArray {
+        #[inline]
+        fn eq(&self, other: &Self) -> bool {
+            self == other
         }
     }
 }

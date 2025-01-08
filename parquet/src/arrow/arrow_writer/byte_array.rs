@@ -326,6 +326,13 @@ impl Storage for ByteArrayStorage {
     }
 }
 
+impl crate::util::interner::Intern for [u8] {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// A dictionary encoder for byte array data
 #[derive(Debug, Default)]
 struct DictEncoder {
