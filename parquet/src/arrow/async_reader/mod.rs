@@ -611,11 +611,23 @@ impl<T> std::fmt::Debug for StreamState<T> {
     }
 }
 
-/// An asynchronous [`Stream`](https://docs.rs/futures/latest/futures/stream/trait.Stream.html) of [`RecordBatch`]
-/// for a parquet file that can be constructed using [`ParquetRecordBatchStreamBuilder`].
+/// An asynchronous [`Stream`]of [`RecordBatch`] constructed using [`ParquetRecordBatchStreamBuilder`] to read parquet files.
 ///
 /// `ParquetRecordBatchStream` also provides [`ParquetRecordBatchStream::next_row_group`] for fetching row groups,
 /// allowing users to decode record batches separately from I/O.
+///
+/// # I/O Buffering
+///
+/// `ParquetRecordBatchStream` buffers *all* data pages selected after predicates
+/// (projection + filtering, etc) and decodes the rows from those buffered pages.
+///
+/// For example, if all rows and columns are selected, the entire row group is
+/// buffered in memory during decode. This minimizes the number of IO operations
+/// required, which is especially important for object stores, where IO operations
+/// have latencies in the hundreds of milliseconds
+///
+///
+/// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
 
