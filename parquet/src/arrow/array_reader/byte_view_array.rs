@@ -169,9 +169,7 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             self.validate_utf8,
         );
         decoder.read(&mut buffer, usize::MAX)?;
-
         self.dict = Some(buffer);
-
         Ok(())
     }
 
@@ -309,9 +307,6 @@ impl ByteViewArrayDecoderPlain {
         num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Self {
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let buf = arrow_buffer::Buffer::from_bytes(buf.clone().into());
         Self {
             buf: Buffer::from(buf),
             offset: 0,
