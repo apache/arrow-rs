@@ -633,7 +633,7 @@ impl GetClient for GoogleCloudStorageClient {
 }
 
 #[async_trait]
-impl ListClient for GoogleCloudStorageClient {
+impl ListClient for Arc<GoogleCloudStorageClient> {
     /// Perform a list request <https://cloud.google.com/storage/docs/xml-api/get-bucket-list>
     async fn list_request(
         &self,

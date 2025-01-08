@@ -62,7 +62,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    fn list(&self, _: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         todo!()
     }
 
