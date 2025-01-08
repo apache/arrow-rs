@@ -24,7 +24,7 @@ const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 pub trait Storage {
     type Key: Copy;
 
-    type Value: Intern + ?Sized;
+    type Value: AsBytes + ?Sized;
 
     /// Gets an element by its key
     fn get(&self, idx: Self::Key) -> &Self::Value;
@@ -35,10 +35,6 @@ pub trait Storage {
     /// Return an estimate of the memory used in this storage, in bytes
     #[allow(dead_code)] // not used in parquet_derive, so is dead there
     fn estimated_memory_size(&self) -> usize;
-}
-
-pub trait Intern: AsBytes {
-    fn eq(&self, other: &Self) -> bool;
 }
 
 /// A generic value interner supporting various different [`Storage`]
@@ -70,7 +66,8 @@ impl<S: Storage> Interner<S> {
             .dedup
             .entry(
                 hash,
-                |index| value.eq(self.storage.get(*index)),
+                // Compare bytes rather than directly comparing values so NaNs can be interned
+                |index| value.as_bytes() == self.storage.get(*index).as_bytes(),
                 |key| self.state.hash_one(self.storage.get(*key).as_bytes()),
             )
             .or_insert_with(|| self.storage.push(value))
