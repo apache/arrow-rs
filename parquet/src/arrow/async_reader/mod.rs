@@ -21,7 +21,7 @@
 //! This can be used to decode a Parquet file in streaming fashion (without
 //! downloading the whole file at once) from a remote source, such as an object store.
 //!
-//! See example on [`ParquetRecordBatchStreamBuilder`]
+//! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
@@ -235,8 +235,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// #
     /// # let testdata = arrow::util::test_util::parquet_test_data();
     /// # let path = format!("{}/alltypes_plain.parquet", testdata);
-    /// // use tokio::fs::File to read data using an async I/O. This can be replaced with
-    /// // other async I/O reader such as a reader from an object store.
+    /// // Use tokio::fs::File to read data using an async I/O. This can be replaced with
+    /// // another async I/O reader such as a reader from an object store.
     /// let file = tokio::fs::File::open(path).await.unwrap();
     ///
     /// // Configure options for reading from the async souce
@@ -246,7 +246,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // Building the stream opens the parquet file (reads metadata, etc) and returns
     /// // a stream that can be used to incrementally read the data in batches
     /// let stream = builder.build().unwrap();
-    /// // in this example, we collect the stream into a Vec<RecordBatch>
+    /// // In this example, we collect the stream into a Vec<RecordBatch>
     /// // but real applications would likely process the batches as they are read
     /// let results = stream.try_collect::<Vec<_>>().await.unwrap();
     /// // demonstrate the results are as expected
@@ -297,11 +297,11 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// #
     /// # let testdata = arrow::util::test_util::parquet_test_data();
     /// # let path = format!("{}/alltypes_plain.parquet", testdata);
-    /// // as before, use tokio::fs::File to read data using an async I/O.
+    /// // As before, use tokio::fs::File to read data using an async I/O.
     /// let file = tokio::fs::File::open(path).await.unwrap();
     ///
     /// // Configure options for reading from the async source, in this case we set the batch size
-    /// // to 3 that produces 3 rows at a time.
+    /// // to 3 which produces 3 rows at a time.
     /// let builder = ParquetRecordBatchStreamBuilder::new(file)
     ///     .await
     ///     .unwrap()
@@ -315,7 +315,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     ///
     /// let stream = builder.with_projection(mask).build().unwrap();
     /// let results = stream.try_collect::<Vec<_>>().await.unwrap();
-    /// // print out the results
+    /// // Print out the results
     /// assert_batches_eq(
     ///     &results,
     ///     &[
@@ -335,7 +335,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     ///  );
     ///
     /// // The results has 8 rows, so since we set the batch size to 3, we expect
-    /// // 3 batches with 3 rows each and the last batch with 2 rows.
+    /// // 3 batches, two with 3 rows each and the last batch with 2 rows.
     /// assert_eq!(results.len(), 3);
     /// # }
     /// ```
