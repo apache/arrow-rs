@@ -249,7 +249,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // In this example, we collect the stream into a Vec<RecordBatch>
     /// // but real applications would likely process the batches as they are read
     /// let results = stream.try_collect::<Vec<_>>().await.unwrap();
-    /// // demonstrate the results are as expected
+    /// // Demonstrate the results are as expected
     /// assert_batches_eq(
     ///     &results,
     ///     &[
