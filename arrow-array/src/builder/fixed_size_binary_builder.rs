@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, UInt8BufferBuilder};
-use crate::{ArrayRef, FixedSizeBinaryArray};
+use crate::builder::{ArrayBuilder, SpecificArrayBuilder, UInt8BufferBuilder};
+use crate::{Array, ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -151,6 +151,41 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+}
+
+impl SpecificArrayBuilder for FixedSizeBinaryBuilder {
+    type Output = FixedSizeBinaryArray;
+    type Item<'a> = &'a [u8];
+
+    fn finish(&mut self) -> Arc<Self::Output> {
+        Arc::new(self.finish())
+    }
+
+    fn finish_cloned(&self) -> Arc<Self::Output> {
+        Arc::new(self.finish_cloned())
+    }
+
+    fn append_value<'a>(&'a mut self, value: Self::Item<'a>) {
+        self.append_value(value).unwrap()
+    }
+
+    fn append_value_ref<'a>(&'a mut self, value: &'a Self::Item<'a>) {
+        self.append_value(value).unwrap()
+    }
+
+    fn append_null(&mut self) {
+        self.append_null()
+    }
+
+    fn append_output<'a>(&'a mut self, output: &'a Self::Output) {
+        for i in 0..output.len() {
+            if output.is_null(i) {
+                self.append_null();
+            } else {
+                self.append_value(output.value(i)).unwrap();
+            }
+        }
     }
 }
 
