@@ -49,7 +49,7 @@ pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> 
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
-pub async fn collect_bytes<S, E>(mut stream: S, size_hint: Option<usize>) -> Result<Bytes, E>
+pub async fn collect_bytes<S, E>(mut stream: S, size_hint: Option<u64>) -> Result<Bytes, E>
 where
     E: Send,
     S: Stream<Item = Result<Bytes, E>> + Send + Unpin,
@@ -60,9 +60,9 @@ where
     match stream.next().await.transpose()? {
         None => Ok(first),
         Some(second) => {
-            let size_hint = size_hint.unwrap_or_else(|| first.len() + second.len());
+            let size_hint = size_hint.unwrap_or_else(|| first.len() as u64 + second.len() as u64);
 
-            let mut buf = Vec::with_capacity(size_hint);
+            let mut buf = Vec::with_capacity(size_hint as usize);
             buf.extend_from_slice(&first);
             buf.extend_from_slice(&second);
             while let Some(maybe_bytes) = stream.next().await {
@@ -89,7 +89,7 @@ where
 
 /// Range requests with a gap less than or equal to this,
 /// will be coalesced into a single request by [`coalesce_ranges`]
-pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 1024 * 1024;
+pub const OBJECT_STORE_COALESCE_DEFAULT: u64 = 1024 * 1024;
 
 /// Up to this number of range requests will be performed in parallel by [`coalesce_ranges`]
 pub(crate) const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
@@ -103,12 +103,12 @@ pub(crate) const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 /// * Make multiple `fetch` requests in parallel (up to maximum of 10)
 ///
 pub async fn coalesce_ranges<F, E, Fut>(
-    ranges: &[Range<usize>],
+    ranges: &[Range<u64>],
     fetch: F,
-    coalesce: usize,
+    coalesce: u64,
 ) -> Result<Vec<Bytes>, E>
 where
-    F: Send + FnMut(Range<usize>) -> Fut,
+    F: Send + FnMut(Range<u64>) -> Fut,
     E: Send,
     Fut: std::future::Future<Output = Result<Bytes, E>> + Send,
 {
@@ -129,13 +129,14 @@ where
 
             let start = range.start - fetch_range.start;
             let end = range.end - fetch_range.start;
-            fetch_bytes.slice(start..end.min(fetch_bytes.len()))
+            let range = (start as usize)..(end as usize).min(fetch_bytes.len());
+            fetch_bytes.slice(range)
         })
         .collect())
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
-fn merge_ranges(ranges: &[Range<usize>], coalesce: usize) -> Vec<Range<usize>> {
+fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
     if ranges.is_empty() {
         return vec![];
     }
@@ -196,20 +197,20 @@ pub enum GetRange {
     /// an error will be returned. Additionally, if the range ends after the end
     /// of the object, the entire remainder of the object will be returned.
     /// Otherwise, the exact requested range will be returned.
-    Bounded(Range<usize>),
+    Bounded(Range<u64>),
     /// Request all bytes starting from a given byte offset
-    Offset(usize),
+    Offset(u64),
     /// Request up to the last n bytes
-    Suffix(usize),
+    Suffix(u64),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InvalidGetRange {
     #[error("Wanted range starting at {requested}, but object was only {length} bytes long")]
-    StartTooLarge { requested: usize, length: usize },
+    StartTooLarge { requested: u64, length: u64 },
 
     #[error("Range started at {start} and ended at {end}")]
-    Inconsistent { start: usize, end: usize },
+    Inconsistent { start: u64, end: u64 },
 }
 
 impl GetRange {
@@ -227,7 +228,7 @@ impl GetRange {
     }
 
     /// Convert to a [`Range`] if valid.
-    pub(crate) fn as_range(&self, len: usize) -> Result<Range<usize>, InvalidGetRange> {
+    pub(crate) fn as_range(&self, len: u64) -> Result<Range<u64>, InvalidGetRange> {
         self.is_valid()?;
         match self {
             Self::Bounded(r) => {
@@ -267,7 +268,7 @@ impl Display for GetRange {
     }
 }
 
-impl<T: RangeBounds<usize>> From<T> for GetRange {
+impl<T: RangeBounds<u64>> From<T> for GetRange {
     fn from(value: T) -> Self {
         use std::ops::Bound::*;
         let first = match value.start_bound() {

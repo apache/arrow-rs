@@ -630,7 +630,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range.
     ///
     /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let options = GetOptions {
             range: Some(range.into()),
             ..Default::default()
@@ -640,7 +640,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         coalesce_ranges(
             ranges,
             |range| self.get_range(location, range),
@@ -820,14 +820,14 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_opts(location, options).await
             }
 
-            async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+            async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
                 self.as_ref().get_range(location, range).await
             }
 
             async fn get_ranges(
                 &self,
                 location: &Path,
-                ranges: &[Range<usize>],
+                ranges: &[Range<u64>],
             ) -> Result<Vec<Bytes>> {
                 self.as_ref().get_ranges(location, ranges).await
             }
@@ -904,7 +904,7 @@ pub struct ObjectMeta {
     /// The last modified time
     pub last_modified: DateTime<Utc>,
     /// The size in bytes of the object
-    pub size: usize,
+    pub size: u64,
     /// The unique identifier for the object
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
@@ -1019,7 +1019,7 @@ pub struct GetResult {
     /// The [`ObjectMeta`] for this object
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
-    pub range: Range<usize>,
+    pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
 }

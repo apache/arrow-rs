@@ -241,7 +241,7 @@ impl ObjectStore for InMemory {
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: entry.last_modified,
-            size: entry.data.len(),
+            size: entry.data.len() as u64,
             e_tag: Some(e_tag),
             version: None,
         };
@@ -250,11 +250,14 @@ impl ObjectStore for InMemory {
         let (range, data) = match options.range {
             Some(range) => {
                 let r = range
-                    .as_range(entry.data.len())
+                    .as_range(entry.data.len() as u64)
                     .map_err(|source| Error::Range { source })?;
-                (r.clone(), entry.data.slice(r))
+                (
+                    r.clone(),
+                    entry.data.slice(r.start as usize..r.end as usize),
+                )
             }
-            None => (0..entry.data.len(), entry.data),
+            None => (0..entry.data.len() as u64, entry.data),
         };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
 
@@ -266,15 +269,15 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let entry = self.entry(location).await?;
         ranges
             .iter()
             .map(|range| {
                 let r = GetRange::Bounded(range.clone())
-                    .as_range(entry.data.len())
+                    .as_range(entry.data.len() as u64)
                     .map_err(|source| Error::Range { source })?;
-
+                let r = r.start as usize..r.end as usize;
                 Ok(entry.data.slice(r))
             })
             .collect()
@@ -286,7 +289,7 @@ impl ObjectStore for InMemory {
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: entry.last_modified,
-            size: entry.data.len(),
+            size: entry.data.len() as u64,
             e_tag: Some(entry.e_tag.to_string()),
             version: None,
         })
@@ -316,7 +319,7 @@ impl ObjectStore for InMemory {
                 Ok(ObjectMeta {
                     location: key.clone(),
                     last_modified: value.last_modified,
-                    size: value.data.len(),
+                    size: value.data.len() as u64,
                     e_tag: Some(value.e_tag.to_string()),
                     version: None,
                 })
@@ -361,7 +364,7 @@ impl ObjectStore for InMemory {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: v.last_modified,
-                    size: v.data.len(),
+                    size: v.data.len() as u64,
                     e_tag: Some(v.e_tag.to_string()),
                     version: None,
                 };
