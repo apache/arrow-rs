@@ -94,7 +94,9 @@ Planned Release Schedule
 
 In general, use panics for bad states that are unreachable, unrecoverable or harmful.
 For those caused by invalid user input, however, we prefer to report that invalidity
-gracefully as an error result instead of panicking.
+gracefully as an error result instead of panicking. Note that it still makes sense
+to have some panic/assert statements, given that the invalidity of user input is
+examined and reported as errors first.
 
 ### Deprecation Guidelines
 
