@@ -350,8 +350,15 @@ pub(crate) fn read_page_header<T: Read>(
     #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
+        // todo: in case of per-column key, decryptor should be column decryptor
+        if !decryptor.has_footer_key() || !decryptor.footer_decryptor().is_some() {
+            let mut prot = TCompactInputProtocol::new(input);
+            let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+            return Ok(page_header)
+        };
 
-        let file_decryptor = decryptor.column_decryptor();
+        // let file_decryptor = decryptor.column_decryptor();
+        let data_decryptor = &crypto_context.data_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
         let aad_prefix = decryptor.aad_prefix();
 
@@ -370,19 +377,10 @@ pub(crate) fn read_page_header<T: Read>(
             crypto_context.page_ordinal,
         )?;
 
-        // let mut len_bytes = [0; 4];
-        // input.read_exact(&mut len_bytes)?;
-        // let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
-        // let mut ciphertext = vec![0; 4 + ciphertext_len];
-        // input.read_exact(&mut ciphertext[4..])?;
-        // let mut ciphertext = Vec::new();
-        // input.read_to_end(&mut ciphertext)?;
-
         let mut ciphertext: Vec<u8> = vec![];
         input.read_to_end(&mut ciphertext)?;
 
-        // let ciphertext = input.read_to_end();
-        let buf = file_decryptor.decrypt(&ciphertext, aad.as_ref())?;
+        let buf = data_decryptor.footer_decryptor().unwrap().decrypt(&ciphertext, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;

@@ -661,6 +661,10 @@ impl RowGroupMetaData {
                     cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                 } else {
                     let column_name = crypto_metadata.path_in_schema.join(".");
+                    if !decryptor.unwrap().has_column_key(&column_name.as_bytes()) {
+                        cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                        break;
+                    }
                     let aad_file_unique = decryptor.unwrap().aad_file_unique();
                     let aad_prefix = decryptor
                         .unwrap()
