@@ -90,6 +90,12 @@ Planned Release Schedule
 | Dec 2024         | `0.11.2` | Minor, NO breaking API changes          |
 | Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
 
+### Guidelines for `panic` vs `Result`
+
+In general, use panics for bad states that are unreachable, unrecoverable or harmful.
+For those caused by invalid user input, however, we prefer to report that invalidity
+gracefully as an error result instead of panicking.
+
 ### Deprecation Guidelines
 
 Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
