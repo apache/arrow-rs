@@ -329,23 +329,29 @@ impl FileDecryptor {
         RingGcmBlockDecryptor::new(self.decryption_properties.footer_key.as_ref().unwrap())
     }
 
+    pub(crate) fn has_column_key(&self, column_name: &[u8]) -> bool {
+        self.decryption_properties.column_keys.clone().unwrap().contains_key(column_name)
+    }
+
     pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> FileDecryptor {
-        if self.decryption_properties.column_keys.is_none() {
+        if self.decryption_properties.column_keys.is_none() || !self.has_column_key(column_name) {
             return self.clone();
         }
         let column_keys = &self.decryption_properties.column_keys.clone().unwrap();
-        let decryptor = if let Some(column_key) = column_keys.get(column_name) {
-            Some(RingGcmBlockDecryptor::new(&column_key))
+        let decryption_properties = if let Some(column_key) = column_keys.get(column_name) {
+            DecryptionPropertiesBuilder::with_defaults()
+                .with_footer_key(column_key.clone())
+                .with_aad_prefix(self.aad_prefix.clone())
+                .build()
         } else {
-            None
+            self.decryption_properties.clone()
         };
 
-        FileDecryptor {
-            decryption_properties: self.decryption_properties.clone(),
-            footer_decryptor: decryptor,
-            aad_file_unique: self.aad_file_unique.clone(),
-            aad_prefix: self.aad_prefix.clone(),
-        }
+        FileDecryptor::new(
+            &decryption_properties,
+            self.aad_file_unique.clone(),
+            self.aad_prefix.clone(),
+        )
     }
 
     pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {
