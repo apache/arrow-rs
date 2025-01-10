@@ -291,6 +291,7 @@ pub(crate) struct Request<'a> {
     retry_error_body: bool,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> Request<'a> {
     pub(crate) fn query<T: Serialize + ?Sized + Sync>(self, query: &T) -> Self {
         let builder = self.builder.query(query);
