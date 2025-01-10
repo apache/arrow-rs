@@ -406,6 +406,42 @@ impl<R: ChunkReader> PageReader for CachedPageReader<R> {
     }
 }
 
+// Helper implementation for testing
+#[cfg(test)]
+impl Page {
+    fn dummy_page(page_type: PageType, size: usize) -> Self {
+        use crate::basic::Encoding;
+        match page_type {
+            PageType::DATA_PAGE => Page::DataPage {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                def_level_encoding: Encoding::PLAIN,
+                rep_level_encoding: Encoding::PLAIN,
+                statistics: None,
+            },
+            PageType::DICTIONARY_PAGE => Page::DictionaryPage {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                is_sorted: false,
+            },
+            PageType::DATA_PAGE_V2 => Page::DataPageV2 {
+                buf: vec![0; size].into(),
+                num_values: size as u32,
+                encoding: Encoding::PLAIN,
+                def_levels_byte_len: 0,
+                rep_levels_byte_len: 0,
+                is_compressed: false,
+                statistics: None,
+                num_nulls: 0,
+                num_rows: 0,
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,7 +470,7 @@ mod tests {
         // Check remaining queue
         assert_eq!(queue.len(), 1);
         assert_eq!(queue[0].row_count, 7);
-        assert_eq!(queue[0].skip, false);
+        assert!(!queue[0].skip);
     }
 
     #[test]
@@ -451,7 +487,7 @@ mod tests {
 
         // Check remaining queue - should have 5 rows from split and original 10
         assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].skip, false);
+        assert!(!queue[0].skip);
         assert_eq!(queue[0].row_count, 5);
     }
 
@@ -534,41 +570,5 @@ mod tests {
 
         // Non-existent column should return None
         assert!(cache.get().get_page(2, 1000).is_none());
-    }
-}
-
-// Helper implementation for testing
-#[cfg(test)]
-impl Page {
-    fn dummy_page(page_type: PageType, size: usize) -> Self {
-        use crate::basic::Encoding;
-        match page_type {
-            PageType::DATA_PAGE => Page::DataPage {
-                buf: vec![0; size].into(),
-                num_values: size as u32,
-                encoding: Encoding::PLAIN,
-                def_level_encoding: Encoding::PLAIN,
-                rep_level_encoding: Encoding::PLAIN,
-                statistics: None,
-            },
-            PageType::DICTIONARY_PAGE => Page::DictionaryPage {
-                buf: vec![0; size].into(),
-                num_values: size as u32,
-                encoding: Encoding::PLAIN,
-                is_sorted: false,
-            },
-            PageType::DATA_PAGE_V2 => Page::DataPageV2 {
-                buf: vec![0; size].into(),
-                num_values: size as u32,
-                encoding: Encoding::PLAIN,
-                def_levels_byte_len: 0,
-                rep_levels_byte_len: 0,
-                is_compressed: false,
-                statistics: None,
-                num_nulls: 0,
-                num_rows: 0,
-            },
-            _ => unreachable!(),
-        }
     }
 }

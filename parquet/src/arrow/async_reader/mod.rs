@@ -475,7 +475,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 type ReadResult<T> = Result<(ReaderFactory<T>, Option<FilteredParquetRecordBatchReader>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
-/// [`ParquetRecordBatchReader`]
+/// [`FilteredParquetRecordBatchReader`]
 struct ReaderFactory<T> {
     metadata: Arc<ParquetMetaData>,
 
@@ -517,7 +517,7 @@ where
             for predicate in filter.predicates.iter_mut() {
                 let p_projection = predicate.projection();
                 if let Some(ref mut p) = predicate_projection {
-                    p.union(&p_projection);
+                    p.union(p_projection);
                 } else {
                     predicate_projection = Some(p_projection.clone());
                 }
@@ -849,7 +849,7 @@ impl<'a> InMemoryRowGroup<'a> {
         }
     }
 }
-impl<'a> InMemoryRowGroup<'a> {
+impl InMemoryRowGroup<'_> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,
