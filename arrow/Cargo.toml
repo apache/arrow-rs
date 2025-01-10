@@ -55,6 +55,7 @@ arrow-string = { workspace = true }
 
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
 pyo3 = { version = "0.23", default-features = false, optional = true }
+half = { version = "2.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
 features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
@@ -70,7 +71,7 @@ prettyprint = ["arrow-cast/prettyprint"]
 # not the core arrow code itself. Be aware that `rand` must be kept as
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
-test_utils = ["dep:rand"]
+test_utils = ["dep:rand", "dep:half"]
 pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
