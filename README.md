@@ -95,8 +95,8 @@ Planned Release Schedule
 In general, use panics for bad states that are unreachable, unrecoverable or harmful.
 For those caused by invalid user input, however, we prefer to report that invalidity
 gracefully as an error result instead of panicking. In general, invalid input should result
-in an `Error` as soon as possible. It *is* ok for code paths after validation to assume validation has 
-already occurred and panic if not. See [this ticket] for more nuances.
+in an `Error` as soon as possible. It _is_ ok for code paths after validation to assume
+validation has already occurred and panic if not. See [this ticket] for more nuances.
 
 [this ticket]: https://github.com/apache/arrow-rs/issues/6737
 
