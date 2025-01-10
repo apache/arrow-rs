@@ -264,8 +264,12 @@ impl ArrayData {
             offset,
             buffers,
             child_data,
+            align_buffers: false,
+            // SAFETY: caller responsible for ensuring data is valid
+            skip_validation: true,
         }
-        .build_unchecked()
+        .build()
+        .unwrap()
     }
 
     /// Create a new ArrayData, validating that the provided buffers form a valid
@@ -1775,7 +1779,7 @@ impl PartialEq for ArrayData {
     }
 }
 
-/// Builder for `ArrayData` type
+/// Builder for [`ArrayData`] type
 #[derive(Debug)]
 pub struct ArrayDataBuilder {
     data_type: DataType,
@@ -1786,6 +1790,10 @@ pub struct ArrayDataBuilder {
     offset: usize,
     buffers: Vec<Buffer>,
     child_data: Vec<ArrayData>,
+    /// Should buffers be realigned (copying if necessary)? Defaults to false.
+    align_buffers: bool,
+    /// Should data validation be skipped for this [`ArrayData`]? Defaults to false.
+    skip_validation: bool,
 }
 
 impl ArrayDataBuilder {
@@ -1801,6 +1809,8 @@ impl ArrayDataBuilder {
             offset: 0,
             buffers: vec![],
             child_data: vec![],
+            align_buffers: false,
+            skip_validation: false,
         }
     }
 
@@ -1877,51 +1887,78 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
+    /// This is shorthand for `self.with_skip_validation(true).build()`
+    ///
     /// # Safety
     ///
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
-    #[allow(clippy::let_and_return)]
     pub unsafe fn build_unchecked(self) -> ArrayData {
-        let data = self.build_impl();
-        // Provide a force_validate mode
-        #[cfg(feature = "force_validate")]
-        data.validate_data().unwrap();
-        data
+        self.with_skip_validation(true).build().unwrap()
     }
 
-    /// Same as [`Self::build_unchecked`] but ignoring `force_validate` feature flag
-    unsafe fn build_impl(self) -> ArrayData {
-        let nulls = self
-            .nulls
+    /// Creates an `ArrayData`, consuming `self`
+    pub fn build(self) -> Result<ArrayData, ArrowError> {
+        let Self {
+            data_type,
+            len,
+            null_count,
+            null_bit_buffer,
+            nulls,
+            offset,
+            buffers,
+            child_data,
+            align_buffers,
+            skip_validation,
+        } = self;
+
+        let nulls = nulls
             .or_else(|| {
-                let buffer = self.null_bit_buffer?;
-                let buffer = BooleanBuffer::new(buffer, self.offset, self.len);
-                Some(match self.null_count {
-                    Some(n) => NullBuffer::new_unchecked(buffer, n),
+                let buffer = null_bit_buffer?;
+                let buffer = BooleanBuffer::new(buffer, offset, len);
+                Some(match null_count {
+                    Some(n) => {
+                        // SAFETY: if validation is on, call to `data.validate_data()` will validate the null buffer
+                        unsafe { NullBuffer::new_unchecked(buffer, n) }
+                    }
                     None => NullBuffer::new(buffer),
                 })
             })
             .filter(|b| b.null_count() != 0);
 
-        ArrayData {
-            data_type: self.data_type,
-            len: self.len,
-            offset: self.offset,
-            buffers: self.buffers,
-            child_data: self.child_data,
+        let mut data = ArrayData {
+            data_type,
+            len,
+            offset,
+            buffers,
+            child_data,
             nulls,
-        }
-    }
+        };
 
-    /// Creates an array data, validating all inputs
-    pub fn build(self) -> Result<ArrayData, ArrowError> {
-        let data = unsafe { self.build_impl() };
-        data.validate_data()?;
+        if align_buffers {
+            data.align_buffers();
+        }
+
+        #[cfg(feature = "force_validate")]
+        let force_validation = true;
+        #[cfg(not(feature = "force_validate"))]
+        let force_validation = false;
+        // force validation in testing mode
+        let skip_validation = skip_validation && !force_validation;
+
+        if !skip_validation {
+            data.validate_data()?;
+        }
         Ok(data)
     }
 
     /// Creates an array data, validating all inputs, and aligning any buffers
+    #[deprecated(since = "54.1.0", note = "Use ArrayData::with_align_buffers instead")]
+    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
+        self.with_align_buffers(true).build()
+    }
+
+    /// Ensure that all buffers are aligned, copying data if necessary
     ///
     /// Rust requires that arrays are aligned to their corresponding primitive,
     /// see [`Layout::array`](std::alloc::Layout::array) and [`std::mem::align_of`].
@@ -1930,17 +1967,32 @@ impl ArrayDataBuilder {
     /// to allow for [slice](std::slice) based APIs. See [`BufferSpec::FixedWidth`].
     ///
     /// As this alignment is architecture specific, and not guaranteed by all arrow implementations,
-    /// this method is provided to automatically copy buffers to a new correctly aligned allocation
+    /// this flag is provided to automatically copy buffers to a new correctly aligned allocation
     /// when necessary, making it useful when interacting with buffers produced by other systems,
     /// e.g. IPC or FFI.
     ///
-    /// This is unlike `[Self::build`] which will instead return an error on encountering
+    /// If this flag is not enabled, `[Self::build`] return an error on encountering
     /// insufficiently aligned buffers.
-    pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
-        let mut data = unsafe { self.build_impl() };
-        data.align_buffers();
-        data.validate_data()?;
-        Ok(data)
+    pub fn with_align_buffers(mut self, align_buffers: bool) -> Self {
+        self.align_buffers = align_buffers;
+        self
+    }
+
+    /// Skips validation of the data.
+    ///
+    /// If this flag is enabled, `[Self::build`] will skip validation of the
+    /// data
+    ///
+    /// If this flag is not enabled, `[Self::build`] will validate that all
+    /// buffers are valid and will return an error if any data is invalid.
+    /// Validation can be expensive.
+    ///
+    /// # Safety
+    /// If validation is skipped, the buffers must form a valid Array array,
+    /// otherwise undefined behavior will result
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation = skip_validation;
+        self
     }
 }
 
@@ -1955,6 +2007,8 @@ impl From<ArrayData> for ArrayDataBuilder {
             nulls: d.nulls,
             null_bit_buffer: None,
             null_count: None,
+            align_buffers: false,
+            skip_validation: false,
         }
     }
 }
