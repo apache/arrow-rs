@@ -1,8 +1,24 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use arrow_array::RecordBatch;
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::codec::{AvroDataType, AvroField, Codec};
 use crate::schema::Schema;
+use arrow_array::RecordBatch;
+use std::sync::Arc;
 
 fn record_batch_to_avro_schema<'a>(
     batch: &'a RecordBatch,
@@ -22,9 +38,7 @@ pub fn to_avro_json_schema(
         .iter()
         .map(|arrow_field| crate::codec::arrow_field_to_avro_field(arrow_field))
         .collect();
-    let top_level_data_type = AvroDataType::from_codec(
-        Codec::Struct(Arc::from(avro_fields)),
-    );
+    let top_level_data_type = AvroDataType::from_codec(Codec::Struct(Arc::from(avro_fields)));
     let avro_schema = record_batch_to_avro_schema(batch, record_name, &top_level_data_type);
     serde_json::to_string_pretty(&avro_schema)
 }
@@ -32,7 +46,7 @@ pub fn to_avro_json_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{Int32Array, StringArray, RecordBatch, ArrayRef, StructArray};
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
     use serde_json::{json, Value};
     use std::sync::Arc;
@@ -74,8 +88,6 @@ mod tests {
                 }
             ]
         });
-
-        // Compare the two JSON objects
         assert_eq!(
             actual_json, expected_json,
             "Avro Schema JSON does not match expected"
@@ -88,18 +100,14 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("desc", DataType::Utf8, true),
         ]));
-
         let col_id = Arc::new(Int32Array::from(vec![10, 20, 30]));
         let col_desc = Arc::new(StringArray::from(vec![Some("a"), Some("b"), None]));
         let batch = RecordBatch::try_new(arrow_schema, vec![col_id, col_desc])
             .expect("Failed to create RecordBatch");
-
         let json_schema_string = to_avro_json_schema(&batch, "AnotherTestRecord")
             .expect("Failed to convert RecordBatch to Avro JSON schema");
-
         let actual_json: Value = serde_json::from_str(&json_schema_string)
             .expect("Invalid JSON returned by to_avro_json_schema");
-
         let expected_json = json!({
             "type": "record",
             "name": "AnotherTestRecord",
@@ -119,7 +127,6 @@ mod tests {
                 }
             ]
         });
-
         assert_eq!(
             actual_json, expected_json,
             "JSON schema mismatch for to_avro_json_schema"
@@ -128,18 +135,18 @@ mod tests {
 
     #[test]
     fn test_to_avro_json_schema_single_nonnull_int() {
-        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
         let col_id = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let batch = RecordBatch::try_new(arrow_schema, vec![col_id])
-            .expect("Failed to create RecordBatch");
-
+        let batch =
+            RecordBatch::try_new(arrow_schema, vec![col_id]).expect("Failed to create RecordBatch");
         let avro_json_string = to_avro_json_schema(&batch, "MySingleIntRecord")
             .expect("Failed to generate Avro JSON schema");
-
-        let actual_json: Value = serde_json::from_str(&avro_json_string)
-            .expect("Failed to parse Avro JSON schema");
-
+        let actual_json: Value =
+            serde_json::from_str(&avro_json_string).expect("Failed to parse Avro JSON schema");
         let expected_json = json!({
             "type": "record",
             "name": "MySingleIntRecord",
@@ -154,8 +161,6 @@ mod tests {
                 }
             ]
         });
-
-        // Compare
         assert_eq!(actual_json, expected_json, "Avro JSON schema mismatch");
     }
 
@@ -165,18 +170,14 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, true),
         ]));
-
         let col_id = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let col_name = Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")]));
         let batch = RecordBatch::try_new(arrow_schema, vec![col_id, col_name])
             .expect("Failed to create RecordBatch");
-
-        let avro_json_string = to_avro_json_schema(&batch, "MyRecord")
-            .expect("Failed to generate Avro JSON schema");
-
-        let actual_json: Value = serde_json::from_str(&avro_json_string)
-            .expect("Failed to parse Avro JSON schema");
-
+        let avro_json_string =
+            to_avro_json_schema(&batch, "MyRecord").expect("Failed to generate Avro JSON schema");
+        let actual_json: Value =
+            serde_json::from_str(&avro_json_string).expect("Failed to parse Avro JSON schema");
         let expected_json = json!({
             "type": "record",
             "name": "MyRecord",
@@ -199,8 +200,6 @@ mod tests {
                 }
             ]
         });
-
-        // Compare
         assert_eq!(actual_json, expected_json, "Avro JSON schema mismatch");
     }
 
@@ -210,14 +209,14 @@ mod tests {
             Field::new("inner_int", DataType::Int32, false),
             Field::new("inner_str", DataType::Utf8, true),
         ]);
-
-        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
-            Field::new("my_struct", DataType::Struct(inner_fields), true)
-        ]));
-
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "my_struct",
+            DataType::Struct(inner_fields),
+            true,
+        )]));
         let inner_int_col = Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef;
-        let inner_str_col = Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])) as ArrayRef;
-
+        let inner_str_col =
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])) as ArrayRef;
         let fields_arrays = vec![
             (
                 Arc::new(Field::new("inner_int", DataType::Int32, false)),
@@ -228,21 +227,13 @@ mod tests {
                 inner_str_col,
             ),
         ];
-
         let struct_array = StructArray::from(fields_arrays);
-
-        let batch = RecordBatch::try_new(
-            arrow_schema,
-            vec![Arc::new(struct_array)],
-        )
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(struct_array)])
             .expect("Failed to create RecordBatch");
-
         let avro_json_string = to_avro_json_schema(&batch, "NestedRecord")
             .expect("Failed to generate Avro JSON schema");
-
-        let actual_json: Value = serde_json::from_str(&avro_json_string)
-            .expect("Failed to parse Avro JSON schema");
-
+        let actual_json: Value =
+            serde_json::from_str(&avro_json_string).expect("Failed to parse Avro JSON schema");
         let expected_json = json!({
             "type": "record",
             "name": "NestedRecord",
@@ -281,8 +272,6 @@ mod tests {
                 }
             ]
         });
-
-        // Compare
         assert_eq!(actual_json, expected_json, "Avro JSON schema mismatch");
     }
 }

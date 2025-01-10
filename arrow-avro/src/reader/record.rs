@@ -538,21 +538,25 @@ fn read_array_blocks(
     let mut total_items = 0usize;
     loop {
         let block_count = buf.get_long()?;
-        if block_count == 0 {
-            break;
-        } else if block_count < 0 {
-            let item_count = (-block_count) as usize;
-            let _block_size = buf.get_long()?; // “block size” is read but not used
-            for _ in 0..item_count {
-                decode_item(buf)?;
+        match block_count {
+            0 => break, // If block_count is 0, exit the loop
+            n if n < 0 => {
+                // If block_count is negative
+                let item_count = (-n) as usize;
+                let _block_size = buf.get_long()?; // Read but ignore block size
+                for _ in 0..item_count {
+                    decode_item(buf)?;
+                }
+                total_items += item_count;
             }
-            total_items += item_count;
-        } else {
-            let item_count = block_count as usize;
-            for _ in 0..item_count {
-                decode_item(buf)?;
+            n => {
+                // If block_count is positive
+                let item_count = n as usize;
+                for _ in 0..item_count {
+                    decode_item(buf)?;
+                }
+                total_items += item_count;
             }
-            total_items += item_count;
         }
     }
     Ok(total_items)
@@ -1128,9 +1132,9 @@ mod tests {
         let arr = decoder.flush(None).unwrap();
         let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
         assert_eq!(dec_arr.len(), 3);
-        assert_eq!(dec_arr.is_valid(0), true);
-        assert_eq!(dec_arr.is_valid(1), false);
-        assert_eq!(dec_arr.is_valid(2), true);
+        assert!(dec_arr.is_valid(0));
+        assert!(!dec_arr.is_valid(1));
+        assert!(dec_arr.is_valid(2));
         assert_eq!(dec_arr.value_as_string(0), "123.4");
         assert_eq!(dec_arr.value_as_string(2), "-123.4");
     }

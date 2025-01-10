@@ -547,7 +547,7 @@ fn make_data_type<'a>(
                         .additional
                         .get("scale")
                         .and_then(|v| v.as_u64())
-                        .or_else(|| Some(0));
+                        .or(Some(0));
                     let field = AvroDataType {
                         nullability: None,
                         metadata: f.attributes.field_metadata(),
@@ -725,7 +725,7 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
                 let value_field = &child_fields[1];
                 let sub_codec = arrow_type_to_codec(value_field.data_type());
                 Codec::Map(Arc::new(AvroDataType {
-                    nullability: value_field.is_nullable().then(|| Nullability::NullFirst),
+                    nullability: value_field.is_nullable().then_some(Nullability::NullFirst),
                     metadata: value_field.metadata().clone(),
                     codec: sub_codec,
                 }))
