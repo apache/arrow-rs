@@ -44,12 +44,12 @@ use crate::{PutPayload, Result};
 #[derive(Debug)]
 pub struct ChunkedStore {
     inner: Arc<dyn ObjectStore>,
-    chunk_size: usize,
+    chunk_size: u64,
 }
 
 impl ChunkedStore {
     /// Creates a new [`ChunkedStore`] with the specified chunk_size
-    pub fn new(inner: Arc<dyn ObjectStore>, chunk_size: usize) -> Self {
+    pub fn new(inner: Arc<dyn ObjectStore>, chunk_size: u64) -> Self {
         Self { inner, chunk_size }
     }
 }
@@ -100,7 +100,7 @@ impl ObjectStore for ChunkedStore {
                         if exhausted {
                             return None;
                         }
-                        while buffer.len() < chunk_size {
+                        while buffer.len() < chunk_size as usize {
                             match stream.next().await {
                                 None => {
                                     exhausted = true;
@@ -125,7 +125,7 @@ impl ObjectStore for ChunkedStore {
                             };
                         }
                         // Return the chunked values as the next value in the stream
-                        let slice = buffer.split_to(chunk_size).freeze();
+                        let slice = buffer.split_to(chunk_size as usize).freeze();
                         Some((Ok(slice), (stream, buffer, exhausted, chunk_size)))
                     },
                 )
@@ -138,7 +138,7 @@ impl ObjectStore for ChunkedStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -203,7 +203,7 @@ mod tests {
 
             let mut remaining = 1001;
             while let Some(next) = s.next().await {
-                let size = next.unwrap().len();
+                let size = next.unwrap().len() as u64;
                 let expected = remaining.min(chunk_size);
                 assert_eq!(size, expected);
                 remaining -= expected;

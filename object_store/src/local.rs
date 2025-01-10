@@ -21,7 +21,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::SystemTime;
-use std::{collections::BTreeSet, convert::TryFrom, io};
+use std::{collections::BTreeSet, io};
 use std::{collections::VecDeque, path::PathBuf};
 
 use async_trait::async_trait;
@@ -44,12 +44,6 @@ use crate::{
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error("File size for {} did not fit in a usize: {}", path, source)]
-    FileSizeOverflowedUsize {
-        source: std::num::TryFromIntError,
-        path: String,
-    },
-
     #[error("Unable to walk dir: {}", source)]
     UnableToWalkDir { source: walkdir::Error },
 
@@ -83,8 +77,8 @@ pub(crate) enum Error {
     #[error("Out of range of file {}, expected: {}, actual: {}", path.display(), expected, actual)]
     OutOfRange {
         path: PathBuf,
-        expected: usize,
-        actual: usize,
+        expected: u64,
+        actual: u64,
     },
 
     #[error("Requested range was invalid")]
@@ -410,7 +404,7 @@ impl ObjectStore for LocalFileSystem {
         let path = self.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
             let (file, metadata) = open_file(&path)?;
-            let meta = convert_metadata(metadata, location)?;
+            let meta = convert_metadata(metadata, location);
             options.check_preconditions(&meta)?;
 
             let range = match options.range {
@@ -430,7 +424,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let path = self.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let (mut file, _) = open_file(&path)?;
@@ -439,7 +433,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
@@ -825,8 +819,8 @@ impl Drop for LocalUpload {
 pub(crate) fn chunked_stream(
     mut file: File,
     path: PathBuf,
-    range: Range<usize>,
-    chunk_size: usize,
+    range: Range<u64>,
+    chunk_size: u64,
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
     futures::stream::once(async move {
         let (file, path) = maybe_spawn_blocking(move || {
@@ -848,7 +842,7 @@ pub(crate) fn chunked_stream(
                     }
 
                     let to_read = remaining.min(chunk_size);
-                    let mut buffer = Vec::with_capacity(to_read);
+                    let mut buffer = Vec::with_capacity(to_read as usize);
                     let read = (&mut file)
                         .take(to_read as u64)
                         .read_to_end(&mut buffer)
@@ -857,7 +851,7 @@ pub(crate) fn chunked_stream(
                             path: path.clone(),
                         })?;
 
-                    Ok(Some((buffer.into(), (file, path, remaining - read))))
+                    Ok(Some((buffer.into(), (file, path, remaining - read as u64))))
                 })
             },
         );
@@ -867,7 +861,7 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
     let to_read = range.end - range.start;
     file.seek(SeekFrom::Start(range.start as u64))
         .map_err(|source| {
@@ -875,14 +869,11 @@ pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -
             Error::Seek { source, path }
         })?;
 
-    let mut buf = Vec::with_capacity(to_read);
-    let read = file
-        .take(to_read as u64)
-        .read_to_end(&mut buf)
-        .map_err(|source| {
-            let path = path.into();
-            Error::UnableToReadBytes { source, path }
-        })?;
+    let mut buf = Vec::with_capacity(to_read as usize);
+    let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
+        let path = path.into();
+        Error::UnableToReadBytes { source, path }
+    })? as u64;
 
     if read != to_read {
         let error = Error::OutOfRange {
@@ -922,7 +913,7 @@ fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<Option<ObjectMeta>> {
     match entry.metadata() {
-        Ok(metadata) => convert_metadata(metadata, location).map(Some),
+        Ok(metadata) => Ok(Some(convert_metadata(metadata, location))),
         Err(e) => {
             if let Some(io_err) = e.io_error() {
                 if io_err.kind() == ErrorKind::NotFound {
@@ -960,20 +951,16 @@ fn get_etag(metadata: &Metadata) -> String {
     format!("{inode:x}-{mtime:x}-{size:x}")
 }
 
-fn convert_metadata(metadata: Metadata, location: Path) -> Result<ObjectMeta> {
+fn convert_metadata(metadata: Metadata, location: Path) -> ObjectMeta {
     let last_modified = last_modified(&metadata);
-    let size = usize::try_from(metadata.len()).map_err(|source| {
-        let path = location.as_ref().into();
-        Error::FileSizeOverflowedUsize { source, path }
-    })?;
 
-    Ok(ObjectMeta {
+    ObjectMeta {
         location,
         last_modified,
-        size,
+        size: metadata.len(),
         e_tag: Some(get_etag(&metadata)),
         version: None,
-    })
+    }
 }
 
 #[cfg(unix)]

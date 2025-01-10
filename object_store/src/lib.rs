@@ -234,7 +234,7 @@
 //!
 //! // Buffer the entire object in memory
 //! let object: Bytes = result.bytes().await.unwrap();
-//! assert_eq!(object.len(), meta.size);
+//! assert_eq!(object.len() as u64, meta.size);
 //!
 //! // Alternatively stream the bytes from object storage
 //! let stream = object_store.get(&path).await.unwrap().into_stream();
@@ -1060,7 +1060,7 @@ impl GetResult {
                             path: path.clone(),
                         })?;
 
-                    let mut buffer = Vec::with_capacity(len);
+                    let mut buffer = Vec::with_capacity(len as usize);
                     file.take(len as _)
                         .read_to_end(&mut buffer)
                         .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
@@ -1093,7 +1093,7 @@ impl GetResult {
         match self.payload {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
-                const CHUNK_SIZE: usize = 8 * 1024;
+                const CHUNK_SIZE: u64 = 8 * 1024;
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
             GetResultPayload::Stream(s) => s,

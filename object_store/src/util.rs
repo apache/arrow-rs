@@ -324,7 +324,7 @@ mod tests {
     /// Calls coalesce_ranges and validates the returned data is correct
     ///
     /// Returns the fetched ranges
-    async fn do_fetch(ranges: Vec<Range<usize>>, coalesce: usize) -> Vec<Range<usize>> {
+    async fn do_fetch(ranges: Vec<Range<u64>>, coalesce: u64) -> Vec<Range<u64>> {
         let max = ranges.iter().map(|x| x.end).max().unwrap_or(0);
         let src: Vec<_> = (0..max).map(|x| x as u8).collect();
 
@@ -333,7 +333,9 @@ mod tests {
             &ranges,
             |range| {
                 fetches.push(range.clone());
-                futures::future::ready(Ok(Bytes::from(src[range].to_vec())))
+                futures::future::ready(Ok(Bytes::from(
+                    src[range.start as usize..range.end as usize].to_vec(),
+                )))
             },
             coalesce,
         )
@@ -342,7 +344,10 @@ mod tests {
 
         assert_eq!(ranges.len(), coalesced.len());
         for (range, bytes) in ranges.iter().zip(coalesced) {
-            assert_eq!(bytes.as_ref(), &src[range.clone()]);
+            assert_eq!(
+                bytes.as_ref(),
+                &src[range.start as usize..range.end as usize]
+            );
         }
         fetches
     }
