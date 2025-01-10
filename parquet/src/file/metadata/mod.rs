@@ -95,28 +95,37 @@ mod memory;
 pub(crate) mod reader;
 mod writer;
 
-use std::ops::Range;
-use std::sync::Arc;
-
-use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SizeStatistics, SortingColumn,
-};
-
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
+use crate::data_type::AsBytes;
+#[cfg(feature = "encryption")]
+use crate::encryption::ciphers::FileDecryptor;
+use crate::encryption::ciphers::{
+    create_footer_aad, create_module_aad, create_page_aad, ModuleType,
+};
+use crate::encryption::ciphers::{
+    BlockDecryptor, DecryptionPropertiesBuilder, FileDecryptionProperties,
+};
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
+use crate::format::{
+    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData, OffsetIndex,
+    PageLocation, RowGroup, SizeStatistics, SortingColumn,
+};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 pub use reader::ParquetMetaDataReader;
+use std::ops::Range;
+use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
+use zstd::zstd_safe::WriteBuf;
 
 /// Page level statistics for each column chunk of each row group.
 ///
@@ -174,15 +183,24 @@ pub struct ParquetMetaData {
     column_index: Option<ParquetColumnIndex>,
     /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
+    /// Optional file decryptor
+    #[cfg(feature = "encryption")]
+    file_decryptor: Option<FileDecryptor>,
 }
 
 impl ParquetMetaData {
     /// Creates Parquet metadata from file metadata and a list of row
     /// group metadata
-    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
+    pub fn new(
+        file_metadata: FileMetaData,
+        row_groups: Vec<RowGroupMetaData>,
+        #[cfg(feature = "encryption")] file_decryptor: Option<FileDecryptor>,
+    ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
             column_index: None,
             offset_index: None,
         }
@@ -212,6 +230,12 @@ impl ParquetMetaData {
     /// Returns file metadata as reference.
     pub fn file_metadata(&self) -> &FileMetaData {
         &self.file_metadata
+    }
+
+    /// Returns file decryptor as reference.
+    #[cfg(feature = "encryption")]
+    pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
+        &self.file_decryptor
     }
 
     /// Returns number of row groups in this file.
@@ -325,7 +349,12 @@ pub struct ParquetMetaDataBuilder(ParquetMetaData);
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![]))
+        Self(ParquetMetaData::new(
+            file_meta_data,
+            vec![],
+            #[cfg(feature = "encryption")]
+            None,
+        ))
     }
 
     /// Create a new builder from an existing ParquetMetaData
@@ -528,6 +557,8 @@ pub struct RowGroupMetaData {
     ordinal: Option<i16>,
 }
 
+// todo:rok
+
 impl RowGroupMetaData {
     /// Returns builder for row group metadata.
     pub fn builder(schema_descr: SchemaDescPtr) -> RowGroupMetaDataBuilder {
@@ -600,7 +631,11 @@ impl RowGroupMetaData {
     }
 
     /// Method to convert from Thrift.
-    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(
+        schema_descr: SchemaDescPtr,
+        mut rg: RowGroup,
+        #[cfg(feature = "encryption")] decryptor: Option<&FileDecryptor>,
+    ) -> Result<RowGroupMetaData> {
         if schema_descr.num_columns() != rg.columns.len() {
             return Err(general_err!(
                 "Column count mismatch. Schema has {} columns while Row Group has {}",
@@ -611,8 +646,60 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
-        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+        for (i, (c, d)) in rg
+            .columns
+            .drain(0..)
+            .zip(schema_descr.columns())
+            .enumerate()
+        {
+            let cc;
+            #[cfg(feature = "encryption")]
+            if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
+                c.crypto_metadata.clone()
+            {
+                if decryptor.is_none() {
+                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                } else {
+                    let column_name = crypto_metadata.path_in_schema.join(".");
+                    if !decryptor.unwrap().has_column_key(&column_name.as_bytes()) {
+                        cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                        break;
+                    }
+                    let aad_file_unique = decryptor.unwrap().aad_file_unique();
+                    let aad_prefix = decryptor
+                        .unwrap()
+                        .decryption_properties()
+                        .aad_prefix()
+                        .unwrap();
+
+                    let column_decryptor = decryptor
+                        .unwrap()
+                        .get_column_decryptor(column_name.as_bytes())
+                        .footer_decryptor()
+                        .unwrap();
+
+                    let column_aad = create_module_aad(
+                        [aad_prefix.as_slice(), aad_file_unique.as_slice()]
+                            .concat()
+                            .as_slice(),
+                        ModuleType::ColumnMetaData,
+                        rg.ordinal.unwrap() as usize,
+                        i as usize,
+                        None,
+                    )?;
+
+                    let buf = c.encrypted_column_metadata.unwrap();
+                    let decrypted_cc_buf =
+                        column_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
+
+                    let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
+                    let c = ColumnChunk::read_from_in_protocol(&mut prot)?;
+                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                }
+            } else {
+                cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+            }
+
             columns.push(cc);
         }
         let sorting_columns = rg.sorting_columns;
@@ -1605,9 +1692,14 @@ mod tests {
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(
+            schema_descr,
+            row_group_exp.clone(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .unwrap()
+        .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1686,10 +1778,14 @@ mod tests {
             .build()
             .unwrap();
 
-        let err =
-            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
-                .unwrap_err()
-                .to_string();
+        let err = RowGroupMetaData::from_thrift(
+            schema_descr_3cols,
+            row_group_meta_2cols.to_thrift(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .unwrap_err()
+        .to_string();
         assert_eq!(
             err,
             "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
@@ -1849,7 +1945,7 @@ mod tests {
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata.clone())
             .set_row_groups(row_group_meta_with_stats)
             .build();
-        let base_expected_size = 2312;
+        let base_expected_size = 2896;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1876,7 +1972,7 @@ mod tests {
             ]]))
             .build();
 
-        let bigger_expected_size = 2816;
+        let bigger_expected_size = 3400;
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);

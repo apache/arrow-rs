@@ -113,7 +113,8 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = ParquetMetaDataReader::decode_footer(&footer)?;
+        let footer = ParquetMetaDataReader::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
 
         if file_size < length + FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(
@@ -127,13 +128,26 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let (metadata, remainder) = if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            (ParquetMetaDataReader::decode_metadata(&meta)?, None)
+            (
+                ParquetMetaDataReader::decode_metadata(
+                    &meta,
+                    footer.encrypted_footer(),
+                    #[cfg(feature = "encryption")]
+                    None,
+                )?,
+                None,
+            )
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
 
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             (
-                ParquetMetaDataReader::decode_metadata(slice)?,
+                ParquetMetaDataReader::decode_metadata(
+                    slice,
+                    footer.encrypted_footer(),
+                    #[cfg(feature = "encryption")]
+                    None,
+                )?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             )
         };
