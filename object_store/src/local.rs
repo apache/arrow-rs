@@ -844,7 +844,7 @@ pub(crate) fn chunked_stream(
                     let to_read = remaining.min(chunk_size);
                     let mut buffer = Vec::with_capacity(to_read as usize);
                     let read = (&mut file)
-                        .take(to_read as u64)
+                        .take(to_read)
                         .read_to_end(&mut buffer)
                         .map_err(|e| Error::UnableToReadBytes {
                             source: e,
@@ -863,11 +863,10 @@ pub(crate) fn chunked_stream(
 
 pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
     let to_read = range.end - range.start;
-    file.seek(SeekFrom::Start(range.start as u64))
-        .map_err(|source| {
-            let path = path.into();
-            Error::Seek { source, path }
-        })?;
+    file.seek(SeekFrom::Start(range.start)).map_err(|source| {
+        let path = path.into();
+        Error::Seek { source, path }
+    })?;
 
     let mut buf = Vec::with_capacity(to_read as usize);
     let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
