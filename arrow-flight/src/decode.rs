@@ -295,7 +295,7 @@ impl FlightDataDecoder {
                     ));
                 };
 
-                let buffer = Buffer::from_bytes(data.data_body.into());
+                let buffer = Buffer::from(data.data_body);
                 let dictionary_batch = message.header_as_dictionary_batch().ok_or_else(|| {
                     FlightError::protocol(
                         "Could not get dictionary batch from DictionaryBatch message",

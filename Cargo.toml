@@ -74,7 +74,7 @@ include = [
     "Cargo.toml",
 ]
 edition = "2021"
-rust-version = "1.62"
+rust-version = "1.70"
 
 [workspace.dependencies]
 arrow = { version = "54.0.0", path = "./arrow", default-features = false }

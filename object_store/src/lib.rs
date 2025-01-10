@@ -722,7 +722,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -734,7 +734,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let offset = offset.clone();
         self.list(prefix)
             .try_filter(move |f| futures::future::ready(f.location > offset))
@@ -847,7 +847,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete_stream(locations)
             }
 
-            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
                 self.as_ref().list(prefix)
             }
 
@@ -855,7 +855,7 @@ macro_rules! as_ref_impl {
                 &self,
                 prefix: Option<&Path>,
                 offset: &Path,
-            ) -> BoxStream<'_, Result<ObjectMeta>> {
+            ) -> BoxStream<'static, Result<ObjectMeta>> {
                 self.as_ref().list_with_offset(prefix, offset)
             }
 

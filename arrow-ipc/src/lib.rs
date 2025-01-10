@@ -43,3 +43,14 @@ pub use self::gen::Tensor::*;
 
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
+
+impl Endianness {
+    /// Returns true if the endianness of the source system matches the endianness of the target system.
+    pub fn equals_to_target_endianness(self) -> bool {
+        match self {
+            Self::Little => cfg!(target_endian = "little"),
+            Self::Big => cfg!(target_endian = "big"),
+            _ => false,
+        }
+    }
+}

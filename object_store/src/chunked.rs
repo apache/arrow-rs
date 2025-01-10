@@ -150,7 +150,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -158,7 +158,7 @@ impl ObjectStore for ChunkedStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

@@ -488,7 +488,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
