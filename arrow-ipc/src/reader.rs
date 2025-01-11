@@ -553,7 +553,7 @@ unsafe fn create_dictionary_array_internal(
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
+/// dictionary array ref
 ///
 /// Safety:
 /// `skip_validations` allows the creation of an `ArrayData` without performing the
