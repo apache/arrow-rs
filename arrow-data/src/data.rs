@@ -1939,10 +1939,7 @@ impl ArrayDataBuilder {
             data.align_buffers();
         }
 
-        #[cfg(feature = "force_validate")]
-        let force_validation = true;
-        #[cfg(not(feature = "force_validate"))]
-        let force_validation = false;
+        let force_validation = cfg!(feature = "force_validate");
         // force validation in testing mode
         let skip_validation = skip_validation && !force_validation;
 
