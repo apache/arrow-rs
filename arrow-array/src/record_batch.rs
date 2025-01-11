@@ -21,7 +21,6 @@
 use crate::cast::AsArray;
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
-use std::collections::VecDeque;
 use std::ops::Index;
 use std::sync::Arc;
 
@@ -438,7 +437,7 @@ impl RecordBatch {
     ///
     /// let normalized = RecordBatch::try_new(Arc::new(schema), vec![a])
     ///     .expect("valid conversion")
-    ///     .normalize(".", 0)
+    ///     .normalize(".", None)
     ///     .expect("valid normalization");
     ///
     /// let expected = RecordBatch::try_from_iter_with_nullable(vec![
@@ -449,19 +448,20 @@ impl RecordBatch {
     ///
     /// assert_eq!(expected, normalized);
     /// ```
-    pub fn normalize(&self, separator: &str, mut max_level: usize) -> Result<Self, ArrowError> {
-        if max_level == 0 {
-            max_level = usize::MAX;
-        }
-        let mut queue: VecDeque<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = VecDeque::new();
-        for (c, f) in self.columns.iter().zip(self.schema.fields()) {
+    pub fn normalize(&self, separator: &str, max_level: Option<usize>) -> Result<Self, ArrowError> {
+        let max_level = match max_level.unwrap_or(usize::MAX) {
+            0 => usize::MAX,
+            val => val,
+        };
+        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = Vec::new();
+        for (c, f) in self.columns.iter().zip(self.schema.fields()).rev() {
             let name_vec: Vec<&str> = vec![f.name()];
-            queue.push_back((0, c, name_vec, f));
+            stack.push((0, c, name_vec, f));
         }
         let mut columns: Vec<ArrayRef> = Vec::new();
         let mut fields: Vec<FieldRef> = Vec::new();
 
-        while let Some((depth, c, name, field_ref)) = queue.pop_front() {
+        while let Some((depth, c, name, field_ref)) = stack.pop() {
             match field_ref.data_type() {
                 DataType::Struct(ff) if depth < max_level => {
                     // Need to zip these in reverse to maintain original order
@@ -469,7 +469,7 @@ impl RecordBatch {
                         let mut name = name.clone();
                         name.push(separator);
                         name.push(fff.name());
-                        queue.push_front((depth + 1, cff, name, fff))
+                        stack.push((depth + 1, cff, name, fff))
                     }
                 }
                 _ => {
@@ -1315,9 +1315,9 @@ mod tests {
             Field::new("month", DataType::Int64, true),
         ]);
 
-        let normalized = RecordBatch::try_new(Arc::new(schema), vec![a, month.clone()])
+        let normalized = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, month.clone()])
             .expect("valid conversion")
-            .normalize(".", 0)
+            .normalize(".", Some(0))
             .expect("valid normalization");
 
         let expected = RecordBatch::try_from_iter_with_nullable(vec![
@@ -1327,6 +1327,14 @@ mod tests {
             ("month", month.clone(), true),
         ])
         .expect("valid conversion");
+
+        assert_eq!(expected, normalized);
+
+        // check 0 and None have the same effect
+        let normalized = RecordBatch::try_new(Arc::new(schema), vec![a, month.clone()])
+            .expect("valid conversion")
+            .normalize(".", None)
+            .expect("valid normalization");
 
         assert_eq!(expected, normalized);
     }
@@ -1382,7 +1390,7 @@ mod tests {
         let normalized =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![exclamation_field.clone()])
                 .expect("valid conversion")
-                .normalize(".", 1)
+                .normalize(".", Some(1))
                 .expect("valid normalization");
 
         let expected = RecordBatch::try_from_iter_with_nullable(vec![
@@ -1412,7 +1420,7 @@ mod tests {
         // Normalize all levels
         let normalized = RecordBatch::try_new(Arc::new(schema), vec![exclamation_field])
             .expect("valid conversion")
-            .normalize(".", 0)
+            .normalize(".", None)
             .expect("valid normalization");
 
         let expected = RecordBatch::try_from_iter_with_nullable(vec![
@@ -1444,11 +1452,11 @@ mod tests {
         ]);
 
         let normalized = RecordBatch::new_empty(Arc::new(schema.clone()))
-            .normalize(".", 0)
+            .normalize(".", Some(0))
             .expect("valid normalization");
 
         let expected = RecordBatch::new_empty(Arc::new(
-            schema.normalize(".", 0).expect("valid normalization"),
+            schema.normalize(".", Some(0)).expect("valid normalization"),
         ));
 
         assert_eq!(expected, normalized);
