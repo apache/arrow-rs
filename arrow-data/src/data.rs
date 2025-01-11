@@ -1790,9 +1790,19 @@ pub struct ArrayDataBuilder {
     offset: usize,
     buffers: Vec<Buffer>,
     child_data: Vec<ArrayData>,
-    /// Should buffers be realigned (copying if necessary)? Defaults to false.
+    /// Should buffers be realigned (copying if necessary)?
+    ///
+    /// Defaults to false.
     align_buffers: bool,
-    /// Should data validation be skipped for this [`ArrayData`]? Defaults to false.
+    /// Should data validation be skipped for this [`ArrayData`]?
+    ///
+    /// Defaults to false.
+    ///
+    /// # Safety
+    ///
+    /// This flag can only be set to true using `unsafe` APIs. However, once true
+    /// subsequent calls to `build()` may result in undefined behavior if the data
+    /// is not valid.
     skip_validation: bool,
 }
 
@@ -1887,7 +1897,7 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
-    /// This is shorthand for `self.with_skip_validation(true).build()`
+    /// Note: This is shorthand for `self.with_skip_validation(true).build()`
     ///
     /// # Safety
     ///
@@ -1898,6 +1908,13 @@ impl ArrayDataBuilder {
     }
 
     /// Creates an `ArrayData`, consuming `self`
+    ///
+    /// # Safety
+    ///
+    /// By default the underlying buffers are checked to ensure they are valid
+    /// Arrow data. However, if the [`Self::skip_validation`] flag has been set
+    /// to true (by the `unsafe` API) this validation is skipped. If the data is
+    /// not valid, undefined behavior will result.
     pub fn build(self) -> Result<ArrayData, ArrowError> {
         let Self {
             data_type,
@@ -1918,7 +1935,7 @@ impl ArrayDataBuilder {
                 let buffer = BooleanBuffer::new(buffer, offset, len);
                 Some(match null_count {
                     Some(n) => {
-                        // SAFETY: if validation is on, call to `data.validate_data()` will validate the null buffer
+                        // SAFETY: call to `data.validate_data()` below validates the null buffer is valid
                         unsafe { NullBuffer::new_unchecked(buffer, n) }
                     }
                     None => NullBuffer::new(buffer),
@@ -1939,18 +1956,15 @@ impl ArrayDataBuilder {
             data.align_buffers();
         }
 
-        let force_validation = cfg!(feature = "force_validate");
-        // force validation in testing mode
-        let skip_validation = skip_validation && !force_validation;
-
-        if !skip_validation {
+        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs
+        if !skip_validation || cfg!(feature = "force_validate") {
             data.validate_data()?;
         }
         Ok(data)
     }
 
     /// Creates an array data, validating all inputs, and aligning any buffers
-    #[deprecated(since = "54.1.0", note = "Use ArrayData::with_align_buffers instead")]
+    #[deprecated(since = "54.1.0", note = "Use ArrayData::align_buffers instead")]
     pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
         self.align_buffers(true).build()
     }
