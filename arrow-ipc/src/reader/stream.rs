@@ -102,33 +102,11 @@ impl StreamDecoder {
         self
     }
 
-    /// Try to read the next [`RecordBatch`] from the provided [`Buffer`]
-    ///
-    /// [`Buffer::advance`] will be called on `buffer` for any consumed bytes.
-    ///
-    /// The push-based interface facilitates integration with sources that yield arbitrarily
-    /// delimited bytes ranges, such as a chunked byte stream received from object storage
-    ///
-    /// ```
-    /// # use arrow_array::RecordBatch;
-    /// # use arrow_buffer::Buffer;
-    /// # use arrow_ipc::reader::StreamDecoder;
-    /// # use arrow_schema::ArrowError;
-    /// #
-    /// fn print_stream<I>(src: impl Iterator<Item = Buffer>) -> Result<(), ArrowError> {
-    ///     let mut decoder = StreamDecoder::new();
-    ///     for mut x in src {
-    ///         while !x.is_empty() {
-    ///             if let Some(x) = decoder.decode(&mut x)? {
-    ///                 println!("{x:?}");
-    ///             }
-    ///         }
-    ///     }
-    ///     decoder.finish().unwrap();
-    ///     Ok(())
-    /// }
-    /// ```
-    pub fn decode(&mut self, buffer: &mut Buffer) -> Result<Option<RecordBatch>, ArrowError> {
+    unsafe fn decode_internal(
+        &mut self,
+        buffer: &mut Buffer,
+        skip_validations: bool,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
         while !buffer.is_empty() {
             match &mut self.state {
                 DecoderState::Header {
@@ -211,15 +189,18 @@ impl StreamDecoder {
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            let batch = read_record_batch_impl(
-                                &body,
-                                batch,
-                                schema,
-                                &self.dictionaries,
-                                None,
-                                &version,
-                                self.require_alignment,
-                            )?;
+                            let batch = unsafe {
+                                read_record_batch_impl(
+                                    &body,
+                                    batch,
+                                    schema,
+                                    &self.dictionaries,
+                                    None,
+                                    &version,
+                                    self.require_alignment,
+                                    skip_validations,
+                                )?
+                            };
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
                         }
@@ -228,14 +209,17 @@ impl StreamDecoder {
                             let schema = self.schema.as_deref().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            read_dictionary_impl(
-                                &body,
-                                dictionary,
-                                schema,
-                                &mut self.dictionaries,
-                                &version,
-                                self.require_alignment,
-                            )?;
+                            unsafe {
+                                read_dictionary_impl(
+                                    &body,
+                                    dictionary,
+                                    schema,
+                                    &mut self.dictionaries,
+                                    &version,
+                                    self.require_alignment,
+                                    skip_validations,
+                                )?;
+                            }
                             self.state = DecoderState::default();
                         }
                         MessageHeader::NONE => {
@@ -254,6 +238,48 @@ impl StreamDecoder {
             }
         }
         Ok(None)
+    }
+
+    /// Try to read the next [`RecordBatch`] from the provided [`Buffer`]
+    ///
+    /// [`Buffer::advance`] will be called on `buffer` for any consumed bytes.
+    ///
+    /// The push-based interface facilitates integration with sources that yield arbitrarily
+    /// delimited bytes ranges, such as a chunked byte stream received from object storage
+    ///
+    /// ```
+    /// # use arrow_array::RecordBatch;
+    /// # use arrow_buffer::Buffer;
+    /// # use arrow_ipc::reader::StreamDecoder;
+    /// # use arrow_schema::ArrowError;
+    /// #
+    /// fn print_stream<I>(src: impl Iterator<Item = Buffer>) -> Result<(), ArrowError> {
+    ///     let mut decoder = StreamDecoder::new();
+    ///     for mut x in src {
+    ///         while !x.is_empty() {
+    ///             if let Some(x) = decoder.decode(&mut x)? {
+    ///                 println!("{x:?}");
+    ///             }
+    ///         }
+    ///     }
+    ///     decoder.finish().unwrap();
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn decode(&mut self, buffer: &mut Buffer) -> Result<Option<RecordBatch>, ArrowError> {
+        unsafe { self.decode_internal(buffer, false) }
+    }
+
+    /// Try to read the next [`RecordBatch`] from the provided [`Buffer`] without validating the data
+    /// This is useful when the data is known to be valid and the validation can be skipped
+    ///
+    /// # Safety:
+    /// This method is unsafe because it does not validate the data
+    pub unsafe fn decode_unvalidated(
+        &mut self,
+        buffer: &mut Buffer,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        unsafe { self.decode_internal(buffer, true) }
     }
 
     /// Signal the end of stream

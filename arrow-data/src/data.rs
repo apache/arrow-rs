@@ -1890,6 +1890,21 @@ impl ArrayDataBuilder {
         data
     }
 
+    /// Creates an array data, without any validation,
+    /// but aligning buffers.
+    ///
+    /// # Safety
+    ///
+    /// The same caveats as [`ArrayData::new_unchecked`] apply.
+    pub unsafe fn build_aligned_unchecked(self) -> ArrayData {
+        let mut data = self.build_impl();
+        data.align_buffers();
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        data.validate_data().unwrap();
+        data
+    }
+
     /// Same as [`Self::build_unchecked`] but ignoring `force_validate` feature flag
     unsafe fn build_impl(self) -> ArrayData {
         let nulls = self

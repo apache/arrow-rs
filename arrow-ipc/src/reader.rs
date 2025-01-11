@@ -32,12 +32,39 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
 use crate::{Block, FieldNode, Message, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
+
+/// Build an array from the builder, optionally skipping validations.
+///
+/// # Safety
+/// If `skip_validations` is true, the function will build an `ArrayData` without performing the
+/// usual validations. This can lead to undefined behavior if the data is not correctly formatted.
+///
+/// Set `skip_validations` to true only if you are certain.
+unsafe fn build_array_internal(
+    builder: ArrayDataBuilder,
+    require_alignment: bool,
+    skip_validations: bool,
+) -> Result<ArrayData, ArrowError> {
+    if skip_validations {
+        if require_alignment {
+            Ok(builder.build_unchecked())
+        } else {
+            Ok(builder.build_aligned_unchecked())
+        }
+    } else {
+        if require_alignment {
+            builder.build()
+        } else {
+            builder.build_aligned()
+        }
+    }
+}
 
 /// Read a buffer based on offset and length
 /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
@@ -62,27 +89,83 @@ fn read_buffer(
     }
 }
 
-/// Coordinates reading arrays based on data types.
-///
-/// `variadic_counts` encodes the number of buffers to read for variadic types (e.g., Utf8View, BinaryView)
-/// When encounter such types, we pop from the front of the queue to get the number of buffers to read.
-///
-/// Notes:
-/// * In the IPC format, null buffers are always set, but may be empty. We discard them if an array has 0 nulls
-/// * Numeric values inside list arrays are often stored as 64-bit values regardless of their data type size.
-///   We thus:
-///     - check if the bit width of non-64-bit numbers is 64, and
-///     - read the buffer as 64-bit (signed integer or float), and
-///     - cast the 64-bit array to the appropriate data type
-fn create_array(
+unsafe fn create_array_internal(
     reader: &mut ArrayReader,
     field: &Field,
     variadic_counts: &mut VecDeque<i64>,
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let data_type = field.data_type();
+
+    // Helper functions to create arrays (with or without validations)
+    let create_primitive_array_helper =
+        |field_node: &FieldNode, data_type: &DataType, buffers: &[Buffer]| {
+            if skip_validations {
+                create_primitive_array_unchecked(field_node, data_type, buffers, require_alignment)
+            } else {
+                create_primitive_array(field_node, data_type, buffers, require_alignment)
+            }
+        };
+
+    let create_array_helper =
+        |reader: &mut ArrayReader, field: &Field, variadic_counts: &mut VecDeque<i64>| {
+            if skip_validations {
+                create_array_unchecked(reader, field, variadic_counts, require_alignment)
+            } else {
+                create_array(reader, field, variadic_counts, require_alignment)
+            }
+        };
+
+    let create_list_array_helper = |field_node: &FieldNode,
+                                    data_type: &DataType,
+                                    buffers: &[Buffer],
+                                    child_array: ArrayRef| {
+        if skip_validations {
+            create_list_array_unchecked(
+                field_node,
+                data_type,
+                buffers,
+                child_array,
+                require_alignment,
+            )
+        } else {
+            create_list_array(
+                field_node,
+                data_type,
+                buffers,
+                child_array,
+                require_alignment,
+            )
+        }
+    };
+
+    let create_dictionary_array_helper =
+        |field_node: &FieldNode,
+         data_type: &DataType,
+         buffers: &[Buffer],
+         value_array: ArrayRef| {
+            if skip_validations {
+                create_dictionary_array_unchecked(
+                    field_node,
+                    data_type,
+                    buffers,
+                    value_array,
+                    require_alignment,
+                )
+            } else {
+                create_dictionary_array(
+                    field_node,
+                    data_type,
+                    buffers,
+                    value_array,
+                    require_alignment,
+                )
+            }
+        };
+
     match data_type {
-        Utf8 | Binary | LargeBinary | LargeUtf8 => create_primitive_array(
+        Utf8 | Binary | LargeBinary | LargeUtf8 => create_primitive_array_helper(
             reader.next_node(field)?,
             data_type,
             &[
@@ -90,7 +173,6 @@ fn create_array(
                 reader.next_buffer()?,
                 reader.next_buffer()?,
             ],
-            require_alignment,
         ),
         BinaryView | Utf8View => {
             let count = variadic_counts
@@ -102,42 +184,24 @@ fn create_array(
             let buffers = (0..count)
                 .map(|_| reader.next_buffer())
                 .collect::<Result<Vec<_>, _>>()?;
-            create_primitive_array(
-                reader.next_node(field)?,
-                data_type,
-                &buffers,
-                require_alignment,
-            )
+            create_primitive_array_helper(reader.next_node(field)?, data_type, &buffers)
         }
-        FixedSizeBinary(_) => create_primitive_array(
+        FixedSizeBinary(_) => create_primitive_array_helper(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
-            require_alignment,
         ),
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?, reader.next_buffer()?];
-            let values = create_array(reader, list_field, variadic_counts, require_alignment)?;
-            create_list_array(
-                list_node,
-                data_type,
-                &list_buffers,
-                values,
-                require_alignment,
-            )
+            let values = create_array_helper(reader, list_field, variadic_counts)?;
+            create_list_array_helper(list_node, data_type, &list_buffers, values)
         }
         FixedSizeList(ref list_field, _) => {
             let list_node = reader.next_node(field)?;
             let list_buffers = [reader.next_buffer()?];
-            let values = create_array(reader, list_field, variadic_counts, require_alignment)?;
-            create_list_array(
-                list_node,
-                data_type,
-                &list_buffers,
-                values,
-                require_alignment,
-            )
+            let values = create_array_helper(reader, list_field, variadic_counts)?;
+            create_list_array_helper(list_node, data_type, &list_buffers, values)
         }
         Struct(struct_fields) => {
             let struct_node = reader.next_node(field)?;
@@ -148,7 +212,7 @@ fn create_array(
             // TODO investigate whether just knowing the number of buffers could
             // still work
             for struct_field in struct_fields {
-                let child = create_array(reader, struct_field, variadic_counts, require_alignment)?;
+                let child = create_array_helper(reader, struct_field, variadic_counts)?;
                 struct_arrays.push(child);
             }
             let null_count = struct_node.null_count() as usize;
@@ -172,9 +236,8 @@ fn create_array(
         }
         RunEndEncoded(run_ends_field, values_field) => {
             let run_node = reader.next_node(field)?;
-            let run_ends =
-                create_array(reader, run_ends_field, variadic_counts, require_alignment)?;
-            let values = create_array(reader, values_field, variadic_counts, require_alignment)?;
+            let run_ends = create_array_helper(reader, run_ends_field, variadic_counts)?;
+            let values = create_array_helper(reader, values_field, variadic_counts)?;
 
             let run_array_length = run_node.length() as usize;
             let builder = ArrayData::builder(data_type.clone())
@@ -183,7 +246,9 @@ fn create_array(
                 .add_child_data(run_ends.into_data())
                 .add_child_data(values.into_data());
 
-            let array_data = if require_alignment {
+            let array_data = if skip_validations {
+                unsafe { builder.build_unchecked() }
+            } else if require_alignment {
                 builder.build()?
             } else {
                 builder.build_aligned()?
@@ -207,12 +272,11 @@ fn create_array(
                 ))
             })?;
 
-            create_dictionary_array(
+            create_dictionary_array_helper(
                 index_node,
                 data_type,
                 &index_buffers,
                 value_array.clone(),
-                require_alignment,
             )
         }
         Union(fields, mode) => {
@@ -239,7 +303,7 @@ fn create_array(
             let mut children = Vec::with_capacity(fields.len());
 
             for (_id, field) in fields.iter() {
-                let child = create_array(reader, field, variadic_counts, require_alignment)?;
+                let child = create_array_helper(reader, field, variadic_counts)?;
                 children.push(child);
             }
 
@@ -261,7 +325,9 @@ fn create_array(
                 .len(length as usize)
                 .offset(0);
 
-            let array_data = if require_alignment {
+            let array_data = if skip_validations {
+                unsafe { builder.build_unchecked() }
+            } else if require_alignment {
                 builder.build()?
             } else {
                 builder.build_aligned()?
@@ -270,22 +336,58 @@ fn create_array(
             // no buffer increases
             Ok(Arc::new(NullArray::from(array_data)))
         }
-        _ => create_primitive_array(
+        _ => create_primitive_array_helper(
             reader.next_node(field)?,
             data_type,
             &[reader.next_buffer()?, reader.next_buffer()?],
-            require_alignment,
         ),
     }
 }
 
-/// Reads the correct number of buffers based on data type and null_count, and creates a
-/// primitive array ref
-fn create_primitive_array(
+/// Semantic is the same as `create_array`, but the function is unsafe
+/// as it skips validations.
+///
+/// # Safety
+/// Skip validations to create an `ArrayData` without performing the usual validations.
+/// This can lead to undefined behavior if the data is not correctly formatted.
+unsafe fn create_array_unchecked(
+    reader: &mut ArrayReader,
+    field: &Field,
+    variadic_counts: &mut VecDeque<i64>,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    create_array_internal(reader, field, variadic_counts, require_alignment, true)
+}
+
+/// Coordinates reading arrays based on data types.
+///
+/// `variadic_counts` encodes the number of buffers to read for variadic types (e.g., Utf8View, BinaryView)
+/// When encounter such types, we pop from the front of the queue to get the number of buffers to read.
+///
+/// Notes:
+/// * In the IPC format, null buffers are always set, but may be empty. We discard them if an array has 0 nulls
+/// * Numeric values inside list arrays are often stored as 64-bit values regardless of their data type size.
+///   We thus:
+///     - check if the bit width of non-64-bit numbers is 64, and
+///     - read the buffer as 64-bit (signed integer or float), and
+///     - cast the 64-bit array to the appropriate data type
+fn create_array(
+    reader: &mut ArrayReader,
+    field: &Field,
+    variadic_counts: &mut VecDeque<i64>,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    unsafe { create_array_internal(reader, field, variadic_counts, require_alignment, false) }
+}
+
+/// `skip_validations` allows the creation of an `ArrayData` without performing the usual
+/// validations. This can lead to undefined behavior if the data is not correctly formatted.
+unsafe fn create_primitive_array_internal(
     field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let length = field_node.length() as usize;
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
@@ -311,23 +413,53 @@ fn create_primitive_array(
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
-    let array_data = if require_alignment {
-        builder.build()?
-    } else {
-        builder.build_aligned()?
-    };
+    let array_data = build_array_internal(builder, require_alignment, skip_validations)?;
 
     Ok(make_array(array_data))
 }
 
+/// Reads the correct number of buffers based on data type and null_count, and creates a
+/// primitive array ref
+///
+/// # Safety
+/// Skip validations to create an `ArrayData` without performing the usual validations.
+/// This can lead to undefined behavior if the data is not correctly formatted.
+unsafe fn create_primitive_array_unchecked(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    create_primitive_array_internal(field_node, data_type, buffers, require_alignment, true)
+}
+
+/// Reads the correct number of buffers based on data type and null_count, and creates a
+/// primitive array ref
+fn create_primitive_array(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    unsafe {
+        create_primitive_array_internal(field_node, data_type, buffers, require_alignment, false)
+    }
+}
+
 /// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
-fn create_list_array(
+/// list array ref for internal usage.
+///
+/// # Safety
+/// `skip_validations` allows the creation of an `ArrayData` without performing the
+/// usual validations. This can lead to undefined behavior if the data is not
+/// correctly formatted. Set `skip_validations` to true only if you are certain.
+unsafe fn create_list_array_internal(
     field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     child_array: ArrayRef,
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
     let length = field_node.length() as usize;
@@ -347,23 +479,63 @@ fn create_list_array(
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
 
-    let array_data = if require_alignment {
-        builder.build()?
-    } else {
-        builder.build_aligned()?
-    };
+    let array_data = build_array_internal(builder, require_alignment, skip_validations)?;
 
     Ok(make_array(array_data))
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
 /// list array ref
-fn create_dictionary_array(
+fn create_list_array(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    child_array: ArrayRef,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    unsafe {
+        create_list_array_internal(
+            field_node,
+            data_type,
+            buffers,
+            child_array,
+            require_alignment,
+            false,
+        )
+    }
+}
+
+/// Reads the correct number of buffers based on list type and null_count, and creates a
+/// list array ref
+///
+/// Safety:
+/// Internal data validation is skipped. This can lead to undefined behavior if the data
+/// is not correctly formatted.
+/// Use this function only if you are certain and trust the data source.
+unsafe fn create_list_array_unchecked(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    child_array: ArrayRef,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    create_list_array_internal(
+        field_node,
+        data_type,
+        buffers,
+        child_array,
+        require_alignment,
+        true,
+    )
+}
+
+unsafe fn create_dictionary_array_internal(
     field_node: &FieldNode,
     data_type: &DataType,
     buffers: &[Buffer],
     value_array: ArrayRef,
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<ArrayRef, ArrowError> {
     if let Dictionary(_, _) = *data_type {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
@@ -373,16 +545,57 @@ fn create_dictionary_array(
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer);
 
-        let array_data = if require_alignment {
-            builder.build()?
-        } else {
-            builder.build_aligned()?
-        };
-
+        let array_data = build_array_internal(builder, require_alignment, skip_validations)?;
         Ok(make_array(array_data))
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }
+}
+
+/// Reads the correct number of buffers based on list type and null_count, and creates a
+/// dictionary array ref
+///
+/// Safety:
+/// `skip_validations` allows the creation of an `ArrayData` without performing the
+/// usual validations. This can lead to undefined behavior if the data is not
+/// correctly formatted. Set `skip_validations` to true only if you are certain.
+///
+/// Notes:
+/// * If `skip_validations` is true, `require_alignment` is ignored.
+fn create_dictionary_array(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    value_array: ArrayRef,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    unsafe {
+        create_dictionary_array_internal(
+            field_node,
+            data_type,
+            buffers,
+            value_array,
+            require_alignment,
+            false,
+        )
+    }
+}
+
+unsafe fn create_dictionary_array_unchecked(
+    field_node: &FieldNode,
+    data_type: &DataType,
+    buffers: &[Buffer],
+    value_array: ArrayRef,
+    require_alignment: bool,
+) -> Result<ArrayRef, ArrowError> {
+    create_dictionary_array_internal(
+        field_node,
+        data_type,
+        buffers,
+        value_array,
+        require_alignment,
+        true,
+    )
 }
 
 /// State for decoding arrays from an encoded [`RecordBatch`]
@@ -513,6 +726,29 @@ pub fn read_record_batch(
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
 ) -> Result<RecordBatch, ArrowError> {
+    unsafe {
+        read_record_batch_impl(
+            buf,
+            batch,
+            schema,
+            dictionaries_by_id,
+            projection,
+            metadata,
+            false,
+            false,
+        )
+    }
+}
+
+/// Same as `read_record_batch`, but skips validations.
+pub unsafe fn read_record_batch_unchecked(
+    buf: &Buffer,
+    batch: crate::RecordBatch,
+    schema: SchemaRef,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    projection: Option<&[usize]>,
+    metadata: &MetadataVersion,
+) -> Result<RecordBatch, ArrowError> {
     read_record_batch_impl(
         buf,
         batch,
@@ -521,6 +757,7 @@ pub fn read_record_batch(
         projection,
         metadata,
         false,
+        true,
     )
 }
 
@@ -533,10 +770,39 @@ pub fn read_dictionary(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
-    read_dictionary_impl(buf, batch, schema, dictionaries_by_id, metadata, false)
+    unsafe {
+        read_dictionary_impl(
+            buf,
+            batch,
+            schema,
+            dictionaries_by_id,
+            metadata,
+            false,
+            false,
+        )
+    }
 }
 
-fn read_record_batch_impl(
+/// Same as `read_dictionary`, but skips validations.
+pub unsafe fn read_dictionary_unchecked(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    schema: &Schema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+) -> Result<(), ArrowError> {
+    read_dictionary_impl(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        false,
+        true,
+    )
+}
+
+unsafe fn read_record_batch_impl(
     buf: &Buffer,
     batch: crate::RecordBatch,
     schema: SchemaRef,
@@ -544,6 +810,7 @@ fn read_record_batch_impl(
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<RecordBatch, ArrowError> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IpcError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -577,8 +844,16 @@ fn read_record_batch_impl(
         for (idx, field) in schema.fields().iter().enumerate() {
             // Create array for projected field
             if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                let child =
-                    create_array(&mut reader, field, &mut variadic_counts, require_alignment)?;
+                let child = if skip_validations {
+                    create_array_unchecked(
+                        &mut reader,
+                        field,
+                        &mut variadic_counts,
+                        require_alignment,
+                    )?
+                } else {
+                    create_array(&mut reader, field, &mut variadic_counts, require_alignment)?
+                };
                 arrays.push((proj_idx, child));
             } else {
                 reader.skip_field(field, &mut variadic_counts)?;
@@ -595,7 +870,11 @@ fn read_record_batch_impl(
         let mut children = vec![];
         // keep track of index as lists require more than one node
         for field in schema.fields() {
-            let child = create_array(&mut reader, field, &mut variadic_counts, require_alignment)?;
+            let child = if skip_validations {
+                create_array_unchecked(&mut reader, field, &mut variadic_counts, require_alignment)?
+            } else {
+                create_array(&mut reader, field, &mut variadic_counts, require_alignment)?
+            };
             children.push(child);
         }
         assert!(variadic_counts.is_empty());
@@ -603,13 +882,14 @@ fn read_record_batch_impl(
     }
 }
 
-fn read_dictionary_impl(
+unsafe fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
+    skip_validations: bool,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -641,6 +921,7 @@ fn read_dictionary_impl(
                 None,
                 metadata,
                 require_alignment,
+                skip_validations,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -815,8 +1096,12 @@ impl FileDecoder {
         Ok(message)
     }
 
-    /// Read the dictionary with the given block and data buffer
-    pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
+    unsafe fn read_dictionary_internal(
+        &mut self,
+        block: &Block,
+        buf: &Buffer,
+        skip_validations: bool,
+    ) -> Result<(), ArrowError> {
         let message = self.read_message(buf)?;
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
@@ -828,6 +1113,7 @@ impl FileDecoder {
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
+                    skip_validations,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -836,11 +1122,30 @@ impl FileDecoder {
         }
     }
 
-    /// Read the RecordBatch with the given block and data buffer
-    pub fn read_record_batch(
+    /// Read the dictionary with the given block and data buffer
+    pub fn read_dictionary(&mut self, block: &Block, buf: &Buffer) -> Result<(), ArrowError> {
+        unsafe { self.read_dictionary_internal(block, buf, false) }
+    }
+
+    /// Read the dictionary with the given block and data buffer
+    ///
+    /// # Safety:
+    /// Skip validations to create an `ArrayData` without performing the usual validations.
+    /// This can lead to undefined behavior if the data is not correctly formatted.
+    /// Use this function only if you are certain and trust the data source.
+    pub unsafe fn read_dictionary_unchecked(
+        &mut self,
+        block: &Block,
+        buf: &Buffer,
+    ) -> Result<(), ArrowError> {
+        self.read_dictionary_internal(block, buf, true)
+    }
+
+    unsafe fn read_record_batch_internal(
         &self,
         block: &Block,
         buf: &Buffer,
+        skip_validations: bool,
     ) -> Result<Option<RecordBatch>, ArrowError> {
         let message = self.read_message(buf)?;
         match message.header_type() {
@@ -860,6 +1165,7 @@ impl FileDecoder {
                     self.projection.as_deref(),
                     &message.version(),
                     self.require_alignment,
+                    skip_validations,
                 )
                 .map(Some)
             }
@@ -868,6 +1174,29 @@ impl FileDecoder {
                 "Reading types other than record batches not yet supported, unable to read {t:?}"
             ))),
         }
+    }
+
+    /// Read the RecordBatch with the given block and data buffer
+    pub fn read_record_batch(
+        &self,
+        block: &Block,
+        buf: &Buffer,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        unsafe { self.read_record_batch_internal(block, buf, false) }
+    }
+
+    /// Same as `read_record_batch`, but skips validations.
+    ///
+    /// # Safety:
+    /// Skip validations to create an `ArrayData` without performing the usual validations.
+    /// This can lead to undefined behavior if the data is not correctly formatted.
+    /// Use this function only if you are certain and trust the data source.
+    pub unsafe fn read_record_batch_unchecked(
+        &self,
+        block: &Block,
+        buf: &Buffer,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
+        self.read_record_batch_internal(block, buf, true)
     }
 }
 
@@ -941,8 +1270,11 @@ impl FileReaderBuilder {
         self
     }
 
-    /// Build [`FileReader`] with given reader.
-    pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
+    unsafe fn build_internal<R: Read + Seek>(
+        self,
+        mut reader: R,
+        skip_validations: bool,
+    ) -> Result<FileReader<R>, ArrowError> {
         // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
         let mut buffer = [0; 10];
         reader.seek(SeekFrom::End(-10))?;
@@ -998,7 +1330,11 @@ impl FileReaderBuilder {
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
                 let buf = read_block(&mut reader, block)?;
-                decoder.read_dictionary(block, &buf)?;
+                if skip_validations {
+                    decoder.read_dictionary_unchecked(block, &buf)?;
+                } else {
+                    decoder.read_dictionary(block, &buf)?;
+                }
             }
         }
 
@@ -1010,6 +1346,20 @@ impl FileReaderBuilder {
             decoder,
             custom_metadata,
         })
+    }
+
+    /// Build [`FileReader`] with given reader.
+    pub fn build<R: Read + Seek>(self, reader: R) -> Result<FileReader<R>, ArrowError> {
+        unsafe { self.build_internal(reader, false) }
+    }
+
+    /// Build [`FileReader`] with given reader without validations at the build up stage.
+    /// Upon reading the data, validations will be performed if not specified otherwise.
+    pub unsafe fn build_unvalidated<R: Read + Seek>(
+        self,
+        reader: R,
+    ) -> Result<FileReader<R>, ArrowError> {
+        self.build_internal(reader, true)
     }
 }
 
@@ -1075,6 +1425,22 @@ impl<R: Read + Seek> FileReader<R> {
         builder.build(reader)
     }
 
+    /// Try to create a new file reader without validations.
+    ///
+    /// This is useful when the file is known to be valid and the user wants to skip validations.
+    /// This might be useful when the content is trusted and the user wants to avoid the overhead of
+    /// validating the content.
+    pub fn try_new_unvalidated(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self, ArrowError> {
+        let builder = FileReaderBuilder {
+            projection,
+            ..Default::default()
+        };
+        builder.build(reader)
+    }
+
     /// Return user defined customized metadata
     pub fn custom_metadata(&self) -> &HashMap<String, String> {
         &self.custom_metadata
@@ -1114,6 +1480,20 @@ impl<R: Read + Seek> FileReader<R> {
         self.decoder.read_record_batch(block, &buffer)
     }
 
+    unsafe fn maybe_next_unvalidated(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        let block = &self.blocks[self.current_block];
+        self.current_block += 1;
+
+        // read length
+        let buffer = read_block(&mut self.reader, block)?;
+        self.decoder.read_record_batch_unchecked(block, &buffer)
+    }
+
+    /// Returns an iterator that uses the unsafe version of maybe_next_unvalidated.
+    pub unsafe fn into_unvalidated_iterator(self) -> UnvalidatedFileReader<R> {
+        UnvalidatedFileReader { reader: self }
+    }
+
     /// Gets a reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
@@ -1145,6 +1525,30 @@ impl<R: Read + Seek> Iterator for FileReader<R> {
 impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
     fn schema(&self) -> SchemaRef {
         self.schema()
+    }
+}
+
+/// An iterator over the record batches (without validation) in an Arrow file
+pub struct UnvalidatedFileReader<R: Read + Seek> {
+    reader: FileReader<R>,
+}
+
+impl<R: Read + Seek> Iterator for UnvalidatedFileReader<R> {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.reader.current_block < self.reader.total_blocks {
+            // Use the unsafe `maybe_next_unvalidated` function
+            unsafe {
+                match self.reader.maybe_next_unvalidated() {
+                    Ok(Some(batch)) => Some(Ok(batch)),
+                    Ok(None) => None, // End of the file
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -1269,7 +1673,10 @@ impl<R: Read> StreamReader<R> {
         self.finished
     }
 
-    fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    unsafe fn maybe_next_internal(
+        &mut self,
+        skip_validations: bool,
+    ) -> Result<Option<RecordBatch>, ArrowError> {
         if self.finished {
             return Ok(None);
         }
@@ -1334,6 +1741,7 @@ impl<R: Read> StreamReader<R> {
                     self.projection.as_ref().map(|x| x.0.as_ref()),
                     &message.version(),
                     false,
+                    skip_validations,
                 )
                 .map(Some)
             }
@@ -1354,6 +1762,7 @@ impl<R: Read> StreamReader<R> {
                     &mut self.dictionaries_by_id,
                     &message.version(),
                     false,
+                    skip_validations,
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1364,6 +1773,14 @@ impl<R: Read> StreamReader<R> {
                 "Reading types other than record batches not yet supported, unable to read {t:?} "
             ))),
         }
+    }
+
+    fn maybe_next(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        unsafe { self.maybe_next_internal(false) }
+    }
+
+    unsafe fn maybe_next_unvalidated(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        self.maybe_next_internal(true)
     }
 
     /// Gets a reference to the underlying reader.
@@ -1379,6 +1796,11 @@ impl<R: Read> StreamReader<R> {
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
+
+    /// Returns an iterator that uses the unsafe version of maybe_next_unvalidated.
+    pub unsafe fn into_unvalidated_iterator(self) -> UnvalidatedStreamReader<R> {
+        UnvalidatedStreamReader { reader: self }
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1392,6 +1814,25 @@ impl<R: Read> Iterator for StreamReader<R> {
 impl<R: Read> RecordBatchReader for StreamReader<R> {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+/// An iterator over the record batches (without validation) in an Arrow stream
+pub struct UnvalidatedStreamReader<R: Read> {
+    reader: StreamReader<R>,
+}
+
+impl<R: Read> Iterator for UnvalidatedStreamReader<R> {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            match self.reader.maybe_next_unvalidated() {
+                Ok(Some(batch)) => Some(Ok(batch)),
+                Ok(None) => None, // End of the file
+                Err(e) => Some(Err(e)),
+            }
+        }
     }
 }
 
@@ -2176,16 +2617,19 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let roundtrip = read_record_batch_impl(
-            &b,
-            ipc_batch,
-            batch.schema(),
-            &Default::default(),
-            None,
-            &message.version(),
-            false,
-        )
-        .unwrap();
+        let roundtrip = unsafe {
+            read_record_batch_impl(
+                &b,
+                ipc_batch,
+                batch.schema(),
+                &Default::default(),
+                None,
+                &message.version(),
+                false,
+                false,
+            )
+            .unwrap()
+        };
         assert_eq!(batch, roundtrip);
     }
 
@@ -2214,15 +2658,18 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let result = read_record_batch_impl(
-            &b,
-            ipc_batch,
-            batch.schema(),
-            &Default::default(),
-            None,
-            &message.version(),
-            true,
-        );
+        let result = unsafe {
+            read_record_batch_impl(
+                &b,
+                ipc_batch,
+                batch.schema(),
+                &Default::default(),
+                None,
+                &message.version(),
+                true,
+                false,
+            )
+        };
 
         let error = result.unwrap_err();
         assert_eq!(
