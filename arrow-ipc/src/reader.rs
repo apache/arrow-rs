@@ -182,7 +182,7 @@ fn create_array(
                 .offset(0)
                 .add_child_data(run_ends.into_data())
                 .add_child_data(values.into_data())
-                .with_align_buffers(!require_alignment)
+                .align_buffers(!require_alignment)
                 .build()?;
 
             Ok(make_array(array_data))
@@ -256,7 +256,7 @@ fn create_array(
             let array_data = ArrayData::builder(data_type.clone())
                 .len(length as usize)
                 .offset(0)
-                .with_align_buffers(!require_alignment)
+                .align_buffers(!require_alignment)
                 .build()?;
 
             // no buffer increases
@@ -303,7 +303,7 @@ fn create_primitive_array(
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
-    let array_data = builder.with_align_buffers(!require_alignment).build()?;
+    let array_data = builder.align_buffers(!require_alignment).build()?;
 
     Ok(make_array(array_data))
 }
@@ -335,7 +335,7 @@ fn create_list_array(
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
 
-    let array_data = builder.with_align_buffers(!require_alignment).build()?;
+    let array_data = builder.align_buffers(!require_alignment).build()?;
 
     Ok(make_array(array_data))
 }
@@ -356,7 +356,7 @@ fn create_dictionary_array(
             .add_buffer(buffers[1].clone())
             .add_child_data(value_array.into_data())
             .null_bit_buffer(null_buffer)
-            .with_align_buffers(!require_alignment)
+            .align_buffers(!require_alignment)
             .build()?;
 
         Ok(make_array(array_data))

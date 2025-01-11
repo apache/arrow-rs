@@ -1894,7 +1894,7 @@ impl ArrayDataBuilder {
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
     pub unsafe fn build_unchecked(self) -> ArrayData {
-        self.with_skip_validation(true).build().unwrap()
+        self.skip_validation(true).build().unwrap()
     }
 
     /// Creates an `ArrayData`, consuming `self`
@@ -1952,7 +1952,7 @@ impl ArrayDataBuilder {
     /// Creates an array data, validating all inputs, and aligning any buffers
     #[deprecated(since = "54.1.0", note = "Use ArrayData::with_align_buffers instead")]
     pub fn build_aligned(self) -> Result<ArrayData, ArrowError> {
-        self.with_align_buffers(true).build()
+        self.align_buffers(true).build()
     }
 
     /// Ensure that all buffers are aligned, copying data if necessary
@@ -1970,7 +1970,7 @@ impl ArrayDataBuilder {
     ///
     /// If this flag is not enabled, `[Self::build`] return an error on encountering
     /// insufficiently aligned buffers.
-    pub fn with_align_buffers(mut self, align_buffers: bool) -> Self {
+    pub fn align_buffers(mut self, align_buffers: bool) -> Self {
         self.align_buffers = align_buffers;
         self
     }
@@ -1985,9 +1985,10 @@ impl ArrayDataBuilder {
     /// Validation can be expensive.
     ///
     /// # Safety
-    /// If validation is skipped, the buffers must form a valid Array array,
+    ///
+    /// If validation is skipped, the buffers must form a valid Arrow array,
     /// otherwise undefined behavior will result
-    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+    pub unsafe fn skip_validation(mut self, skip_validation: bool) -> Self {
         self.skip_validation = skip_validation;
         self
     }
