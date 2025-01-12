@@ -3163,6 +3163,7 @@ mod tests {
         assert_eq!(&v.unwrap(), "b\u{10ffff}".as_bytes());
     }
 
+    #[allow(clippy::needless_as_bytes)]
     #[test]
     fn test_truncate_utf8() {
         // No-op

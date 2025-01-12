@@ -174,6 +174,7 @@ pub(crate) struct Request<'a> {
     idempotent: bool,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> Request<'a> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);

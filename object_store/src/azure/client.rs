@@ -170,6 +170,7 @@ struct PutRequest<'a> {
     idempotent: bool,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> PutRequest<'a> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);

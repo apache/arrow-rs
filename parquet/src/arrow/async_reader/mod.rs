@@ -724,6 +724,7 @@ struct InMemoryRowGroup<'a> {
     row_count: usize,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> InMemoryRowGroup<'a> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(

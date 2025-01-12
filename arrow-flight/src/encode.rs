@@ -1798,6 +1798,7 @@ mod tests {
     }
 
     /// Return size, in memory of flight data
+    #[allow(clippy::needless_as_bytes)]
     fn flight_data_size(d: &FlightData) -> usize {
         let flight_descriptor_size = d
             .flight_descriptor

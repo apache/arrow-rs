@@ -864,6 +864,7 @@ pub fn parse_decimal<T: DecimalType>(
 
     // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
     // Thus, if we validate the precision correctly, we can skip overflow checks.
+    #[allow(clippy::question_mark)]
     while let Some((index, b)) = bs.next() {
         match b {
             b'0'..=b'9' => {

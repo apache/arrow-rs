@@ -146,11 +146,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          target: wasm32-unknown-unknown,wasm32-wasi
+          target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Build wasm32-unknown-unknown
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
-      - name: Build wasm32-wasi
-        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasi
+      - name: Build wasm32-wasip1
+        run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-wasip1
 
   clippy:
     name: Clippy
