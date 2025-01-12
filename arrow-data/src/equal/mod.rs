@@ -30,6 +30,7 @@ mod dictionary;
 mod fixed_binary;
 mod fixed_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
 mod run;
@@ -47,6 +48,7 @@ use dictionary::dictionary_equal;
 use fixed_binary::fixed_binary_equal;
 use fixed_list::fixed_list_equal;
 use list::list_equal;
+use list_view::list_view_equal;
 use null::null_equal;
 use primitive::primitive_equal;
 use structure::struct_equal;
@@ -102,9 +104,8 @@ fn equal_values(
             byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not yet implemented")
-        }
+        DataType::ListView(_) => list_view_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeListView(_) => list_view_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),

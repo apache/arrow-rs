@@ -18,12 +18,12 @@
 use arrow::array::{
     make_array, Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, GenericStringArray,
-    Int32Array, Int32Builder, Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait,
-    StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
+    Int32Array, Int32Builder, Int64Builder, ListArray, ListBuilder, ListViewBuilder, NullArray,
+    OffsetSizeTrait, StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{StringBuilder, StringViewBuilder, StructBuilder};
-use arrow_array::{DictionaryArray, FixedSizeListArray, StringViewArray};
+use arrow_array::{DictionaryArray, FixedSizeListArray, ListViewArray, StringViewArray};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field, Fields};
@@ -1291,4 +1291,137 @@ fn test_list_excess_children_equal() {
     assert_eq!(a.value_offsets(), &[0, 1, 3]);
     assert_eq!(b.value_offsets(), &[0, 0, 2]);
     assert_eq!(a, b);
+}
+
+fn create_list_view_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(data: T) -> ListViewArray {
+    let mut builder = ListViewBuilder::new(Int32Builder::with_capacity(10));
+    for d in data.as_ref() {
+        if let Some(v) = d {
+            builder.values().append_slice(v.as_ref());
+            builder.append(true);
+        } else {
+            builder.append(false);
+        }
+    }
+    builder.finish()
+}
+
+#[test]
+fn test_list_view_equal() {
+    let a = create_list_view_array([Some(&[1, 2, 3]), Some(&[4, 5, 6])]);
+    let b = create_list_view_array([Some(&[1, 2, 3]), Some(&[4, 5, 6])]);
+    test_equal(&a, &b, true);
+
+    let b = create_list_view_array([Some(&[1, 2, 3]), Some(&[4, 5, 7])]);
+    test_equal(&a, &b, false);
+}
+
+#[test]
+fn test_empty_offsets_list_view_equal() {
+    let empty: Vec<i32> = vec![];
+    let values = Int32Array::from(empty);
+    let empty_offsets: [u8; 0] = [];
+    let empty_sizes: [u8; 0] = [];
+    let a: ListViewArray = ArrayDataBuilder::new(DataType::ListView(Arc::new(
+        Field::new_list_field(DataType::Int32, true),
+    )))
+    .len(0)
+    .add_buffer(Buffer::from(&empty_offsets))
+    .add_buffer(Buffer::from(&empty_sizes))
+    .add_child_data(values.to_data())
+    .null_bit_buffer(Some(Buffer::from(&empty_offsets)))
+    .build()
+    .unwrap()
+    .into();
+
+    let b: ListViewArray = ArrayDataBuilder::new(DataType::ListView(Arc::new(
+        Field::new_list_field(DataType::Int32, true),
+    )))
+    .len(0)
+    .add_buffer(Buffer::from(&empty_offsets))
+    .add_buffer(Buffer::from(&empty_sizes))
+    .add_child_data(values.to_data())
+    .null_bit_buffer(Some(Buffer::from(&empty_offsets)))
+    .build()
+    .unwrap()
+    .into();
+
+    test_equal(&a, &b, true);
+}
+
+// Test the case where null_count > 0
+#[test]
+fn test_list_view_null() {
+    let a = create_list_view_array([Some(&[1, 2]), None, None, Some(&[3, 4]), None, None]);
+    let b = create_list_view_array([Some(&[1, 2]), None, None, Some(&[3, 4]), None, None]);
+    test_equal(&a, &b, true);
+
+    let b = create_list_view_array([
+        Some(&[1, 2]),
+        None,
+        Some(&[5, 6]),
+        Some(&[3, 4]),
+        None,
+        None,
+    ]);
+    test_equal(&a, &b, false);
+
+    let b = create_list_view_array([Some(&[1, 2]), None, None, Some(&[3, 5]), None, None]);
+    test_equal(&a, &b, false);
+
+    // a list where the nullness of values is determined by the list's bitmap
+    let c_values = Int32Array::from(vec![1, 2, -1, -2, 3, 4, -3, -4]);
+    let c: ListViewArray = ArrayDataBuilder::new(DataType::ListView(Arc::new(
+        Field::new_list_field(DataType::Int32, true),
+    )))
+    .len(8)
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 4, 1, 4, 4].to_byte_slice()))
+    .add_buffer(Buffer::from([3i32, 2, 1, 2, 1, 1, 1, 1].to_byte_slice()))
+    .add_child_data(c_values.into_data())
+    .null_bit_buffer(Some(Buffer::from([0b0001001])))
+    .build()
+    .unwrap()
+    .into();
+
+    let d_values = Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(-1),
+        None,
+        Some(3),
+        Some(4),
+        None,
+        None,
+    ]);
+    let d: ListViewArray = ArrayDataBuilder::new(DataType::ListView(Arc::new(
+        Field::new_list_field(DataType::Int32, true),
+    )))
+    .len(8)
+    .add_buffer(Buffer::from([0i32, 2, 3, 4, 4, 1, 4, 4].to_byte_slice()))
+    .add_buffer(Buffer::from([3i32, 2, 1, 2, 1, 1, 1, 1].to_byte_slice()))
+    .add_child_data(d_values.into_data())
+    .null_bit_buffer(Some(Buffer::from([0b0001001])))
+    .build()
+    .unwrap()
+    .into();
+    test_equal(&c, &d, true);
+}
+
+// Test the case where offset != 0
+#[test]
+fn test_list_view_offsets() {
+    let a = create_list_view_array([Some(&[1, 2]), None, None, Some(&[3, 4]), None, None]);
+    let b = create_list_view_array([Some(&[1, 2]), None, None, Some(&[3, 5]), None, None]);
+
+    let a_slice = a.slice(0, 3);
+    let b_slice = b.slice(0, 3);
+    test_equal(&a_slice, &b_slice, true);
+
+    let a_slice = a.slice(0, 5);
+    let b_slice = b.slice(0, 5);
+    test_equal(&a_slice, &b_slice, false);
+
+    let a_slice = a.slice(4, 1);
+    let b_slice = b.slice(4, 1);
+    test_equal(&a_slice, &b_slice, true);
 }
