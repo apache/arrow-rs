@@ -1152,6 +1152,13 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }

@@ -370,6 +370,13 @@ impl Array for StructArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.fields.iter_mut().for_each(|n| n.shrink_to_fit());
+    }
+
     fn offset(&self) -> usize {
         0
     }
