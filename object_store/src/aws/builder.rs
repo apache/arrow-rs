@@ -428,8 +428,8 @@ impl AmazonS3Builder {
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
     /// All environment variables starting with `AWS_` will be evaluated. Names must
-    /// match items from [`AmazonS3ConfigKey`][]. Only upper-case environment variables are
-    /// accepted.
+    /// match acceptable input to [`AmazonS3ConfigKey::from_str`][]. Only upper-case environment
+    /// variables are accepted.
     ///
     /// Some examples of variables extracted from environment:
     /// * `AWS_ACCESS_KEY_ID` -> access_key_id
