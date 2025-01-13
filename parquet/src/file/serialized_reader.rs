@@ -421,7 +421,6 @@ pub(crate) fn decode_page(
                     uncompressed_size
                 ));
             }
-
             Bytes::from(decompressed)
         }
         _ => buffer,
@@ -574,8 +573,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     ///
     /// This is used when we need to read parquet with row-filter, and we don't want to decompress the page twice.
     /// This function allows us to check if the next page is being cached or read previously.
-    #[cfg(test)]
-    fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+    #[cfg(feature = "async")]
+    pub(crate) fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
         match &mut self.state {
             SerializedPageReaderState::Values {
                 offset,
@@ -859,7 +858,6 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
 
     use bytes::Buf;
 
@@ -1166,6 +1164,7 @@ mod tests {
         assert_eq!(page_count, 2);
     }
 
+    #[cfg(feature = "async")]
     fn get_serialized_page_reader<R: ChunkReader>(
         file_reader: &SerializedFileReader<R>,
         row_group: usize,
@@ -1202,12 +1201,13 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "async")]
     #[test]
     fn test_peek_next_page_offset_matches_actual() -> Result<()> {
         let test_file = get_test_file("alltypes_plain.parquet");
         let reader = SerializedFileReader::new(test_file)?;
 
-        let mut offset_set = HashSet::new();
+        let mut offset_set = std::collections::HashSet::new();
         let num_row_groups = reader.metadata.num_row_groups();
         for row_group in 0..num_row_groups {
             let num_columns = reader.metadata.row_group(row_group).num_columns();
