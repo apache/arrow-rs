@@ -24,7 +24,8 @@ use arrow_array::types::{
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
@@ -262,7 +263,14 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(create_decimal_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(create_decimal32_array(vec![Some(1), Some(2), Some(3)], 9, 0).unwrap()),
+        Arc::new(create_decimal64_array(vec![Some(1), Some(2), Some(3)], 18, 0).unwrap()),
+        Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(create_decimal256_array(vec![
+            Some(i256::from_i128(1)),
+            Some(i256::from_i128(2)),
+            Some(i256::from_i128(3))
+        ], 40, 0).unwrap()),
         make_dictionary_primitive::<Int8Type, Decimal32Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal32Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal32Type>(vec![1, 2]),
@@ -428,7 +436,29 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
-fn create_decimal_array(
+fn create_decimal32_array(
+    array: Vec<Option<i132>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal32Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal64_array(
+    array: Vec<Option<i64>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal64Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
     scale: i8,
@@ -436,6 +466,17 @@ fn create_decimal_array(
     array
         .into_iter()
         .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal256_array(
+    array: Vec<Option<i256>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal256Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal256Array>()
         .with_precision_and_scale(precision, scale)
 }
 
@@ -519,6 +560,7 @@ fn get_all_types() -> Vec<DataType> {
                 Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal32(9, 0))),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal64(18, 0))),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]

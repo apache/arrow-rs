@@ -830,6 +830,7 @@ pub fn cast_with_options(
         (Map(_, ordered1), Map(_, ordered2)) if ordered1 == ordered2 => {
             cast_map_values(array.as_map(), to_type, cast_options, ordered1.to_owned())
         }
+        // Decimal to decimal, same width
         (Decimal32(p1, s1), Decimal32(p2, s2)) => {
             cast_decimal_to_decimal_same_type::<Decimal32Type>(
                 array.as_primitive(),
@@ -840,6 +841,37 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
+        (Decimal64(p1, s1), Decimal64(p2, s2)) => {
+            cast_decimal_to_decimal_same_type::<Decimal64Type>(
+                array.as_primitive(),
+                *p1,
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
+        }
+        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal_same_type::<Decimal128Type>(
+                array.as_primitive(),
+                *p1,
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
+        }
+        (Decimal256(p1, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal_same_type::<Decimal256Type>(
+                array.as_primitive(),
+                *p1,
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
+        }
+        // Decimal to decimal, different width
         (Decimal32(_, s1), Decimal64(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal32Type, Decimal64Type>(
                 array.as_primitive(),
@@ -867,10 +899,9 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Decimal64(p1, s1), Decimal64(p2, s2)) => {
-            cast_decimal_to_decimal_same_type::<Decimal64Type>(
+        (Decimal64(_, s1), Decimal32(p2, s2)) => {
+            cast_decimal_to_decimal::<Decimal64Type, Decimal32Type>(
                 array.as_primitive(),
-                *p1,
                 *s1,
                 *p2,
                 *s2,
@@ -895,20 +926,18 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal_same_type::<Decimal128Type>(
+        (Decimal128(_, s1), Decimal32(p2, s2)) => {
+            cast_decimal_to_decimal::<Decimal128Type, Decimal32Type>(
                 array.as_primitive(),
-                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(p1, s1), Decimal256(p2, s2)) => {
-            cast_decimal_to_decimal_same_type::<Decimal256Type>(
+        (Decimal128(_, s1), Decimal64(p2, s2)) => {
+            cast_decimal_to_decimal::<Decimal128Type, Decimal64Type>(
                 array.as_primitive(),
-                *p1,
                 *s1,
                 *p2,
                 *s2,
@@ -917,6 +946,24 @@ pub fn cast_with_options(
         }
         (Decimal128(_, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal256Type>(
+                array.as_primitive(),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
+        }
+        (Decimal256(_, s1), Decimal32(p2, s2)) => {
+            cast_decimal_to_decimal::<Decimal256Type, Decimal32Type>(
+                array.as_primitive(),
+                *s1,
+                *p2,
+                *s2,
+                cast_options,
+            )
+        }
+        (Decimal256(_, s1), Decimal64(p2, s2)) => {
+            cast_decimal_to_decimal::<Decimal256Type, Decimal64Type>(
                 array.as_primitive(),
                 *s1,
                 *p2,
@@ -933,6 +980,7 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
+        // Decimal to non-decimal
         (Decimal32(_, scale), _) if !to_type.is_temporal() => {
             cast_from_decimal::<Decimal32Type, _>(
                 array,
@@ -977,6 +1025,7 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
+        // Non-decimal to decimal
         (_, Decimal32(precision, scale)) if !from_type.is_temporal() => {
             cast_to_decimal::<Decimal32Type, _>(
                 array,
@@ -2584,7 +2633,7 @@ mod tests {
             .with_precision_and_scale(precision, scale)
     }
 
-    fn create_decimal_array(
+    fn create_decimal128_array(
         array: Vec<Option<i128>>,
         precision: u8,
         scale: i8,
@@ -2653,7 +2702,7 @@ mod tests {
             Some(-3123456),
             None,
         ];
-        let array = create_decimal_array(array, 20, 4).unwrap();
+        let array = create_decimal128_array(array, 20, 4).unwrap();
         // decimal128 to decimal128
         let input_type = DataType::Decimal128(20, 4);
         let output_type = DataType::Decimal128(20, 3);
@@ -2804,7 +2853,7 @@ mod tests {
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let array = create_decimal_array(array, 20, 3).unwrap();
+        let array = create_decimal128_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal128Array,
@@ -2818,7 +2867,7 @@ mod tests {
         );
         // negative test
         let array = vec![Some(123456), None];
-        let array = create_decimal_array(array, 10, 0).unwrap();
+        let array = create_decimal128_array(array, 10, 0).unwrap();
         let result_safe = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result_safe.is_ok());
         let options = CastOptions {
@@ -2874,7 +2923,7 @@ mod tests {
         );
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let array = create_decimal_array(array, p, s).unwrap();
+        let array = create_decimal128_array(array, p, s).unwrap();
         let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
         assert_eq!(cast_array.data_type(), &output_type);
     }
@@ -2890,7 +2939,7 @@ mod tests {
         );
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let array = create_decimal_array(array, p, s).unwrap();
+        let array = create_decimal128_array(array, p, s).unwrap();
         let cast_array = cast_with_options(&array, &output_type, &CastOptions::default()).unwrap();
         assert_eq!(cast_array.data_type(), &output_type);
     }
@@ -2942,7 +2991,7 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
 
         let array = vec![Some(i128::MAX)];
-        let array = create_decimal_array(array, 38, 3).unwrap();
+        let array = create_decimal128_array(array, 38, 3).unwrap();
         let result = cast_with_options(
             &array,
             &output_type,
@@ -2962,7 +3011,7 @@ mod tests {
         assert!(can_cast_types(&input_type, &output_type));
 
         let array = vec![Some(i128::MAX)];
-        let array = create_decimal_array(array, 38, 3).unwrap();
+        let array = create_decimal128_array(array, 38, 3).unwrap();
         let result = cast_with_options(
             &array,
             &output_type,
@@ -3019,7 +3068,7 @@ mod tests {
         let output_type = DataType::Decimal256(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
-        let array = create_decimal_array(array, 20, 3).unwrap();
+        let array = create_decimal128_array(array, 20, 3).unwrap();
         generate_cast_test_case!(
             &array,
             Decimal256Array,
@@ -3227,13 +3276,13 @@ mod tests {
     #[test]
     fn test_cast_decimal_to_numeric() {
         let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
-        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = create_decimal128_array(value_array, 38, 2).unwrap();
 
         generate_decimal_to_numeric_cast_test_case!(&array);
 
         // overflow test: out of range of max u8
         let value_array: Vec<Option<i128>> = vec![Some(51300)];
-        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = create_decimal128_array(value_array, 38, 2).unwrap();
         let casted_array = cast_with_options(
             &array,
             &DataType::UInt8,
@@ -3260,7 +3309,7 @@ mod tests {
 
         // overflow test: out of range of max i8
         let value_array: Vec<Option<i128>> = vec![Some(24400)];
-        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = create_decimal128_array(value_array, 38, 2).unwrap();
         let casted_array = cast_with_options(
             &array,
             &DataType::Int8,
@@ -3297,7 +3346,7 @@ mod tests {
             Some(112345678),
             Some(112345679),
         ];
-        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = create_decimal128_array(value_array, 38, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float32Array,
@@ -3324,7 +3373,7 @@ mod tests {
             Some(112345678901234568),
             Some(112345678901234560),
         ];
-        let array = create_decimal_array(value_array, 38, 2).unwrap();
+        let array = create_decimal128_array(value_array, 38, 2).unwrap();
         generate_cast_test_case!(
             &array,
             Float64Array,
@@ -8638,7 +8687,7 @@ mod tests {
         let output_type = DataType::Decimal128(20, -1);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123450), Some(2123455), Some(3123456), None];
-        let input_decimal_array = create_decimal_array(array, 20, 0).unwrap();
+        let input_decimal_array = create_decimal128_array(array, 20, 0).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
@@ -8696,7 +8745,7 @@ mod tests {
         let output_type = DataType::Decimal128(10, -2);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(123)];
-        let input_decimal_array = create_decimal_array(array, 10, -1).unwrap();
+        let input_decimal_array = create_decimal128_array(array, 10, -1).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(&array, Decimal128Array, &output_type, vec![Some(12_i128),]);
 
@@ -8706,7 +8755,7 @@ mod tests {
         assert_eq!("1200", decimal_arr.value_as_string(0));
 
         let array = vec![Some(125)];
-        let input_decimal_array = create_decimal_array(array, 10, -1).unwrap();
+        let input_decimal_array = create_decimal128_array(array, 10, -1).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(&array, Decimal128Array, &output_type, vec![Some(13_i128),]);
 
@@ -8722,7 +8771,7 @@ mod tests {
         let output_type = DataType::Decimal256(10, 5);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(123456), Some(-123456)];
-        let input_decimal_array = create_decimal_array(array, 10, 3).unwrap();
+        let input_decimal_array = create_decimal128_array(array, 10, 3).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
 
         let hundred = i256::from_i128(100);
@@ -9586,15 +9635,15 @@ mod tests {
         
         test_decimal_to_string::<Decimal128Type, i32>(
             DataType::Utf8View,
-            create_decimal_array(array128.clone(), 7, 3).unwrap(),
+            create_decimal128_array(array128.clone(), 7, 3).unwrap(),
         );
         test_decimal_to_string::<Decimal128Type, i32>(
             DataType::Utf8,
-            create_decimal_array(array128.clone(), 7, 3).unwrap(),
+            create_decimal128_array(array128.clone(), 7, 3).unwrap(),
         );
         test_decimal_to_string::<Decimal128Type, i64>(
             DataType::LargeUtf8,
-            create_decimal_array(array128, 7, 3).unwrap(),
+            create_decimal128_array(array128, 7, 3).unwrap(),
         );
 
         test_decimal_to_string::<Decimal256Type, i32>(
@@ -10242,7 +10291,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_same_scale() {
         let array = vec![Some(123456789)];
-        let array = create_decimal_array(array, 24, 2).unwrap();
+        let array = create_decimal128_array(array, 24, 2).unwrap();
         println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal128(6, 2);
@@ -10260,7 +10309,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_lower_scale() {
         let array = vec![Some(123456789)];
-        let array = create_decimal_array(array, 24, 2).unwrap();
+        let array = create_decimal128_array(array, 24, 2).unwrap();
         println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 4);
         let output_type = DataType::Decimal128(6, 2);
@@ -10278,7 +10327,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_greater_scale() {
         let array = vec![Some(123456789)];
-        let array = create_decimal_array(array, 24, 2).unwrap();
+        let array = create_decimal128_array(array, 24, 2).unwrap();
         println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal128(6, 3);
@@ -10296,7 +10345,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_diff_type() {
         let array = vec![Some(123456789)];
-        let array = create_decimal_array(array, 24, 2).unwrap();
+        let array = create_decimal128_array(array, 24, 2).unwrap();
         println!("{:?}", array);
         let input_type = DataType::Decimal128(24, 2);
         let output_type = DataType::Decimal256(6, 2);
