@@ -143,10 +143,6 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) | DataType::RunEndEncoded(_, _) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
-            MutableBuffer::new(capacity * mem::size_of::<u8>()),
-            empty_buffer,
-        ],
         DataType::Union(_, mode) => {
             let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
             match mode {
