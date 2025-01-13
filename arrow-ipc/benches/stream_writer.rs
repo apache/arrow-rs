@@ -23,7 +23,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("arrow_ipc");
+    let mut group = c.benchmark_group("arrow_ipc_stream_writer");
 
     group.bench_function("write_single_batch", |b| {
         let batch = create_batch(8192, true);
