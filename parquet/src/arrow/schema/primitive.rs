@@ -47,6 +47,11 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
 
+        // Allow up-casting integers (i.e. no precision loss)
+        (DataType::Int8, DataType::Int16) => hint,
+        (DataType::Int8 | DataType::Int16, DataType::Int32) => hint,
+        (DataType::Int8 | DataType::Int16 | DataType::Int32, DataType::Int64) => hint,
+
         // Coerce Date32 back to Date64 (#1666)
         (DataType::Date32, DataType::Date64) => hint,
 
