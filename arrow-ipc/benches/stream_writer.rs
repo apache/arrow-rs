@@ -27,9 +27,10 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("write_single_batch", |b| {
         let batch = create_batch(8192, true);
-        b.iter(|| {
-            let buffer = vec![];
-            let mut writer = StreamWriter::try_new(buffer, batch.schema().as_ref()).unwrap();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
             writer.write(&batch).unwrap();
             writer.finish().unwrap();
         })
@@ -37,9 +38,10 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("write_multiple_batches", |b| {
         let batch = create_batch(8192, true);
-        b.iter(|| {
-            let buffer = vec![];
-            let mut writer = StreamWriter::try_new(buffer, batch.schema().as_ref()).unwrap();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
             for _ in 0..10 {
                 writer.write(&batch).unwrap();
             }
