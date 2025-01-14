@@ -16,7 +16,7 @@
 // under the License.
 
 //! [`check_valid_utf8`] validation function
-use crate::errors::{Result, ParquetError};
+use crate::errors::{ParquetError, Result};
 
 /// Check that `val` is a valid UTF-8 sequence.
 ///
@@ -49,8 +49,8 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
         }
     }
     #[cfg(not(feature = "simdutf8"))]
-        match std::str::from_utf8(val) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
-        }
+    match std::str::from_utf8(val) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+    }
 }

@@ -682,7 +682,6 @@ impl ByteViewArrayDecoderDelta {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use arrow_array::StringViewArray;
