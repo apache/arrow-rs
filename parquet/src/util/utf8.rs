@@ -28,6 +28,15 @@ use crate::errors::{Result, ParquetError};
 ///
 /// Returns `Err::General` with a message compatible with [`std::str::from_utf8`] on failure.
 ///
+/// # Example
+/// ```
+/// use parquet::utf8::check_valid_utf8;
+/// assert!(check_valid_utf8(b"hello").is_ok());
+/// assert!(check_valid_utf8(b"hello \xF0\x9F\x98\x8E").is_ok());
+/// // invalid UTF-8
+/// assert!(check_valid_utf8(b"hello \xF0\x9F\x98").is_err());
+/// ```
+///
 /// [`simdutf8`]: https://crates.io/crates/simdutf8
 #[inline(always)]
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {

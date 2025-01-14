@@ -22,7 +22,7 @@ pub(crate) mod interner;
 
 #[cfg(any(test, feature = "test_common"))]
 pub(crate) mod test_common;
-pub(crate) mod utf8;
+pub mod utf8;
 
 #[cfg(any(test, feature = "test_common"))]
 pub use self::test_common::page_util::{
