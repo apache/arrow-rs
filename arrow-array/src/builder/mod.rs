@@ -216,8 +216,24 @@
 //!     RecordBatch::from(&builder.finish())
 //! }
 //! ```
+//!
+//! # Null / Validity Masks
+//!
+//! The [`NullBufferBuilder`] is optimized for creating the null mask for an array.
+//!
+//! ```
+//! # use arrow_array::builder::NullBufferBuilder;
+//! let mut builder = NullBufferBuilder::new(8);
+//! let mut builder = NullBufferBuilder::new(8);
+//! builder.append_n_non_nulls(7);
+//! builder.append_null();
+//! let buffer = builder.finish().unwrap();
+//! assert_eq!(buffer.len(), 8);
+//! assert_eq!(buffer.iter().collect::<Vec<_>>(), vec![true, true, true, true, true, true, true, false]);
+//! ```
 
 pub use arrow_buffer::BooleanBufferBuilder;
+pub use arrow_buffer::NullBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
