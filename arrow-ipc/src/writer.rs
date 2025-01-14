@@ -17,8 +17,12 @@
 
 //! Arrow IPC File and Stream Writers
 //!
-//! The `FileWriter` and `StreamWriter` have similar interfaces,
-//! however the `FileWriter` expects a reader that supports `Seek`ing
+//! # Notes
+//!
+//! [`FileWriter`] and [`StreamWriter`] have similar interfaces,
+//! however the [`FileWriter`] expects a reader that supports [`Seek`]ing
+//!
+//! [`Seek`]: std::io::Seek
 
 use std::cmp::min;
 use std::collections::HashMap;
@@ -188,7 +192,7 @@ impl Default for IpcWriteOptions {
 /// Handles low level details of encoding [`Array`] and [`Schema`] into the
 /// [Arrow IPC Format].
 ///
-/// # Example:
+/// # Example
 /// ```
 /// # fn run() {
 /// # use std::sync::Arc;
@@ -905,7 +909,27 @@ impl DictionaryTracker {
     }
 }
 
-/// Writer for an IPC file
+/// Arrow File Writer
+///
+/// Writes Arrow [`RecordBatch`]es in the [IPC File Format] to  anything
+/// that implements [Write].
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::StreamWriter;
+/// # let mut file = vec![]; // mimic a file for the example
+/// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// // create a new writer, the schema must be known in advance
+/// let mut writer = StreamWriter::try_new(&mut file, &batch.schema()).unwrap();
+/// // write each batch to the underlying writer
+/// writer.write(&batch).unwrap();
+/// // When all batches are written, call finish to flush all buffers
+/// writer.finish().unwrap();
+/// // must drop the writer to release the reference to the file.
+/// drop(writer);
+/// ```
+/// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 pub struct FileWriter<W> {
     /// The object to write to
     writer: W,
@@ -1108,7 +1132,7 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
-    /// Unwraps the the underlying writer.
+    /// Unwraps the underlying writer.
     ///
     /// The writer is flushed and the FileWriter is finished before returning.
     ///
@@ -1135,7 +1159,28 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 }
 
-/// Writer for an IPC stream
+/// Arrow Writer for an IPC stream
+///
+/// Writes Arrow [`RecordBatch`]es in the [IPC Streaming Format] to anything
+/// that implements [Write].
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::StreamWriter;
+/// # let mut stream = vec![]; // mimic a stream for the example
+/// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// // create a new writer, the schema must be known in advance
+/// let mut writer = StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+/// // write each batch to the underlying stream
+/// writer.write(&batch).unwrap();
+/// // When all batches are written, call finish to flush all buffers
+/// writer.finish().unwrap();
+/// // must drop the writer to release the stream reference
+/// drop(writer);
+/// ```
+///
+/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamWriter<W> {
     /// The object to write to
     writer: W,
