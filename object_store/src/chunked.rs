@@ -86,6 +86,7 @@ impl ObjectStore for ChunkedStore {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let r = self.inner.get_opts(location, options).await?;
         let stream = match r.payload {
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
                 crate::local::chunked_stream(file, path, r.range.clone(), self.chunk_size)
             }
@@ -149,7 +150,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -157,7 +158,7 @@ impl ObjectStore for ChunkedStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 
@@ -178,7 +179,9 @@ impl ObjectStore for ChunkedStore {
 mod tests {
     use futures::StreamExt;
 
+    #[cfg(feature = "fs")]
     use crate::integration::*;
+    #[cfg(feature = "fs")]
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
@@ -209,6 +212,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fs")]
     #[tokio::test]
     async fn test_chunked() {
         let temporary = tempfile::tempdir().unwrap();

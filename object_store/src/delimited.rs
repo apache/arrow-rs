@@ -21,16 +21,15 @@ use std::collections::VecDeque;
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use snafu::{ensure, Snafu};
 
 use super::Result;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("encountered unterminated string"))]
+    #[error("encountered unterminated string")]
     UnterminatedString,
 
-    #[snafu(display("encountered trailing escape character"))]
+    #[error("encountered trailing escape character")]
     TrailingEscape,
 }
 
@@ -125,8 +124,12 @@ impl LineDelimiter {
     /// Returns `true` if there is no remaining data to be read
     fn finish(&mut self) -> Result<bool> {
         if !self.remainder.is_empty() {
-            ensure!(!self.is_quote, UnterminatedStringSnafu);
-            ensure!(!self.is_escape, TrailingEscapeSnafu);
+            if self.is_quote {
+                Err(Error::UnterminatedString)?;
+            }
+            if self.is_escape {
+                Err(Error::TrailingEscape)?;
+            }
 
             self.complete
                 .push_back(Bytes::from(std::mem::take(&mut self.remainder)))

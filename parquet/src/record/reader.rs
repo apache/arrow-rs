@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::{FileReader, RowGroupReader};
 use crate::record::{
-    api::{make_list, make_map, make_row, Field, Row},
+    api::{make_list, make_map, Field, Row},
     triplet::TripletIter,
 };
 use crate::schema::types::{ColumnPath, SchemaDescPtr, SchemaDescriptor, Type, TypePtr};
@@ -138,7 +138,17 @@ impl TreeBuilder {
                 .column_descr_ptr();
             let col_reader = row_group_reader.get_column_reader(orig_index)?;
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
-            Reader::PrimitiveReader(field, Box::new(column))
+            let reader = Reader::PrimitiveReader(field.clone(), Box::new(column));
+            if repetition == Repetition::REPEATED {
+                Reader::RepeatedReader(
+                    field,
+                    curr_def_level - 1,
+                    curr_rep_level - 1,
+                    Box::new(reader),
+                )
+            } else {
+                reader
+            }
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
@@ -207,11 +217,15 @@ impl TreeBuilder {
                         Repetition::REPEATED,
                         "Invalid map type: {field:?}"
                     );
-                    assert_eq!(
-                        key_value_type.get_fields().len(),
-                        2,
-                        "Invalid map type: {field:?}"
-                    );
+                    // Parquet spec allows no value. In that case treat as a list. #1642
+                    if key_value_type.get_fields().len() != 1 {
+                        // If not a list, then there can only be 2 fields in the struct
+                        assert_eq!(
+                            key_value_type.get_fields().len(),
+                            2,
+                            "Invalid map type: {field:?}"
+                        );
+                    }
 
                     path.push(String::from(key_value_type.name()));
 
@@ -229,25 +243,35 @@ impl TreeBuilder {
                         row_group_reader,
                     )?;
 
-                    let value_type = &key_value_type.get_fields()[1];
-                    let value_reader = self.reader_tree(
-                        value_type.clone(),
-                        path,
-                        curr_def_level + 1,
-                        curr_rep_level + 1,
-                        paths,
-                        row_group_reader,
-                    )?;
+                    if key_value_type.get_fields().len() == 1 {
+                        path.pop();
+                        Reader::RepeatedReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                        )
+                    } else {
+                        let value_type = &key_value_type.get_fields()[1];
+                        let value_reader = self.reader_tree(
+                            value_type.clone(),
+                            path,
+                            curr_def_level + 1,
+                            curr_rep_level + 1,
+                            paths,
+                            row_group_reader,
+                        )?;
 
-                    path.pop();
+                        path.pop();
 
-                    Reader::KeyValueReader(
-                        field,
-                        curr_def_level,
-                        curr_rep_level,
-                        Box::new(key_reader),
-                        Box::new(value_reader),
-                    )
+                        Reader::KeyValueReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                            Box::new(value_reader),
+                        )
+                    }
                 }
                 // A repeated field that is neither contained by a `LIST`- or
                 // `MAP`-annotated group nor annotated by `LIST` or `MAP`
@@ -335,6 +359,19 @@ impl Reader {
     /// <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
     ///   #backward-compatibility-rules
     fn is_element_type(repeated_type: &Type) -> bool {
+        // For legacy 2-level list types whose element type is a 2-level list
+        //
+        //    // ARRAY<ARRAY<INT>> (nullable list, non-null elements)
+        //    optional group my_list (LIST) {
+        //      repeated group array (LIST) {
+        //        repeated int32 array;
+        //      };
+        //    }
+        //
+        if repeated_type.is_list() || repeated_type.has_single_repeated_child() {
+            return false;
+        }
+
         // For legacy 2-level list types with primitive element type, e.g.:
         //
         //    // ARRAY<INT> (nullable list, non-null elements)
@@ -389,7 +426,7 @@ impl Reader {
                 for reader in readers {
                     fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
-                Ok(make_row(fields))
+                Ok(Row::new(fields))
             }
             _ => panic!("Cannot call read() on {self}"),
         }
@@ -424,7 +461,7 @@ impl Reader {
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
-                let row = make_row(fields);
+                let row = Row::new(fields);
                 Field::Group(row)
             }
             Reader::RepeatedReader(_, def_level, rep_level, ref mut reader) => {
@@ -816,7 +853,7 @@ mod tests {
     macro_rules! row {
         ($($e:tt)*) => {
             {
-                make_row(vec![$($e)*])
+                Row::new(vec![$($e)*])
             }
         }
     }
@@ -1449,8 +1486,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid map type")]
-    fn test_file_reader_rows_invalid_map_type() {
+    fn test_file_reader_rows_nested_map_type() {
         let schema = "
       message spark_schema {
         OPTIONAL group a (MAP) {
@@ -1688,6 +1724,161 @@ mod tests {
         assert_eq!(rows, expected_rows);
     }
 
+    #[test]
+    fn test_tree_reader_handle_primitive_repeated_fields_with_no_annotation() {
+        // In this test the REPEATED fields are primitives
+        let rows = test_file_reader_rows("repeated_primitive_no_list.parquet", None).unwrap();
+        let expected_rows = vec![
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["foo", "zero", "one", "two"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["foo", "zero", "one", "two"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![Field::Int(4)]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![Field::Int(4)]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["five", "six", "seven", "eight"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["five", "six", "seven", "eight"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+        ];
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let rows = test_file_reader_rows("map_no_value.parquet", None).unwrap();
+
+        // the my_map_no_v and my_list columns should be equivalent lists by this point
+        for row in rows {
+            let cols = row.into_columns();
+            assert_eq!(cols[1].1, cols[2].1);
+        }
+    }
+
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
         let file = get_test_file(file_name);
         let file_reader: Box<dyn FileReader> = Box::new(SerializedFileReader::new(file)?);
@@ -1703,5 +1894,22 @@ mod tests {
         let row_group_reader = file_reader.get_row_group(0).unwrap();
         let iter = row_group_reader.get_row_iter(schema)?;
         Ok(iter.map(|row| row.unwrap()).collect())
+    }
+
+    #[test]
+    fn test_read_old_nested_list() {
+        let rows = test_file_reader_rows("old_list_structure.parquet", None).unwrap();
+        let expected_rows = vec![row![(
+            "a".to_string(),
+            Field::ListInternal(make_list(
+                [
+                    make_list([1, 2].map(Field::Int).to_vec()),
+                    make_list([3, 4].map(Field::Int).to_vec())
+                ]
+                .map(Field::ListInternal)
+                .to_vec()
+            ))
+        ),]];
+        assert_eq!(rows, expected_rows);
     }
 }

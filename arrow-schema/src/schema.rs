@@ -389,7 +389,12 @@ impl Schema {
 
     /// Returns a vector of immutable references to all [`Field`] instances selected by
     /// the dictionary ID they use.
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
+        #[allow(deprecated)]
         self.fields
             .iter()
             .flat_map(|f| f.fields_with_dict_id(dict_id))
@@ -433,33 +438,6 @@ impl Schema {
                 .metadata
                 .iter()
                 .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
-    }
-
-    /// Remove field by index and return it. Recommend to use [`SchemaBuilder`]
-    /// if you are looking to remove multiple columns, as this will save allocations.
-    ///
-    /// # Panic
-    ///
-    /// Panics if `index` is out of bounds.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// let mut schema = Schema::new(vec![
-    ///   Field::new("a", DataType::Boolean, false),
-    ///   Field::new("b", DataType::Int8, false),
-    ///   Field::new("c", DataType::Utf8, false),
-    /// ]);
-    /// assert_eq!(schema.fields.len(), 3);
-    /// assert_eq!(schema.remove(1), Field::new("b", DataType::Int8, false).into());
-    /// assert_eq!(schema.fields.len(), 2);
-    /// ```
-    #[deprecated(note = "Use SchemaBuilder::remove")]
-    #[doc(hidden)]
-    #[allow(deprecated)]
-    pub fn remove(&mut self, index: usize) -> FieldRef {
-        self.fields.remove(index)
     }
 }
 
@@ -665,7 +643,9 @@ mod tests {
         assert_eq!(first_name.name(), "first_name");
         assert_eq!(first_name.data_type(), &DataType::Utf8);
         assert!(!first_name.is_nullable());
-        assert_eq!(first_name.dict_id(), None);
+        #[allow(deprecated)]
+        let dict_id = first_name.dict_id();
+        assert_eq!(dict_id, None);
         assert_eq!(first_name.dict_is_ordered(), None);
 
         let metadata = first_name.metadata();
@@ -682,7 +662,9 @@ mod tests {
             interests.data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         );
-        assert_eq!(interests.dict_id(), Some(123));
+        #[allow(deprecated)]
+        let dict_id = interests.dict_id();
+        assert_eq!(dict_id, Some(123));
         assert_eq!(interests.dict_is_ordered(), Some(true));
     }
 
@@ -718,6 +700,7 @@ mod tests {
     fn schema_field_with_dict_id() {
         let schema = person_schema();
 
+        #[allow(deprecated)]
         let fields_dict_123: Vec<_> = schema
             .fields_with_dict_id(123)
             .iter()
@@ -725,7 +708,9 @@ mod tests {
             .collect();
         assert_eq!(fields_dict_123, vec!["interests"]);
 
-        assert!(schema.fields_with_dict_id(456).is_empty());
+        #[allow(deprecated)]
+        let is_empty = schema.fields_with_dict_id(456).is_empty();
+        assert!(is_empty);
     }
 
     fn person_schema() -> Schema {
@@ -745,6 +730,7 @@ mod tests {
                 ])),
                 false,
             ),
+            #[allow(deprecated)]
             Field::new_dict(
                 "interests",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

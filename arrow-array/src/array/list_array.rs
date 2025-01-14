@@ -485,12 +485,25 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -560,7 +573,7 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         ListArray::new(field, offsets, Arc::new(values), None)
     }
 
@@ -590,7 +603,8 @@ mod tests {
         let value_offsets = Buffer::from([]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(0)
             .add_buffer(value_offsets)
@@ -616,7 +630,8 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -761,7 +776,8 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -912,7 +928,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
                 .build_unchecked()
         };
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -929,7 +946,8 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -959,7 +977,8 @@ mod tests {
 
         let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
 
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1005,7 +1024,8 @@ mod tests {
                 .build_unchecked()
         };
 
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(buf2)

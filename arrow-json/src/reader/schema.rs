@@ -77,7 +77,7 @@ impl InferredType {
 
 /// Shorthand for building list data type of `ty`
 fn list_type_of(ty: DataType) -> DataType {
-    DataType::List(Arc::new(Field::new("item", ty, true)))
+    DataType::List(Arc::new(Field::new_list_field(ty, true)))
 }
 
 /// Coerce data type during inference

@@ -454,7 +454,7 @@ impl Encoder for ArrayFormatter<'_> {
 /// A newtype wrapper around [`ArrayFormatter`] that skips surrounding the value with `"`
 struct RawArrayFormatter<'a>(ArrayFormatter<'a>);
 
-impl<'a> Encoder for RawArrayFormatter<'a> {
+impl Encoder for RawArrayFormatter<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         let _ = write!(out, "{}", self.0.value(idx));
     }

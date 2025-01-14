@@ -330,6 +330,11 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         self.run_ends.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.run_ends.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.run_ends.offset()
     }
@@ -594,6 +599,10 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
         self.run_array.logical_nulls()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.run_array.logical_null_count()
     }
 
     fn is_nullable(&self) -> bool {

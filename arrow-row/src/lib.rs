@@ -2317,7 +2317,7 @@ mod tests {
         let values_len = offsets.last().unwrap().to_usize().unwrap();
         let values = values(values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
-        let field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
         ListArray::new(field, offsets, values, Some(nulls))
     }
 

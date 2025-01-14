@@ -23,11 +23,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - arrow/**
@@ -123,13 +123,13 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          target: wasm32-unknown-unknown,wasm32-wasi
+          target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Install clang # Needed for zlib compilation
         run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown
         run: cargo build -p parquet --target wasm32-unknown-unknown
-      - name: Build wasm32-wasi
-        run: cargo build -p parquet --target wasm32-wasi
+      - name: Build wasm32-wasip1
+        run: cargo build -p parquet --target wasm32-wasip1
 
   pyspark-integration-test:
     name: PySpark Integration Test

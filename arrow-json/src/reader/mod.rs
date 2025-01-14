@@ -246,13 +246,6 @@ impl ReaderBuilder {
 
     /// Sets if the decoder should coerce primitive values (bool and number) into string
     /// when the Schema's column is Utf8 or LargeUtf8.
-    #[deprecated(note = "Use with_coerce_primitive")]
-    pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
-        self.with_coerce_primitive(coerce_primitive)
-    }
-
-    /// Sets if the decoder should coerce primitive values (bool and number) into string
-    /// when the Schema's column is Utf8 or LargeUtf8.
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
@@ -691,6 +684,10 @@ fn make_decoder(
         DataType::Time32(TimeUnit::Millisecond) => primitive_decoder!(Time32MillisecondType, data_type),
         DataType::Time64(TimeUnit::Microsecond) => primitive_decoder!(Time64MicrosecondType, data_type),
         DataType::Time64(TimeUnit::Nanosecond) => primitive_decoder!(Time64NanosecondType, data_type),
+        DataType::Duration(TimeUnit::Nanosecond) => primitive_decoder!(DurationNanosecondType, data_type),
+        DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
+        DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
+        DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
         DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
@@ -1330,6 +1327,37 @@ mod tests {
         test_time::<Time64NanosecondType>();
     }
 
+    fn test_duration<T: ArrowTemporalType>() {
+        let buf = r#"
+        {"a": 1, "b": "2"}
+        {"a": 3, "b": null}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", T::DATA_TYPE, true),
+            Field::new("b", T::DATA_TYPE, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col_a = batches[0].column_by_name("a").unwrap().as_primitive::<T>();
+        assert_eq!(col_a.null_count(), 0);
+        assert_eq!(col_a.values(), &[1, 3].map(T::Native::usize_as));
+
+        let col2 = batches[0].column_by_name("b").unwrap().as_primitive::<T>();
+        assert_eq!(col2.null_count(), 1);
+        assert_eq!(col2.values(), &[2, 0].map(T::Native::usize_as));
+    }
+
+    #[test]
+    fn test_durations() {
+        test_duration::<DurationNanosecondType>();
+        test_duration::<DurationMicrosecondType>();
+        test_duration::<DurationMillisecondType>();
+        test_duration::<DurationSecondType>();
+    }
+
     #[test]
     fn test_delta_checkpoint() {
         let json = "{\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}";
@@ -1726,12 +1754,12 @@ mod tests {
         assert_eq!(&DataType::Int64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
             b.1.data_type()
         );
         let c = schema.column_with_name("c").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
             c.1.data_type()
         );
         let d = schema.column_with_name("d").unwrap();
@@ -1770,7 +1798,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
             true,
         )]));
 
@@ -1794,9 +1822,8 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new(
-                "item",
-                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(
+                DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
                 true,
             ))),
             true,

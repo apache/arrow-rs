@@ -18,12 +18,15 @@
 //! Provide SQL's LIKE operators for Arrow's string arrays
 
 use crate::predicate::Predicate;
+
 use arrow_array::cast::AsArray;
 use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
-use iterator::ArrayIter;
+
 use std::sync::Arc;
+
+pub use arrow_array::StringArrayType;
 
 #[derive(Debug)]
 enum Op {
@@ -147,39 +150,6 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid string operation: {l_t} {op} {r_t}"
         ))),
-    }
-}
-
-/// A trait for Arrow String Arrays, currently three types are supported:
-/// - `StringArray`
-/// - `LargeStringArray`
-/// - `StringViewArray`
-///
-/// This trait helps to abstract over the different types of string arrays
-/// so that we don't need to duplicate the implementation for each type.
-pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
-    /// Returns true if all data within this string array is ASCII
-    fn is_ascii(&self) -> bool;
-    /// Constructs a new iterator
-    fn iter(&self) -> ArrayIter<Self>;
-}
-
-impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
-    fn is_ascii(&self) -> bool {
-        GenericStringArray::<O>::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        GenericStringArray::<O>::iter(self)
-    }
-}
-impl<'a> StringArrayType<'a> for &'a StringViewArray {
-    fn is_ascii(&self) -> bool {
-        StringViewArray::is_ascii(self)
-    }
-
-    fn iter(&self) -> ArrayIter<Self> {
-        StringViewArray::iter(self)
     }
 }
 
@@ -429,6 +399,7 @@ legacy_kernels!(
 mod tests {
     use super::*;
     use arrow_array::types::Int8Type;
+    use std::iter::zip;
 
     /// Applying `op(left, right)`, both sides are arrays
     /// The macro tests four types of array implementations:
@@ -1708,33 +1679,1217 @@ mod tests {
     }
 
     #[test]
-    fn like_scalar_null() {
-        let a = StringArray::new_scalar("a");
-        let b = Scalar::new(StringArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+    fn string_null_like_pattern() {
+        // Different patterns have different execution code paths
+        for pattern in &[
+            "",           // can execute as equality check
+            "_",          // can execute as length check
+            "%",          // can execute as starts_with("") or non-null check
+            "a%",         // can execute as starts_with("a")
+            "%a",         // can execute as ends_with("")
+            "a%b",        // can execute as starts_with("a") && ends_with("b")
+            "%a%",        // can_execute as contains("a")
+            "%a%b_c_d%e", // can_execute as regular expression
+        ] {
+            // These tests focus on the null handling, but are case-insensitive
+            for like_f in [like, ilike, nlike, nilike] {
+                let a = Scalar::new(StringArray::new_null(1));
+                let b = StringArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-        let a = StringArray::from_iter_values(["a"]);
-        let b = Scalar::new(StringArray::new_null(1));
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+                let a = Scalar::new(StringArray::new_null(1));
+                let b = StringArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-        let a = StringArray::from_iter_values(["a"]);
-        let b = StringArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+                let a = StringArray::new_null(1);
+                let b = StringArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
 
-        let a = StringArray::new_scalar("a");
-        let b = StringArray::new_null(1);
-        let r = like(&a, &b).unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r.null_count(), 1);
-        assert!(r.is_null(0));
+                let a = StringArray::new_null(1);
+                let b = StringArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn string_view_null_like_pattern() {
+        // Different patterns have different execution code paths
+        for pattern in &[
+            "",           // can execute as equality check
+            "_",          // can execute as length check
+            "%",          // can execute as starts_with("") or non-null check
+            "a%",         // can execute as starts_with("a")
+            "%a",         // can execute as ends_with("")
+            "a%b",        // can execute as starts_with("a") && ends_with("b")
+            "%a%",        // can_execute as contains("a")
+            "%a%b_c_d%e", // can_execute as regular expression
+        ] {
+            // These tests focus on the null handling, but are case-insensitive
+            for like_f in [like, ilike, nlike, nilike] {
+                let a = Scalar::new(StringViewArray::new_null(1));
+                let b = StringViewArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = Scalar::new(StringViewArray::new_null(1));
+                let b = StringViewArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = StringViewArray::new_null(1);
+                let b = StringViewArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = StringViewArray::new_null(1);
+                let b = StringViewArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+            }
+        }
+    }
+
+    #[test]
+    fn string_like_scalar_null() {
+        for like_f in [like, ilike, nlike, nilike] {
+            let a = StringArray::new_scalar("a");
+            let b = Scalar::new(StringArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringArray::from_iter_values(["a"]);
+            let b = Scalar::new(StringArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringArray::from_iter_values(["a"]);
+            let b = StringArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringArray::new_scalar("a");
+            let b = StringArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+        }
+    }
+
+    #[test]
+    fn string_view_like_scalar_null() {
+        for like_f in [like, ilike, nlike, nilike] {
+            let a = StringViewArray::new_scalar("a");
+            let b = Scalar::new(StringViewArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringViewArray::from_iter_values(["a"]);
+            let b = Scalar::new(StringViewArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringViewArray::from_iter_values(["a"]);
+            let b = StringViewArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = StringViewArray::new_scalar("a");
+            let b = StringViewArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+        }
+    }
+
+    #[test]
+    fn like_escape() {
+        // (value, pattern, expected)
+        let test_cases = vec![
+            // Empty pattern
+            (r"", r"", true),
+            (r"\", r"", false),
+            // Sole (dangling) escape (some engines consider this invalid pattern)
+            (r"", r"\", false),
+            (r"\", r"\", true),
+            (r"\\", r"\", false),
+            (r"a", r"\", false),
+            (r"\a", r"\", false),
+            (r"\\a", r"\", false),
+            // Sole escape
+            (r"", r"\\", false),
+            (r"\", r"\\", true),
+            (r"\\", r"\\", false),
+            (r"a", r"\\", false),
+            (r"\a", r"\\", false),
+            (r"\\a", r"\\", false),
+            // Sole escape and dangling escape
+            (r"", r"\\\", false),
+            (r"\", r"\\\", false),
+            (r"\\", r"\\\", true),
+            (r"\\\", r"\\\", false),
+            (r"\\\\", r"\\\", false),
+            (r"a", r"\\\", false),
+            (r"\a", r"\\\", false),
+            (r"\\a", r"\\\", false),
+            // Sole two escapes
+            (r"", r"\\\\", false),
+            (r"\", r"\\\\", false),
+            (r"\\", r"\\\\", true),
+            (r"\\\", r"\\\\", false),
+            (r"\\\\", r"\\\\", false),
+            (r"\\\\\", r"\\\\", false),
+            (r"a", r"\\\\", false),
+            (r"\a", r"\\\\", false),
+            (r"\\a", r"\\\\", false),
+            // Escaped non-wildcard
+            (r"", r"\a", false),
+            (r"\", r"\a", false),
+            (r"\\", r"\a", false),
+            (r"a", r"\a", true),
+            (r"\a", r"\a", false),
+            (r"\\a", r"\a", false),
+            // Escaped _ wildcard
+            (r"", r"\_", false),
+            (r"\", r"\_", false),
+            (r"\\", r"\_", false),
+            (r"a", r"\_", false),
+            (r"_", r"\_", true),
+            (r"%", r"\_", false),
+            (r"\a", r"\_", false),
+            (r"\\a", r"\_", false),
+            (r"\_", r"\_", false),
+            (r"\\_", r"\_", false),
+            // Escaped % wildcard
+            (r"", r"\%", false),
+            (r"\", r"\%", false),
+            (r"\\", r"\%", false),
+            (r"a", r"\%", false),
+            (r"_", r"\%", false),
+            (r"%", r"\%", true),
+            (r"\a", r"\%", false),
+            (r"\\a", r"\%", false),
+            (r"\%", r"\%", false),
+            (r"\\%", r"\%", false),
+            // Escape and non-wildcard
+            (r"", r"\\a", false),
+            (r"\", r"\\a", false),
+            (r"\\", r"\\a", false),
+            (r"a", r"\\a", false),
+            (r"\a", r"\\a", true),
+            (r"\\a", r"\\a", false),
+            (r"\\\a", r"\\a", false),
+            // Escape and _ wildcard
+            (r"", r"\\_", false),
+            (r"\", r"\\_", false),
+            (r"\\", r"\\_", true),
+            (r"a", r"\\_", false),
+            (r"_", r"\\_", false),
+            (r"%", r"\\_", false),
+            (r"\a", r"\\_", true),
+            (r"\\a", r"\\_", false),
+            (r"\_", r"\\_", true),
+            (r"\\_", r"\\_", false),
+            (r"\\\_", r"\\_", false),
+            // Escape and % wildcard
+            (r"", r"\\%", false),
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"ab", r"\\%", false),
+            (r"a%", r"\\%", false),
+            (r"_", r"\\%", false),
+            (r"%", r"\\%", false),
+            (r"\a", r"\\%", true),
+            (r"\\a", r"\\%", true),
+            (r"\%", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"\\\%", r"\\%", true),
+            // %... pattern with dangling wildcard
+            (r"\", r"%\", true),
+            (r"\\", r"%\", true),
+            (r"%\", r"%\", true),
+            (r"%\\", r"%\", true),
+            (r"abc\", r"%\", true),
+            (r"abc", r"%\", false),
+            // %... pattern with wildcard
+            (r"\", r"%\\", true),
+            (r"\\", r"%\\", true),
+            (r"%\\", r"%\\", true),
+            (r"%\\\", r"%\\", true),
+            (r"abc\", r"%\\", true),
+            (r"abc", r"%\\", false),
+            // %... pattern including escaped non-wildcard
+            (r"ac", r"%a\c", true),
+            (r"xyzac", r"%a\c", true),
+            (r"abc", r"%a\c", false),
+            (r"a\c", r"%a\c", false),
+            (r"%a\c", r"%a\c", false),
+            // %... pattern including escape
+            (r"\", r"%a\\c", false),
+            (r"\\", r"%a\\c", false),
+            (r"ac", r"%a\\c", false),
+            (r"a\c", r"%a\\c", true),
+            (r"a\\c", r"%a\\c", false),
+            (r"abc", r"%a\\c", false),
+            (r"xyza\c", r"%a\\c", true),
+            (r"xyza\\c", r"%a\\c", false),
+            (r"%a\\c", r"%a\\c", false),
+            // ...% pattern with wildcard
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"\\\%", r"\\%", true),
+            (r"\abc", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"abc", r"\\%", false),
+            // ...% pattern including escaped non-wildcard
+            (r"ac", r"a\c%", true),
+            (r"acxyz", r"a\c%", true),
+            (r"abc", r"a\c%", false),
+            (r"a\c", r"a\c%", false),
+            (r"a\c%", r"a\c%", false),
+            (r"a\\c%", r"a\c%", false),
+            // ...% pattern including escape
+            (r"ac", r"a\\c%", false),
+            (r"a\c", r"a\\c%", true),
+            (r"a\cxyz", r"a\\c%", true),
+            (r"a\\c", r"a\\c%", false),
+            (r"a\\cxyz", r"a\\c%", false),
+            (r"abc", r"a\\c%", false),
+            (r"abcxyz", r"a\\c%", false),
+            (r"a\\c%", r"a\\c%", false),
+            // %...% pattern including escaped non-wildcard
+            (r"ac", r"%a\c%", true),
+            (r"xyzacxyz", r"%a\c%", true),
+            (r"abc", r"%a\c%", false),
+            (r"a\c", r"%a\c%", false),
+            (r"xyza\cxyz", r"%a\c%", false),
+            (r"%a\c%", r"%a\c%", false),
+            (r"%a\\c%", r"%a\c%", false),
+            // %...% pattern including escape
+            (r"ac", r"%a\\c%", false),
+            (r"a\c", r"%a\\c%", true),
+            (r"xyza\cxyz", r"%a\\c%", true),
+            (r"a\\c", r"%a\\c%", false),
+            (r"xyza\\cxyz", r"%a\\c%", false),
+            (r"abc", r"%a\\c%", false),
+            (r"xyzabcxyz", r"%a\\c%", false),
+            (r"%a\\c%", r"%a\\c%", false),
+            // Odd (7) backslashes and % wildcard
+            (r"\\%", r"\\\\\\\%", false),
+            (r"\\\", r"\\\\\\\%", false),
+            (r"\\\%", r"\\\\\\\%", true),
+            (r"\\\\", r"\\\\\\\%", false),
+            (r"\\\\%", r"\\\\\\\%", false),
+            (r"\\\\\\\%", r"\\\\\\\%", false),
+            // Odd (7) backslashes and _ wildcard
+            (r"\\\", r"\\\\\\\_", false),
+            (r"\\\\", r"\\\\\\\_", false),
+            (r"\\\_", r"\\\\\\\_", true),
+            (r"\\\\", r"\\\\\\\_", false),
+            (r"\\\a", r"\\\\\\\_", false),
+            (r"\\\\_", r"\\\\\\\_", false),
+            (r"\\\\\\\_", r"\\\\\\\_", false),
+            // Even (8) backslashes and % wildcard
+            (r"\\\", r"\\\\\\\\%", false),
+            (r"\\\\", r"\\\\\\\\%", true),
+            (r"\\\\\", r"\\\\\\\\%", true),
+            (r"\\\\xyz", r"\\\\\\\\%", true),
+            (r"\\\\\\\\%", r"\\\\\\\\%", true),
+            // Even (8) backslashes and _ wildcard
+            (r"\\\", r"\\\\\\\\_", false),
+            (r"\\\\", r"\\\\\\\\_", false),
+            (r"\\\\\", r"\\\\\\\\_", true),
+            (r"\\\\a", r"\\\\\\\\_", true),
+            (r"\\\\\a", r"\\\\\\\\_", false),
+            (r"\\\\ab", r"\\\\\\\\_", false),
+            (r"\\\\\\\\_", r"\\\\\\\\_", false),
+        ];
+
+        for (value, pattern, expected) in test_cases {
+            let unexpected = BooleanArray::from(vec![!expected]);
+            let expected = BooleanArray::from(vec![expected]);
+
+            for string_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
+                    make_datums(value, &string_type),
+                    make_datums(pattern, &string_type),
+                ) {
+                    let value_datum = value_datum.as_ref();
+                    let pattern_datum = pattern_datum.as_ref();
+                    assert_eq!(
+                        like(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» like {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        ilike(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» ilike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nlike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nlike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nilike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nilike {pattern_type:?} «{pattern}»"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn like_escape_many() {
+        // (value, pattern, expected)
+        let test_cases = vec![
+            (r"", r"", true),
+            (r"\", r"", false),
+            (r"\\", r"", false),
+            (r"\\\", r"", false),
+            (r"\\\\", r"", false),
+            (r"a", r"", false),
+            (r"\a", r"", false),
+            (r"\\a", r"", false),
+            (r"%", r"", false),
+            (r"\%", r"", false),
+            (r"\\%", r"", false),
+            (r"%%", r"", false),
+            (r"\%%", r"", false),
+            (r"\\%%", r"", false),
+            (r"_", r"", false),
+            (r"\_", r"", false),
+            (r"\\_", r"", false),
+            (r"__", r"", false),
+            (r"\__", r"", false),
+            (r"\\__", r"", false),
+            (r"abc", r"", false),
+            (r"a_c", r"", false),
+            (r"a\bc", r"", false),
+            (r"a\_c", r"", false),
+            (r"%abc", r"", false),
+            (r"\%abc", r"", false),
+            (r"a\\_c%", r"", false),
+            (r"", r"\", false),
+            (r"\", r"\", true),
+            (r"\\", r"\", false),
+            (r"\\\", r"\", false),
+            (r"\\\\", r"\", false),
+            (r"a", r"\", false),
+            (r"\a", r"\", false),
+            (r"\\a", r"\", false),
+            (r"%", r"\", false),
+            (r"\%", r"\", false),
+            (r"\\%", r"\", false),
+            (r"%%", r"\", false),
+            (r"\%%", r"\", false),
+            (r"\\%%", r"\", false),
+            (r"_", r"\", false),
+            (r"\_", r"\", false),
+            (r"\\_", r"\", false),
+            (r"__", r"\", false),
+            (r"\__", r"\", false),
+            (r"\\__", r"\", false),
+            (r"abc", r"\", false),
+            (r"a_c", r"\", false),
+            (r"a\bc", r"\", false),
+            (r"a\_c", r"\", false),
+            (r"%abc", r"\", false),
+            (r"\%abc", r"\", false),
+            (r"a\\_c%", r"\", false),
+            (r"", r"\\", false),
+            (r"\", r"\\", true),
+            (r"\\", r"\\", false),
+            (r"\\\", r"\\", false),
+            (r"\\\\", r"\\", false),
+            (r"a", r"\\", false),
+            (r"\a", r"\\", false),
+            (r"\\a", r"\\", false),
+            (r"%", r"\\", false),
+            (r"\%", r"\\", false),
+            (r"\\%", r"\\", false),
+            (r"%%", r"\\", false),
+            (r"\%%", r"\\", false),
+            (r"\\%%", r"\\", false),
+            (r"_", r"\\", false),
+            (r"\_", r"\\", false),
+            (r"\\_", r"\\", false),
+            (r"__", r"\\", false),
+            (r"\__", r"\\", false),
+            (r"\\__", r"\\", false),
+            (r"abc", r"\\", false),
+            (r"a_c", r"\\", false),
+            (r"a\bc", r"\\", false),
+            (r"a\_c", r"\\", false),
+            (r"%abc", r"\\", false),
+            (r"\%abc", r"\\", false),
+            (r"a\\_c%", r"\\", false),
+            (r"", r"\\\", false),
+            (r"\", r"\\\", false),
+            (r"\\", r"\\\", true),
+            (r"\\\", r"\\\", false),
+            (r"\\\\", r"\\\", false),
+            (r"a", r"\\\", false),
+            (r"\a", r"\\\", false),
+            (r"\\a", r"\\\", false),
+            (r"%", r"\\\", false),
+            (r"\%", r"\\\", false),
+            (r"\\%", r"\\\", false),
+            (r"%%", r"\\\", false),
+            (r"\%%", r"\\\", false),
+            (r"\\%%", r"\\\", false),
+            (r"_", r"\\\", false),
+            (r"\_", r"\\\", false),
+            (r"\\_", r"\\\", false),
+            (r"__", r"\\\", false),
+            (r"\__", r"\\\", false),
+            (r"\\__", r"\\\", false),
+            (r"abc", r"\\\", false),
+            (r"a_c", r"\\\", false),
+            (r"a\bc", r"\\\", false),
+            (r"a\_c", r"\\\", false),
+            (r"%abc", r"\\\", false),
+            (r"\%abc", r"\\\", false),
+            (r"a\\_c%", r"\\\", false),
+            (r"", r"\\\\", false),
+            (r"\", r"\\\\", false),
+            (r"\\", r"\\\\", true),
+            (r"\\\", r"\\\\", false),
+            (r"\\\\", r"\\\\", false),
+            (r"a", r"\\\\", false),
+            (r"\a", r"\\\\", false),
+            (r"\\a", r"\\\\", false),
+            (r"%", r"\\\\", false),
+            (r"\%", r"\\\\", false),
+            (r"\\%", r"\\\\", false),
+            (r"%%", r"\\\\", false),
+            (r"\%%", r"\\\\", false),
+            (r"\\%%", r"\\\\", false),
+            (r"_", r"\\\\", false),
+            (r"\_", r"\\\\", false),
+            (r"\\_", r"\\\\", false),
+            (r"__", r"\\\\", false),
+            (r"\__", r"\\\\", false),
+            (r"\\__", r"\\\\", false),
+            (r"abc", r"\\\\", false),
+            (r"a_c", r"\\\\", false),
+            (r"a\bc", r"\\\\", false),
+            (r"a\_c", r"\\\\", false),
+            (r"%abc", r"\\\\", false),
+            (r"\%abc", r"\\\\", false),
+            (r"a\\_c%", r"\\\\", false),
+            (r"", r"a", false),
+            (r"\", r"a", false),
+            (r"\\", r"a", false),
+            (r"\\\", r"a", false),
+            (r"\\\\", r"a", false),
+            (r"a", r"a", true),
+            (r"\a", r"a", false),
+            (r"\\a", r"a", false),
+            (r"%", r"a", false),
+            (r"\%", r"a", false),
+            (r"\\%", r"a", false),
+            (r"%%", r"a", false),
+            (r"\%%", r"a", false),
+            (r"\\%%", r"a", false),
+            (r"_", r"a", false),
+            (r"\_", r"a", false),
+            (r"\\_", r"a", false),
+            (r"__", r"a", false),
+            (r"\__", r"a", false),
+            (r"\\__", r"a", false),
+            (r"abc", r"a", false),
+            (r"a_c", r"a", false),
+            (r"a\bc", r"a", false),
+            (r"a\_c", r"a", false),
+            (r"%abc", r"a", false),
+            (r"\%abc", r"a", false),
+            (r"a\\_c%", r"a", false),
+            (r"", r"\a", false),
+            (r"\", r"\a", false),
+            (r"\\", r"\a", false),
+            (r"\\\", r"\a", false),
+            (r"\\\\", r"\a", false),
+            (r"a", r"\a", true),
+            (r"\a", r"\a", false),
+            (r"\\a", r"\a", false),
+            (r"%", r"\a", false),
+            (r"\%", r"\a", false),
+            (r"\\%", r"\a", false),
+            (r"%%", r"\a", false),
+            (r"\%%", r"\a", false),
+            (r"\\%%", r"\a", false),
+            (r"_", r"\a", false),
+            (r"\_", r"\a", false),
+            (r"\\_", r"\a", false),
+            (r"__", r"\a", false),
+            (r"\__", r"\a", false),
+            (r"\\__", r"\a", false),
+            (r"abc", r"\a", false),
+            (r"a_c", r"\a", false),
+            (r"a\bc", r"\a", false),
+            (r"a\_c", r"\a", false),
+            (r"%abc", r"\a", false),
+            (r"\%abc", r"\a", false),
+            (r"a\\_c%", r"\a", false),
+            (r"", r"\\a", false),
+            (r"\", r"\\a", false),
+            (r"\\", r"\\a", false),
+            (r"\\\", r"\\a", false),
+            (r"\\\\", r"\\a", false),
+            (r"a", r"\\a", false),
+            (r"\a", r"\\a", true),
+            (r"\\a", r"\\a", false),
+            (r"%", r"\\a", false),
+            (r"\%", r"\\a", false),
+            (r"\\%", r"\\a", false),
+            (r"%%", r"\\a", false),
+            (r"\%%", r"\\a", false),
+            (r"\\%%", r"\\a", false),
+            (r"_", r"\\a", false),
+            (r"\_", r"\\a", false),
+            (r"\\_", r"\\a", false),
+            (r"__", r"\\a", false),
+            (r"\__", r"\\a", false),
+            (r"\\__", r"\\a", false),
+            (r"abc", r"\\a", false),
+            (r"a_c", r"\\a", false),
+            (r"a\bc", r"\\a", false),
+            (r"a\_c", r"\\a", false),
+            (r"%abc", r"\\a", false),
+            (r"\%abc", r"\\a", false),
+            (r"a\\_c%", r"\\a", false),
+            (r"", r"%", true),
+            (r"\", r"%", true),
+            (r"\\", r"%", true),
+            (r"\\\", r"%", true),
+            (r"\\\\", r"%", true),
+            (r"a", r"%", true),
+            (r"\a", r"%", true),
+            (r"\\a", r"%", true),
+            (r"%", r"%", true),
+            (r"\%", r"%", true),
+            (r"\\%", r"%", true),
+            (r"%%", r"%", true),
+            (r"\%%", r"%", true),
+            (r"\\%%", r"%", true),
+            (r"_", r"%", true),
+            (r"\_", r"%", true),
+            (r"\\_", r"%", true),
+            (r"__", r"%", true),
+            (r"\__", r"%", true),
+            (r"\\__", r"%", true),
+            (r"abc", r"%", true),
+            (r"a_c", r"%", true),
+            (r"a\bc", r"%", true),
+            (r"a\_c", r"%", true),
+            (r"%abc", r"%", true),
+            (r"\%abc", r"%", true),
+            (r"a\\_c%", r"%", true),
+            (r"", r"\%", false),
+            (r"\", r"\%", false),
+            (r"\\", r"\%", false),
+            (r"\\\", r"\%", false),
+            (r"\\\\", r"\%", false),
+            (r"a", r"\%", false),
+            (r"\a", r"\%", false),
+            (r"\\a", r"\%", false),
+            (r"%", r"\%", true),
+            (r"\%", r"\%", false),
+            (r"\\%", r"\%", false),
+            (r"%%", r"\%", false),
+            (r"\%%", r"\%", false),
+            (r"\\%%", r"\%", false),
+            (r"_", r"\%", false),
+            (r"\_", r"\%", false),
+            (r"\\_", r"\%", false),
+            (r"__", r"\%", false),
+            (r"\__", r"\%", false),
+            (r"\\__", r"\%", false),
+            (r"abc", r"\%", false),
+            (r"a_c", r"\%", false),
+            (r"a\bc", r"\%", false),
+            (r"a\_c", r"\%", false),
+            (r"%abc", r"\%", false),
+            (r"\%abc", r"\%", false),
+            (r"a\\_c%", r"\%", false),
+            (r"", r"\\%", false),
+            (r"\", r"\\%", true),
+            (r"\\", r"\\%", true),
+            (r"\\\", r"\\%", true),
+            (r"\\\\", r"\\%", true),
+            (r"a", r"\\%", false),
+            (r"\a", r"\\%", true),
+            (r"\\a", r"\\%", true),
+            (r"%", r"\\%", false),
+            (r"\%", r"\\%", true),
+            (r"\\%", r"\\%", true),
+            (r"%%", r"\\%", false),
+            (r"\%%", r"\\%", true),
+            (r"\\%%", r"\\%", true),
+            (r"_", r"\\%", false),
+            (r"\_", r"\\%", true),
+            (r"\\_", r"\\%", true),
+            (r"__", r"\\%", false),
+            (r"\__", r"\\%", true),
+            (r"\\__", r"\\%", true),
+            (r"abc", r"\\%", false),
+            (r"a_c", r"\\%", false),
+            (r"a\bc", r"\\%", false),
+            (r"a\_c", r"\\%", false),
+            (r"%abc", r"\\%", false),
+            (r"\%abc", r"\\%", true),
+            (r"a\\_c%", r"\\%", false),
+            (r"", r"%%", true),
+            (r"\", r"%%", true),
+            (r"\\", r"%%", true),
+            (r"\\\", r"%%", true),
+            (r"\\\\", r"%%", true),
+            (r"a", r"%%", true),
+            (r"\a", r"%%", true),
+            (r"\\a", r"%%", true),
+            (r"%", r"%%", true),
+            (r"\%", r"%%", true),
+            (r"\\%", r"%%", true),
+            (r"%%", r"%%", true),
+            (r"\%%", r"%%", true),
+            (r"\\%%", r"%%", true),
+            (r"_", r"%%", true),
+            (r"\_", r"%%", true),
+            (r"\\_", r"%%", true),
+            (r"__", r"%%", true),
+            (r"\__", r"%%", true),
+            (r"\\__", r"%%", true),
+            (r"abc", r"%%", true),
+            (r"a_c", r"%%", true),
+            (r"a\bc", r"%%", true),
+            (r"a\_c", r"%%", true),
+            (r"%abc", r"%%", true),
+            (r"\%abc", r"%%", true),
+            (r"a\\_c%", r"%%", true),
+            (r"", r"\%%", false),
+            (r"\", r"\%%", false),
+            (r"\\", r"\%%", false),
+            (r"\\\", r"\%%", false),
+            (r"\\\\", r"\%%", false),
+            (r"a", r"\%%", false),
+            (r"\a", r"\%%", false),
+            (r"\\a", r"\%%", false),
+            (r"%", r"\%%", true),
+            (r"\%", r"\%%", false),
+            (r"\\%", r"\%%", false),
+            (r"%%", r"\%%", true),
+            (r"\%%", r"\%%", false),
+            (r"\\%%", r"\%%", false),
+            (r"_", r"\%%", false),
+            (r"\_", r"\%%", false),
+            (r"\\_", r"\%%", false),
+            (r"__", r"\%%", false),
+            (r"\__", r"\%%", false),
+            (r"\\__", r"\%%", false),
+            (r"abc", r"\%%", false),
+            (r"a_c", r"\%%", false),
+            (r"a\bc", r"\%%", false),
+            (r"a\_c", r"\%%", false),
+            (r"%abc", r"\%%", true),
+            (r"\%abc", r"\%%", false),
+            (r"a\\_c%", r"\%%", false),
+            (r"", r"\\%%", false),
+            (r"\", r"\\%%", true),
+            (r"\\", r"\\%%", true),
+            (r"\\\", r"\\%%", true),
+            (r"\\\\", r"\\%%", true),
+            (r"a", r"\\%%", false),
+            (r"\a", r"\\%%", true),
+            (r"\\a", r"\\%%", true),
+            (r"%", r"\\%%", false),
+            (r"\%", r"\\%%", true),
+            (r"\\%", r"\\%%", true),
+            (r"%%", r"\\%%", false),
+            (r"\%%", r"\\%%", true),
+            (r"\\%%", r"\\%%", true),
+            (r"_", r"\\%%", false),
+            (r"\_", r"\\%%", true),
+            (r"\\_", r"\\%%", true),
+            (r"__", r"\\%%", false),
+            (r"\__", r"\\%%", true),
+            (r"\\__", r"\\%%", true),
+            (r"abc", r"\\%%", false),
+            (r"a_c", r"\\%%", false),
+            (r"a\bc", r"\\%%", false),
+            (r"a\_c", r"\\%%", false),
+            (r"%abc", r"\\%%", false),
+            (r"\%abc", r"\\%%", true),
+            (r"a\\_c%", r"\\%%", false),
+            (r"", r"_", false),
+            (r"\", r"_", true),
+            (r"\\", r"_", false),
+            (r"\\\", r"_", false),
+            (r"\\\\", r"_", false),
+            (r"a", r"_", true),
+            (r"\a", r"_", false),
+            (r"\\a", r"_", false),
+            (r"%", r"_", true),
+            (r"\%", r"_", false),
+            (r"\\%", r"_", false),
+            (r"%%", r"_", false),
+            (r"\%%", r"_", false),
+            (r"\\%%", r"_", false),
+            (r"_", r"_", true),
+            (r"\_", r"_", false),
+            (r"\\_", r"_", false),
+            (r"__", r"_", false),
+            (r"\__", r"_", false),
+            (r"\\__", r"_", false),
+            (r"abc", r"_", false),
+            (r"a_c", r"_", false),
+            (r"a\bc", r"_", false),
+            (r"a\_c", r"_", false),
+            (r"%abc", r"_", false),
+            (r"\%abc", r"_", false),
+            (r"a\\_c%", r"_", false),
+            (r"", r"\_", false),
+            (r"\", r"\_", false),
+            (r"\\", r"\_", false),
+            (r"\\\", r"\_", false),
+            (r"\\\\", r"\_", false),
+            (r"a", r"\_", false),
+            (r"\a", r"\_", false),
+            (r"\\a", r"\_", false),
+            (r"%", r"\_", false),
+            (r"\%", r"\_", false),
+            (r"\\%", r"\_", false),
+            (r"%%", r"\_", false),
+            (r"\%%", r"\_", false),
+            (r"\\%%", r"\_", false),
+            (r"_", r"\_", true),
+            (r"\_", r"\_", false),
+            (r"\\_", r"\_", false),
+            (r"__", r"\_", false),
+            (r"\__", r"\_", false),
+            (r"\\__", r"\_", false),
+            (r"abc", r"\_", false),
+            (r"a_c", r"\_", false),
+            (r"a\bc", r"\_", false),
+            (r"a\_c", r"\_", false),
+            (r"%abc", r"\_", false),
+            (r"\%abc", r"\_", false),
+            (r"a\\_c%", r"\_", false),
+            (r"", r"\\_", false),
+            (r"\", r"\\_", false),
+            (r"\\", r"\\_", true),
+            (r"\\\", r"\\_", false),
+            (r"\\\\", r"\\_", false),
+            (r"a", r"\\_", false),
+            (r"\a", r"\\_", true),
+            (r"\\a", r"\\_", false),
+            (r"%", r"\\_", false),
+            (r"\%", r"\\_", true),
+            (r"\\%", r"\\_", false),
+            (r"%%", r"\\_", false),
+            (r"\%%", r"\\_", false),
+            (r"\\%%", r"\\_", false),
+            (r"_", r"\\_", false),
+            (r"\_", r"\\_", true),
+            (r"\\_", r"\\_", false),
+            (r"__", r"\\_", false),
+            (r"\__", r"\\_", false),
+            (r"\\__", r"\\_", false),
+            (r"abc", r"\\_", false),
+            (r"a_c", r"\\_", false),
+            (r"a\bc", r"\\_", false),
+            (r"a\_c", r"\\_", false),
+            (r"%abc", r"\\_", false),
+            (r"\%abc", r"\\_", false),
+            (r"a\\_c%", r"\\_", false),
+            (r"", r"__", false),
+            (r"\", r"__", false),
+            (r"\\", r"__", true),
+            (r"\\\", r"__", false),
+            (r"\\\\", r"__", false),
+            (r"a", r"__", false),
+            (r"\a", r"__", true),
+            (r"\\a", r"__", false),
+            (r"%", r"__", false),
+            (r"\%", r"__", true),
+            (r"\\%", r"__", false),
+            (r"%%", r"__", true),
+            (r"\%%", r"__", false),
+            (r"\\%%", r"__", false),
+            (r"_", r"__", false),
+            (r"\_", r"__", true),
+            (r"\\_", r"__", false),
+            (r"__", r"__", true),
+            (r"\__", r"__", false),
+            (r"\\__", r"__", false),
+            (r"abc", r"__", false),
+            (r"a_c", r"__", false),
+            (r"a\bc", r"__", false),
+            (r"a\_c", r"__", false),
+            (r"%abc", r"__", false),
+            (r"\%abc", r"__", false),
+            (r"a\\_c%", r"__", false),
+            (r"", r"\__", false),
+            (r"\", r"\__", false),
+            (r"\\", r"\__", false),
+            (r"\\\", r"\__", false),
+            (r"\\\\", r"\__", false),
+            (r"a", r"\__", false),
+            (r"\a", r"\__", false),
+            (r"\\a", r"\__", false),
+            (r"%", r"\__", false),
+            (r"\%", r"\__", false),
+            (r"\\%", r"\__", false),
+            (r"%%", r"\__", false),
+            (r"\%%", r"\__", false),
+            (r"\\%%", r"\__", false),
+            (r"_", r"\__", false),
+            (r"\_", r"\__", false),
+            (r"\\_", r"\__", false),
+            (r"__", r"\__", true),
+            (r"\__", r"\__", false),
+            (r"\\__", r"\__", false),
+            (r"abc", r"\__", false),
+            (r"a_c", r"\__", false),
+            (r"a\bc", r"\__", false),
+            (r"a\_c", r"\__", false),
+            (r"%abc", r"\__", false),
+            (r"\%abc", r"\__", false),
+            (r"a\\_c%", r"\__", false),
+            (r"", r"\\__", false),
+            (r"\", r"\\__", false),
+            (r"\\", r"\\__", false),
+            (r"\\\", r"\\__", true),
+            (r"\\\\", r"\\__", false),
+            (r"a", r"\\__", false),
+            (r"\a", r"\\__", false),
+            (r"\\a", r"\\__", true),
+            (r"%", r"\\__", false),
+            (r"\%", r"\\__", false),
+            (r"\\%", r"\\__", true),
+            (r"%%", r"\\__", false),
+            (r"\%%", r"\\__", true),
+            (r"\\%%", r"\\__", false),
+            (r"_", r"\\__", false),
+            (r"\_", r"\\__", false),
+            (r"\\_", r"\\__", true),
+            (r"__", r"\\__", false),
+            (r"\__", r"\\__", true),
+            (r"\\__", r"\\__", false),
+            (r"abc", r"\\__", false),
+            (r"a_c", r"\\__", false),
+            (r"a\bc", r"\\__", false),
+            (r"a\_c", r"\\__", false),
+            (r"%abc", r"\\__", false),
+            (r"\%abc", r"\\__", false),
+            (r"a\\_c%", r"\\__", false),
+            (r"", r"abc", false),
+            (r"\", r"abc", false),
+            (r"\\", r"abc", false),
+            (r"\\\", r"abc", false),
+            (r"\\\\", r"abc", false),
+            (r"a", r"abc", false),
+            (r"\a", r"abc", false),
+            (r"\\a", r"abc", false),
+            (r"%", r"abc", false),
+            (r"\%", r"abc", false),
+            (r"\\%", r"abc", false),
+            (r"%%", r"abc", false),
+            (r"\%%", r"abc", false),
+            (r"\\%%", r"abc", false),
+            (r"_", r"abc", false),
+            (r"\_", r"abc", false),
+            (r"\\_", r"abc", false),
+            (r"__", r"abc", false),
+            (r"\__", r"abc", false),
+            (r"\\__", r"abc", false),
+            (r"abc", r"abc", true),
+            (r"a_c", r"abc", false),
+            (r"a\bc", r"abc", false),
+            (r"a\_c", r"abc", false),
+            (r"%abc", r"abc", false),
+            (r"\%abc", r"abc", false),
+            (r"a\\_c%", r"abc", false),
+            (r"", r"a_c", false),
+            (r"\", r"a_c", false),
+            (r"\\", r"a_c", false),
+            (r"\\\", r"a_c", false),
+            (r"\\\\", r"a_c", false),
+            (r"a", r"a_c", false),
+            (r"\a", r"a_c", false),
+            (r"\\a", r"a_c", false),
+            (r"%", r"a_c", false),
+            (r"\%", r"a_c", false),
+            (r"\\%", r"a_c", false),
+            (r"%%", r"a_c", false),
+            (r"\%%", r"a_c", false),
+            (r"\\%%", r"a_c", false),
+            (r"_", r"a_c", false),
+            (r"\_", r"a_c", false),
+            (r"\\_", r"a_c", false),
+            (r"__", r"a_c", false),
+            (r"\__", r"a_c", false),
+            (r"\\__", r"a_c", false),
+            (r"abc", r"a_c", true),
+            (r"a_c", r"a_c", true),
+            (r"a\bc", r"a_c", false),
+            (r"a\_c", r"a_c", false),
+            (r"%abc", r"a_c", false),
+            (r"\%abc", r"a_c", false),
+            (r"a\\_c%", r"a_c", false),
+            (r"", r"a\bc", false),
+            (r"\", r"a\bc", false),
+            (r"\\", r"a\bc", false),
+            (r"\\\", r"a\bc", false),
+            (r"\\\\", r"a\bc", false),
+            (r"a", r"a\bc", false),
+            (r"\a", r"a\bc", false),
+            (r"\\a", r"a\bc", false),
+            (r"%", r"a\bc", false),
+            (r"\%", r"a\bc", false),
+            (r"\\%", r"a\bc", false),
+            (r"%%", r"a\bc", false),
+            (r"\%%", r"a\bc", false),
+            (r"\\%%", r"a\bc", false),
+            (r"_", r"a\bc", false),
+            (r"\_", r"a\bc", false),
+            (r"\\_", r"a\bc", false),
+            (r"__", r"a\bc", false),
+            (r"\__", r"a\bc", false),
+            (r"\\__", r"a\bc", false),
+            (r"abc", r"a\bc", true),
+            (r"a_c", r"a\bc", false),
+            (r"a\bc", r"a\bc", false),
+            (r"a\_c", r"a\bc", false),
+            (r"%abc", r"a\bc", false),
+            (r"\%abc", r"a\bc", false),
+            (r"a\\_c%", r"a\bc", false),
+            (r"", r"a\_c", false),
+            (r"\", r"a\_c", false),
+            (r"\\", r"a\_c", false),
+            (r"\\\", r"a\_c", false),
+            (r"\\\\", r"a\_c", false),
+            (r"a", r"a\_c", false),
+            (r"\a", r"a\_c", false),
+            (r"\\a", r"a\_c", false),
+            (r"%", r"a\_c", false),
+            (r"\%", r"a\_c", false),
+            (r"\\%", r"a\_c", false),
+            (r"%%", r"a\_c", false),
+            (r"\%%", r"a\_c", false),
+            (r"\\%%", r"a\_c", false),
+            (r"_", r"a\_c", false),
+            (r"\_", r"a\_c", false),
+            (r"\\_", r"a\_c", false),
+            (r"__", r"a\_c", false),
+            (r"\__", r"a\_c", false),
+            (r"\\__", r"a\_c", false),
+            (r"abc", r"a\_c", false),
+            (r"a_c", r"a\_c", true),
+            (r"a\bc", r"a\_c", false),
+            (r"a\_c", r"a\_c", false),
+            (r"%abc", r"a\_c", false),
+            (r"\%abc", r"a\_c", false),
+            (r"a\\_c%", r"a\_c", false),
+            (r"", r"%abc", false),
+            (r"\", r"%abc", false),
+            (r"\\", r"%abc", false),
+            (r"\\\", r"%abc", false),
+            (r"\\\\", r"%abc", false),
+            (r"a", r"%abc", false),
+            (r"\a", r"%abc", false),
+            (r"\\a", r"%abc", false),
+            (r"%", r"%abc", false),
+            (r"\%", r"%abc", false),
+            (r"\\%", r"%abc", false),
+            (r"%%", r"%abc", false),
+            (r"\%%", r"%abc", false),
+            (r"\\%%", r"%abc", false),
+            (r"_", r"%abc", false),
+            (r"\_", r"%abc", false),
+            (r"\\_", r"%abc", false),
+            (r"__", r"%abc", false),
+            (r"\__", r"%abc", false),
+            (r"\\__", r"%abc", false),
+            (r"abc", r"%abc", true),
+            (r"a_c", r"%abc", false),
+            (r"a\bc", r"%abc", false),
+            (r"a\_c", r"%abc", false),
+            (r"%abc", r"%abc", true),
+            (r"\%abc", r"%abc", true),
+            (r"a\\_c%", r"%abc", false),
+            (r"", r"\%abc", false),
+            (r"\", r"\%abc", false),
+            (r"\\", r"\%abc", false),
+            (r"\\\", r"\%abc", false),
+            (r"\\\\", r"\%abc", false),
+            (r"a", r"\%abc", false),
+            (r"\a", r"\%abc", false),
+            (r"\\a", r"\%abc", false),
+            (r"%", r"\%abc", false),
+            (r"\%", r"\%abc", false),
+            (r"\\%", r"\%abc", false),
+            (r"%%", r"\%abc", false),
+            (r"\%%", r"\%abc", false),
+            (r"\\%%", r"\%abc", false),
+            (r"_", r"\%abc", false),
+            (r"\_", r"\%abc", false),
+            (r"\\_", r"\%abc", false),
+            (r"__", r"\%abc", false),
+            (r"\__", r"\%abc", false),
+            (r"\\__", r"\%abc", false),
+            (r"abc", r"\%abc", false),
+            (r"a_c", r"\%abc", false),
+            (r"a\bc", r"\%abc", false),
+            (r"a\_c", r"\%abc", false),
+            (r"%abc", r"\%abc", true),
+            (r"\%abc", r"\%abc", false),
+            (r"a\\_c%", r"\%abc", false),
+            (r"", r"a\\_c%", false),
+            (r"\", r"a\\_c%", false),
+            (r"\\", r"a\\_c%", false),
+            (r"\\\", r"a\\_c%", false),
+            (r"\\\\", r"a\\_c%", false),
+            (r"a", r"a\\_c%", false),
+            (r"\a", r"a\\_c%", false),
+            (r"\\a", r"a\\_c%", false),
+            (r"%", r"a\\_c%", false),
+            (r"\%", r"a\\_c%", false),
+            (r"\\%", r"a\\_c%", false),
+            (r"%%", r"a\\_c%", false),
+            (r"\%%", r"a\\_c%", false),
+            (r"\\%%", r"a\\_c%", false),
+            (r"_", r"a\\_c%", false),
+            (r"\_", r"a\\_c%", false),
+            (r"\\_", r"a\\_c%", false),
+            (r"__", r"a\\_c%", false),
+            (r"\__", r"a\\_c%", false),
+            (r"\\__", r"a\\_c%", false),
+            (r"abc", r"a\\_c%", false),
+            (r"a_c", r"a\\_c%", false),
+            (r"a\bc", r"a\\_c%", true),
+            (r"a\_c", r"a\\_c%", true),
+            (r"%abc", r"a\\_c%", false),
+            (r"\%abc", r"a\\_c%", false),
+            (r"a\\_c%", r"a\\_c%", false),
+        ];
+
+        let values = test_cases
+            .iter()
+            .map(|(value, _, _)| *value)
+            .collect::<Vec<_>>();
+        let patterns = test_cases
+            .iter()
+            .map(|(_, pattern, _)| *pattern)
+            .collect::<Vec<_>>();
+        let expected = BooleanArray::from(
+            test_cases
+                .iter()
+                .map(|(_, _, expected)| *expected)
+                .collect::<Vec<_>>(),
+        );
+        let unexpected = BooleanArray::from(
+            test_cases
+                .iter()
+                .map(|(_, _, expected)| !*expected)
+                .collect::<Vec<_>>(),
+        );
+
+        for string_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let values = make_array(values.iter(), &string_type);
+            let patterns = make_array(patterns.iter(), &string_type);
+            let (values, patterns) = (values.as_ref(), patterns.as_ref());
+
+            assert_eq!(like(&values, &patterns).unwrap(), expected,);
+            assert_eq!(ilike(&values, &patterns).unwrap(), expected,);
+            assert_eq!(nlike(&values, &patterns).unwrap(), unexpected,);
+            assert_eq!(nilike(&values, &patterns).unwrap(), unexpected,);
+        }
+    }
+
+    fn make_datums(
+        value: impl AsRef<str>,
+        data_type: &DataType,
+    ) -> Vec<(Box<dyn Datum>, DatumType)> {
+        match data_type {
+            DataType::Utf8 => {
+                let array = StringArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            DataType::LargeUtf8 => {
+                let array = LargeStringArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            DataType::Utf8View => {
+                let array = StringViewArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    fn make_array(
+        values: impl IntoIterator<Item: AsRef<str>>,
+        data_type: &DataType,
+    ) -> Box<dyn Array> {
+        match data_type {
+            DataType::Utf8 => Box::new(StringArray::from_iter_values(values)),
+            DataType::LargeUtf8 => Box::new(LargeStringArray::from_iter_values(values)),
+            DataType::Utf8View => Box::new(StringViewArray::from_iter_values(values)),
+            _ => unimplemented!(),
+        }
+    }
+
+    #[derive(Debug)]
+    enum DatumType {
+        Array,
+        Scalar,
     }
 }

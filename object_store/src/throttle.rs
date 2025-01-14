@@ -237,11 +237,13 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list(prefix);
+        let config = Arc::clone(&self.config);
         futures::stream::once(async move {
-            let wait_list_per_entry = self.config().wait_list_per_entry;
-            sleep(self.config().wait_list_per_call).await;
+            let config = *config.lock();
+            let wait_list_per_entry = config.wait_list_per_entry;
+            sleep(config.wait_list_per_call).await;
             throttle_stream(stream, move |_| wait_list_per_entry)
         })
         .flatten()
@@ -252,11 +254,13 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list_with_offset(prefix, offset);
+        let config = Arc::clone(&self.config);
         futures::stream::once(async move {
-            let wait_list_per_entry = self.config().wait_list_per_entry;
-            sleep(self.config().wait_list_per_call).await;
+            let config = *config.lock();
+            let wait_list_per_entry = config.wait_list_per_entry;
+            sleep(config.wait_list_per_call).await;
             throttle_stream(stream, move |_| wait_list_per_entry)
         })
         .flatten()
@@ -307,8 +311,10 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
 }
 
 fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
+    #[allow(clippy::infallible_destructuring_match)]
     let s = match result.payload {
         GetResultPayload::Stream(s) => s,
+        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         GetResultPayload::File(_, _) => unimplemented!(),
     };
 

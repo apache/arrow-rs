@@ -1742,6 +1742,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
             .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .set_offset_index_disabled(true) // this should be ignored because of the line above
             .build();
         let mut file = Vec::with_capacity(1024);
         let mut file_writer =

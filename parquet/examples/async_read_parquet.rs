@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     builder = builder.with_projection(mask);
 
     // Highlight: set `RowFilter`, it'll push down filter predicates to skip IO and decode.
-    // For more specific usage: please refer to https://github.com/apache/arrow-datafusion/blob/master/datafusion/core/src/physical_plan/file_format/parquet/row_filter.rs.
+    // For more specific usage: please refer to https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/parquet/row_filter.rs.
     let scalar = Int32Array::from(vec![1]);
     let filter = ArrowPredicateFn::new(
         ProjectionMask::roots(file_metadata.schema_descr(), [0]),

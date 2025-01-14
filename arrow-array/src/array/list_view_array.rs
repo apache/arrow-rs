@@ -326,12 +326,26 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
         self.value_sizes.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+        self.value_sizes.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -485,7 +499,7 @@ mod tests {
     fn test_empty_list_view_array() {
         // Construct an empty value array
         let vec: Vec<i32> = vec![];
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![]);
         let offsets = ScalarBuffer::from(vec![]);
         let values = Int32Array::from(vec);
@@ -503,7 +517,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![3i32, 3, 2]);
         let offsets = ScalarBuffer::from(vec![0i32, 3, 6]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -539,7 +553,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![3i64, 3, 2]);
         let offsets = ScalarBuffer::from(vec![0i64, 3, 6]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -585,7 +599,7 @@ mod tests {
         let buffer = BooleanBuffer::new(Buffer::from(null_bits), 0, 9);
         let null_buffer = NullBuffer::new(buffer);
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -651,7 +665,7 @@ mod tests {
         let null_buffer = NullBuffer::new(buffer);
 
         // Construct a large list view array from the above two
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2i64, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0i64, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -713,7 +727,7 @@ mod tests {
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1], null, null, [2, 3], [4, 5], null, [6, 7, 8], null, [9]]
         // Construct a list array from the above two
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2i32, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0i32, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -736,7 +750,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -754,7 +768,7 @@ mod tests {
     fn test_list_view_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -766,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_list_view_array_offsets_need_not_start_at_zero() {
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![0i32, 0, 3]);
         let offsets = ScalarBuffer::from(vec![2i32, 2, 5]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -795,7 +809,7 @@ mod tests {
         };
 
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(offset_buf2)
@@ -937,7 +951,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(2)
@@ -971,7 +985,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -1010,7 +1024,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
