@@ -210,7 +210,7 @@ pub struct Fixed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use arrow_schema::{DataType, Fields, TimeUnit};
     use serde_json::json;
 
@@ -237,7 +237,7 @@ mod tests {
                    "logicalType":"timestamp-micros"
                 }"#,
         )
-            .unwrap();
+        .unwrap();
 
         let timestamp = Type {
             r#type: TypeName::Primitive(PrimitiveType::Long),
@@ -260,7 +260,7 @@ mod tests {
                    "scale":2
                 }"#,
         )
-            .unwrap();
+        .unwrap();
 
         let decimal = ComplexType::Fixed(Fixed {
             name: "fixed",
@@ -300,7 +300,7 @@ mod tests {
                ]
             }"#,
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(
             schema,
@@ -333,7 +333,7 @@ mod tests {
                   ]
                 }"#,
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(
             schema,
@@ -392,7 +392,7 @@ mod tests {
                ]
             }"#,
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(
             schema,
@@ -453,7 +453,7 @@ mod tests {
                   ]
             }"#,
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(
             schema,
@@ -508,5 +508,23 @@ mod tests {
                 attributes: Default::default(),
             }))
         );
+
+        let t: Type = serde_json::from_str(
+            r#"{
+                   "type":"string",
+                   "logicalType":"uuid"
+                }"#,
+        )
+        .unwrap();
+
+        let uuid = Type {
+            r#type: TypeName::Primitive(PrimitiveType::String),
+            attributes: Attributes {
+                logical_type: Some("uuid"),
+                additional: Default::default(),
+            },
+        };
+
+        assert_eq!(t, uuid);
     }
 }

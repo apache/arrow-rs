@@ -159,6 +159,11 @@ impl Decoder {
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
+            Codec::Decimal(precision, scale, size) => {
+                let builder = DecimalBuilder::new(*precision, *scale, *size)?;
+                Self::Decimal(*precision, *scale, *size, builder)
+            }
+            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
@@ -208,10 +213,6 @@ impl Decoder {
                     Box::new(Self::try_new(value_type)?),
                     0,
                 )
-            }
-            Codec::Decimal(precision, scale, size) => {
-                let builder = DecimalBuilder::new(*precision, *scale, *size)?;
-                Self::Decimal(*precision, *scale, *size, builder)
             }
         };
 
