@@ -683,9 +683,12 @@ impl ByteViewArrayDecoderDelta {
 
 /// Check that `val` is a valid UTF-8 sequence
 pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match std::str::from_utf8(val) {
+    match simdutf8::basic::from_utf8(val) {
         Ok(_) => Ok(()),
-        Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+        Err(_) => {
+            let e = simdutf8::compat::from_utf8(val).unwrap_err();
+            Err(general_err!("encountered non UTF-8 data: {}", e))
+        }
     }
 }
 
