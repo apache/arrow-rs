@@ -155,6 +155,8 @@ pub enum Codec {
     Float64,
     Binary,
     Utf8,
+    Decimal(usize, Option<usize>, Option<usize>),
+    Uuid,
     Date32,
     TimeMillis,
     TimeMicros,
@@ -165,11 +167,10 @@ pub enum Codec {
     Fixed(i32),
     List(Arc<AvroDataType>),
     Struct(Arc<[AvroField]>),
-    Interval,
+    Duration,
     /// In Arrow, use Dictionary(Int32, Utf8) for Enum.
     Enum(Vec<String>),
     Map(Arc<AvroDataType>),
-    Decimal(usize, Option<usize>, Option<usize>),
 }
 
 impl Codec {
@@ -184,6 +185,18 @@ impl Codec {
             Self::Float64 => Float64,
             Self::Binary => Binary,
             Self::Utf8 => Utf8,
+            Self::Decimal(precision, scale, size) => match size {
+                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
+                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
+                None if *precision <= DECIMAL128_MAX_PRECISION as usize
+                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
+                {
+                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
+                }
+                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
+            },
+            // arrow-rs does not support the UUID Canonical Extension Type yet, so this is a temporary workaround.
+            Self::Uuid => FixedSizeBinary(16),
             Self::Date32 => Date32,
             Self::TimeMillis => Time32(TimeUnit::Millisecond),
             Self::TimeMicros => Time64(TimeUnit::Microsecond),
@@ -193,7 +206,7 @@ impl Codec {
             Self::TimestampMicros(is_utc) => {
                 Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
             }
-            Self::Interval => Interval(IntervalUnit::MonthDayNano),
+            Self::Duration => Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => FixedSizeBinary(*size),
             Self::List(f) => List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME))),
             Self::Struct(f) => Struct(f.iter().map(|x| x.field()).collect()),
@@ -212,16 +225,6 @@ impl Codec {
                 )),
                 false,
             ),
-            Self::Decimal(precision, scale, size) => match size {
-                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
-                None if *precision <= DECIMAL128_MAX_PRECISION as usize
-                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
-                {
-                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
-                }
-                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-            },
         }
     }
 }
@@ -450,6 +453,7 @@ fn make_data_type<'a>(
                         None,
                     );
                 }
+                (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
                 (Some("date"), c @ Codec::Int32) => *c = Codec::Date32,
                 (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                 (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,
@@ -461,7 +465,7 @@ fn make_data_type<'a>(
                 (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                     *c = Codec::TimestampMicros(false)
                 }
-                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
+                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Duration,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata
                     field.metadata.insert("logicalType".into(), logical.into());
@@ -510,6 +514,9 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
         Float64 => Codec::Float64,
         Utf8 => Codec::Utf8,
         Binary | LargeBinary => Codec::Binary,
+        // arrow-rs does not support the UUID Canonical Extension Type yet, so this mapping is not possible.
+        // It is unsafe to assume all FixedSizeBinary(16) are UUIDs.
+        // Uuid => Codec::Uuid,
         Date32 => Codec::Date32,
         Time32(TimeUnit::Millisecond) => Codec::TimeMillis,
         Time64(TimeUnit::Microsecond) => Codec::TimeMicros,
