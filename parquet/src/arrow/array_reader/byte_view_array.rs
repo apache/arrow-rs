@@ -27,6 +27,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::utf8::check_valid_utf8;
 use arrow_array::{builder::make_view, ArrayRef};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
@@ -681,16 +682,6 @@ impl ByteViewArrayDecoderDelta {
     }
 }
 
-/// Check that `val` is a valid UTF-8 sequence
-pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match simdutf8::basic::from_utf8(val) {
-        Ok(_) => Ok(()),
-        Err(_) => {
-            let e = simdutf8::compat::from_utf8(val).unwrap_err();
-            Err(general_err!("encountered non UTF-8 data: {}", e))
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
