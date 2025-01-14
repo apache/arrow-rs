@@ -23,8 +23,10 @@
 //! record batch pretty printing.
 //!
 //! [`pretty`]: crate::pretty
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Range;
+use std::str::FromStr;
 
 use arrow_array::cast::*;
 use arrow_array::temporal_conversions::*;
@@ -938,7 +940,33 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
             })
             .collect()
     }
+    #[cfg(feature = "struct_display_json")]
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let mut iter = s.iter();
 
+        let mut json = BTreeMap::<String, serde_json::Value>::new();
+        if let Some((name, display)) = iter.next() {
+            let mut display_str = String::new();
+            display.write(idx, &mut display_str)?;
+            json.insert(
+                name.to_string(),
+                serde_json::Value::from_str(&display_str)
+                    .unwrap_or(serde_json::Value::String(display_str)),
+            );
+        }
+        for (name, display) in iter {
+            let mut display_str = String::new();
+            display.write(idx, &mut display_str)?;
+            json.insert(
+                name.to_string(),
+                serde_json::Value::from_str(&display_str)
+                    .unwrap_or(serde_json::Value::String(display_str)),
+            );
+        }
+        let _ = f.write_str(&serde_json::to_string(&json).unwrap_or_default());
+        Ok(())
+    }
+    #[cfg(not(feature = "struct_display_json"))]
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let mut iter = s.iter();
         f.write_char('{')?;
