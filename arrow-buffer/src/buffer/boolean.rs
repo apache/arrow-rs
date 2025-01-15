@@ -25,6 +25,14 @@ use crate::{
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
+///
+/// `BooleanBuffer`s can be creating using [`BooleanBufferBuilder`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for representing null values in Arrow arrays
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
     buffer: Buffer,
