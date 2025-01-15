@@ -911,8 +911,11 @@ impl DictionaryTracker {
 
 /// Arrow File Writer
 ///
-/// Writes Arrow [`RecordBatch`]es in the [IPC File Format] to  anything
-/// that implements [Write].
+/// Writes Arrow [`RecordBatch`]es in the [IPC File Format].
+///
+/// # See Also
+///
+/// * [`StreamWriter`] for writing IPC Streams
 ///
 /// # Example
 /// ```
@@ -1159,10 +1162,13 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 }
 
-/// Arrow Writer for an IPC stream
+/// Arrow Stream Writer
 ///
-/// Writes Arrow [`RecordBatch`]es in the [IPC Streaming Format] to anything
-/// that implements [Write].
+/// Writes Arrow [`RecordBatch`]es to bytes using the [IPC Streaming Format].
+///
+/// # See Also
+///
+/// * [`FileWriter`] for writing IPC Files
 ///
 /// # Example
 /// ```

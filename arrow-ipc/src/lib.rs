@@ -22,11 +22,10 @@
 //! data to files and over the network.
 //!
 //! There are two variants of the IPC format:
-//! 1. [IPC Streaming Format]: A sequence of bytes, implemented by
+//! 1. [IPC Streaming Format]: Supports streaming data sources, implemented by
 //!    [StreamReader] and [StreamWriter]
 //!
-//! 2. [IPC File Format]: Extension of the streaming format that allows
-//!    random access for seekable sources, implemented by [FileReader] and
+//! 2. [IPC File Format]: Supports random access, implemented by [FileReader] and
 //!    [FileWriter].
 //!
 //! See the [`reader`] and [`writer`] modules for more information.

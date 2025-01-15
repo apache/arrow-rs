@@ -997,15 +997,15 @@ impl FileReaderBuilder {
     }
 }
 
-/// Arrow File reader
+/// Arrow File Reader
 ///
-/// Reads Arrow [`RecordBatch`]es from data in the [IPC File Format] from
-/// anything that implements [Read] and [Seek].
+/// Reads Arrow [`RecordBatch`]es from bytes in the [IPC File Format],
+/// providing random access to the record batches.
 ///
 /// # See Also
 ///
 /// * [`Self::set_index`] for random access
-/// * [`StreamReader`] for a source that doesn't require seeking.
+/// * [`StreamReader`] for a reading streaming data
 ///
 /// # Example
 /// ```
@@ -1170,15 +1170,13 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
     }
 }
 
-/// Arrow Stream reader
+/// Arrow Stream Reader
 ///
-/// Reads Arrow [`RecordBatch`]es from data in the [IPC Streaming Format] from
-/// anything that implements [Read]. Note the source does *not* need to
-/// implement [Seek].
+/// Reads Arrow [`RecordBatch`]es from bytes in the [IPC Streaming Format].
 ///
 /// # See Also
 ///
-/// * [`FileReader`] for a source that allows random access.
+/// * [`FileReader`] for random access.
 ///
 /// # Example
 /// ```
