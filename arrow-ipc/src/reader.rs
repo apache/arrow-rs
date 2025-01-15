@@ -683,6 +683,10 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 ///
 /// For a higher-level interface see [`FileReader`]
 ///
+/// For an example of using this API with `mmap` see the [`zero_copy_ipc`] example.
+///
+/// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
+///
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
@@ -994,6 +998,10 @@ impl FileReaderBuilder {
 }
 
 /// Arrow File reader
+///
+/// For an example creating Arrays with memory mapped (`mmap`) files see the [`zero_copy_ipc`] example.
+///
+/// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking
     reader: R,
