@@ -349,14 +349,6 @@ fn make_data_type<'a>(
                         .ok_or_else(|| {
                             ArrowError::ParseError("Decimal requires precision".to_string())
                         })?;
-                    let size_val = f
-                        .attributes
-                        .additional
-                        .get("size")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ArrowError::ParseError("Decimal requires size".to_string())
-                        })?;
                     let scale = f
                         .attributes
                         .additional
@@ -369,7 +361,7 @@ fn make_data_type<'a>(
                         codec: Codec::Decimal(
                             precision as usize,
                             Some(scale.unwrap_or(0) as usize),
-                            Some(size_val as usize),
+                            Some(size as usize),
                         ),
                     };
                     resolver.register(f.name, namespace, field.clone());
