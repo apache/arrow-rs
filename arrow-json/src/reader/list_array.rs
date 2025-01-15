@@ -17,6 +17,7 @@
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{make_decoder, ArrayDecoder};
+use crate::StructMode;
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_array::OffsetSizeTrait;
 use arrow_buffer::buffer::NullBuffer;
@@ -37,6 +38,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
             DataType::List(f) if !O::IS_LARGE => f,
@@ -48,6 +50,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             coerce_primitive,
             strict_mode,
             field.is_nullable(),
+            struct_mode,
         )?;
 
         Ok(Self {
