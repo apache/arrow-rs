@@ -44,6 +44,7 @@ pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
     match simdutf8::basic::from_utf8(val) {
         Ok(_) => Ok(()),
         Err(_) => {
+            // Use simdutf8::compat to return details about the decoding error
             let e = simdutf8::compat::from_utf8(val).unwrap_err();
             Err(general_err!("encountered non UTF-8 data: {}", e))
         }
