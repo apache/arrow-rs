@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::error::ArrowError;
 use crate::field::Field;
-use crate::{FieldRef, Fields};
+use crate::{DataType, FieldRef, Fields};
 
 /// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
 #[derive(Debug, Default)]
@@ -418,6 +418,85 @@ impl Schema {
         &self.metadata
     }
 
+    /// Returns a new schema, normalized based on the max_level field.
+    /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
+    /// separator= "." and the schema:
+    /// ```text
+    ///     "foo": StructArray<"bar": Utf8>
+    /// ```
+    /// will generate:
+    /// ```text
+    ///     "foo.bar": Utf8
+    /// ```
+    ///
+    /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`,
+    /// normalizes all levels.
+    ///
+    /// This carries metadata from the parent schema over.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::{DataType, Field, Fields, Schema};
+    /// let schema = Schema::new(vec![
+    ///     Field::new(
+    ///         "a",
+    ///         DataType::Struct(Fields::from(vec![
+    ///             Arc::new(Field::new("animals", DataType::Utf8, true)),
+    ///             Arc::new(Field::new("n_legs", DataType::Int64, true)),
+    ///         ])),
+    ///         false,
+    ///     ),
+    /// ])
+    /// .normalize(".", None)
+    /// .expect("valid normalization");
+    /// let expected = Schema::new(vec![
+    ///     Field::new("a.animals", DataType::Utf8, true),
+    ///     Field::new("a.n_legs", DataType::Int64, true),
+    /// ]);
+    /// assert_eq!(schema, expected);
+    /// ```
+    pub fn normalize(
+        &self,
+        separator: &str,
+        max_level: Option<usize>,
+    ) -> Result<Self, ArrowError> {
+        let max_level = match max_level.unwrap_or(usize::MAX) {
+            0 => usize::MAX,
+            val => val,
+        };
+        let mut stack: Vec<(usize, Vec<&str>, &FieldRef)> = Vec::new();
+        for f in self.fields().iter().rev() {
+            let name_vec: Vec<&str> = vec![f.name()];
+            stack.push((0, name_vec, f));
+        }
+        let mut fields: Vec<FieldRef> = Vec::new();
+
+        while let Some((depth, name, field_ref)) = stack.pop() {
+            match field_ref.data_type() {
+                DataType::Struct(ff) if depth < max_level => {
+                    // Need to zip these in reverse to maintain original order
+                    for fff in ff.into_iter().rev() {
+                        let mut name = name.clone();
+                        name.push(separator);
+                        name.push(fff.name());
+                        stack.push((depth + 1, name, fff))
+                    }
+                }
+                _ => {
+                    let updated_field = Field::new(
+                        name.concat(),
+                        field_ref.data_type().clone(),
+                        field_ref.is_nullable(),
+                    );
+                    fields.push(Arc::new(updated_field));
+                }
+            }
+        }
+        Ok(Schema::new(fields))
+    }
+
     /// Look up a column by name and return a immutable reference to the column along with
     /// its index.
     pub fn column_with_name(&self, name: &str) -> Option<(usize, &Field)> {
@@ -677,6 +756,210 @@ mod tests {
         assert_eq!(schema.index_of("first_name").unwrap(), 0);
         assert_eq!(schema.index_of("last_name").unwrap(), 1);
         schema.index_of("nickname").unwrap();
+    }
+
+    #[test]
+    fn normalize_simple() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![
+                    Arc::new(Field::new("animals", DataType::Utf8, true)),
+                    Arc::new(Field::new("n_legs", DataType::Int64, true)),
+                    Arc::new(Field::new("year", DataType::Int64, true)),
+                ])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
+        ])
+        .normalize(".", Some(0))
+        .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("a.animals", DataType::Utf8, true),
+            Field::new("a.n_legs", DataType::Int64, true),
+            Field::new("a.year", DataType::Int64, true),
+            Field::new("month", DataType::Int64, true),
+        ]);
+
+        assert_eq!(schema, expected);
+
+        // Check that 0, None have the same result
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![
+                    Arc::new(Field::new("animals", DataType::Utf8, true)),
+                    Arc::new(Field::new("n_legs", DataType::Int64, true)),
+                    Arc::new(Field::new("year", DataType::Int64, true)),
+                ])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
+        ])
+        .normalize(".", None)
+        .expect("valid normalization");
+
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn normalize_nested() {
+        let a = Arc::new(Field::new("a", DataType::Utf8, true));
+        let b = Arc::new(Field::new("b", DataType::Int64, false));
+        let c = Arc::new(Field::new("c", DataType::Int64, true));
+
+        let d = Arc::new(Field::new("d", DataType::Utf8, true));
+        let e = Arc::new(Field::new("e", DataType::Int64, false));
+        let f = Arc::new(Field::new("f", DataType::Int64, true));
+
+        let one = Arc::new(Field::new(
+            "1",
+            DataType::Struct(Fields::from(vec![a.clone(), b.clone(), c.clone()])),
+            false,
+        ));
+        let two = Arc::new(Field::new(
+            "2",
+            DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+            true,
+        ));
+
+        let exclamation = Arc::new(Field::new(
+            "!",
+            DataType::Struct(Fields::from(vec![one, two])),
+            false,
+        ));
+
+        let normalize_all = Schema::new(vec![exclamation.clone()])
+            .normalize(".", Some(0))
+            .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("!.1.a", DataType::Utf8, true),
+            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.c", DataType::Int64, true),
+            Field::new("!.2.d", DataType::Utf8, true),
+            Field::new("!.2.e", DataType::Int64, false),
+            Field::new("!.2.f", DataType::Int64, true),
+        ]);
+
+        assert_eq!(normalize_all, expected);
+
+        let normalize_depth_one = Schema::new(vec![exclamation])
+            .normalize(".", Some(1))
+            .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("!.1", DataType::Struct(Fields::from(vec![a, b, c])), false),
+            Field::new("!.2", DataType::Struct(Fields::from(vec![d, e, f])), true),
+        ]);
+
+        assert_eq!(normalize_depth_one, expected);
+    }
+
+    #[test]
+    fn normalize_list() {
+        // Only the Struct type field should be unwrapped
+        let a = Arc::new(Field::new("a", DataType::Utf8, true));
+        let b = Arc::new(Field::new("b", DataType::Int64, false));
+        let c = Arc::new(Field::new("c", DataType::Int64, true));
+        let d = Arc::new(Field::new("d", DataType::Utf8, true));
+        let e = Arc::new(Field::new("e", DataType::Int64, false));
+        let f = Arc::new(Field::new("f", DataType::Int64, true));
+
+        let one = Arc::new(Field::new(
+            "1",
+            DataType::Struct(Fields::from(vec![a.clone(), b.clone(), c.clone()])),
+            true,
+        ));
+
+        let two = Arc::new(Field::new(
+            "2",
+            DataType::List(Arc::new(Field::new_list_field(
+                DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+                true,
+            ))),
+            false,
+        ));
+
+        let exclamation = Arc::new(Field::new(
+            "!",
+            DataType::Struct(Fields::from(vec![one.clone(), two.clone()])),
+            false,
+        ));
+
+        let normalize_all = Schema::new(vec![exclamation.clone()])
+            .normalize(".", Some(0))
+            .expect("valid normalization");
+
+        let expected = Schema::new(vec![
+            Field::new("!.1.a", DataType::Utf8, true),
+            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.c", DataType::Int64, true),
+            Field::new(
+                "!.2",
+                DataType::List(Arc::new(Field::new_list_field(
+                    DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+                    true,
+                ))),
+                false,
+            ),
+        ]);
+
+        assert_eq!(normalize_all, expected);
+
+        // LargeList
+        let two = Arc::new(Field::new(
+            "2",
+            DataType::FixedSizeList(
+                Arc::new(Field::new_fixed_size_list(
+                    "3",
+                    Arc::new(Field::new_list_field(
+                        DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+                        true,
+                    )),
+                    1,
+                    true,
+                )),
+                1,
+            ),
+            false,
+        ));
+
+        let exclamation = Arc::new(Field::new(
+            "!",
+            DataType::Struct(Fields::from(vec![one, two])),
+            false,
+        ));
+
+        let normalize_all = Schema::new(vec![exclamation.clone()])
+            .normalize(".", Some(0))
+            .expect("valid normalization");
+
+        // List shouldn't be affected
+        let expected = Schema::new(vec![
+            Field::new("!.1.a", DataType::Utf8, true),
+            Field::new("!.1.b", DataType::Int64, false),
+            Field::new("!.1.c", DataType::Int64, true),
+            Field::new(
+                "!.2",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new_fixed_size_list(
+                        "3",
+                        Arc::new(Field::new_list_field(
+                            DataType::Struct(Fields::from(vec![d.clone(), e.clone(), f.clone()])),
+                            true,
+                        )),
+                        1,
+                        true,
+                    )),
+                    1,
+                ),
+                false,
+            ),
+        ]);
+
+        assert_eq!(normalize_all, expected);
     }
 
     #[test]
