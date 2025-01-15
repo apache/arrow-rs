@@ -17,9 +17,10 @@
 
 //! Provide SQL's LIKE operators for Arrow's string arrays
 
-use crate::predicate::Predicate;
+use crate::predicate::{BinaryPredicate, Predicate, PredicateImpl};
 
 use arrow_array::cast::AsArray;
+use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_schema::*;
 use arrow_select::take::take;
@@ -112,6 +113,92 @@ pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, Arr
     like_op(Op::Contains, left, right)
 }
 
+trait LikeSupportedArray: Array {
+    type UnsizedItem: ?Sized;
+    type MatchingPredicate<'a>: PredicateImpl<'a, UnsizedItem = Self::UnsizedItem>;
+    type Iter<'a>: Iterator<Item = Option<&'a Self::UnsizedItem>>
+    where
+        Self: 'a;
+
+    fn is_ascii(&self) -> bool;
+
+    fn iter(&self) -> Self::Iter<'_>;
+
+    fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8];
+}
+
+impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericStringArray<OffsetSize> {
+    type UnsizedItem = str;
+    type MatchingPredicate<'a> = Predicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
+
+    fn is_ascii(&self) -> bool {
+        self.is_ascii()
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.iter()
+    }
+
+    fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8] {
+        item.as_bytes()
+    }
+}
+
+impl LikeSupportedArray for StringViewArray {
+    type UnsizedItem = str;
+    type MatchingPredicate<'a> = Predicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
+
+    fn is_ascii(&self) -> bool {
+        self.is_ascii()
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.iter()
+    }
+
+    fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8] {
+        item.as_bytes()
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> LikeSupportedArray for GenericBinaryArray<OffsetSize> {
+    type UnsizedItem = [u8];
+    type MatchingPredicate<'a> = BinaryPredicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
+
+    fn is_ascii(&self) -> bool {
+        self.is_ascii()
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.iter()
+    }
+
+    fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8] {
+        item
+    }
+}
+
+impl LikeSupportedArray for BinaryViewArray {
+    type UnsizedItem = [u8];
+    type MatchingPredicate<'a> = BinaryPredicate<'a>;
+    type Iter<'a> = ArrayIter<&'a Self>;
+
+    fn is_ascii(&self) -> bool {
+        self.is_ascii()
+    }
+
+    fn iter(&self) -> Self::Iter<'_> {
+        self.iter()
+    }
+
+    fn item_as_bytes(item: &Self::UnsizedItem) -> &[u8] {
+        item
+    }
+}
+
 fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     use arrow_schema::DataType::*;
     let (l, l_s) = lhs.get();
@@ -133,17 +220,32 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
 
     match (l.data_type(), r.data_type()) {
         (Utf8, Utf8) => {
-            apply::<&GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+            apply::<GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
         (LargeUtf8, LargeUtf8) => {
-            apply::<&GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
+            apply::<GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
         }
-        (Utf8View, Utf8View) => apply::<&StringViewArray>(
+        (Utf8View, Utf8View) => apply::<StringViewArray>(
             op,
             l.as_string_view(),
             l_s,
             l_v,
             r.as_string_view(),
+            r_s,
+            r_v,
+        ),
+        (Binary, Binary) => {
+            apply::<GenericBinaryArray<i32>>(op, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v)
+        }
+        (LargeBinary, LargeBinary) => {
+            apply::<GenericBinaryArray<i64>>(op, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v)
+        }
+        (BinaryView, BinaryView) => apply::<BinaryViewArray>(
+            op,
+            l.as_binary_view(),
+            l_s,
+            l_v,
+            r.as_binary_view(),
             r_s,
             r_v,
         ),
@@ -153,15 +255,18 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     }
 }
 
-fn apply<'a, T: StringArrayType<'a> + 'a>(
+fn apply<'a, T: LikeSupportedArray>(
     op: Op,
-    l: T,
+    l: &'a T,
     l_s: bool,
     l_v: Option<&'a dyn AnyDictionaryArray>,
-    r: T,
+    r: &'a T,
     r_s: bool,
     r_v: Option<&'a dyn AnyDictionaryArray>,
-) -> Result<BooleanArray, ArrowError> {
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a T: ArrayAccessor<Item = &'a T::UnsizedItem>,
+{
     let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
     if r_s {
         let idx = match r_v {
@@ -177,45 +282,48 @@ fn apply<'a, T: StringArrayType<'a> + 'a>(
         match (l_s, l_v, r_v) {
             (true, None, None) => {
                 let v = l.is_valid(0).then(|| l.value(0));
-                op_binary(op, std::iter::repeat(v), r.iter())
+                op_binary::<T>(op, std::iter::repeat(v), r.iter())
             }
             (true, Some(l_v), None) => {
                 let idx = l_v.is_valid(0).then(|| l_v.normalized_keys()[0]);
                 let v = idx.and_then(|idx| l.is_valid(idx).then(|| l.value(idx)));
-                op_binary(op, std::iter::repeat(v), r.iter())
+                op_binary::<T>(op, std::iter::repeat(v), r.iter())
             }
             (true, None, Some(r_v)) => {
                 let v = l.is_valid(0).then(|| l.value(0));
-                op_binary(op, std::iter::repeat(v), vectored_iter(r, r_v))
+                op_binary::<T>(op, std::iter::repeat(v), vectored_iter::<T>(r, r_v))
             }
             (true, Some(l_v), Some(r_v)) => {
                 let idx = l_v.is_valid(0).then(|| l_v.normalized_keys()[0]);
                 let v = idx.and_then(|idx| l.is_valid(idx).then(|| l.value(idx)));
-                op_binary(op, std::iter::repeat(v), vectored_iter(r, r_v))
+                op_binary::<T>(op, std::iter::repeat(v), vectored_iter::<T>(r, r_v))
             }
-            (false, None, None) => op_binary(op, l.iter(), r.iter()),
-            (false, Some(l_v), None) => op_binary(op, vectored_iter(l, l_v), r.iter()),
-            (false, None, Some(r_v)) => op_binary(op, l.iter(), vectored_iter(r, r_v)),
+            (false, None, None) => op_binary::<T>(op, l.iter(), r.iter()),
+            (false, Some(l_v), None) => op_binary::<T>(op, vectored_iter::<T>(l, l_v), r.iter()),
+            (false, None, Some(r_v)) => op_binary::<T>(op, l.iter(), vectored_iter::<T>(r, r_v)),
             (false, Some(l_v), Some(r_v)) => {
-                op_binary(op, vectored_iter(l, l_v), vectored_iter(r, r_v))
+                op_binary::<T>(op, vectored_iter::<T>(l, l_v), vectored_iter::<T>(r, r_v))
             }
         }
     }
 }
 
 #[inline(never)]
-fn op_scalar<'a, T: StringArrayType<'a>>(
+fn op_scalar<'a, T: LikeSupportedArray>(
     op: Op,
-    l: T,
+    l: &'a T,
     l_v: Option<&dyn AnyDictionaryArray>,
-    r: &str,
-) -> Result<BooleanArray, ArrowError> {
+    r: &'a T::UnsizedItem,
+) -> Result<BooleanArray, ArrowError>
+where
+    &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem>,
+{
     let r = match op {
-        Op::Like(neg) => Predicate::like(r)?.evaluate_array(l, neg),
-        Op::ILike(neg) => Predicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
-        Op::Contains => Predicate::contains(r).evaluate_array(l, false),
-        Op::StartsWith => Predicate::StartsWith(r).evaluate_array(l, false),
-        Op::EndsWith => Predicate::EndsWith(r).evaluate_array(l, false),
+        Op::Like(neg) => T::MatchingPredicate::like(r)?.evaluate_array(l, neg),
+        Op::ILike(neg) => T::MatchingPredicate::ilike(r, l.is_ascii())?.evaluate_array(l, neg),
+        Op::Contains => T::MatchingPredicate::contains(r).evaluate_array(l, false),
+        Op::StartsWith => T::MatchingPredicate::starts_with(r).evaluate_array(l, false),
+        Op::EndsWith => T::MatchingPredicate::ends_with(r).evaluate_array(l, false),
     };
 
     Ok(match l_v {
@@ -224,10 +332,13 @@ fn op_scalar<'a, T: StringArrayType<'a>>(
     })
 }
 
-fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
-    a: T,
+fn vectored_iter<'a, T: LikeSupportedArray>(
+    a: &'a T,
     a_v: &'a dyn AnyDictionaryArray,
-) -> impl Iterator<Item = Option<&'a str>> + 'a {
+) -> impl Iterator<Item = Option<&'a T::UnsizedItem>> + 'a
+where
+    &'a T: arrow_array::ArrayAccessor<Item = &'a T::UnsizedItem> + 'a,
+{
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
@@ -239,35 +350,38 @@ fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
 }
 
 #[inline(never)]
-fn op_binary<'a>(
+fn op_binary<'a, T: LikeSupportedArray + 'a>(
     op: Op,
-    l: impl Iterator<Item = Option<&'a str>>,
-    r: impl Iterator<Item = Option<&'a str>>,
+    l: impl Iterator<Item = Option<&'a T::UnsizedItem>>,
+    r: impl Iterator<Item = Option<&'a T::UnsizedItem>>,
 ) -> Result<BooleanArray, ArrowError> {
     match op {
-        Op::Like(neg) => binary_predicate(l, r, neg, Predicate::like),
-        Op::ILike(neg) => binary_predicate(l, r, neg, |s| Predicate::ilike(s, false)),
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(str_contains(l?, r?))).collect()),
+        Op::Like(neg) => binary_predicate(l, r, neg, T::MatchingPredicate::like),
+        Op::ILike(neg) => binary_predicate(l, r, neg, |s| T::MatchingPredicate::ilike(s, false)),
+        Op::Contains => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(str_contains(T::item_as_bytes(l?), T::item_as_bytes(r?))))
+            .collect()),
         Op::StartsWith => Ok(l
             .zip(r)
-            .map(|(l, r)| Some(Predicate::StartsWith(r?).evaluate(l?)))
+            .map(|(l, r)| Some(T::MatchingPredicate::starts_with(r?).evaluate(l?)))
             .collect()),
         Op::EndsWith => Ok(l
             .zip(r)
-            .map(|(l, r)| Some(Predicate::EndsWith(r?).evaluate(l?)))
+            .map(|(l, r)| Some(T::MatchingPredicate::ends_with(r?).evaluate(l?)))
             .collect()),
     }
 }
 
-fn str_contains(haystack: &str, needle: &str) -> bool {
-    memchr::memmem::find(haystack.as_bytes(), needle.as_bytes()).is_some()
+fn str_contains(haystack: &[u8], needle: &[u8]) -> bool {
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
-fn binary_predicate<'a>(
-    l: impl Iterator<Item = Option<&'a str>>,
-    r: impl Iterator<Item = Option<&'a str>>,
+fn binary_predicate<'a, Predicate: PredicateImpl<'a> + 'a>(
+    l: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
+    r: impl Iterator<Item = Option<&'a Predicate::UnsizedItem>>,
     neg: bool,
-    f: impl Fn(&'a str) -> Result<Predicate<'a>, ArrowError>,
+    f: impl Fn(&'a Predicate::UnsizedItem) -> Result<Predicate, ArrowError>,
 ) -> Result<BooleanArray, ArrowError> {
     let mut previous = None;
     l.zip(r)
@@ -291,6 +405,10 @@ fn make_scalar(data_type: &DataType, scalar: &str) -> Result<ArrayRef, ArrowErro
         DataType::Utf8 => Ok(Arc::new(StringArray::from_iter_values([scalar]))),
         DataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from_iter_values([scalar]))),
         DataType::Dictionary(_, v) => make_scalar(v.as_ref(), scalar),
+        DataType::Binary => Ok(Arc::new(BinaryArray::from_iter_values([scalar.as_bytes()]))),
+        DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter_values([
+            scalar.as_bytes()
+        ]))),
         d => Err(ArrowError::InvalidArgumentError(format!(
             "Unsupported string scalar data type {d:?}",
         ))),
@@ -398,8 +516,42 @@ legacy_kernels!(
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use arrow_array::types::Int8Type;
+    use arrow_array::builder::BinaryDictionaryBuilder;
+    use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
     use std::iter::zip;
+
+    fn convert_binary_iterator_to_binary_dictionary<
+        'a,
+        K: ArrowDictionaryKeyType,
+        I: IntoIterator<Item = &'a [u8]>,
+    >(
+        iter: I,
+    ) -> DictionaryArray<K> {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        it.for_each(|i| {
+            builder
+                .append(i)
+                .expect("Unable to append a value to a dictionary array.");
+        });
+
+        builder.finish()
+    }
+
+    fn convert_string_iterator_to_binary_dictionary<
+        'a,
+        K: ArrowDictionaryKeyType,
+        I: Iterator<Item = &'a Option<&'a str>>,
+    >(
+        iter: I,
+    ) -> DictionaryArray<K> {
+        let (lower, _) = iter.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        iter.for_each(|i| builder.append_option(i.map(|i| i.as_bytes())));
+
+        builder.finish()
+    }
 
     /// Applying `op(left, right)`, both sides are arrays
     /// The macro tests four types of array implementations:
@@ -430,6 +582,27 @@ mod tests {
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let expected = BooleanArray::from($expected);
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(right_binary);
                 let res = $op(&left, &right).unwrap();
                 assert_eq!(res, expected);
             }
@@ -467,8 +640,39 @@ mod tests {
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.as_bytes();
+                let expected = BooleanArray::from($expected);
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
             }
         };
+    }
+
+    trait IntoBinaryScalar {
+        fn into_binary_scalar(self) -> Scalar<ArrayRef>;
+    }
+
+    impl IntoBinaryScalar for &str {
+        fn into_binary_scalar(self) -> Scalar<ArrayRef> {
+            Scalar::new(make_scalar(&DataType::Binary, self).unwrap())
+        }
     }
 
     test_utf8!(
@@ -1098,6 +1302,69 @@ mod tests {
         vec![true, false, true, true, true]
     );
 
+    fn like_utf8_scalar(data: &[Option<&str>], pattern: &str) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> = data.iter().cloned().collect();
+        like_utf8_scalar_dyn(&dict_array, pattern)
+    }
+
+    fn like_binary_scalar(
+        data: &[Option<&str>],
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.iter());
+
+        like(&dict_array, &pattern.into_binary_scalar())
+    }
+
+    fn nlike_utf8_scalar(data: &[Option<&str>], pattern: &str) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> = data.iter().cloned().collect();
+        nlike_utf8_scalar_dyn(&dict_array, pattern)
+    }
+
+    fn nlike_binary_scalar(
+        data: &[Option<&str>],
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.iter());
+
+        nlike(&dict_array, &pattern.into_binary_scalar())
+    }
+
+    fn ilike_utf8_scalar(data: &[Option<&str>], pattern: &str) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> = data.iter().cloned().collect();
+        ilike_utf8_scalar_dyn(&dict_array, pattern)
+    }
+
+    fn ilike_binary_scalar(
+        data: &[Option<&str>],
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.iter());
+
+        ilike(&dict_array, &pattern.into_binary_scalar())
+    }
+
+    fn nilike_utf8_scalar(
+        data: &[Option<&str>],
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> = data.iter().cloned().collect();
+        nilike_utf8_scalar_dyn(&dict_array, pattern)
+    }
+
+    fn nilike_binary_scalar(
+        data: &[Option<&str>],
+        pattern: &str,
+    ) -> Result<BooleanArray, ArrowError> {
+        let dict_array: DictionaryArray<Int8Type> =
+            convert_string_iterator_to_binary_dictionary(data.iter());
+
+        nilike(&dict_array, &pattern.into_binary_scalar())
+    }
+
     #[test]
     fn test_dict_like_kernels() {
         let data = vec![
@@ -1110,137 +1377,137 @@ mod tests {
             Some("bbbbb\nAir"),
         ];
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+        for func in &[like_utf8_scalar, like_binary_scalar] {
+            assert_eq!(
+                func(&data, "Air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%r").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%r").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%i%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%i%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%a%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            like_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%a%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
+        }
     }
 
     #[test]
@@ -1255,137 +1522,137 @@ mod tests {
             Some("bbbbb\nAir"),
         ];
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+        for func in &[nlike_utf8_scalar, nlike_binary_scalar] {
+            assert_eq!(
+                func(&data, "Air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "Wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "Wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%r").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%r").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%r").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%i%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%i%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%i%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%a%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            nlike_utf8_scalar_dyn(&dict_array, "%a%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%a%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
+        }
     }
 
     #[test]
@@ -1400,137 +1667,137 @@ mod tests {
             Some("bbbbb\nAir"),
         ];
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+        for func in &[ilike_utf8_scalar, ilike_binary_scalar] {
+            assert_eq!(
+                func(&data, "air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%R").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%R").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%I%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%I%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%A%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
-
-        assert_eq!(
-            ilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%A%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
+        }
     }
 
     #[test]
@@ -1545,137 +1812,137 @@ mod tests {
             Some("bbbbb\nAir"),
         ];
 
-        let dict_array: DictionaryArray<Int8Type> = data.into_iter().collect();
+        for func in &[nilike_utf8_scalar, nilike_binary_scalar] {
+            assert_eq!(
+                func(&data, "air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "air").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "air").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "wa%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    None,
+                    Some(true),
+                    Some(true),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "wa%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(true),
-                None,
-                Some(true),
-                Some(true),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%R").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%R").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%R").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%I%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%I%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(true),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%I%").unwrap(),
-            BooleanArray::from(vec![
-                Some(true),
-                Some(false),
-                Some(true),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%A%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
 
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
-
-        assert_eq!(
-            nilike_utf8_scalar_dyn(&dict_array, "%A%r%").unwrap(),
-            BooleanArray::from(vec![
-                Some(false),
-                Some(true),
-                Some(false),
-                Some(false),
-                None,
-                Some(false),
-                Some(false),
-            ]),
-        );
+            assert_eq!(
+                func(&data, "%A%r%").unwrap(),
+                BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                    Some(false),
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            );
+        }
     }
 
     #[test]
@@ -1716,6 +1983,34 @@ mod tests {
 
                 let a = StringArray::new_null(1);
                 let b = StringArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = Scalar::new(BinaryArray::new_null(1));
+                let b = BinaryArray::new_scalar(pattern);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = Scalar::new(BinaryArray::new_null(1));
+                let b = BinaryArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = BinaryArray::new_null(1);
+                let b = BinaryArray::from_iter_values([pattern]);
+                let r = like_f(&a, &b).unwrap();
+                assert_eq!(r.len(), 1, "With pattern {pattern}");
+                assert_eq!(r.null_count(), 1, "With pattern {pattern}");
+                assert!(r.is_null(0), "With pattern {pattern}");
+
+                let a = BinaryArray::new_null(1);
+                let b = BinaryArray::new_scalar(pattern);
                 let r = like_f(&a, &b).unwrap();
                 assert_eq!(r.len(), 1, "With pattern {pattern}");
                 assert_eq!(r.null_count(), 1, "With pattern {pattern}");
@@ -1796,6 +2091,34 @@ mod tests {
 
             let a = StringArray::new_scalar("a");
             let b = StringArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::new_scalar("a");
+            let b = Scalar::new(BinaryArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::from_iter_values(["a"]);
+            let b = Scalar::new(BinaryArray::new_null(1));
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::from_iter_values(["a"]);
+            let b = BinaryArray::new_null(1);
+            let r = like_f(&a, &b).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r.null_count(), 1);
+            assert!(r.is_null(0));
+
+            let a = BinaryArray::new_scalar("a");
+            let b = BinaryArray::new_null(1);
             let r = like_f(&a, &b).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r.null_count(), 1);
@@ -2049,6 +2372,36 @@ mod tests {
                 for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
                     make_datums(value, &string_type),
                     make_datums(pattern, &string_type),
+                ) {
+                    let value_datum = value_datum.as_ref();
+                    let pattern_datum = pattern_datum.as_ref();
+                    assert_eq!(
+                        like(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» like {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        ilike(value_datum, pattern_datum).unwrap(),
+                        expected,
+                        "{value_type:?} «{value}» ilike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nlike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nlike {pattern_type:?} «{pattern}»"
+                    );
+                    assert_eq!(
+                        nilike(value_datum, pattern_datum).unwrap(),
+                        unexpected,
+                        "{value_type:?} «{value}» nilike {pattern_type:?} «{pattern}»"
+                    );
+                }
+            }
+
+            for binary_type in [DataType::Binary, DataType::LargeBinary] {
+                for ((value_datum, value_type), (pattern_datum, pattern_type)) in zip(
+                    make_binary_datums(value.as_bytes(), &binary_type),
+                    make_binary_datums(pattern.as_bytes(), &binary_type),
                 ) {
                     let value_datum = value_datum.as_ref();
                     let pattern_datum = pattern_datum.as_ref();
@@ -2843,6 +3196,17 @@ mod tests {
             assert_eq!(nlike(&values, &patterns).unwrap(), unexpected,);
             assert_eq!(nilike(&values, &patterns).unwrap(), unexpected,);
         }
+
+        for binary_type in [DataType::Binary, DataType::LargeBinary] {
+            let values = make_binary_array(values.iter(), &binary_type);
+            let patterns = make_binary_array(patterns.iter(), &binary_type);
+            let (values, patterns) = (values.as_ref(), patterns.as_ref());
+
+            assert_eq!(like(&values, &patterns).unwrap(), expected,);
+            assert_eq!(ilike(&values, &patterns).unwrap(), expected,);
+            assert_eq!(nlike(&values, &patterns).unwrap(), unexpected,);
+            assert_eq!(nilike(&values, &patterns).unwrap(), unexpected,);
+        }
     }
 
     fn make_datums(
@@ -2884,6 +3248,40 @@ mod tests {
             DataType::LargeUtf8 => Box::new(LargeStringArray::from_iter_values(values)),
             DataType::Utf8View => Box::new(StringViewArray::from_iter_values(values)),
             _ => unimplemented!(),
+        }
+    }
+
+    fn make_binary_datums(
+        value: impl AsRef<[u8]>,
+        data_type: &DataType,
+    ) -> Vec<(Box<dyn Datum>, DatumType)> {
+        match data_type {
+            DataType::Binary => {
+                let array = BinaryArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            DataType::LargeBinary => {
+                let array = LargeBinaryArray::from_iter_values([value]);
+                vec![
+                    (Box::new(array.clone()), DatumType::Array),
+                    (Box::new(Scalar::new(array)), DatumType::Scalar),
+                ]
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    fn make_binary_array(
+        values: impl IntoIterator<Item: AsRef<[u8]>>,
+        data_type: &DataType,
+    ) -> Box<dyn Array> {
+        match data_type {
+            DataType::Binary => Box::new(BinaryArray::from_iter_values(values)),
+            DataType::LargeBinary => Box::new(LargeBinaryArray::from_iter_values(values)),
+            _ => unimplemented!("Unsupported data type: {:?}", data_type),
         }
     }
 
