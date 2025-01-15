@@ -903,7 +903,9 @@ pub struct ObjectMeta {
     pub location: Path,
     /// The last modified time
     pub last_modified: DateTime<Utc>,
-    /// The size in bytes of the object
+    /// The size in bytes of the object. 
+    ///
+    /// Note this is not `usize` as `object_store` supports 32-bit architectures such as WASM
     pub size: u64,
     /// The unique identifier for the object
     ///
