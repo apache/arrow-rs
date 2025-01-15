@@ -1021,6 +1021,8 @@ pub struct GetResult {
     /// The [`ObjectMeta`] for this object
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
+    ///
+    /// Note this is not `usize` as `object_store` supports 32-bit architectures such as WASM
     pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
