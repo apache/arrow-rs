@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["arrow_json_integration_test",[["impl ValueEnum for <a class=\"enum\" href=\"arrow_json_integration_test/enum.Mode.html\" title=\"enum arrow_json_integration_test::Mode\">Mode</a>"]]],["flight_test_integration_client",[["impl ValueEnum for <a class=\"enum\" href=\"flight_test_integration_client/enum.Scenario.html\" title=\"enum flight_test_integration_client::Scenario\">Scenario</a>"]]],["flight_test_integration_server",[["impl ValueEnum for <a class=\"enum\" href=\"flight_test_integration_server/enum.Scenario.html\" title=\"enum flight_test_integration_server::Scenario\">Scenario</a>"]]],["parquet_fromcsv",[["impl ValueEnum for <a class=\"enum\" href=\"parquet_fromcsv/enum.CsvDialect.html\" title=\"enum parquet_fromcsv::CsvDialect\">CsvDialect</a>"],["impl ValueEnum for <a class=\"enum\" href=\"parquet_fromcsv/enum.RecordTerminator.html\" title=\"enum parquet_fromcsv::RecordTerminator\">RecordTerminator</a>"]]],["parquet_rewrite",[["impl ValueEnum for <a class=\"enum\" href=\"parquet_rewrite/enum.CompressionArgs.html\" title=\"enum parquet_rewrite::CompressionArgs\">CompressionArgs</a>"],["impl ValueEnum for <a class=\"enum\" href=\"parquet_rewrite/enum.EnabledStatisticsArgs.html\" title=\"enum parquet_rewrite::EnabledStatisticsArgs\">EnabledStatisticsArgs</a>"],["impl ValueEnum for <a class=\"enum\" href=\"parquet_rewrite/enum.WriterVersionArgs.html\" title=\"enum parquet_rewrite::WriterVersionArgs\">WriterVersionArgs</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[184,206,206,330,526]}
