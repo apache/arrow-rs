@@ -117,12 +117,12 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         Ok(permit_get_result(r, permit))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.get_range(location, range).await
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.get_ranges(location, ranges).await
     }

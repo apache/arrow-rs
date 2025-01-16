@@ -132,7 +132,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get(&full_path).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let full_path = self.full_path(location);
         self.inner.get_range(&full_path, range).await
     }
@@ -142,7 +142,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_opts(&full_path, options).await
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let full_path = self.full_path(location);
         self.inner.get_ranges(&full_path, ranges).await
     }

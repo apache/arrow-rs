@@ -420,7 +420,7 @@ impl MultiStatusResponse {
         })?)
     }
 
-    fn size(&self) -> Result<usize> {
+    fn size(&self) -> Result<u64> {
         let size = self
             .prop_stat
             .prop
@@ -462,7 +462,7 @@ pub(crate) struct Prop {
     last_modified: DateTime<Utc>,
 
     #[serde(rename = "getcontentlength")]
-    content_length: Option<usize>,
+    content_length: Option<u64>,
 
     #[serde(rename = "resourcetype")]
     resource_type: ResourceType,

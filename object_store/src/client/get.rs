@@ -67,9 +67,9 @@ impl<T: GetClient> GetClientExt for T {
 
 struct ContentRange {
     /// The range of the object returned
-    range: Range<usize>,
+    range: Range<u64>,
     /// The total size of the object being requested
-    size: usize,
+    size: u64,
 }
 
 impl ContentRange {
@@ -84,7 +84,7 @@ impl ContentRange {
         let (start_s, end_s) = range.split_once('-')?;
 
         let start = start_s.parse().ok()?;
-        let end: usize = end_s.parse().ok()?;
+        let end: u64 = end_s.parse().ok()?;
 
         Some(Self {
             size,
@@ -140,8 +140,8 @@ enum GetResultError {
 
     #[error("Requested {expected:?}, got {actual:?}")]
     UnexpectedRange {
-        expected: Range<usize>,
-        actual: Range<usize>,
+        expected: Range<u64>,
+        actual: Range<u64>,
     },
 }
 

@@ -112,7 +112,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     let range_result = storage.get_range(&location, range.clone()).await;
 
     let bytes = range_result.unwrap();
-    assert_eq!(bytes, data.slice(range.clone()));
+    assert_eq!(bytes, data.slice(range.start as usize..range.end as usize));
 
     let opts = GetOptions {
         range: Some(GetRange::Bounded(2..5)),
@@ -190,11 +190,11 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     let ranges = vec![0..1, 2..3, 0..5];
     let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
     for (range, bytes) in ranges.iter().zip(bytes) {
-        assert_eq!(bytes, data.slice(range.clone()))
+        assert_eq!(bytes, data.slice(range.start as usize..range.end as usize));
     }
 
     let head = storage.head(&location).await.unwrap();
-    assert_eq!(head.size, data.len());
+    assert_eq!(head.size, data.len() as u64);
 
     storage.delete(&location).await.unwrap();
 
@@ -934,7 +934,7 @@ pub async fn list_with_delimiter(storage: &DynObjectStore) {
     let object = &result.objects[0];
 
     assert_eq!(object.location, expected_location);
-    assert_eq!(object.size, data.len());
+    assert_eq!(object.size, data.len() as u64);
 
     // ==================== check: prefix-list `mydb/wb/000/000/001` (partial filename doesn't match) ====================
     let prefix = Path::from("mydb/wb/000/000/001");
@@ -1085,7 +1085,7 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
         .unwrap();
 
     let meta = storage.head(&path).await.unwrap();
-    assert_eq!(meta.size, chunk_size * 2);
+    assert_eq!(meta.size, chunk_size as u64 * 2);
 
     // Empty case
     let path = Path::from("test_empty_multipart");
