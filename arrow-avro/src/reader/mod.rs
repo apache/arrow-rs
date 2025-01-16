@@ -76,11 +76,12 @@ fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, 
 #[cfg(test)]
 mod test {
     use crate::codec::AvroField;
-    use crate::compression::CompressionCodec;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{read_blocks, read_header};
     use crate::test_util::arrow_test_data;
     use arrow_array::*;
+    use arrow_schema::{DataType, Field, Schema};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
@@ -214,5 +215,27 @@ mod test {
             assert_eq!(read_file(&file, 8), expected);
             assert_eq!(read_file(&file, 3), expected);
         }
+    }
+
+    #[test]
+    fn test_fixed_length_decimal() {
+        let file_path = arrow_test_data("avro/fixed_length_decimal.avro");
+        let actual_batch = read_file(&file_path, 8);
+        let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
+        let array = Decimal128Array::from_iter_values(decimal_values)
+            .with_precision_and_scale(25, 2)
+            .unwrap();
+        let mut meta = HashMap::new();
+        meta.insert("precision".to_string(), "25".to_string());
+        meta.insert("scale".to_string(), "2".to_string());
+        let field_with_meta =
+            Field::new("value", DataType::Decimal128(25, 2), true).with_metadata(meta);
+        let expected_schema = Arc::new(Schema::new(vec![field_with_meta]));
+        let expected_batch = RecordBatch::try_new(expected_schema.clone(), vec![Arc::new(array)])
+            .expect("Failed to build expected RecordBatch");
+        assert_eq!(
+            actual_batch, expected_batch,
+            "Decoded RecordBatch does not match the expected Decimal128 data"
+        );
     }
 }

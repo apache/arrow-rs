@@ -123,28 +123,30 @@ pub enum ComplexType<'a> {
 pub struct Record<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
-    pub fields: Vec<Field<'a>>,
+    pub fields: Vec<RecordField<'a>>,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
 
 /// A field within a [`Record`]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Field<'a> {
+pub struct RecordField<'a> {
     #[serde(borrow)]
     pub name: &'a str,
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
+    #[serde(borrow, default)]
+    pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub r#type: Schema<'a>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub default: Option<&'a str>,
 }
 
@@ -155,7 +157,7 @@ pub struct Field<'a> {
 pub struct Enum<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
@@ -163,7 +165,7 @@ pub struct Enum<'a> {
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub symbols: Vec<&'a str>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub default: Option<&'a str>,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
@@ -198,7 +200,7 @@ pub struct Map<'a> {
 pub struct Fixed<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
@@ -210,7 +212,7 @@ pub struct Fixed<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use arrow_schema::{DataType, Fields, TimeUnit};
     use serde_json::json;
 
@@ -254,6 +256,7 @@ mod tests {
                    "type":"fixed",
                    "name":"fixed",
                    "namespace":"topLevelRecord.value",
+                   "aliases":[],
                    "size":11,
                    "logicalType":"decimal",
                    "precision":25,
@@ -309,9 +312,10 @@ mod tests {
                 namespace: None,
                 doc: None,
                 aliases: vec![],
-                fields: vec![Field {
+                fields: vec![RecordField {
                     name: "value",
                     doc: None,
+                    aliases: vec![],
                     r#type: Schema::Union(vec![
                         Schema::Complex(decimal),
                         Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
@@ -343,15 +347,17 @@ mod tests {
                 doc: None,
                 aliases: vec!["LinkedLongs"],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "value",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "next",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                             Schema::TypeName(TypeName::Ref("LongList")),
@@ -402,18 +408,20 @@ mod tests {
                 doc: None,
                 aliases: vec![],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "id",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                         ]),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "timestamp_col",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::Type(timestamp),
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
@@ -463,9 +471,10 @@ mod tests {
                 doc: None,
                 aliases: vec![],
                 fields: vec![
-                    Field {
+                    RecordField {
                         name: "clientHash",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Complex(ComplexType::Fixed(Fixed {
                             name: "MD5",
                             namespace: None,
@@ -475,24 +484,27 @@ mod tests {
                         })),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "clientProtocol",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
                         ]),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "serverHash",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::TypeName(TypeName::Ref("MD5")),
                         default: None,
                     },
-                    Field {
+                    RecordField {
                         name: "meta",
                         doc: None,
+                        aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
                             Schema::Complex(ComplexType::Map(Map {
@@ -508,5 +520,53 @@ mod tests {
                 attributes: Default::default(),
             }))
         );
+
+        let t: Type = serde_json::from_str(
+            r#"{
+                   "type":"string",
+                   "logicalType":"uuid"
+                }"#,
+        )
+        .unwrap();
+
+        let uuid = Type {
+            r#type: TypeName::Primitive(PrimitiveType::String),
+            attributes: Attributes {
+                logical_type: Some("uuid"),
+                additional: Default::default(),
+            },
+        };
+
+        assert_eq!(t, uuid);
+
+        // Ensure aliases are parsed
+        let schema: Schema = serde_json::from_str(
+            r#"{
+                  "type": "record",
+                  "name": "Foo",
+                  "aliases": ["Bar"],
+                  "fields" : [
+                    {"name":"id","aliases":["uid"],"type":"int"}
+                  ]
+                }"#,
+        )
+        .unwrap();
+
+        let with_aliases = Schema::Complex(ComplexType::Record(Record {
+            name: "Foo",
+            namespace: None,
+            doc: None,
+            aliases: vec!["Bar"],
+            fields: vec![RecordField {
+                name: "id",
+                aliases: vec!["uid"],
+                doc: None,
+                r#type: Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+                default: None,
+            }],
+            attributes: Default::default(),
+        }));
+
+        assert_eq!(schema, with_aliases);
     }
 }
