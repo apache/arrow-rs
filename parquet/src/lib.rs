@@ -131,6 +131,9 @@ pub mod data_type;
 pub use self::encodings::{decoding, encoding};
 
 experimental!(#[macro_use] mod util);
+
+pub use util::utf8;
+
 #[cfg(feature = "arrow")]
 pub mod arrow;
 pub mod column;

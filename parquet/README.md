@@ -51,17 +51,21 @@ major releases may contain breaking API changes.
 
 The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
 
-- `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
-- `async` - support `async` APIs for reading parquet
-- `json` - support for reading / writing `json` data to / from parquet
-- `brotli` (default) - support for parquet using `brotli` compression
-- `flate2` (default) - support for parquet using `gzip` compression
-- `lz4` (default) - support for parquet using `lz4` compression
-- `zstd` (default) - support for parquet using `zstd` compression
-- `snap` (default) - support for parquet using `snappy` compression
+- `arrow` (default) - support for reading / writing [`arrow`] arrays to / from Parquet
+- `async` - support `async` APIs for reading Parquet
+- `json` - support for reading / writing `json` data to / from Parquet
+- `brotli` (default) - support for Parquet using `brotli` compression
+- `flate2` (default) - support for Parquet using `gzip` compression
+- `lz4` (default) - support for Parquet using `lz4` compression
+- `zstd` (default) - support for Parquet using `zstd` compression
+- `snap` (default) - support for Parquet using `snappy` compression
 - `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/main/parquet/src/bin)
 - `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
+- `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
+
+[`arrow`]: https://crates.io/crates/arrow
+[`simdutf8`]: https://crates.io/crates/simdutf8
 
 ## Parquet Feature Status
 
