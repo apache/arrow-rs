@@ -2502,8 +2502,18 @@ where
 mod tests {
     use super::*;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_data::decimal::is_validate_decimal_precision;
     use chrono::NaiveDate;
     use half::f16;
+
+    struct DecimalCastTestConfig {
+        input_scale: i8,
+        input_prec: u8,
+        output_scale: i8,
+        output_prec: u8,
+        input_repr: i128,
+        expected_output_repr: i128,
+    }
 
     macro_rules! generate_cast_test_case {
         ($INPUT_ARRAY: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
@@ -9962,6 +9972,161 @@ mod tests {
         let result = cast(&array, &to_type);
         assert_eq!(
             r#"Cast error: Casting from Utf8 to Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) not supported"#,
+            result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_increase_scale_and_precision_unchecked() {
+        let test_cases = [
+            DecimalCastTestConfig {
+                input_scale: 0,
+                input_prec: 5,
+                output_scale: 5,
+                output_prec: 10,
+                input_repr: 99999,
+                expected_output_repr: 9999900000,
+            },
+            DecimalCastTestConfig {
+                input_scale: 0,
+                input_prec: 5,
+                output_scale: 5,
+                output_prec: 10,
+                input_repr: -99999,
+                expected_output_repr: -9999900000,
+            },
+            DecimalCastTestConfig {
+                input_scale: 2,
+                input_prec: 5,
+                output_scale: 5,
+                output_prec: 10,
+                input_repr: 99999,
+                expected_output_repr: 99999000,
+            },
+            DecimalCastTestConfig {
+                input_scale: -2,
+                input_prec: 5,
+                output_scale: 3,
+                output_prec: 10,
+                input_repr: -99999,
+                expected_output_repr: -9999900000,
+            },
+        ];
+
+        for t in test_cases.iter() {
+            let array = vec![Some(t.input_repr)];
+            let array = create_decimal_array(array, t.input_prec, t.input_scale).unwrap(); // ['999' * 10^-3 = 0.999]
+            let input_type = DataType::Decimal128(t.input_prec, t.input_scale);
+            let output_type = DataType::Decimal128(t.output_prec, t.output_scale);
+            assert!(can_cast_types(&input_type, &output_type));
+
+            let options = CastOptions {
+                safe: true,
+                ..Default::default()
+            };
+            let result = cast_with_options(&array, &output_type, &options);
+
+            // make sure that the configuration is set up correctly
+            assert!(is_validate_decimal_precision(
+                t.expected_output_repr,
+                t.output_prec
+            ));
+            assert_eq!(
+                *result.unwrap(),
+                create_decimal_array(
+                    vec![Some(t.expected_output_repr)],
+                    t.output_prec,
+                    t.output_scale
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_decrease_scale_and_precision_unchecked() {
+        let test_cases = [
+            DecimalCastTestConfig {
+                input_scale: 0,
+                input_prec: 5,
+                output_scale: -3,
+                output_prec: 3,
+                input_repr: 99999,
+                expected_output_repr: 100,
+            },
+            DecimalCastTestConfig {
+                input_scale: 0,
+                input_prec: 5,
+                output_scale: -5,
+                output_prec: 1,
+                input_repr: -99999,
+                expected_output_repr: -1,
+            },
+            DecimalCastTestConfig {
+                input_scale: 2,
+                input_prec: 10,
+                output_scale: -2,
+                output_prec: 5,
+                input_repr: 123456789,
+                expected_output_repr: 12346,
+            },
+            DecimalCastTestConfig {
+                input_scale: 4,
+                input_prec: 10,
+                output_scale: 0,
+                output_prec: 7,
+                input_repr: -9876543210,
+                expected_output_repr: -987654,
+            },
+        ];
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        // happy case: reducing scale does not result in problem
+        {
+            for t in test_cases.iter() {
+                let array = vec![Some(t.input_repr)];
+                let array = create_decimal_array(array, t.input_prec, t.input_scale).unwrap(); // ['999' * 10^-3 = 0.999]
+                let input_type = DataType::Decimal128(t.input_prec, t.input_scale);
+                let output_type = DataType::Decimal128(t.output_prec, t.output_scale);
+                assert!(can_cast_types(&input_type, &output_type));
+
+                let result = cast_with_options(&array, &output_type, &options);
+
+                // make sure that the configuration is set up correctly
+                assert!(is_validate_decimal_precision(
+                    t.expected_output_repr,
+                    t.output_prec
+                ));
+                assert_eq!(
+                    *result.unwrap(),
+                    create_decimal_array(
+                        vec![Some(t.expected_output_repr)],
+                        t.output_prec,
+                        t.output_scale
+                    )
+                    .unwrap()
+                );
+            }
+        }
+
+        // also test the edge case where loss in precision = loss in scale
+        // this is not a safe conversion in general
+        let array = vec![Some(9999999)];
+        let output_type = DataType::Decimal128(6, 3);
+        let array = create_decimal_array(array, 7, 4).unwrap(); // ['9999999' * 10^-4 = 999.9999]
+        let input_type = DataType::Decimal128(7, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(
+            "Invalid argument error: 1000000 is too large to store in a Decimal128 of precision 6. Max is 999999",
             result.unwrap_err().to_string()
         );
     }
