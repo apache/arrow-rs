@@ -197,6 +197,9 @@ pub enum GetRange {
     /// an error will be returned. Additionally, if the range ends after the end
     /// of the object, the entire remainder of the object will be returned.
     /// Otherwise, the exact requested range will be returned.
+    ///
+    /// Note that range is u64 (i.e., not usize),
+    /// as `object_store` supports 32-bit architectures such as WASM
     Bounded(Range<u64>),
     /// Request all bytes starting from a given byte offset
     Offset(u64),
@@ -211,19 +214,27 @@ pub(crate) enum InvalidGetRange {
 
     #[error("Range started at {start} and ended at {end}")]
     Inconsistent { start: u64, end: u64 },
+
+    #[error("Range {requested} is larger than system memory limit {max}")]
+    TooLarge { requested: u64, max: u64 },
 }
 
 impl GetRange {
     pub(crate) fn is_valid(&self) -> Result<(), InvalidGetRange> {
-        match self {
-            Self::Bounded(r) if r.end <= r.start => {
+        if let Self::Bounded(r) = self {
+            if r.end <= r.start {
                 return Err(InvalidGetRange::Inconsistent {
                     start: r.start,
                     end: r.end,
                 });
             }
-            _ => (),
-        };
+            if (r.end - r.start) > usize::MAX as u64 {
+                return Err(InvalidGetRange::TooLarge {
+                    requested: r.start,
+                    max: usize::MAX as u64,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -333,9 +344,9 @@ mod tests {
             &ranges,
             |range| {
                 fetches.push(range.clone());
-                futures::future::ready(Ok(Bytes::from(
-                    src[range.start as usize..range.end as usize].to_vec(),
-                )))
+                let start = usize::try_from(range.start).unwrap();
+                let end = usize::try_from(range.end).unwrap();
+                futures::future::ready(Ok(Bytes::from(src[start..end].to_vec())))
             },
             coalesce,
         )
@@ -346,7 +357,7 @@ mod tests {
         for (range, bytes) in ranges.iter().zip(coalesced) {
             assert_eq!(
                 bytes.as_ref(),
-                &src[range.start as usize..range.end as usize]
+                &src[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
             );
         }
         fetches

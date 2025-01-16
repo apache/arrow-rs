@@ -44,12 +44,12 @@ use crate::{PutPayload, Result};
 #[derive(Debug)]
 pub struct ChunkedStore {
     inner: Arc<dyn ObjectStore>,
-    chunk_size: u64,
+    chunk_size: usize, // chunks are in memory, so we use usize not u64
 }
 
 impl ChunkedStore {
     /// Creates a new [`ChunkedStore`] with the specified chunk_size
-    pub fn new(inner: Arc<dyn ObjectStore>, chunk_size: u64) -> Self {
+    pub fn new(inner: Arc<dyn ObjectStore>, chunk_size: usize) -> Self {
         Self { inner, chunk_size }
     }
 }
@@ -100,7 +100,7 @@ impl ObjectStore for ChunkedStore {
                         if exhausted {
                             return None;
                         }
-                        while buffer.len() < chunk_size as usize {
+                        while buffer.len() < chunk_size {
                             match stream.next().await {
                                 None => {
                                     exhausted = true;
@@ -125,7 +125,7 @@ impl ObjectStore for ChunkedStore {
                             };
                         }
                         // Return the chunked values as the next value in the stream
-                        let slice = buffer.split_to(chunk_size as usize).freeze();
+                        let slice = buffer.split_to(chunk_size).freeze();
                         Some((Ok(slice), (stream, buffer, exhausted, chunk_size)))
                     },
                 )
@@ -204,7 +204,7 @@ mod tests {
             let mut remaining = 1001;
             while let Some(next) = s.next().await {
                 let size = next.unwrap().len() as u64;
-                let expected = remaining.min(chunk_size);
+                let expected = remaining.min(chunk_size as u64);
                 assert_eq!(size, expected);
                 remaining -= expected;
             }

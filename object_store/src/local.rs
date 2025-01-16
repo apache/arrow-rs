@@ -820,7 +820,7 @@ pub(crate) fn chunked_stream(
     mut file: File,
     path: PathBuf,
     range: Range<u64>,
-    chunk_size: u64,
+    chunk_size: usize,
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
     futures::stream::once(async move {
         let (file, path) = maybe_spawn_blocking(move || {
@@ -841,8 +841,14 @@ pub(crate) fn chunked_stream(
                         return Ok(None);
                     }
 
-                    let to_read = remaining.min(chunk_size);
-                    let mut buffer = Vec::with_capacity(to_read as usize);
+                    let to_read = remaining.min(chunk_size as u64);
+                    let cap = usize::try_from(to_read).map_err(|_e| Error::InvalidRange {
+                        source: InvalidGetRange::TooLarge {
+                            requested: to_read,
+                            max: usize::MAX as u64,
+                        },
+                    })?;
+                    let mut buffer = Vec::with_capacity(cap);
                     let read = (&mut file)
                         .take(to_read)
                         .read_to_end(&mut buffer)

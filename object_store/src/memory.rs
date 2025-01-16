@@ -277,8 +277,19 @@ impl ObjectStore for InMemory {
                 let r = GetRange::Bounded(range.clone())
                     .as_range(entry.data.len() as u64)
                     .map_err(|source| Error::Range { source })?;
-                let r = r.start as usize..r.end as usize;
-                Ok(entry.data.slice(r))
+                let r_end = usize::try_from(r.end).map_err(|_e| Error::Range {
+                    source: InvalidGetRange::TooLarge {
+                        requested: r.end,
+                        max: usize::MAX as u64,
+                    },
+                })?;
+                let r_start = usize::try_from(r.start).map_err(|_e| Error::Range {
+                    source: InvalidGetRange::TooLarge {
+                        requested: r.start,
+                        max: usize::MAX as u64,
+                    },
+                })?;
+                Ok(entry.data.slice(r_start..r_end))
             })
             .collect()
     }

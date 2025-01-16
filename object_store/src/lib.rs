@@ -903,7 +903,7 @@ pub struct ObjectMeta {
     pub location: Path,
     /// The last modified time
     pub last_modified: DateTime<Utc>,
-    /// The size in bytes of the object. 
+    /// The size in bytes of the object.
     ///
     /// Note this is not `usize` as `object_store` supports 32-bit architectures such as WASM
     pub size: u64,
@@ -1064,7 +1064,11 @@ impl GetResult {
                             path: path.clone(),
                         })?;
 
-                    let mut buffer = Vec::with_capacity(len as usize);
+                    let mut buffer = if let Ok(len) = len.try_into() {
+                        Vec::with_capacity(len)
+                    } else {
+                        Vec::new()
+                    };
                     file.take(len as _)
                         .read_to_end(&mut buffer)
                         .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
@@ -1097,7 +1101,7 @@ impl GetResult {
         match self.payload {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
-                const CHUNK_SIZE: u64 = 8 * 1024;
+                const CHUNK_SIZE: usize = 8 * 1024;
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
             GetResultPayload::Stream(s) => s,
