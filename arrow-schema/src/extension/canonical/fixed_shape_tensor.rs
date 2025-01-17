@@ -160,7 +160,7 @@ impl FixedShapeTensorMetadata {
 }
 
 impl ExtensionType for FixedShapeTensor {
-    const NAME: &str = "arrow.fixed_shape_tensor";
+    const NAME: &'static str = "arrow.fixed_shape_tensor";
 
     type Metadata = FixedShapeTensorMetadata;
 

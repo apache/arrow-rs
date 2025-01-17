@@ -34,7 +34,7 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 pub struct Bool8;
 
 impl ExtensionType for Bool8 {
-    const NAME: &str = "arrow.bool8";
+    const NAME: &'static str = "arrow.bool8";
 
     type Metadata = &'static str;
 

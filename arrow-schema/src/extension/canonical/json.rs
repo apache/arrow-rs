@@ -52,7 +52,7 @@ impl Default for JsonMetadata {
 }
 
 impl ExtensionType for Json {
-    const NAME: &str = "arrow.json";
+    const NAME: &'static str = "arrow.json";
 
     type Metadata = JsonMetadata;
 

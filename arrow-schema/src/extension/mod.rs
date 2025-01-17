@@ -115,7 +115,7 @@ pub const EXTENSION_TYPE_METADATA_KEY: &str = "ARROW:extension:metadata";
 ///
 /// impl ExtensionType for Uuid {
 ///     // We use a namespace as suggested by the specification.
-///     const NAME: &str = "myorg.example.uuid";
+///     const NAME: &'static str = "myorg.example.uuid";
 ///
 ///     // The metadata type is the Uuid version.
 ///     type Metadata = UuidVersion;
@@ -201,7 +201,7 @@ pub trait ExtensionType: Sized {
     ///
     /// [`Field`]: crate::Field
     /// [`Field::metadata`]: crate::Field::metadata
-    const NAME: &str;
+    const NAME: &'static str;
 
     /// The metadata type of this extension type.
     ///

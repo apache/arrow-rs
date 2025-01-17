@@ -91,7 +91,7 @@ impl OpaqueMetadata {
 }
 
 impl ExtensionType for Opaque {
-    const NAME: &str = "arrow.opaque";
+    const NAME: &'static str = "arrow.opaque";
 
     type Metadata = OpaqueMetadata;
 

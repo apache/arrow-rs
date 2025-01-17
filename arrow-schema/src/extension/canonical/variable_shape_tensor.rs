@@ -106,7 +106,7 @@ impl VariableShapeTensorMetadata {
 }
 
 impl ExtensionType for VariableShapeTensor {
-    const NAME: &str = "arrow.variable_shape_tensor";
+    const NAME: &'static str = "arrow.variable_shape_tensor";
 
     type Metadata = VariableShapeTensorMetadata;
 

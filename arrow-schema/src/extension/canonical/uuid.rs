@@ -38,7 +38,7 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 pub struct Uuid;
 
 impl ExtensionType for Uuid {
-    const NAME: &str = "arrow.uuid";
+    const NAME: &'static str = "arrow.uuid";
 
     type Metadata = ();
 
