@@ -35,8 +35,8 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 mod complex;
 mod primitive;
 
-use crate::arrow::ProjectionMask;
-pub(crate) use complex::{ParquetField, ParquetFieldType};
+pub use crate::arrow::ProjectionMask;
+pub use complex::{ParquetField, ParquetFieldType};
 
 use super::PARQUET_FIELD_ID_META_KEY;
 
