@@ -23,13 +23,14 @@
 //!
 //! The interfaces for converting arrow schema to parquet schema is coming.
 
-use arrow_schema::canonical_extension_types::Uuid;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
+#[cfg(feature = "arrow-canonical-extension-types")]
+use arrow_schema::extension::Uuid;
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
@@ -472,8 +473,16 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(*length)
-                // If set, map arrow uuid extension type to parquet uuid logical type.
-                .with_logical_type(field.extension_type::<Uuid>().map(|_| LogicalType::Uuid))
+                .with_logical_type(
+                    #[cfg(feature = "arrow-canonical-extension-types")]
+                    // If set, map arrow uuid extension type to parquet uuid logical type.
+                    field
+                        .try_extension_type::<Uuid>()
+                        .ok()
+                        .map(|_| LogicalType::Uuid),
+                    #[cfg(not(feature = "arrow-canonical-extension-types"))]
+                    None,
+                )
                 .build()
         }
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
@@ -1937,6 +1946,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arrow-canonical-extension-types")]
     fn arrow_uuid_to_parquet_uuid() -> Result<()> {
         let arrow_schema = Schema::new(vec![Field::new(
             "uuid",
