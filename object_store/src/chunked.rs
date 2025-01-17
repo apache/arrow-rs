@@ -44,7 +44,7 @@ use crate::{PutPayload, Result};
 #[derive(Debug)]
 pub struct ChunkedStore {
     inner: Arc<dyn ObjectStore>,
-    chunk_size: usize,
+    chunk_size: usize, // chunks are in memory, so we use usize not u64
 }
 
 impl ChunkedStore {
@@ -138,7 +138,7 @@ impl ObjectStore for ChunkedStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -203,8 +203,8 @@ mod tests {
 
             let mut remaining = 1001;
             while let Some(next) = s.next().await {
-                let size = next.unwrap().len();
-                let expected = remaining.min(chunk_size);
+                let size = next.unwrap().len() as u64;
+                let expected = remaining.min(chunk_size as u64);
                 assert_eq!(size, expected);
                 remaining -= expected;
             }
