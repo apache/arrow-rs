@@ -3414,10 +3414,8 @@ mod tests {
     // https://github.com/apache/arrow-rs/issues/6988
     fn test_roundtrip_empty_schema() {
         // create empty record batch with empty schema
-        let empty_fields: Vec<Field> = vec![];
-        let empty_schema = Arc::new(Schema::new(empty_fields));
         let empty_batch = RecordBatch::try_new_with_options(
-            empty_schema,
+            Arc::new(Schema::empty()),
             vec![],
             &RecordBatchOptions::default().with_row_count(Some(0)),
         )
