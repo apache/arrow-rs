@@ -372,7 +372,7 @@ pub const MAX_DECIMAL256_FOR_EACH_PRECISION: [i256; 77] = [
 /// ```
 /// # use arrow_buffer::i256;
 /// # use arrow_data::decimal::MIN_DECIMAL256_FOR_EACH_PRECISION;
-/// assert_eq!(MIN_DECIMAL256_FOR_EACH_PRECISION[3], i256::from(9999));
+/// assert_eq!(MIN_DECIMAL256_FOR_EACH_PRECISION[3], i256::from(-999));
 /// ```
 ///
 /// [`i256`]: arrow_buffer::i256
@@ -742,7 +742,7 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 #[allow(dead_code)] // no longer used but is part of our public API
 #[deprecated(
     since = "54.1.0",
-    note = "Use MAX_DECIMAL128_FOR_EACH_PRECISION (note indexes are different)"
+    note = "Use MIN_DECIMAL_FOR_EACH_PRECISION (note indexes are different)"
 )]
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
