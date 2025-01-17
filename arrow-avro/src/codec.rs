@@ -81,23 +81,6 @@ impl AvroDataType {
     }
 }
 
-/// If this is a named complex type (Record, Enum, Fixed), attach `namespace`
-/// from `dt.metadata["namespace"]` if present. Otherwise, return as-is.
-fn maybe_add_namespace<'a>(mut schema: Schema<'a>, dt: &'a AvroDataType) -> Schema<'a> {
-    if let Some(ns_str) = dt.metadata.get("namespace") {
-        if let Schema::Complex(ref mut c) = schema {
-            match c {
-                ComplexType::Record(r) => r.namespace = Some(ns_str),
-                ComplexType::Enum(e) => e.namespace = Some(ns_str),
-                ComplexType::Fixed(f) => f.namespace = Some(ns_str),
-                // Arrays and Maps do not have a namespace field, so do nothing
-                _ => {}
-            }
-        }
-    }
-    schema
-}
-
 /// A named [`AvroDataType`]
 #[derive(Debug, Clone)]
 pub struct AvroField {
