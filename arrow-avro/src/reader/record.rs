@@ -122,7 +122,7 @@ enum Decoder {
     /// Avro union that includes `null`
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
     /// Avro `enum` => Dictionary(int32 -> string)
-    Enum(Vec<String>, Vec<i32>),
+    Enum(Arc<[String]>, Vec<i32>),
     /// Avro `map<T>`
     Map(
         FieldRef,
@@ -155,7 +155,7 @@ impl Decoder {
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Utf8 => Self::String(
+            Codec::String => Self::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
@@ -175,7 +175,7 @@ impl Decoder {
             }
             Codec::Fixed(n) => Self::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::Duration => Self::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::List(item) => {
+            Codec::Array(item) => {
                 let item_decoder = Box::new(Self::try_new(item)?);
                 Self::List(
                     Arc::new(item.field_with_name("item")),
@@ -183,7 +183,7 @@ impl Decoder {
                     item_decoder,
                 )
             }
-            Codec::Struct(avro_fields) => {
+            Codec::Record(avro_fields) => {
                 let mut arrow_fields = Vec::with_capacity(avro_fields.len());
                 let mut decoders = Vec::with_capacity(avro_fields.len());
                 for avro_field in avro_fields.iter() {
@@ -193,8 +193,8 @@ impl Decoder {
                 }
                 Self::Record(arrow_fields.into(), decoders)
             }
-            Codec::Enum(symbols) => {
-                Self::Enum(symbols.clone(), Vec::with_capacity(DEFAULT_CAPACITY))
+            Codec::Enum(keys, values) => {
+                Self::Enum(Arc::clone(keys), Vec::with_capacity(values.len()))
             }
             Codec::Map(value_type) => {
                 let map_field = Arc::new(ArrowField::new(
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn test_enum_decoding() {
         let symbols = vec!["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
-        let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols.clone()));
+        let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new([]), Arc::new([])));
         let mut decoder = Decoder::try_new(&enum_dt).unwrap();
         // Encode the indices [1, 0, 2] => zigzag => 1->2, 0->0, 2->4
         let mut data = Vec::new();
@@ -977,8 +977,8 @@ mod tests {
     fn test_enum_decoding_with_nulls() {
         // Union => [Enum(...), null]
         // "child" => branch_index=0 => [0x00], "null" => 1 => [0x02]
-        let symbols = vec!["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
-        let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols.clone()));
+        let symbols = ["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
+        let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new(symbols), Arc::new([])));
         let mut inner_decoder = Decoder::try_new(&enum_dt).unwrap();
         let mut nullable_decoder = Decoder::Nullable(
             Nullability::NullFirst,
@@ -1025,7 +1025,7 @@ mod tests {
     // -------------------
     #[test]
     fn test_map_decoding_one_entry() {
-        let value_type = AvroDataType::from_codec(Codec::Utf8);
+        let value_type = AvroDataType::from_codec(Codec::String);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
         let mut decoder = Decoder::try_new(&map_type).unwrap();
         // Encode a single map with one entry: {"hello": "world"}
@@ -1062,7 +1062,7 @@ mod tests {
     #[test]
     fn test_map_decoding_empty() {
         // block_count=0 => empty map
-        let value_type = AvroDataType::from_codec(Codec::Utf8);
+        let value_type = AvroDataType::from_codec(Codec::String);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
         let mut decoder = Decoder::try_new(&map_type).unwrap();
         // Encode an empty map => block_count=0 => [0x00]
@@ -1195,7 +1195,7 @@ mod tests {
         //
         // 2. flush => should yield 2-element array => first row has 2 items, second row has 0 items
         let item_dt = AvroDataType::from_codec(Codec::Int32);
-        let list_dt = AvroDataType::from_codec(Codec::List(Arc::new(item_dt)));
+        let list_dt = AvroDataType::from_codec(Codec::Array(Arc::new(item_dt)));
         let mut decoder = Decoder::try_new(&list_dt).unwrap();
         // Row1 => block_count=2 => item=10 => item=20 => block_count=0 => end
         //  - 2 => zigzag => [0x04]
@@ -1236,7 +1236,7 @@ mod tests {
         // Then read block_size => let's pretend it's 9 bytes, etc. Then the items.
         // Then a block_count=0 => done
         let item_dt = AvroDataType::from_codec(Codec::Int32);
-        let list_dt = AvroDataType::from_codec(Codec::List(Arc::new(item_dt)));
+        let list_dt = AvroDataType::from_codec(Codec::Array(Arc::new(item_dt)));
         let mut decoder = Decoder::try_new(&list_dt).unwrap();
         // block_count=-3 => zigzag => (-3 << 1) ^ (-3 >> 63)
         //   => -6 ^ -1 => ...
