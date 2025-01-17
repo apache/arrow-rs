@@ -3409,4 +3409,30 @@ mod tests {
             "Arrow: Incompatible type. Field 'temperature' has type Float64, array has type Int32"
         );
     }
+
+    #[test]
+    // https://github.com/apache/arrow-rs/issues/6988
+    fn test_roundtrip_empty_schema() {
+        // create empty record batch with empty schema
+        let empty_fields: Vec<Field> = vec![];
+        let empty_schema = Arc::new(Schema::new(empty_fields));
+        let empty_batch = RecordBatch::try_new_with_options(
+            empty_schema,
+            vec![],
+            &RecordBatchOptions::default().with_row_count(Some(0)),
+        )
+        .unwrap();
+
+        // write to parquet
+        let mut parquet_bytes: Vec<u8> = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut parquet_bytes, empty_batch.schema(), None).unwrap();
+        writer.write(&empty_batch).unwrap();
+        writer.close().unwrap();
+
+        // read from parquet
+        let bytes = Bytes::from(parquet_bytes);
+        let result = ParquetRecordBatchReaderBuilder::try_new(bytes);
+        result.unwrap();
+    }
 }
