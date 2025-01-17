@@ -45,12 +45,12 @@ impl Opaque {
 
     /// Returns the name of the unknown type in the external system.
     pub fn type_name(&self) -> &str {
-        &self.0.type_name()
+        self.0.type_name()
     }
 
     /// Returns the name of the external system.
     pub fn vendor_name(&self) -> &str {
-        &self.0.vendor_name()
+        self.0.vendor_name()
     }
 }
 
