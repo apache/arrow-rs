@@ -3430,7 +3430,13 @@ mod tests {
 
         // read from parquet
         let bytes = Bytes::from(parquet_bytes);
-        let result = ParquetRecordBatchReaderBuilder::try_new(bytes);
-        result.unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        assert_eq!(reader.schema(), &empty_batch.schema());
+        let batches: Vec<_> = reader
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 0);
     }
 }
