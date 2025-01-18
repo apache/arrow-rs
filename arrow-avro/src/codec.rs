@@ -193,16 +193,22 @@ impl Codec {
             Self::Fixed(size) => FixedSizeBinary(*size),
             /// Logical Types
             ///
-            Self::Decimal(precision, scale, size) => match size {
-                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
-                None if *precision <= DECIMAL128_MAX_PRECISION as usize
-                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
-                {
-                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
+            Self::Decimal(precision, scale, size) => {
+                let scale = scale.unwrap_or(0) as i8;
+                let precision = *precision as u8;
+                let is_256 = match *size {
+                    Some(s) => s > 16,
+                    None => {
+                        (precision as usize) > DECIMAL128_MAX_PRECISION as usize
+                            || (scale as usize) > DECIMAL128_MAX_SCALE as usize
+                    }
+                };
+                if is_256 {
+                    Decimal256(precision, scale)
+                } else {
+                    Decimal128(precision, scale)
                 }
-                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-            },
+            }
             // arrow-rs does not support the UUID Canonical Extension Type yet,
             // so this is a temporary workaround.
             Self::Uuid => FixedSizeBinary(16),
@@ -518,26 +524,21 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
                     Arc::from(Vec::<i32>::new()),
                 )
             } else {
-                // Fallback to Utf8
                 Codec::String
             }
         }
-        List(field) => {
-            let sub_codec = arrow_type_to_codec(field.data_type());
-            Codec::Array(Arc::new(AvroDataType {
-                nullability: field.is_nullable().then_some(Nullability::NullFirst),
-                metadata: field.metadata().clone(),
-                codec: sub_codec,
-            }))
-        }
+        List(field) => Codec::Array(Arc::new(AvroDataType {
+            nullability: field.is_nullable().then_some(Nullability::NullFirst),
+            metadata: field.metadata().clone(),
+            codec: arrow_type_to_codec(field.data_type()),
+        })),
         Map(field, _keys_sorted) => {
             if let Struct(child_fields) = field.data_type() {
                 let value_field = &child_fields[1];
-                let sub_codec = arrow_type_to_codec(value_field.data_type());
                 Codec::Map(Arc::new(AvroDataType {
                     nullability: value_field.is_nullable().then_some(Nullability::NullFirst),
                     metadata: value_field.metadata().clone(),
-                    codec: sub_codec,
+                    codec: arrow_type_to_codec(value_field.data_type()),
                 }))
             } else {
                 Codec::Map(Arc::new(AvroDataType::from_codec(Codec::String)))
