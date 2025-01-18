@@ -979,8 +979,8 @@ mod tests {
     // -------------------
     #[test]
     fn test_enum_decoding() {
-        let symbols = ["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
-        let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new([]), Arc::new([])));
+        let symbols = Arc::new(["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()]);
+        let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols, Arc::new([])));
         let mut decoder = Decoder::try_new(&enum_dt).unwrap();
         // Encode the indices [1, 0, 2] => zigzag => 1->2, 0->0, 2->4
         let mut data = Vec::new();
