@@ -85,6 +85,8 @@ impl RecordDecoder {
 /// Decoder for Avro data of various shapes.
 #[derive(Debug)]
 enum Decoder {
+    /// Primitive Types
+    ///
     /// Avro `null`
     Null(usize),
     /// Avro `boolean`
@@ -97,6 +99,35 @@ enum Decoder {
     Float32(Vec<f32>),
     /// Avro `double` => f64
     Float64(Vec<f64>),
+    /// Avro `bytes` => Arrow Binary
+    Binary(OffsetBufferBuilder<i32>, Vec<u8>),
+    /// Avro `string` => Arrow String
+    String(OffsetBufferBuilder<i32>, Vec<u8>),
+    /// Complex Types
+    ///
+    /// Avro `record`
+    Record(Fields, Vec<Decoder>),
+    /// Avro `enum` => Dictionary(int32 -> string)
+    Enum(Arc<[String]>, Vec<i32>),
+    /// Avro `array<T>`
+    List(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
+    /// Avro `map<T>`
+    Map(
+        FieldRef,
+        OffsetBufferBuilder<i32>,
+        OffsetBufferBuilder<i32>,
+        Vec<u8>,
+        Box<Decoder>,
+        usize,
+    ),
+    /// Avro union that includes `null`
+    Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
+    /// Avro `fixed(n)` => Arrow `FixedSizeBinaryArray`
+    Fixed(i32, Vec<u8>),
+    /// Logical Types
+    ///
+    /// Avro decimal => Arrow decimal
+    Decimal(usize, Option<usize>, Option<usize>, DecimalBuilder),
     /// Avro `date` => Date32
     Date32(Vec<i32>),
     /// Avro `time-millis` => Time32(Millisecond)
@@ -107,33 +138,8 @@ enum Decoder {
     TimestampMillis(bool, Vec<i64>),
     /// Avro `timestamp-micros` (bool = UTC?)
     TimestampMicros(bool, Vec<i64>),
-    /// Avro `bytes` => Arrow Binary
-    Binary(OffsetBufferBuilder<i32>, Vec<u8>),
-    /// Avro `string` => Arrow String
-    String(OffsetBufferBuilder<i32>, Vec<u8>),
-    /// Avro `fixed(n)` => Arrow `FixedSizeBinaryArray`
-    Fixed(i32, Vec<u8>),
     /// Avro `interval` => Arrow `IntervalMonthDayNanoType` (12 bytes)
     Interval(Vec<IntervalMonthDayNano>),
-    /// Avro `array<T>`
-    List(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    /// Avro `record`
-    Record(Fields, Vec<Decoder>),
-    /// Avro union that includes `null`
-    Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
-    /// Avro `enum` => Dictionary(int32 -> string)
-    Enum(Arc<[String]>, Vec<i32>),
-    /// Avro `map<T>`
-    Map(
-        FieldRef,
-        OffsetBufferBuilder<i32>,
-        OffsetBufferBuilder<i32>,
-        Vec<u8>,
-        Box<Decoder>,
-        usize,
-    ),
-    /// Avro decimal => Arrow decimal
-    Decimal(usize, Option<usize>, Option<usize>, DecimalBuilder),
 }
 
 impl Decoder {
@@ -145,6 +151,8 @@ impl Decoder {
     /// Create a `Decoder` from an [`AvroDataType`].
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         let decoder = match data_type.codec() {
+            /// Primitive Types
+            ///
             Codec::Null => Self::Null(0),
             Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
             Codec::Int32 => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
@@ -159,30 +167,9 @@ impl Decoder {
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Decimal(precision, scale, size) => {
-                let builder = DecimalBuilder::new(*precision, *scale, *size)?;
-                Self::Decimal(*precision, *scale, *size, builder)
-            }
-            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimestampMillis(is_utc) => {
-                Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            Codec::TimestampMicros(is_utc) => {
-                Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            Codec::Fixed(n) => Self::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Duration => Self::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Array(item) => {
-                let item_decoder = Box::new(Self::try_new(item)?);
-                Self::List(
-                    Arc::new(item.field_with_name("item")),
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                    item_decoder,
-                )
-            }
+
+            /// Complex Types
+            ///
             Codec::Record(avro_fields) => {
                 let mut arrow_fields = Vec::with_capacity(avro_fields.len());
                 let mut decoders = Vec::with_capacity(avro_fields.len());
@@ -195,6 +182,14 @@ impl Decoder {
             }
             Codec::Enum(keys, values) => {
                 Self::Enum(Arc::clone(keys), Vec::with_capacity(values.len()))
+            }
+            Codec::Array(item) => {
+                let item_decoder = Box::new(Self::try_new(item)?);
+                Self::List(
+                    Arc::new(item.field_with_name("item")),
+                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                    item_decoder,
+                )
             }
             Codec::Map(value_type) => {
                 let map_field = Arc::new(ArrowField::new(
@@ -214,6 +209,25 @@ impl Decoder {
                     0,
                 )
             }
+            Codec::Fixed(n) => Self::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
+
+            /// Logical Types
+            ///
+            Codec::Decimal(precision, scale, size) => {
+                let builder = DecimalBuilder::new(*precision, *scale, *size)?;
+                Self::Decimal(*precision, *scale, *size, builder)
+            }
+            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimestampMillis(is_utc) => {
+                Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            Codec::TimestampMicros(is_utc) => {
+                Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            Codec::Duration => Self::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
 
         // Wrap in Nullable if needed
@@ -230,6 +244,8 @@ impl Decoder {
     /// Append a null to this decoder.
     fn append_null(&mut self) {
         match self {
+            /// Primitive & Date Logical Types
+            ///
             Self::Null(n) => *n += 1,
             Self::Boolean(b) => b.append(false),
             Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
@@ -240,9 +256,30 @@ impl Decoder {
             Self::Float32(v) => v.push(0.0),
             Self::Float64(v) => v.push(0.0),
             Self::Binary(off, _) | Self::String(off, _) => off.push_length(0),
+            /// Complex Types
+            ///
+            Self::Record(_, children) => {
+                for c in children.iter_mut() {
+                    c.append_null();
+                }
+            }
+            Self::Enum(_, indices) => indices.push(0),
+            Self::List(_, off, child) => {
+                off.push_length(0);
+                child.append_null();
+            }
+            Self::Map(_, key_off, map_off, _, _, entry_count) => {
+                key_off.push_length(0);
+                map_off.push_length(*entry_count);
+            }
             Self::Fixed(fsize, buf) => {
                 // For a null, push `fsize` zeroed bytes
                 buf.extend(std::iter::repeat(0u8).take(*fsize as usize));
+            }
+            /// Non-Date Logical Types
+            ///
+            Self::Decimal(_, _, _, builder) => {
+                let _ = builder.append_null();
             }
             Self::Interval(intervals) => {
                 // null => store a 12-byte zero => months=0, days=0, nanos=0
@@ -252,23 +289,6 @@ impl Decoder {
                     nanoseconds: 0,
                 });
             }
-            Self::List(_, off, child) => {
-                off.push_length(0);
-                child.append_null();
-            }
-            Self::Record(_, children) => {
-                for c in children.iter_mut() {
-                    c.append_null();
-                }
-            }
-            Self::Enum(_, indices) => indices.push(0),
-            Self::Map(_, key_off, map_off, _, _, entry_count) => {
-                key_off.push_length(0);
-                map_off.push_length(*entry_count);
-            }
-            Self::Decimal(_, _, _, builder) => {
-                let _ = builder.append_null();
-            }
             Self::Nullable(_, _, _) => { /* The null bit is stored in the NullBufferBuilder */ }
         }
     }
@@ -276,15 +296,12 @@ impl Decoder {
     /// Decode a single row of data from `buf`.
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         match self {
+            /// Primitive Types
+            ///
             Self::Null(count) => *count += 1,
             Self::Boolean(values) => values.append(buf.get_bool()?),
             Self::Int32(values) => values.push(buf.get_int()?),
-            Self::Date32(values) => values.push(buf.get_int()?),
             Self::Int64(values) => values.push(buf.get_long()?),
-            Self::TimeMillis(values) => values.push(buf.get_int()?),
-            Self::TimeMicros(values) => values.push(buf.get_long()?),
-            Self::TimestampMillis(_, values) => values.push(buf.get_long()?),
-            Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Binary(off, data) | Self::String(off, data) => {
@@ -292,28 +309,27 @@ impl Decoder {
                 off.push_length(bytes.len());
                 data.extend_from_slice(bytes);
             }
-            Self::Fixed(fsize, accum) => accum.extend_from_slice(buf.get_fixed(*fsize as usize)?),
-            Self::Interval(intervals) => {
-                let raw = buf.get_fixed(12)?;
-                let months = i32::from_le_bytes(raw[0..4].try_into().unwrap());
-                let days = i32::from_le_bytes(raw[4..8].try_into().unwrap());
-                let millis = i32::from_le_bytes(raw[8..12].try_into().unwrap());
-                let nanos = millis as i64 * 1_000_000;
-                let val = IntervalMonthDayNano {
-                    months,
-                    days,
-                    nanoseconds: nanos,
-                };
-                intervals.push(val);
-            }
-            Self::List(_, off, child) => {
-                let total_items = read_array_blocks(buf, |b| child.decode(b))?;
-                off.push_length(total_items);
-            }
+            /// Complex Types
+            ///
             Self::Record(_, children) => {
                 for c in children.iter_mut() {
                     c.decode(buf)?;
                 }
+            }
+            Self::Enum(_, indices) => indices.push(buf.get_int()?),
+            Self::List(_, off, child) => {
+                let total_items = read_array_blocks(buf, |b| child.decode(b))?;
+                off.push_length(total_items);
+            }
+            Self::Map(_, key_off, map_off, key_data, val_decoder, entry_count) => {
+                let newly_added = read_map_blocks(buf, |b| {
+                    let kb = b.get_bytes()?;
+                    key_off.push_length(kb.len());
+                    key_data.extend_from_slice(kb);
+                    val_decoder.decode(b)
+                })?;
+                *entry_count += newly_added;
+                map_off.push_length(*entry_count);
             }
             Self::Nullable(_, nulls, child) => match buf.get_int()? {
                 0 => {
@@ -330,23 +346,33 @@ impl Decoder {
                     )));
                 }
             },
-            Self::Enum(_, indices) => indices.push(buf.get_int()?),
-            Self::Map(_, key_off, map_off, key_data, val_decoder, entry_count) => {
-                let newly_added = read_map_blocks(buf, |b| {
-                    let kb = b.get_bytes()?;
-                    key_off.push_length(kb.len());
-                    key_data.extend_from_slice(kb);
-                    val_decoder.decode(b)
-                })?;
-                *entry_count += newly_added;
-                map_off.push_length(*entry_count);
-            }
+            Self::Fixed(fsize, accum) => accum.extend_from_slice(buf.get_fixed(*fsize as usize)?),
+            /// Logical Types
+            ///
             Self::Decimal(_, _, size, builder) => {
                 let bytes = match *size {
                     Some(sz) => buf.get_fixed(sz)?,
                     None => buf.get_bytes()?,
                 };
                 builder.append_bytes(bytes)?;
+            }
+            Self::Date32(values) => values.push(buf.get_int()?),
+            Self::TimeMillis(values) => values.push(buf.get_int()?),
+            Self::TimeMicros(values) => values.push(buf.get_long()?),
+            Self::TimestampMillis(_, values) => values.push(buf.get_long()?),
+            Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            Self::Interval(intervals) => {
+                let raw = buf.get_fixed(12)?;
+                let months = i32::from_le_bytes(raw[0..4].try_into().unwrap());
+                let days = i32::from_le_bytes(raw[4..8].try_into().unwrap());
+                let millis = i32::from_le_bytes(raw[8..12].try_into().unwrap());
+                let nanos = millis as i64 * 1_000_000;
+                let val = IntervalMonthDayNano {
+                    months,
+                    days,
+                    nanoseconds: nanos,
+                };
+                intervals.push(val);
             }
         }
         Ok(())
@@ -355,11 +381,8 @@ impl Decoder {
     /// Flush buffered data into an [`ArrayRef`], optionally applying `nulls`.
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         match self {
-            // For a nullable wrapper => flush the child with the built null buffer
-            Self::Nullable(_, nb, child) => {
-                let mask = nb.finish();
-                child.flush(mask)
-            }
+            /// Primitive Types
+            ///
             // Null => produce NullArray
             Self::Null(len) => {
                 let count = std::mem::replace(len, 0);
@@ -385,28 +408,6 @@ impl Decoder {
                 let arr = flush_primitive::<Int64Type>(vals, nulls);
                 Ok(Arc::new(arr))
             }
-            // time-millis => Time32Millisecond
-            Self::TimeMillis(vals) => {
-                let arr = flush_primitive::<Time32MillisecondType>(vals, nulls);
-                Ok(Arc::new(arr))
-            }
-            // time-micros => Time64Microsecond
-            Self::TimeMicros(vals) => {
-                let arr = flush_primitive::<Time64MicrosecondType>(vals, nulls);
-                Ok(Arc::new(arr))
-            }
-            // timestamp-millis => TimestampMillisecond
-            Self::TimestampMillis(is_utc, vals) => {
-                let arr = flush_primitive::<TimestampMillisecondType>(vals, nulls)
-                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
-                Ok(Arc::new(arr))
-            }
-            // timestamp-micros => TimestampMicrosecond
-            Self::TimestampMicros(is_utc, vals) => {
-                let arr = flush_primitive::<TimestampMicrosecondType>(vals, nulls)
-                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
-                Ok(Arc::new(arr))
-            }
             // float32 => flush to Float32Array
             Self::Float32(vals) => {
                 let arr = flush_primitive::<Float32Type>(vals, nulls);
@@ -429,44 +430,9 @@ impl Decoder {
                 let values = flush_values(data).into();
                 Ok(Arc::new(StringArray::new(offsets, values, nulls)))
             }
-            // Avro fixed => FixedSizeBinaryArray
-            Self::Fixed(fsize, raw) => {
-                let size = *fsize;
-                let buf: Buffer = flush_values(raw).into();
-                let total_len = buf.len() / (size as usize);
-                let array = FixedSizeBinaryArray::try_new(size, buf, nulls)
-                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Ok(Arc::new(array))
-            }
-            // Avro interval => IntervalMonthDayNanoType
-            Self::Interval(vals) => {
-                let data_len = vals.len();
-                let mut builder =
-                    PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(data_len);
-                for v in vals.drain(..) {
-                    builder.append_value(v);
-                }
-                let arr = builder
-                    .finish()
-                    .with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
-                if let Some(nb) = nulls {
-                    // "merge" the newly built array with the nulls
-                    let arr_data = arr.into_data().into_builder().nulls(Some(nb));
-                    let arr_data = unsafe { arr_data.build_unchecked() };
-                    Ok(Arc::new(PrimitiveArray::<IntervalMonthDayNanoType>::from(
-                        arr_data,
-                    )))
-                } else {
-                    Ok(Arc::new(arr))
-                }
-            }
-            // Avro array => ListArray
-            Self::List(field, off, item_dec) => {
-                let child_arr = item_dec.flush(None)?;
-                let offsets = flush_offsets(off);
-                let arr = ListArray::new(field.clone(), offsets, child_arr, nulls);
-                Ok(Arc::new(arr))
-            }
+
+            /// Complex Types
+            ///
             // Avro record => StructArray
             Self::Record(fields, children) => {
                 let mut arrays = Vec::with_capacity(children.len());
@@ -493,6 +459,13 @@ impl Decoder {
                 indices.clear(); // reset
                 Ok(Arc::new(dict))
             }
+            // Avro array => ListArray
+            Self::List(field, off, item_dec) => {
+                let child_arr = item_dec.flush(None)?;
+                let offsets = flush_offsets(off);
+                let arr = ListArray::new(field.clone(), offsets, child_arr, nulls);
+                Ok(Arc::new(arr))
+            }
             // Avro map => MapArray
             Self::Map(field, key_off, map_off, key_data, val_dec, entry_count) => {
                 let moff = flush_offsets(map_off);
@@ -518,6 +491,18 @@ impl Decoder {
                 *entry_count = 0;
                 Ok(Arc::new(map_arr))
             }
+
+            // Avro fixed => FixedSizeBinaryArray
+            Self::Fixed(fsize, raw) => {
+                let size = *fsize;
+                let buf: Buffer = flush_values(raw).into();
+                let total_len = buf.len() / (size as usize);
+                let array = FixedSizeBinaryArray::try_new(size, buf, nulls)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Ok(Arc::new(array))
+            }
+            /// Logical Types
+            ///
             // Avro decimal => Arrow decimal
             Self::Decimal(prec, sc, sz, builder) => {
                 let precision = *prec;
@@ -526,6 +511,55 @@ impl Decoder {
                 let old_builder = std::mem::replace(builder, new_builder);
                 let arr = old_builder.finish(nulls, precision, scale)?;
                 Ok(arr)
+            }
+            // time-millis => Time32Millisecond
+            Self::TimeMillis(vals) => {
+                let arr = flush_primitive::<Time32MillisecondType>(vals, nulls);
+                Ok(Arc::new(arr))
+            }
+            // time-micros => Time64Microsecond
+            Self::TimeMicros(vals) => {
+                let arr = flush_primitive::<Time64MicrosecondType>(vals, nulls);
+                Ok(Arc::new(arr))
+            }
+            // timestamp-millis => TimestampMillisecond
+            Self::TimestampMillis(is_utc, vals) => {
+                let arr = flush_primitive::<TimestampMillisecondType>(vals, nulls)
+                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
+                Ok(Arc::new(arr))
+            }
+            // timestamp-micros => TimestampMicrosecond
+            Self::TimestampMicros(is_utc, vals) => {
+                let arr = flush_primitive::<TimestampMicrosecondType>(vals, nulls)
+                    .with_timezone_opt::<Arc<str>>(is_utc.then(|| "+00:00".into()));
+                Ok(Arc::new(arr))
+            }
+            // Avro interval => IntervalMonthDayNanoType
+            Self::Interval(vals) => {
+                let data_len = vals.len();
+                let mut builder =
+                    PrimitiveBuilder::<IntervalMonthDayNanoType>::with_capacity(data_len);
+                for v in vals.drain(..) {
+                    builder.append_value(v);
+                }
+                let arr = builder
+                    .finish()
+                    .with_data_type(DataType::Interval(IntervalUnit::MonthDayNano));
+                if let Some(nb) = nulls {
+                    // "merge" the newly built array with the nulls
+                    let arr_data = arr.into_data().into_builder().nulls(Some(nb));
+                    let arr_data = unsafe { arr_data.build_unchecked() };
+                    Ok(Arc::new(PrimitiveArray::<IntervalMonthDayNanoType>::from(
+                        arr_data,
+                    )))
+                } else {
+                    Ok(Arc::new(arr))
+                }
+            }
+            // For a nullable wrapper => flush the child with the built null buffer
+            Self::Nullable(_, nb, child) => {
+                let mask = nb.finish();
+                child.flush(mask)
             }
         }
     }
@@ -945,7 +979,7 @@ mod tests {
     // -------------------
     #[test]
     fn test_enum_decoding() {
-        let symbols = vec!["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
+        let symbols = ["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
         let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new([]), Arc::new([])));
         let mut decoder = Decoder::try_new(&enum_dt).unwrap();
         // Encode the indices [1, 0, 2] => zigzag => 1->2, 0->0, 2->4

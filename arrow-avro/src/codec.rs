@@ -131,6 +131,8 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
 #[derive(Debug, Clone)]
 pub enum Codec {
+    /// Primitive Types
+    /// https://avro.apache.org/docs/1.11.1/specification/#primitive-types
     Null,
     Boolean,
     Int32,
@@ -139,28 +141,31 @@ pub enum Codec {
     Float64,
     Binary,
     String,
+    /// Complex Types
+    /// https://avro.apache.org/docs/1.11.1/specification/#complex-types
+    Record(Arc<[AvroField]>),
+    Enum(Arc<[String]>, Arc<[i32]>),
+    Array(Arc<AvroDataType>),
+    Map(Arc<AvroDataType>),
+    Fixed(i32),
+    /// Logical Types
+    /// https://avro.apache.org/docs/1.11.1/specification/#logical-types
     Decimal(usize, Option<usize>, Option<usize>),
     Uuid,
     Date32,
     TimeMillis,
     TimeMicros,
-    /// TimestampMillis(is_utc)
     TimestampMillis(bool),
-    /// TimestampMicros(is_utc)
     TimestampMicros(bool),
     Duration,
-    Record(Arc<[AvroField]>),
-    /// In Arrow, use Dictionary(Utf8, Int32) for Enum.
-    Enum(Arc<[String]>, Arc<[i32]>),
-    Array(Arc<AvroDataType>),
-    Map(Arc<AvroDataType>),
-    Fixed(i32),
 }
 
 impl Codec {
     /// Convert this to an Arrow `DataType`
     fn data_type(&self) -> DataType {
         match self {
+            /// Primitive Types
+            ///
             Self::Null => Null,
             Self::Boolean => Boolean,
             Self::Int32 => Int32,
@@ -169,33 +174,10 @@ impl Codec {
             Self::Float64 => Float64,
             Self::Binary => Binary,
             Self::String => Utf8,
-            Self::Decimal(precision, scale, size) => match size {
-                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
-                None if *precision <= DECIMAL128_MAX_PRECISION as usize
-                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
-                {
-                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
-                }
-                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
-            },
-            // arrow-rs does not support the UUID Canonical Extension Type yet, so this is a temporary workaround.
-            Self::Uuid => FixedSizeBinary(16),
-            Self::Date32 => Date32,
-            Self::TimeMillis => Time32(TimeUnit::Millisecond),
-            Self::TimeMicros => Time64(TimeUnit::Microsecond),
-            Self::TimestampMillis(is_utc) => {
-                Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::TimestampMicros(is_utc) => {
-                Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
-            }
-            Self::Duration => Interval(IntervalUnit::MonthDayNano),
+            /// Complex Types
+            ///
             Self::Record(f) => Struct(f.iter().map(|x| x.field()).collect()),
-            Self::Enum(symbols, values) => {
-                // Produce a Dictionary type with index = Utf8, value = Int32
-                Dictionary(Box::new(Utf8), Box::new(Int32))
-            }
+            Self::Enum(symbols, values) => Dictionary(Box::new(Utf8), Box::new(Int32)),
             Self::Array(f) => List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME))),
             Self::Map(values) => Map(
                 Arc::new(Field::new(
@@ -209,6 +191,31 @@ impl Codec {
                 false,
             ),
             Self::Fixed(size) => FixedSizeBinary(*size),
+            /// Logical Types
+            ///
+            Self::Decimal(precision, scale, size) => match size {
+                Some(s) if *s > 16 => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
+                Some(s) => Decimal128(*precision as u8, scale.unwrap_or(0) as i8),
+                None if *precision <= DECIMAL128_MAX_PRECISION as usize
+                    && scale.unwrap_or(0) <= DECIMAL128_MAX_SCALE as usize =>
+                {
+                    Decimal128(*precision as u8, scale.unwrap_or(0) as i8)
+                }
+                _ => Decimal256(*precision as u8, scale.unwrap_or(0) as i8),
+            },
+            // arrow-rs does not support the UUID Canonical Extension Type yet,
+            // so this is a temporary workaround.
+            Self::Uuid => FixedSizeBinary(16),
+            Self::Date32 => Date32,
+            Self::TimeMillis => Time32(TimeUnit::Millisecond),
+            Self::TimeMicros => Time64(TimeUnit::Microsecond),
+            Self::TimestampMillis(is_utc) => {
+                Timestamp(TimeUnit::Millisecond, is_utc.then(|| "+00:00".into()))
+            }
+            Self::TimestampMicros(is_utc) => {
+                Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
+            }
+            Self::Duration => Interval(IntervalUnit::MonthDayNano),
         }
     }
 }
@@ -263,12 +270,16 @@ fn make_data_type<'a>(
     resolver: &mut Resolver<'a>,
 ) -> Result<AvroDataType, ArrowError> {
     match schema {
+        /// Primitive Types
+        ///
         Schema::TypeName(TypeName::Primitive(p)) => Ok(AvroDataType {
             nullability: None,
             metadata: Default::default(),
             codec: (*p).into(),
         }),
         Schema::TypeName(TypeName::Ref(name)) => resolver.resolve(name, namespace),
+        /// Complex Types
+        ///
         Schema::Union(f) => {
             // Special case the common case of nullable primitives or single-type
             let null = f
@@ -382,8 +393,9 @@ fn make_data_type<'a>(
                 Ok(field)
             }
         },
+        /// Logical Types
+        ///
         Schema::Type(t) => {
-            // Possibly decimal, or other logical types
             let mut field =
                 make_data_type(&Schema::TypeName(t.r#type.clone()), namespace, resolver)?;
             match (t.attributes.logical_type, &mut field.codec) {
@@ -480,6 +492,8 @@ pub fn arrow_field_to_avro_field(arrow_field: &Field) -> AvroField {
 /// Maps an Arrow `DataType` to a `Codec`.
 fn arrow_type_to_codec(dt: &DataType) -> Codec {
     match dt {
+        /// Primitive Types
+        ///
         Null => Codec::Null,
         Boolean => Codec::Boolean,
         Int8 | Int16 | Int32 => Codec::Int32,
@@ -488,23 +502,8 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
         Float64 => Codec::Float64,
         Binary | LargeBinary => Codec::Binary,
         Utf8 => Codec::String,
-        Decimal128(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(16)),
-        Decimal256(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(32)),
-        // arrow-rs does not support the UUID Canonical Extension Type yet, so this mapping is not possible.
-        // It is unsafe to assume all FixedSizeBinary(16) are UUIDs.
-        // Uuid => Codec::Uuid,
-        Date32 => Codec::Date32,
-        Time32(TimeUnit::Millisecond) => Codec::TimeMillis,
-        Time64(TimeUnit::Microsecond) => Codec::TimeMicros,
-        Timestamp(TimeUnit::Millisecond, None) => Codec::TimestampMillis(false),
-        Timestamp(TimeUnit::Microsecond, None) => Codec::TimestampMicros(false),
-        Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
-            Codec::TimestampMillis(true)
-        }
-        Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC" => {
-            Codec::TimestampMicros(true)
-        }
-        Interval(IntervalUnit::MonthDayNano) => Codec::Duration,
+        /// Complex Types
+        ///
         Struct(child_fields) => {
             let avro_fields: Vec<AvroField> = child_fields
                 .iter()
@@ -545,6 +544,25 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
             }
         }
         FixedSizeBinary(n) => Codec::Fixed(*n),
+        /// Logical Types
+        ///
+        Decimal128(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(16)),
+        Decimal256(prec, scale) => Codec::Decimal(*prec as usize, Some(*scale as usize), Some(32)),
+        // arrow-rs does not support the UUID Canonical Extension Type yet, so this mapping is not possible.
+        // It is unsafe to assume all FixedSizeBinary(16) are UUIDs.
+        // Uuid => Codec::Uuid,
+        Date32 => Codec::Date32,
+        Time32(TimeUnit::Millisecond) => Codec::TimeMillis,
+        Time64(TimeUnit::Microsecond) => Codec::TimeMicros,
+        Timestamp(TimeUnit::Millisecond, None) => Codec::TimestampMillis(false),
+        Timestamp(TimeUnit::Microsecond, None) => Codec::TimestampMicros(false),
+        Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
+            Codec::TimestampMillis(true)
+        }
+        Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC" => {
+            Codec::TimestampMicros(true)
+        }
+        Interval(IntervalUnit::MonthDayNano) => Codec::Duration,
         _ => Codec::String,
     }
 }
@@ -748,7 +766,7 @@ mod tests {
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         if let Codec::Array(avro_data_type) = avro_field.data_type().codec() {
-            assert!(matches!(avro_data_type.nullability(), None));
+            assert!(avro_data_type.nullability().is_none());
             assert_eq!(avro_data_type.metadata.len(), 0);
             assert!(matches!(avro_data_type.codec(), Codec::String));
         } else {
@@ -791,7 +809,7 @@ mod tests {
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         if let Codec::Map(avro_data_type) = avro_field.data_type().codec() {
-            assert!(matches!(avro_data_type.nullability(), None,));
+            assert!(avro_data_type.nullability().is_none());
             assert_eq!(avro_data_type.metadata.len(), 0);
             assert!(matches!(avro_data_type.codec(), Codec::String));
         } else {
