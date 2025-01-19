@@ -17,21 +17,20 @@
 
 use crate::aws::STORE;
 use crate::{ClientOptions, Result};
-use snafu::{ensure, OptionExt, ResultExt, Snafu};
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Bucket '{}' not found", bucket))]
+    #[error("Bucket '{}' not found", bucket)]
     BucketNotFound { bucket: String },
 
-    #[snafu(display("Failed to resolve region for bucket '{}'", bucket))]
+    #[error("Failed to resolve region for bucket '{}'", bucket)]
     ResolveRegion {
         bucket: String,
         source: reqwest::Error,
     },
 
-    #[snafu(display("Failed to parse the region for bucket '{}'", bucket))]
+    #[error("Failed to parse the region for bucket '{}'", bucket)]
     RegionParse { bucket: String },
 }
 
@@ -54,22 +53,23 @@ pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions)
 
     let client = client_options.client()?;
 
-    let response = client
-        .head(&endpoint)
-        .send()
-        .await
-        .context(ResolveRegionSnafu { bucket })?;
+    let response = client.head(&endpoint).send().await.map_err(|source| {
+        let bucket = bucket.into();
+        Error::ResolveRegion { bucket, source }
+    })?;
 
-    ensure!(
-        response.status() != StatusCode::NOT_FOUND,
-        BucketNotFoundSnafu { bucket }
-    );
+    if response.status() == StatusCode::NOT_FOUND {
+        let bucket = bucket.into();
+        return Err(Error::BucketNotFound { bucket }.into());
+    }
 
     let region = response
         .headers()
         .get("x-amz-bucket-region")
         .and_then(|x| x.to_str().ok())
-        .context(RegionParseSnafu { bucket })?;
+        .ok_or_else(|| Error::RegionParse {
+            bucket: bucket.into(),
+        })?;
 
     Ok(region.to_string())
 }

@@ -66,10 +66,13 @@
 //! By default, this crate provides the following implementations:
 //!
 //! * Memory: [`InMemory`](memory::InMemory)
-//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
 //!
 //! Feature flags are used to enable support for other implementations:
 //!
+#![cfg_attr(
+    feature = "fs",
+    doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
+)]
 #![cfg_attr(
     feature = "gcp",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
@@ -231,7 +234,7 @@
 //!
 //! // Buffer the entire object in memory
 //! let object: Bytes = result.bytes().await.unwrap();
-//! assert_eq!(object.len(), meta.size);
+//! assert_eq!(object.len() as u64, meta.size);
 //!
 //! // Alternatively stream the bytes from object storage
 //! let stream = object_store.get(&path).await.unwrap().into_stream();
@@ -513,7 +516,7 @@ pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod limit;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
 pub mod memory;
 pub mod path;
@@ -557,15 +560,14 @@ pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
 use crate::path::Path;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
@@ -628,7 +630,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range.
     ///
     /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let options = GetOptions {
             range: Some(range.into()),
             ..Default::default()
@@ -638,7 +640,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         coalesce_ranges(
             ranges,
             |range| self.get_range(location, range),
@@ -720,7 +722,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -732,7 +734,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let offset = offset.clone();
         self.list(prefix)
             .try_filter(move |f| futures::future::ready(f.location > offset))
@@ -818,14 +820,14 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_opts(location, options).await
             }
 
-            async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+            async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
                 self.as_ref().get_range(location, range).await
             }
 
             async fn get_ranges(
                 &self,
                 location: &Path,
-                ranges: &[Range<usize>],
+                ranges: &[Range<u64>],
             ) -> Result<Vec<Bytes>> {
                 self.as_ref().get_ranges(location, ranges).await
             }
@@ -845,7 +847,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete_stream(locations)
             }
 
-            fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+            fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
                 self.as_ref().list(prefix)
             }
 
@@ -853,7 +855,7 @@ macro_rules! as_ref_impl {
                 &self,
                 prefix: Option<&Path>,
                 offset: &Path,
-            ) -> BoxStream<'_, Result<ObjectMeta>> {
+            ) -> BoxStream<'static, Result<ObjectMeta>> {
                 self.as_ref().list_with_offset(prefix, offset)
             }
 
@@ -901,8 +903,10 @@ pub struct ObjectMeta {
     pub location: Path,
     /// The last modified time
     pub last_modified: DateTime<Utc>,
-    /// The size in bytes of the object
-    pub size: usize,
+    /// The size in bytes of the object.
+    ///
+    /// Note this is not `usize` as `object_store` supports 32-bit architectures such as WASM
+    pub size: u64,
     /// The unique identifier for the object
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-etag>
@@ -1017,7 +1021,9 @@ pub struct GetResult {
     /// The [`ObjectMeta`] for this object
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
-    pub range: Range<usize>,
+    ///
+    /// Note this is not `usize` as `object_store` supports 32-bit architectures such as WASM
+    pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
 }
@@ -1028,6 +1034,7 @@ pub struct GetResult {
 /// be able to optimise the case of a file already present on local disk
 pub enum GetResultPayload {
     /// The file, path
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     File(std::fs::File, std::path::PathBuf),
     /// An opaque stream of bytes
     Stream(BoxStream<'static, Result<Bytes>>),
@@ -1036,6 +1043,7 @@ pub enum GetResultPayload {
 impl Debug for GetResultPayload {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             Self::File(_, _) => write!(f, "GetResultPayload(File)"),
             Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
         }
@@ -1047,7 +1055,7 @@ impl GetResult {
     pub async fn bytes(self) -> Result<Bytes> {
         let len = self.range.end - self.range.start;
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
                     file.seek(SeekFrom::Start(self.range.start as _))
@@ -1056,7 +1064,11 @@ impl GetResult {
                             path: path.clone(),
                         })?;
 
-                    let mut buffer = Vec::with_capacity(len);
+                    let mut buffer = if let Ok(len) = len.try_into() {
+                        Vec::with_capacity(len)
+                    } else {
+                        Vec::new()
+                    };
                     file.take(len as _)
                         .read_to_end(&mut buffer)
                         .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
@@ -1087,7 +1099,7 @@ impl GetResult {
     /// no additional complexity or overheads
     pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
         match self.payload {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
@@ -1224,11 +1236,11 @@ pub struct PutResult {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A fallback error type when no variant matches
-    #[snafu(display("Generic {} error: {}", store, source))]
+    #[error("Generic {} error: {}", store, source)]
     Generic {
         /// The store this error originated from
         store: &'static str,
@@ -1237,7 +1249,7 @@ pub enum Error {
     },
 
     /// Error when the object is not found at given location
-    #[snafu(display("Object at location {} not found: {}", path, source))]
+    #[error("Object at location {} not found: {}", path, source)]
     NotFound {
         /// The path to file
         path: String,
@@ -1246,31 +1258,30 @@ pub enum Error {
     },
 
     /// Error for invalid path
-    #[snafu(
-        display("Encountered object with invalid path: {}", source),
-        context(false)
-    )]
+    #[error("Encountered object with invalid path: {}", source)]
     InvalidPath {
         /// The wrapped error
+        #[from]
         source: path::Error,
     },
 
     /// Error when `tokio::spawn` failed
-    #[snafu(display("Error joining spawned task: {}", source), context(false))]
+    #[error("Error joining spawned task: {}", source)]
     JoinError {
         /// The wrapped error
+        #[from]
         source: tokio::task::JoinError,
     },
 
     /// Error when the attempted operation is not supported
-    #[snafu(display("Operation not supported: {}", source))]
+    #[error("Operation not supported: {}", source)]
     NotSupported {
         /// The wrapped error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
     /// Error when the object already exists
-    #[snafu(display("Object at location {} already exists: {}", path, source))]
+    #[error("Object at location {} already exists: {}", path, source)]
     AlreadyExists {
         /// The path to the
         path: String,
@@ -1279,7 +1290,7 @@ pub enum Error {
     },
 
     /// Error when the required conditions failed for the operation
-    #[snafu(display("Request precondition failure for path {}: {}", path, source))]
+    #[error("Request precondition failure for path {}: {}", path, source)]
     Precondition {
         /// The path to the file
         path: String,
@@ -1288,7 +1299,7 @@ pub enum Error {
     },
 
     /// Error when the object at the location isn't modified
-    #[snafu(display("Object at location {} not modified: {}", path, source))]
+    #[error("Object at location {} not modified: {}", path, source)]
     NotModified {
         /// The path to the file
         path: String,
@@ -1297,16 +1308,16 @@ pub enum Error {
     },
 
     /// Error when an operation is not implemented
-    #[snafu(display("Operation not yet implemented."))]
+    #[error("Operation not yet implemented.")]
     NotImplemented,
 
     /// Error when the used credentials don't have enough permission
     /// to perform the requested operation
-    #[snafu(display(
+    #[error(
         "The operation lacked the necessary privileges to complete for path {}: {}",
         path,
         source
-    ))]
+    )]
     PermissionDenied {
         /// The path to the file
         path: String,
@@ -1315,11 +1326,11 @@ pub enum Error {
     },
 
     /// Error when the used credentials lack valid authentication
-    #[snafu(display(
+    #[error(
         "The operation lacked valid authentication credentials for path {}: {}",
         path,
         source
-    ))]
+    )]
     Unauthenticated {
         /// The path to the file
         path: String,
@@ -1328,7 +1339,7 @@ pub enum Error {
     },
 
     /// Error when a configuration key is invalid for the store used
-    #[snafu(display("Configuration key: '{}' is not valid for store '{}'.", key, store))]
+    #[error("Configuration key: '{}' is not valid for store '{}'.", key, store)]
     UnknownConfigurationKey {
         /// The object store used
         store: &'static str,

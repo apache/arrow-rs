@@ -17,12 +17,16 @@
 
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
-/// Builder for creating the null bit buffer.
+/// Builder for creating [`NullBuffer`]
+///
+/// # Performance
 ///
 /// This builder only materializes the buffer when we append `false`.
 /// If you only append `true`s to the builder, what you get will be
 /// `None` when calling [`finish`](#method.finish).
-/// This optimization is **very** important for the performance.
+///
+/// This optimization is **very** important for the performance as it avoids
+/// allocating memory for the null buffer when there are no nulls.
 #[derive(Debug)]
 pub struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,

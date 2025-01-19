@@ -62,7 +62,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    fn list(&self, _: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         todo!()
     }
 
@@ -90,12 +90,15 @@ async fn test_get_range() {
     let fetched = store.get(&path).await.unwrap().bytes().await.unwrap();
     assert_eq!(expected, fetched);
 
-    for range in [0..10, 3..5, 0..expected.len()] {
+    for range in [0..10, 3..5, 0..expected.len() as u64] {
         let data = store.get_range(&path, range.clone()).await.unwrap();
-        assert_eq!(&data[..], &expected[range])
+        assert_eq!(
+            &data[..],
+            &expected[range.start as usize..range.end as usize]
+        )
     }
 
-    let over_range = 0..(expected.len() * 2);
+    let over_range = 0..(expected.len() as u64 * 2);
     let data = store.get_range(&path, over_range.clone()).await.unwrap();
     assert_eq!(&data[..], expected)
 }
@@ -113,10 +116,10 @@ async fn test_get_opts_over_range() {
     store.put(&path, expected.clone().into()).await.unwrap();
 
     let opts = GetOptions {
-        range: Some(GetRange::Bounded(0..(expected.len() * 2))),
+        range: Some(GetRange::Bounded(0..(expected.len() as u64 * 2))),
         ..Default::default()
     };
     let res = store.get_opts(&path, opts).await.unwrap();
-    assert_eq!(res.range, 0..expected.len());
+    assert_eq!(res.range, 0..expected.len() as u64);
     assert_eq!(res.bytes().await.unwrap(), expected);
 }

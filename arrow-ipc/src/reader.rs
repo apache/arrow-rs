@@ -177,17 +177,13 @@ fn create_array(
             let values = create_array(reader, values_field, variadic_counts, require_alignment)?;
 
             let run_array_length = run_node.length() as usize;
-            let builder = ArrayData::builder(data_type.clone())
+            let array_data = ArrayData::builder(data_type.clone())
                 .len(run_array_length)
                 .offset(0)
                 .add_child_data(run_ends.into_data())
-                .add_child_data(values.into_data());
-
-            let array_data = if require_alignment {
-                builder.build()?
-            } else {
-                builder.build_aligned()?
-            };
+                .add_child_data(values.into_data())
+                .align_buffers(!require_alignment)
+                .build()?;
 
             Ok(make_array(array_data))
         }
@@ -257,15 +253,11 @@ fn create_array(
                 )));
             }
 
-            let builder = ArrayData::builder(data_type.clone())
+            let array_data = ArrayData::builder(data_type.clone())
                 .len(length as usize)
-                .offset(0);
-
-            let array_data = if require_alignment {
-                builder.build()?
-            } else {
-                builder.build_aligned()?
-            };
+                .offset(0)
+                .align_buffers(!require_alignment)
+                .build()?;
 
             // no buffer increases
             Ok(Arc::new(NullArray::from(array_data)))
@@ -311,11 +303,7 @@ fn create_primitive_array(
         t => unreachable!("Data type {:?} either unsupported or not primitive", t),
     };
 
-    let array_data = if require_alignment {
-        builder.build()?
-    } else {
-        builder.build_aligned()?
-    };
+    let array_data = builder.align_buffers(!require_alignment).build()?;
 
     Ok(make_array(array_data))
 }
@@ -347,11 +335,7 @@ fn create_list_array(
         _ => unreachable!("Cannot create list or map array from {:?}", data_type),
     };
 
-    let array_data = if require_alignment {
-        builder.build()?
-    } else {
-        builder.build_aligned()?
-    };
+    let array_data = builder.align_buffers(!require_alignment).build()?;
 
     Ok(make_array(array_data))
 }
@@ -367,17 +351,13 @@ fn create_dictionary_array(
 ) -> Result<ArrayRef, ArrowError> {
     if let Dictionary(_, _) = *data_type {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-        let builder = ArrayData::builder(data_type.clone())
+        let array_data = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .add_buffer(buffers[1].clone())
             .add_child_data(value_array.into_data())
-            .null_bit_buffer(null_buffer);
-
-        let array_data = if require_alignment {
-            builder.build()?
-        } else {
-            builder.build_aligned()?
-        };
+            .null_bit_buffer(null_buffer)
+            .align_buffers(!require_alignment)
+            .build()?;
 
         Ok(make_array(array_data))
     } else {

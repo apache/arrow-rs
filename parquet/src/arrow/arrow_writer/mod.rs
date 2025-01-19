@@ -1095,6 +1095,7 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
+    use half::f16;
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -1761,6 +1762,44 @@ mod tests {
             10,
             "Expected 9 pages but got {page_locations:#?}"
         );
+    }
+
+    #[test]
+    fn arrow_writer_float_nans() {
+        let f16_field = Field::new("a", DataType::Float16, false);
+        let f32_field = Field::new("b", DataType::Float32, false);
+        let f64_field = Field::new("c", DataType::Float64, false);
+        let schema = Schema::new(vec![f16_field, f32_field, f64_field]);
+
+        let f16_values = (0..MEDIUM_SIZE)
+            .map(|i| {
+                Some(if i % 2 == 0 {
+                    f16::NAN
+                } else {
+                    f16::from_f32(i as f32)
+                })
+            })
+            .collect::<Float16Array>();
+
+        let f32_values = (0..MEDIUM_SIZE)
+            .map(|i| Some(if i % 2 == 0 { f32::NAN } else { i as f32 }))
+            .collect::<Float32Array>();
+
+        let f64_values = (0..MEDIUM_SIZE)
+            .map(|i| Some(if i % 2 == 0 { f64::NAN } else { i as f64 }))
+            .collect::<Float64Array>();
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(f16_values),
+                Arc::new(f32_values),
+                Arc::new(f64_values),
+            ],
+        )
+        .unwrap();
+
+        roundtrip(batch, None);
     }
 
     const SMALL_SIZE: usize = 7;

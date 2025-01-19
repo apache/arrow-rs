@@ -54,6 +54,10 @@ jobs:
       # targets.
       - name: Run clippy with default features
         run: cargo clippy -- -D warnings
+      - name: Run clippy without default features
+        run: cargo clippy --no-default-features -- -D warnings
+      - name: Run clippy with fs features
+        run: cargo clippy --no-default-features --features fs -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy --features aws -- -D warnings
       - name: Run clippy with gcp feature
@@ -200,11 +204,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          target: wasm32-unknown-unknown,wasm32-wasi
+          target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
-      - name: Build wasm32-wasi
-        run: cargo build --target wasm32-wasi
+      - name: Build wasm32-wasip1
+        run: cargo build --target wasm32-wasip1
 
   windows:
     name: cargo test LocalFileSystem (win64)

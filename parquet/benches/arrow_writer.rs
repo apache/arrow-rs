@@ -28,7 +28,9 @@ extern crate parquet;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
+use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
+use arrow_array::RecordBatchOptions;
 use parquet::file::properties::WriterProperties;
 use parquet::{arrow::ArrowWriter, errors::Result};
 
@@ -178,6 +180,25 @@ fn create_bool_bench_batch_non_null(
         size,
         null_density,
         true_density,
+    )?)
+}
+
+fn create_float_bench_batch_with_nans(size: usize, nan_density: f32) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new("_1", DataType::Float16, false),
+        Field::new("_2", DataType::Float32, false),
+        Field::new("_3", DataType::Float64, false),
+    ];
+    let schema = Schema::new(fields);
+    let columns: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(create_f16_array(size, nan_density)),
+        Arc::new(create_f32_array(size, nan_density)),
+        Arc::new(create_f64_array(size, nan_density)),
+    ];
+    Ok(RecordBatch::try_new_with_options(
+        Arc::new(schema),
+        columns,
+        &RecordBatchOptions::new().with_match_field_names(false),
     )?)
 }
 
@@ -457,6 +478,18 @@ fn bench_primitive_writer(c: &mut Criterion) {
 
     group.bench_function("4096 values string non-null with bloom filter", |b| {
         b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
+    });
+
+    let batch = create_float_bench_batch_with_nans(4096, 0.5).unwrap();
+    group.throughput(Throughput::Bytes(
+        batch
+            .columns()
+            .iter()
+            .map(|f| f.get_array_memory_size() as u64)
+            .sum(),
+    ));
+    group.bench_function("4096 values float with NaNs", |b| {
+        b.iter(|| write_batch(&batch).unwrap())
     });
 
     group.finish();

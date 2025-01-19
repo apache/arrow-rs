@@ -19,6 +19,12 @@ use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for building [`BooleanBuffer`]s for representing nulls
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,

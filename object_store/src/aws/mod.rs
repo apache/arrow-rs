@@ -273,7 +273,7 @@ impl ObjectStore for AmazonS3 {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.client.list(prefix)
     }
 
@@ -281,7 +281,7 @@ impl ObjectStore for AmazonS3 {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         if self.client.config.is_s3_express() {
             let offset = offset.clone();
             // S3 Express does not support start-after

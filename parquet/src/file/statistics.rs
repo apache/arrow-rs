@@ -157,6 +157,32 @@ pub fn from_thrift(
                 stats.max_value
             };
 
+            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+                if let Some(min) = min {
+                    if min.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse min statistic".to_string(),
+                        ));
+                    }
+                }
+                if let Some(max) = max {
+                    if max.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse max statistic".to_string(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
+            match physical_type {
+                Type::BOOLEAN => check_len(&min, &max, 1),
+                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
+                Type::INT96 => check_len(&min, &max, 12),
+                _ => Ok(()),
+            }?;
+
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
             //
