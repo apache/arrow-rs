@@ -202,8 +202,8 @@ pub enum DataType {
     /// However, it is better to use the offset representation, as it is more explicit and less ambiguous.
     /// This also ensures that other arrow-rs functionalities can interpret the UTC timestamps correctly
     /// For example, the `with_timezone_utc` method that is applied on timestamp arrays to add the UTC timezone.
-    /// 
-    /// 
+    ///
+    ///
     /// Timezone string parsing
     /// -----------------------
     /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
