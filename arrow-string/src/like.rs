@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
-use arrow_schema::DataType::{Binary, BinaryView, LargeBinary};
 
 #[derive(Debug)]
 pub(crate) enum Op {

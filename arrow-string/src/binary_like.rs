@@ -164,24 +164,3 @@ fn op_binary<'a>(
 fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
     memchr::memmem::find(haystack, needle).is_some()
 }
-
-fn binary_predicate<'a>(
-    l: impl Iterator<Item = Option<&'a [u8]>>,
-    r: impl Iterator<Item = Option<&'a [u8]>>,
-    neg: bool,
-    f: impl Fn(&'a [u8]) -> Result<BinaryPredicate<'a>, ArrowError>,
-) -> Result<BooleanArray, ArrowError> {
-    let mut previous = None;
-    l.zip(r)
-        .map(|(l, r)| match (l, r) {
-            (Some(l), Some(r)) => {
-                let p: &BinaryPredicate = match previous {
-                    Some((expr, ref predicate)) if expr == r => predicate,
-                    _ => &previous.insert((r, f(r)?)).1,
-                };
-                Ok(Some(p.evaluate(l) != neg))
-            }
-            _ => Ok(None),
-        })
-        .collect()
-}
