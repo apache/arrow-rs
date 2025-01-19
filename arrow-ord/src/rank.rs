@@ -162,7 +162,7 @@ fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
     let true_count = array.true_count() as u32;
     let false_count = array.len() as u32 - null_count - true_count;
 
-    // ranks for [false, true, null]
+    // Rank values for [false, true, null] in that order
     //
     // The value for a rank is last value rank + own value count
     // this means that if we have the following order: `false`, `true` and then `null`
@@ -171,16 +171,38 @@ fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
     // - true: false_count + true_count
     // - null: false_count + true_count + null_count
     //
+    // If we have the following order: `null`, `false` and then `true`
+    // the ranks will be:
+    // - false: null_count + false_count
+    // - true: null_count + false_count + true_count
+    // - null: null_count
+    //
     // You will notice that the last rank is always the total length of the array but we don't use it for readability on how the rank is calculated
     let ranks_index: [u32; 3] = match (options.descending, options.nulls_first) {
-        // The order is null, true, false (order is [3, 2, 1])
-        (true, true) => [null_count + true_count + false_count, null_count + true_count, null_count],
-        // The order is true, false, null (order is [2, 1, 3])
-        (true, false) => [true_count + false_count, true_count, true_count + false_count + null_count],
-        // The order is null, false, true (order is [2, 3, 1])
-        (false, true) => [null_count + false_count, null_count + false_count + true_count, null_count],
-        // The order is false, true, null (order is [1, 2, 3])
-        (false, false) => [false_count, false_count + true_count, false_count + true_count + null_count],
+        // The order is null, true, false
+        (true, true) => [
+            null_count + true_count + false_count,
+            null_count + true_count,
+            null_count,
+        ],
+        // The order is true, false, null
+        (true, false) => [
+            true_count + false_count,
+            true_count,
+            true_count + false_count + null_count,
+        ],
+        // The order is null, false, true
+        (false, true) => [
+            null_count + false_count,
+            null_count + false_count + true_count,
+            null_count,
+        ],
+        // The order is false, true, null
+        (false, false) => [
+            false_count,
+            false_count + true_count,
+            false_count + true_count + null_count,
+        ],
     };
 
     match array.nulls().filter(|n| n.null_count() > 0) {
