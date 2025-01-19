@@ -158,15 +158,29 @@ fn get_boolean_rank_index(value: bool, is_null: bool) -> usize {
 
 #[inline(never)]
 fn boolean_rank(array: &BooleanArray, options: SortOptions) -> Vec<u32> {
+    let null_count = array.null_count() as u32;
+    let true_count = array.true_count() as u32;
+    let false_count = array.len() as u32 - null_count - true_count;
+
+    // ranks for [false, true, null]
+    //
+    // The value for a rank is last value rank + own value count
+    // this means that if we have the following order: `false`, `true` and then `null`
+    // the ranks will be:
+    // - false: false_count
+    // - true: false_count + true_count
+    // - null: false_count + true_count + null_count
+    //
+    // You will notice that the last rank is always the total length of the array but we don't use it for readability on how the rank is calculated
     let ranks_index: [u32; 3] = match (options.descending, options.nulls_first) {
-        // The order is null, true, false
-        (true, true) => [2, 1, 0],
-        // The order is true, false, null
-        (true, false) => [1, 0, 2],
-        // The order is null, false, true
-        (false, true) => [1, 2, 0],
-        // The order is false, true, null
-        (false, false) => [0, 1, 2],
+        // The order is null, true, false (order is [3, 2, 1])
+        (true, true) => [null_count + true_count + false_count, null_count + true_count, null_count],
+        // The order is true, false, null (order is [2, 1, 3])
+        (true, false) => [true_count + false_count, true_count, true_count + false_count + null_count],
+        // The order is null, false, true (order is [2, 3, 1])
+        (false, true) => [null_count + false_count, null_count + false_count + true_count, null_count],
+        // The order is false, true, null (order is [1, 2, 3])
+        (false, false) => [false_count, false_count + true_count, false_count + true_count + null_count],
     };
 
     match array.nulls().filter(|n| n.null_count() > 0) {
@@ -253,22 +267,22 @@ mod tests {
 
         let a = BooleanArray::from(vec![Some(true), Some(true), None, Some(false), Some(false)]);
         let res = rank(&a, None).unwrap();
-        assert_eq!(res, &[2, 2, 0, 1, 1]);
+        assert_eq!(res, &[5, 5, 1, 3, 3]);
 
         let res = rank(&a, Some(descending)).unwrap();
-        assert_eq!(res, &[1, 1, 0, 2, 2]);
+        assert_eq!(res, &[3, 3, 1, 5, 5]);
 
         let res = rank(&a, Some(nulls_last)).unwrap();
-        assert_eq!(res, &[1, 1, 2, 0, 0]);
+        assert_eq!(res, &[4, 4, 5, 2, 2]);
 
         let res = rank(&a, Some(nulls_last_descending)).unwrap();
-        assert_eq!(res, &[0, 0, 2, 1, 1]);
+        assert_eq!(res, &[2, 2, 5, 4, 4]);
 
         // Test with non-zero null values
         let nulls = NullBuffer::from(vec![true, true, false, true, true]);
         let a = BooleanArray::new(vec![true, true, true, false, false].into(), Some(nulls));
         let res = rank(&a, None).unwrap();
-        assert_eq!(res, &[2, 2, 0, 1, 1]);
+        assert_eq!(res, &[5, 5, 1, 3, 3]);
     }
 
     #[test]

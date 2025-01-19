@@ -869,14 +869,9 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<u32>,
     ) {
-        println!("input: {:?}", data);
         let output = BooleanArray::from(data);
         let expected = UInt32Array::from(expected_data);
-        let other = sort(&(Arc::new(output.clone()) as ArrayRef), options).unwrap();
         let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
-        println!("options: {:?}", options);
-        println!("output: {:?}", other);
-
         assert_eq!(output, expected)
     }
 
