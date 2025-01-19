@@ -620,7 +620,6 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
-
 /// A trait for Arrow String Arrays, currently three types are supported:
 /// - `BinaryArray`
 /// - `LargeBinaryArray`
@@ -629,19 +628,16 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
 /// This trait helps to abstract over the different types of binary arrays
 /// so that we don't need to duplicate the implementation for each type.
 pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
-
     /// Constructs a new iterator
     fn iter(&self) -> ArrayIter<Self>;
 }
 
 impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
-
     fn iter(&self) -> ArrayIter<Self> {
         GenericBinaryArray::<O>::iter(self)
     }
 }
 impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
-
     fn iter(&self) -> ArrayIter<Self> {
         BinaryViewArray::iter(self)
     }

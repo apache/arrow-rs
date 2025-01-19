@@ -146,7 +146,10 @@ fn op_binary<'a>(
     r: impl Iterator<Item = Option<&'a [u8]>>,
 ) -> Result<BooleanArray, ArrowError> {
     match op {
-        Op::Contains => Ok(l.zip(r).map(|(l, r)| Some(bytes_contains(l?, r?))).collect()),
+        Op::Contains => Ok(l
+            .zip(r)
+            .map(|(l, r)| Some(bytes_contains(l?, r?)))
+            .collect()),
         Op::StartsWith => Ok(l
             .zip(r)
             .map(|(l, r)| Some(BinaryPredicate::StartsWith(r?).evaluate(l?)))

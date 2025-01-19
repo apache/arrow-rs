@@ -18,11 +18,11 @@
 #![warn(missing_docs)]
 //! Arrow string kernels
 
+mod binary_like;
+mod binary_predicate;
 pub mod concat_elements;
 pub mod length;
 pub mod like;
 mod predicate;
 pub mod regexp;
 pub mod substring;
-mod binary_predicate;
-mod binary_like;

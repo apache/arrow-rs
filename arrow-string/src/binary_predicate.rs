@@ -28,11 +28,9 @@ pub enum BinaryPredicate<'a> {
 }
 
 impl<'a> BinaryPredicate<'a> {
-
     pub fn contains(needle: &'a [u8]) -> Self {
         Self::Contains(Finder::new(needle))
     }
-
 
     /// Evaluate this predicate against the given haystack
     pub fn evaluate(&self, haystack: &[u8]) -> bool {
@@ -61,9 +59,7 @@ impl<'a> BinaryPredicate<'a> {
                     let values = BooleanBuffer::from(
                         view_array
                             .prefix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v, equals_kernel) != negate
-                            })
+                            .map(|haystack| equals_bytes(haystack, v, equals_kernel) != negate)
                             .collect::<Vec<_>>(),
                     );
                     BooleanArray::new(values, nulls)
@@ -79,9 +75,7 @@ impl<'a> BinaryPredicate<'a> {
                     let values = BooleanBuffer::from(
                         view_array
                             .suffix_bytes_iter(v.len())
-                            .map(|haystack| {
-                                equals_bytes(haystack, v, equals_kernel) != negate
-                            })
+                            .map(|haystack| equals_bytes(haystack, v, equals_kernel) != negate)
                             .collect::<Vec<_>>(),
                     );
                     BooleanArray::new(values, nulls)
@@ -101,7 +95,11 @@ fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> b
 
 /// This is faster than `str::starts_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn starts_with(haystack: &[u8], needle: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+fn starts_with(
+    haystack: &[u8],
+    needle: &[u8],
+    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
+) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
@@ -114,11 +112,7 @@ fn ends_with(haystack: &[u8], needle: &[u8], byte_eq_kernel: impl Fn((&u8, &u8))
     if needle.len() > haystack.len() {
         false
     } else {
-        zip(
-            haystack.iter().rev(),
-            needle.iter().rev(),
-        )
-        .all(byte_eq_kernel)
+        zip(haystack.iter().rev(), needle.iter().rev()).all(byte_eq_kernel)
     }
 }
 

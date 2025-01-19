@@ -26,9 +26,9 @@ use arrow_select::take::take;
 
 use std::sync::Arc;
 
+use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
 use arrow_schema::DataType::{Binary, BinaryView, LargeBinary};
-use crate::binary_like::binary_apply;
 
 #[derive(Debug)]
 pub(crate) enum Op {
@@ -134,12 +134,24 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     match (l.data_type(), r.data_type()) {
-        (Utf8, Utf8) => {
-            string_apply::<&GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
-        (LargeUtf8, LargeUtf8) => {
-            string_apply::<&GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
+        (Utf8, Utf8) => string_apply::<&GenericStringArray<i32>>(
+            op,
+            l.as_string(),
+            l_s,
+            l_v,
+            r.as_string(),
+            r_s,
+            r_v,
+        ),
+        (LargeUtf8, LargeUtf8) => string_apply::<&GenericStringArray<i64>>(
+            op,
+            l.as_string(),
+            l_s,
+            l_v,
+            r.as_string(),
+            r_s,
+            r_v,
+        ),
         (Utf8View, Utf8View) => string_apply::<&StringViewArray>(
             op,
             l.as_string_view(),
@@ -149,12 +161,24 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
             r_s,
             r_v,
         ),
-        (Binary, Binary) => {
-            binary_apply::<&GenericBinaryArray<i32>>(op.try_into()?, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v)
-        }
-        (LargeBinary, LargeBinary) => {
-            binary_apply::<&GenericBinaryArray<i64>>(op.try_into()?, l.as_binary(), l_s, l_v, r.as_binary(), r_s, r_v)
-        }
+        (Binary, Binary) => binary_apply::<&GenericBinaryArray<i32>>(
+            op.try_into()?,
+            l.as_binary(),
+            l_s,
+            l_v,
+            r.as_binary(),
+            r_s,
+            r_v,
+        ),
+        (LargeBinary, LargeBinary) => binary_apply::<&GenericBinaryArray<i64>>(
+            op.try_into()?,
+            l.as_binary(),
+            l_s,
+            l_v,
+            r.as_binary(),
+            r_s,
+            r_v,
+        ),
         (BinaryView, BinaryView) => binary_apply::<&BinaryViewArray>(
             op.try_into()?,
             l.as_binary_view(),
@@ -415,9 +439,9 @@ legacy_kernels!(
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use arrow_array::builder::BinaryDictionaryBuilder;
     use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
     use std::iter::zip;
-    use arrow_array::builder::BinaryDictionaryBuilder;
 
     fn convert_binary_iterator_to_binary_dictionary<
         'a,
