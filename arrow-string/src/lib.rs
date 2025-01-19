@@ -24,3 +24,5 @@ pub mod like;
 mod predicate;
 pub mod regexp;
 pub mod substring;
+mod binary_predicate;
+mod binary_like;

@@ -15,385 +15,199 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::{Array, ArrayAccessor, BinaryViewArray, BooleanArray, StringViewArray};
+use arrow_array::{Array, ArrayAccessor, BooleanArray, StringViewArray};
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::ArrowError;
 use memchr::memchr3;
 use memchr::memmem::Finder;
-use regex::{
-    bytes::Regex as BinaryRegex, bytes::RegexBuilder as BinaryRegexBuilder, Regex, RegexBuilder,
-};
-use std::{iter::zip, str::Chars};
+use regex::{Regex, RegexBuilder};
+use std::iter::zip;
 
-pub trait SupportedPredicateItem: PartialEq
-where
-    Self: 'static,
-{
-    type CharIter<'a>: Iterator<Item = char>;
+/// A string based predicate
+pub enum Predicate<'a> {
+    Eq(&'a str),
+    Contains(Finder<'a>),
+    StartsWith(&'a str),
+    EndsWith(&'a str),
 
-    const PERCENT: &'static Self;
-    const PERCENT_ESCAPED: &'static Self;
+    /// Equality ignoring ASCII case
+    IEqAscii(&'a str),
+    /// Starts with ignoring ASCII case
+    IStartsWithAscii(&'a str),
+    /// Ends with ignoring ASCII case
+    IEndsWithAscii(&'a str),
 
-    fn len(&self) -> usize;
-
-    fn as_bytes(&self) -> &[u8];
-
-    // After the minimum supported Rust version is >= 1.75.0 we can change the return type to be
-    // `impl Iterator<Item = char>`
-    fn to_char_iter(&self) -> Self::CharIter<'_>;
+    Regex(Regex),
 }
 
-impl SupportedPredicateItem for str {
-    type CharIter<'a> = Chars<'a>;
-
-    const PERCENT: &'static str = "%";
-    const PERCENT_ESCAPED: &'static str = "\\%";
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        self.as_bytes()
-    }
-
-    #[inline]
-    fn to_char_iter(&self) -> Self::CharIter<'_> {
-        self.chars()
-    }
-}
-
-impl SupportedPredicateItem for [u8] {
-    type CharIter<'a> = std::iter::Map<std::slice::Iter<'a, u8>, for<'b> fn(&'b u8) -> char>;
-
-    const PERCENT: &'static [u8] = b"%";
-    const PERCENT_ESCAPED: &'static [u8] = b"\\%";
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        self
-    }
-
-    #[inline]
-    fn to_char_iter(&self) -> Self::CharIter<'_> {
-        self.iter().map(|&b| b as char)
-    }
-}
-
-pub trait PredicateImpl<'a>: Sized {
-    type UnsizedItem: SupportedPredicateItem + ?Sized;
-    type RegexType;
-
+impl<'a> Predicate<'a> {
     /// Create a predicate for the given like pattern
-    fn like(pattern: &'a Self::UnsizedItem) -> Result<Self, ArrowError>;
+    pub fn like(pattern: &'a str) -> Result<Self, ArrowError> {
+        if !contains_like_pattern(pattern) {
+            Ok(Self::Eq(pattern))
+        } else if pattern.ends_with('%') && !contains_like_pattern(&pattern[..pattern.len() - 1]) {
+            Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
+        } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
+            Ok(Self::EndsWith(&pattern[1..]))
+        } else if pattern.starts_with('%')
+            && pattern.ends_with('%')
+            && !contains_like_pattern(&pattern[1..pattern.len() - 1])
+        {
+            Ok(Self::contains(&pattern[1..pattern.len() - 1]))
+        } else {
+            Ok(Self::Regex(regex_like(pattern, false)?))
+        }
+    }
 
-    fn contains(needle: &'a Self::UnsizedItem) -> Self;
+    pub fn contains(needle: &'a str) -> Self {
+        Self::Contains(Finder::new(needle.as_bytes()))
+    }
 
     /// Create a predicate for the given ilike pattern
-    fn ilike(pattern: &'a Self::UnsizedItem, is_ascii: bool) -> Result<Self, ArrowError>;
-
-    /// Create a predicate for the given starts_with pattern
-    fn starts_with(pattern: &'a Self::UnsizedItem) -> Self;
-
-    /// Create a predicate for the given ends_with pattern
-    fn ends_with(pattern: &'a Self::UnsizedItem) -> Self;
+    pub fn ilike(pattern: &'a str, is_ascii: bool) -> Result<Self, ArrowError> {
+        if is_ascii && pattern.is_ascii() {
+            if !contains_like_pattern(pattern) {
+                return Ok(Self::IEqAscii(pattern));
+            } else if pattern.ends_with('%')
+                && !pattern.ends_with("\\%")
+                && !contains_like_pattern(&pattern[..pattern.len() - 1])
+            {
+                return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
+            } else if pattern.starts_with('%') && !contains_like_pattern(&pattern[1..]) {
+                return Ok(Self::IEndsWithAscii(&pattern[1..]));
+            }
+        }
+        Ok(Self::Regex(regex_like(pattern, true)?))
+    }
 
     /// Evaluate this predicate against the given haystack
-    fn evaluate(&self, haystack: &'a Self::UnsizedItem) -> bool;
+    pub fn evaluate(&self, haystack: &str) -> bool {
+        match self {
+            Predicate::Eq(v) => *v == haystack,
+            Predicate::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
+            Predicate::Contains(finder) => finder.find(haystack.as_bytes()).is_some(),
+            Predicate::StartsWith(v) => starts_with(haystack, v, equals_kernel),
+            Predicate::IStartsWithAscii(v) => {
+                starts_with(haystack, v, equals_ignore_ascii_case_kernel)
+            }
+            Predicate::EndsWith(v) => ends_with(haystack, v, equals_kernel),
+            Predicate::IEndsWithAscii(v) => ends_with(haystack, v, equals_ignore_ascii_case_kernel),
+            Predicate::Regex(v) => v.is_match(haystack),
+        }
+    }
 
     /// Evaluate this predicate against the elements of `array`
     ///
     /// If `negate` is true the result of the predicate will be negated
-    fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
+    #[inline(never)]
+    pub fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
     where
-        T: ArrayAccessor<Item = &'i Self::UnsizedItem>,
-        Self::UnsizedItem: 'i;
-
-    /// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
-    ///
-    /// 1. Replace `LIKE` multi-character wildcards `%` => `.*` (unless they're at the start or end of the pattern,
-    ///    where the regex is just truncated - e.g. `%foo%` => `foo` rather than `^.*foo.*$`)
-    /// 2. Replace `LIKE` single-character wildcards `_` => `.`
-    /// 3. Escape regex meta characters to match them and not be evaluated as regex special chars. e.g. `.` => `\\.`
-    /// 4. Replace escaped `LIKE` wildcards removing the escape characters to be able to match it as a regex. e.g. `\\%` => `%`
-    fn regex_like(
-        pattern: &'a Self::UnsizedItem,
-        case_insensitive: bool,
-    ) -> Result<Self::RegexType, ArrowError>;
-}
-macro_rules! impl_predicate {
-    (
-type PredicateUnsizedItem = $PredicateItem: ty;
-type MatchingRegexBuilder = $RegexBuilder: ty;
-type ViewArray = $ViewArray: ident;
-
-impl<'a> PredicateImpl<'a> for $predicate: ident<'a> {
-    type UnsizedItem = PredicateUnsizedItem;
-    type RegexType = $regex_type: ty;
-
-    ...
-}
-    ) => {
-        pub enum $predicate<'a> {
-            Eq(&'a $PredicateItem),
-            Contains(Finder<'a>),
-            StartsWith(&'a $PredicateItem),
-            EndsWith(&'a $PredicateItem),
-
-            /// Equality ignoring ASCII case
-            IEqAscii(&'a $PredicateItem),
-            /// Starts with ignoring ASCII case
-            IStartsWithAscii(&'a $PredicateItem),
-            /// Ends with ignoring ASCII case
-            IEndsWithAscii(&'a $PredicateItem),
-
-            Regex($regex_type),
-        }
-
-        impl<'a> PredicateImpl<'a> for $predicate<'a> {
-            type UnsizedItem = $PredicateItem;
-            type RegexType = $regex_type;
-
-            /// Create a predicate for the given like pattern
-            fn like(pattern: &'a Self::UnsizedItem) -> Result<Self, ArrowError> {
-                if !contains_like_pattern(pattern) {
-                    Ok(Self::Eq(pattern))
-                } else if pattern.ends_with(Self::UnsizedItem::PERCENT)
-                    && !contains_like_pattern(&pattern[..pattern.len() - 1])
-                {
-                    Ok(Self::StartsWith(&pattern[..pattern.len() - 1]))
-                } else if pattern.starts_with(Self::UnsizedItem::PERCENT)
-                    && !contains_like_pattern(&pattern[1..])
-                {
-                    Ok(Self::EndsWith(&pattern[1..]))
-                } else if pattern.starts_with(Self::UnsizedItem::PERCENT)
-                    && pattern.ends_with(Self::UnsizedItem::PERCENT)
-                    && !contains_like_pattern(&pattern[1..pattern.len() - 1])
-                {
-                    Ok(Self::contains(&pattern[1..pattern.len() - 1]))
+        T: ArrayAccessor<Item = &'i str>,
+    {
+        match self {
+            Predicate::Eq(v) => BooleanArray::from_unary(array, |haystack| {
+                (haystack.len() == v.len() && haystack == *v) != negate
+            }),
+            Predicate::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
+                haystack.eq_ignore_ascii_case(v) != negate
+            }),
+            Predicate::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
+                finder.find(haystack.as_bytes()).is_some() != negate
+            }),
+            Predicate::StartsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
+                        string_view_array
+                            .prefix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    BooleanArray::new(values, nulls)
                 } else {
-                    Ok(Self::Regex(Self::regex_like(pattern, false)?))
-                }
-            }
-
-            fn contains(needle: &'a Self::UnsizedItem) -> Self {
-                Self::Contains(Finder::new(needle.as_bytes()))
-            }
-
-            /// Create a predicate for the given ilike pattern
-            fn ilike(pattern: &'a Self::UnsizedItem, is_ascii: bool) -> Result<Self, ArrowError> {
-                if is_ascii && pattern.is_ascii() {
-                    if !contains_like_pattern(pattern) {
-                        return Ok(Self::IEqAscii(pattern));
-                    } else if pattern.ends_with(Self::UnsizedItem::PERCENT)
-                        && !pattern.ends_with(Self::UnsizedItem::PERCENT_ESCAPED)
-                        && !contains_like_pattern(&pattern[..pattern.len() - 1])
-                    {
-                        return Ok(Self::IStartsWithAscii(&pattern[..pattern.len() - 1]));
-                    } else if pattern.starts_with(Self::UnsizedItem::PERCENT)
-                        && !contains_like_pattern(&pattern[1..])
-                    {
-                        return Ok(Self::IEndsWithAscii(&pattern[1..]));
-                    }
-                }
-                Ok(Self::Regex(Self::regex_like(pattern, true)?))
-            }
-
-            fn starts_with(pattern: &'a Self::UnsizedItem) -> Self {
-                Self::StartsWith(pattern)
-            }
-
-            fn ends_with(pattern: &'a Self::UnsizedItem) -> Self {
-                Self::EndsWith(pattern)
-            }
-
-            /// Evaluate this predicate against the given haystack
-            fn evaluate(&self, haystack: &'a Self::UnsizedItem) -> bool {
-                match self {
-                    Self::Eq(v) => *v == haystack,
-                    Self::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
-                    Self::Contains(finder) => finder.find(haystack.as_bytes()).is_some(),
-                    Self::StartsWith(v) => starts_with(haystack, v, equals_kernel),
-                    Self::IStartsWithAscii(v) => {
-                        starts_with(haystack, v, equals_ignore_ascii_case_kernel)
-                    }
-                    Self::EndsWith(v) => ends_with(haystack, v, equals_kernel),
-                    Self::IEndsWithAscii(v) => {
-                        ends_with(haystack, v, equals_ignore_ascii_case_kernel)
-                    }
-                    Self::Regex(v) => v.is_match(haystack),
-                }
-            }
-
-            /// Evaluate this predicate against the elements of `array`
-            ///
-            /// If `negate` is true the result of the predicate will be negated
-            #[inline(never)]
-            fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
-            where
-                T: ArrayAccessor<Item = &'i Self::UnsizedItem>,
-            {
-                match self {
-                    Self::Eq(v) => BooleanArray::from_unary(array, |haystack| {
-                        (haystack.len() == v.len() && haystack == *v) != negate
-                    }),
-                    Self::IEqAscii(v) => BooleanArray::from_unary(array, |haystack| {
-                        haystack.eq_ignore_ascii_case(v) != negate
-                    }),
-                    Self::Contains(finder) => BooleanArray::from_unary(array, |haystack| {
-                        finder.find(haystack.as_bytes()).is_some() != negate
-                    }),
-                    Self::StartsWith(v) => {
-                        if let Some(view_array) = array.as_any().downcast_ref::<$ViewArray>() {
-                            let nulls = view_array.logical_nulls();
-                            let values = BooleanBuffer::from(
-                                view_array
-                                    .prefix_bytes_iter(v.len())
-                                    .map(|haystack| {
-                                        equals_bytes(haystack, *v, equals_kernel) != negate
-                                    })
-                                    .collect::<Vec<_>>(),
-                            );
-                            BooleanArray::new(values, nulls)
-                        } else {
-                            BooleanArray::from_unary(array, |haystack| {
-                                starts_with(haystack, v, equals_kernel) != negate
-                            })
-                        }
-                    }
-                    Self::IStartsWithAscii(v) => {
-                        if let Some(view_array) = array.as_any().downcast_ref::<$ViewArray>() {
-                            let nulls = view_array.logical_nulls();
-                            let values = BooleanBuffer::from(
-                                view_array
-                                    .prefix_bytes_iter(v.len())
-                                    .map(|haystack| {
-                                        equals_bytes(haystack, *v, equals_ignore_ascii_case_kernel)
-                                            != negate
-                                    })
-                                    .collect::<Vec<_>>(),
-                            );
-                            BooleanArray::new(values, nulls)
-                        } else {
-                            BooleanArray::from_unary(array, |haystack| {
-                                starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-                            })
-                        }
-                    }
-                    Self::EndsWith(v) => {
-                        if let Some(view_array) = array.as_any().downcast_ref::<$ViewArray>() {
-                            let nulls = view_array.logical_nulls();
-                            let values = BooleanBuffer::from(
-                                view_array
-                                    .suffix_bytes_iter(v.len())
-                                    .map(|haystack| {
-                                        equals_bytes(haystack, *v, equals_kernel) != negate
-                                    })
-                                    .collect::<Vec<_>>(),
-                            );
-                            BooleanArray::new(values, nulls)
-                        } else {
-                            BooleanArray::from_unary(array, |haystack| {
-                                ends_with(haystack, v, equals_kernel) != negate
-                            })
-                        }
-                    }
-                    Self::IEndsWithAscii(v) => {
-                        if let Some(view_array) = array.as_any().downcast_ref::<$ViewArray>() {
-                            let nulls = view_array.logical_nulls();
-                            let values = BooleanBuffer::from(
-                                view_array
-                                    .suffix_bytes_iter(v.len())
-                                    .map(|haystack| {
-                                        equals_bytes(haystack, *v, equals_ignore_ascii_case_kernel)
-                                            != negate
-                                    })
-                                    .collect::<Vec<_>>(),
-                            );
-                            BooleanArray::new(values, nulls)
-                        } else {
-                            BooleanArray::from_unary(array, |haystack| {
-                                ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
-                            })
-                        }
-                    }
-                    Self::Regex(v) => {
-                        BooleanArray::from_unary(array, |haystack| v.is_match(haystack) != negate)
-                    }
-                }
-            }
-
-            fn regex_like(
-                pattern: &Self::UnsizedItem,
-                case_insensitive: bool,
-            ) -> Result<Self::RegexType, ArrowError> {
-                let regex_pattern = transform_pattern_like_to_regex_compatible_pattern(pattern);
-                <$RegexBuilder>::new(&regex_pattern)
-                    .case_insensitive(case_insensitive)
-                    .dot_matches_new_line(true)
-                    .build()
-                    .map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Unable to build regex from LIKE pattern: {e}"
-                        ))
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_kernel) != negate
                     })
+                }
+            }
+            Predicate::IStartsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
+                        string_view_array
+                            .prefix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    BooleanArray::new(values, nulls)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        starts_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
+            Predicate::EndsWith(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
+                        string_view_array
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(haystack, v.as_bytes(), equals_kernel) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    BooleanArray::new(values, nulls)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_kernel) != negate
+                    })
+                }
+            }
+            Predicate::IEndsWithAscii(v) => {
+                if let Some(string_view_array) = array.as_any().downcast_ref::<StringViewArray>() {
+                    let nulls = string_view_array.logical_nulls();
+                    let values = BooleanBuffer::from(
+                        string_view_array
+                            .suffix_bytes_iter(v.len())
+                            .map(|haystack| {
+                                equals_bytes(
+                                    haystack,
+                                    v.as_bytes(),
+                                    equals_ignore_ascii_case_kernel,
+                                ) != negate
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    BooleanArray::new(values, nulls)
+                } else {
+                    BooleanArray::from_unary(array, |haystack| {
+                        ends_with(haystack, v, equals_ignore_ascii_case_kernel) != negate
+                    })
+                }
+            }
+            Predicate::Regex(v) => {
+                BooleanArray::from_unary(array, |haystack| v.is_match(haystack) != negate)
             }
         }
-    };
+    }
 }
 
-impl_predicate!(
-
-type PredicateUnsizedItem = str;
-type MatchingRegexBuilder = RegexBuilder;
-type ViewArray = StringViewArray;
-
-impl<'a> PredicateImpl<'a> for Predicate<'a> {
-  type UnsizedItem = PredicateUnsizedItem;
-  type RegexType = Regex;
-
-  ...
-
-}
-);
-
-impl_predicate!(
-
-type PredicateUnsizedItem = [u8];
-type MatchingRegexBuilder = BinaryRegexBuilder;
-type ViewArray = BinaryViewArray;
-
-impl<'a> PredicateImpl<'a> for BinaryPredicate<'a> {
-  type UnsizedItem = PredicateUnsizedItem;
-  type RegexType = BinaryRegex;
-
-  ...
-
-}
-);
-
-fn equals_bytes<Lhs: SupportedPredicateItem + ?Sized, Rhs: SupportedPredicateItem + ?Sized>(
-    lhs: &Lhs,
-    rhs: &Rhs,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
-    lhs.len() == rhs.len() && zip(lhs.as_bytes(), rhs.as_bytes()).all(byte_eq_kernel)
+fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
+    lhs.len() == rhs.len() && zip(lhs, rhs).all(byte_eq_kernel)
 }
 
 /// This is faster than `str::starts_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn starts_with<T: SupportedPredicateItem + ?Sized>(
-    haystack: &T,
-    needle: &T,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
+fn starts_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
@@ -402,11 +216,7 @@ fn starts_with<T: SupportedPredicateItem + ?Sized>(
 }
 /// This is faster than `str::ends_with` for small strings.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
-fn ends_with<T: SupportedPredicateItem + ?Sized>(
-    haystack: &T,
-    needle: &T,
-    byte_eq_kernel: impl Fn((&u8, &u8)) -> bool,
-) -> bool {
+fn ends_with(haystack: &str, needle: &str, byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
     if needle.len() > haystack.len() {
         false
     } else {
@@ -433,11 +243,9 @@ fn equals_ignore_ascii_case_kernel((n, h): (&u8, &u8)) -> bool {
 /// 2. Replace `LIKE` single-character wildcards `_` => `.`
 /// 3. Escape regex meta characters to match them and not be evaluated as regex special chars. e.g. `.` => `\\.`
 /// 4. Replace escaped `LIKE` wildcards removing the escape characters to be able to match it as a regex. e.g. `\\%` => `%`
-fn transform_pattern_like_to_regex_compatible_pattern<T: SupportedPredicateItem + ?Sized>(
-    pattern: &T,
-) -> String {
+fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError> {
     let mut result = String::with_capacity(pattern.len() * 2);
-    let mut chars_iter = pattern.to_char_iter().peekable();
+    let mut chars_iter = pattern.chars().peekable();
     match chars_iter.peek() {
         // if the pattern starts with `%`, we avoid starting the regex with a slow but meaningless `^.*`
         Some('%') => {
@@ -482,11 +290,18 @@ fn transform_pattern_like_to_regex_compatible_pattern<T: SupportedPredicateItem 
     } else {
         result.push('$');
     }
-
-    result
+    RegexBuilder::new(&result)
+        .case_insensitive(case_insensitive)
+        .dot_matches_new_line(true)
+        .build()
+        .map_err(|e| {
+            ArrowError::InvalidArgumentError(format!(
+                "Unable to build regex from LIKE pattern: {e}"
+            ))
+        })
 }
 
-fn contains_like_pattern<T: SupportedPredicateItem + ?Sized>(pattern: &T) -> bool {
+fn contains_like_pattern(pattern: &str) -> bool {
     memchr3(b'%', b'_', b'\\', pattern.as_bytes()).is_some()
 }
 
@@ -518,9 +333,7 @@ mod tests {
         ];
 
         for (like_pattern, expected_regexp) in test_cases {
-            let r = Predicate::regex_like(like_pattern, false).unwrap();
-            assert_eq!(r.to_string(), expected_regexp);
-            let r = BinaryPredicate::regex_like(like_pattern.as_bytes(), false).unwrap();
+            let r = regex_like(like_pattern, false).unwrap();
             assert_eq!(r.to_string(), expected_regexp);
         }
     }

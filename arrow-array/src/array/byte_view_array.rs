@@ -754,20 +754,6 @@ where
 pub type BinaryViewArray = GenericByteViewArray<BinaryViewType>;
 
 impl BinaryViewArray {
-    /// Returns true if all data within this array is ASCII
-    pub fn is_ascii(&self) -> bool {
-        // Alternative (but incorrect): directly check the underlying buffers
-        // (1) Our binary view might be sparse, i.e., a subset of the buffers,
-        //      so even if the buffer is not ascii, we can still be ascii.
-        // (2) It is quite difficult to know the range of each buffer (unlike BinaryArray)
-        // This means that this operation is quite expensive, shall we cache the result?
-        //  i.e. track `is_ascii` in the builder.
-        self.iter().all(|v| match v {
-            Some(v) => v.is_ascii(),
-            None => true,
-        })
-    }
-
     /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
     /// If items not utf8 data, validate will fail and error returned.
     pub fn to_string_view(self) -> Result<StringViewArray, ArrowError> {
