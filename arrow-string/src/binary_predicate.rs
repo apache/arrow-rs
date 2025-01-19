@@ -93,7 +93,7 @@ fn equals_bytes(lhs: &[u8], rhs: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> b
     lhs.len() == rhs.len() && zip(lhs, rhs).all(byte_eq_kernel)
 }
 
-/// This is faster than `str::starts_with` for small strings.
+/// This is faster than `[u8]::starts_with` for small slices.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn starts_with(
     haystack: &[u8],
@@ -106,7 +106,7 @@ fn starts_with(
         zip(haystack, needle).all(byte_eq_kernel)
     }
 }
-/// This is faster than `str::ends_with` for small strings.
+/// This is faster than `[u8]::ends_with` for small slices.
 /// See <https://github.com/apache/arrow-rs/issues/6107> for more details.
 fn ends_with(haystack: &[u8], needle: &[u8], byte_eq_kernel: impl Fn((&u8, &u8)) -> bool) -> bool {
     if needle.len() > haystack.len() {
