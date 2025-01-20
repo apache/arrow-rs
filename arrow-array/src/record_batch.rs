@@ -1315,10 +1315,11 @@ mod tests {
             Field::new("month", DataType::Int64, true),
         ]);
 
-        let normalized = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, month.clone()])
-            .expect("valid conversion")
-            .normalize(".", Some(0))
-            .expect("valid normalization");
+        let normalized =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![a.clone(), month.clone()])
+                .expect("valid conversion")
+                .normalize(".", Some(0))
+                .expect("valid normalization");
 
         let expected = RecordBatch::try_from_iter_with_nullable(vec![
             ("a.animals", animals.clone(), true),
