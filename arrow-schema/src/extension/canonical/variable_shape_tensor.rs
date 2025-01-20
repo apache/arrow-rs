@@ -32,8 +32,9 @@ use crate::{extension::ExtensionType, ArrowError, DataType, Field};
 /// - `data` is a List holding tensor elements (each list element is a single
 ///   tensor). The List’s value type is the value type of the tensor, such as
 ///   an integer or floating-point type.
-/// - `shape` is a FixedSizeList<int32>[ndim] of the tensor shape where th
-///   size of the list ndim is equal to the number of dimensions of the tensor.
+/// - `shape` is a `FixedSizeList<int32>[ndim]` of the tensor shape where the
+///   size of the list `ndim` is equal to the number of dimensions of the
+///   tensor.
 ///
 /// Extension type parameters:
 /// `value_type`: the Arrow data type of individual tensor elements.
