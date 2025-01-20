@@ -397,17 +397,23 @@ impl RecordBatch {
 
     /// Normalize a semi-structured [`RecordBatch`] into a flat table.
     ///
-    /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
-    /// separator= "." and the schema:
+    /// Nested [`Field`]s will generate names separated by `separator`, up to a depth of `max_level`
+    /// (unlimited if `None`).
+    ///
+    /// e.g. given a [`RecordBatch`] with schema:
+    ///
     /// ```text
     ///     "foo": StructArray<"bar": Utf8>
     /// ```
-    /// will generate:
+    ///
+    /// A separator of `"."` would generate a batch with the schema:
+    ///
     /// ```text
     ///     "foo.bar": Utf8
     /// ```
-    /// `max_level`: The maximum number of levels (depth of the `Schema` and `Columns`) to
-    /// normalize. If `0`, normalizes all levels.
+    ///
+    /// Note that giving a depth of `Some(0)` to `max_level` is the same as passing in `None`;
+    /// it will be treated as unlimited.
     ///
     /// # Example
     ///
@@ -415,7 +421,7 @@ impl RecordBatch {
     /// # use std::sync::Arc;
     /// # use arrow_array::{ArrayRef, Int64Array, StringArray, StructArray, RecordBatch};
     /// # use arrow_schema::{DataType, Field, Fields, Schema};
-    ///
+    /// #
     /// let animals: ArrayRef = Arc::new(StringArray::from(vec!["Parrot", ""]));
     /// let n_legs: ArrayRef = Arc::new(Int64Array::from(vec![Some(2), Some(4)]));
     ///
@@ -453,11 +459,16 @@ impl RecordBatch {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = Vec::new();
-        for (c, f) in self.columns.iter().zip(self.schema.fields()).rev() {
-            let name_vec: Vec<&str> = vec![f.name()];
-            stack.push((0, c, name_vec, f));
-        }
+        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = self
+            .columns
+            .iter()
+            .zip(self.schema.fields())
+            .rev()
+            .map(|c, f| {
+                let name_vec: Vec<&str> = vec![f.name()];
+                (0, c, name_vec, f)
+            })
+            .collect();
         let mut columns: Vec<ArrayRef> = Vec::new();
         let mut fields: Vec<FieldRef> = Vec::new();
 

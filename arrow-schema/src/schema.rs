@@ -413,21 +413,25 @@ impl Schema {
         &self.metadata
     }
 
-    /// Returns a new schema, normalized based on the max_level field.
-    /// `separator`: Nested [`Field`]s will generate names separated by `separator`, e.g. for
-    /// separator= "." and the schema:
+    /// Normalize a [`Schema`] into a flat table.
+    ///
+    /// Nested [`Field`]s will generate names separated by `separator`, up to a depth of `max_level`
+    /// (unlimited if `None`).
+    ///
+    /// e.g. given a [`Schema`]:
+    ///
     /// ```text
     ///     "foo": StructArray<"bar": Utf8>
     /// ```
-    /// will generate:
+    ///
+    /// A separator of `"."` would generate a batch with the schema:
+    ///
     /// ```text
     ///     "foo.bar": Utf8
     /// ```
     ///
-    /// `max_level`: The maximum number of levels (depth of the `Schema`) to normalize. If `0`,
-    /// normalizes all levels.
-    ///
-    /// This carries metadata from the parent schema over.
+    /// Note that giving a depth of `Some(0)` to `max_level` is the same as passing in `None`;
+    /// it will be treated as unlimited.
     ///
     /// # Example
     ///
@@ -457,11 +461,15 @@ impl Schema {
             0 => usize::MAX,
             val => val,
         };
-        let mut stack: Vec<(usize, Vec<&str>, &FieldRef)> = Vec::new();
-        for f in self.fields().iter().rev() {
-            let name_vec: Vec<&str> = vec![f.name()];
-            stack.push((0, name_vec, f));
-        }
+        let mut stack: Vec<(usize, Vec<&str>, &FieldRef)> = self
+            .fields()
+            .iter()
+            .rev()
+            .map(|f| {
+                let name_vec: Vec<&str> = vec![f.name()];
+                (0, name_vec, f)
+            })
+            .collect();
         let mut fields: Vec<FieldRef> = Vec::new();
 
         while let Some((depth, name, field_ref)) = stack.pop() {
