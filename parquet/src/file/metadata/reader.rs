@@ -396,7 +396,7 @@ impl ParquetMetaDataReader {
     async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
-        remaineder: Option<(usize, Bytes)>,
+        remainder: Option<(usize, Bytes)>,
     ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!("Footer metadata is not present"));
@@ -409,12 +409,12 @@ impl ParquetMetaDataReader {
             None => return Ok(()),
         };
 
-        let bytes = match &remaineder {
-            Some((remainder_start, remaineder)) if *remainder_start <= range.start => {
+        let bytes = match &remainder {
+            Some((remainder_start, remainder)) if *remainder_start <= range.start => {
                 let offset = range.start - *remainder_start;  
                 let end = offset + range.end - range.start;  
-                assert!(end <= remaineder.len());  
-                remaineder.slice(offset..end)  
+                assert!(end <= remainder.len());  
+                remainder.slice(offset..end)  
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
             _ => fetch.fetch(range.start..range.end).await?,
