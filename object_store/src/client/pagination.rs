@@ -35,9 +35,14 @@ use std::future::Future;
 /// finish, otherwise it will continue to call `op(state, token)` with the values returned by the
 /// previous call to `op`, until a continuation token of `None` is returned
 ///
-pub fn stream_paginated<F, Fut, S, T>(state: S, op: F) -> impl Stream<Item = Result<T>>
+pub(crate) fn stream_paginated<F, Fut, S, T, C>(
+    client: C,
+    state: S,
+    op: F,
+) -> impl Stream<Item = Result<T>>
 where
-    F: Fn(S, Option<String>) -> Fut + Copy,
+    C: Clone,
+    F: Fn(C, S, Option<String>) -> Fut + Copy,
     Fut: Future<Output = Result<(T, S, Option<String>)>>,
 {
     enum PaginationState<T> {
@@ -46,27 +51,30 @@ where
         Done,
     }
 
-    futures::stream::unfold(PaginationState::Start(state), move |state| async move {
-        let (s, page_token) = match state {
-            PaginationState::Start(s) => (s, None),
-            PaginationState::HasMore(s, page_token) if !page_token.is_empty() => {
-                (s, Some(page_token))
-            }
-            _ => {
-                return None;
-            }
-        };
+    futures::stream::unfold(PaginationState::Start(state), move |state| {
+        let client = client.clone();
+        async move {
+            let (s, page_token) = match state {
+                PaginationState::Start(s) => (s, None),
+                PaginationState::HasMore(s, page_token) if !page_token.is_empty() => {
+                    (s, Some(page_token))
+                }
+                _ => {
+                    return None;
+                }
+            };
 
-        let (resp, s, continuation) = match op(s, page_token).await {
-            Ok(resp) => resp,
-            Err(e) => return Some((Err(e), PaginationState::Done)),
-        };
+            let (resp, s, continuation) = match op(client, s, page_token).await {
+                Ok(resp) => resp,
+                Err(e) => return Some((Err(e), PaginationState::Done)),
+            };
 
-        let next_state = match continuation {
-            Some(token) => PaginationState::HasMore(s, token),
-            None => PaginationState::Done,
-        };
+            let next_state = match continuation {
+                Some(token) => PaginationState::HasMore(s, token),
+                None => PaginationState::Done,
+            };
 
-        Some((Ok(resp), next_state))
+            Some((Ok(resp), next_state))
+        }
     })
 }

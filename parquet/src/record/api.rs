@@ -52,6 +52,11 @@ pub struct Row {
 
 #[allow(clippy::len_without_is_empty)]
 impl Row {
+    /// Constructs a `Row` from the list of `fields` and returns it.
+    pub fn new(fields: Vec<(String, Field)>) -> Row {
+        Row { fields }
+    }
+
     /// Get the number of fields in this row.
     pub fn len(&self) -> usize {
         self.fields.len()
@@ -101,6 +106,7 @@ impl Row {
         }
     }
 
+    /// Converts the row into a JSON object.
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
         Value::Object(
@@ -134,25 +140,45 @@ impl<'a> Iterator for RowColumnIter<'a> {
 
 /// Trait for type-safe convenient access to fields within a Row.
 pub trait RowAccessor {
+    /// Try to get a boolean value at the given index.
     fn get_bool(&self, i: usize) -> Result<bool>;
+    /// Try to get a byte value at the given index.
     fn get_byte(&self, i: usize) -> Result<i8>;
+    /// Try to get a short value at the given index.
     fn get_short(&self, i: usize) -> Result<i16>;
+    /// Try to get a int value at the given index.
     fn get_int(&self, i: usize) -> Result<i32>;
+    /// Try to get a long value at the given index.
     fn get_long(&self, i: usize) -> Result<i64>;
+    /// Try to get a ubyte value at the given index.
     fn get_ubyte(&self, i: usize) -> Result<u8>;
+    /// Try to get a ushort value at the given index.
     fn get_ushort(&self, i: usize) -> Result<u16>;
+    /// Try to get a uint value at the given index.
     fn get_uint(&self, i: usize) -> Result<u32>;
+    /// Try to get a ulong value at the given index.
     fn get_ulong(&self, i: usize) -> Result<u64>;
+    /// Try to get a float16 value at the given index.
     fn get_float16(&self, i: usize) -> Result<f16>;
+    /// Try to get a float value at the given index.
     fn get_float(&self, i: usize) -> Result<f32>;
+    /// Try to get a double value at the given index.
     fn get_double(&self, i: usize) -> Result<f64>;
+    /// Try to get a date value at the given index.
     fn get_timestamp_millis(&self, i: usize) -> Result<i64>;
+    /// Try to get a date value at the given index.
     fn get_timestamp_micros(&self, i: usize) -> Result<i64>;
+    /// Try to get a decimal value at the given index.
     fn get_decimal(&self, i: usize) -> Result<&Decimal>;
+    /// Try to get a string value at the given index.
     fn get_string(&self, i: usize) -> Result<&String>;
+    /// Try to get a bytes value at the given index.
     fn get_bytes(&self, i: usize) -> Result<&ByteArray>;
+    /// Try to get a group value at the given index.
     fn get_group(&self, i: usize) -> Result<&Row>;
+    /// Try to get a list value at the given index.
     fn get_list(&self, i: usize) -> Result<&List>;
+    /// Try to get a map value at the given index.
     fn get_map(&self, i: usize) -> Result<&Map>;
 }
 
@@ -175,6 +201,7 @@ pub trait RowAccessor {
 /// ```
 ///
 pub trait RowFormatter {
+    /// The method to format a field at the given index.
     fn fmt(&self, i: usize) -> &dyn fmt::Display;
 }
 
@@ -261,12 +288,6 @@ impl RowAccessor for Row {
     row_complex_accessor!(get_map, MapInternal, Map);
 }
 
-/// Constructs a `Row` from the list of `fields` and returns it.
-#[inline]
-pub fn make_row(fields: Vec<(String, Field)>) -> Row {
-    Row { fields }
-}
-
 impl fmt::Display for Row {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
@@ -295,6 +316,7 @@ impl List {
         self.elements.len()
     }
 
+    /// Get the reference to the elements in this list
     pub fn elements(&self) -> &[Field] {
         self.elements.as_slice()
     }
@@ -309,25 +331,47 @@ pub fn make_list(elements: Vec<Field>) -> List {
 /// Trait for type-safe access of an index for a `List`.
 /// Note that the get_XXX methods do not do bound checking.
 pub trait ListAccessor {
+    /// Try getting a `boolean` value at the given index.
     fn get_bool(&self, i: usize) -> Result<bool>;
+    /// Try getting a `byte` value at the given index.
     fn get_byte(&self, i: usize) -> Result<i8>;
+    /// Try getting an `i16` value at the given index.
     fn get_short(&self, i: usize) -> Result<i16>;
+    /// Try getting an `i32` value at the given index.
     fn get_int(&self, i: usize) -> Result<i32>;
+    /// Try getting an `i64` value at the given index.
     fn get_long(&self, i: usize) -> Result<i64>;
+    /// Try getting a `u8` value at the given index.
     fn get_ubyte(&self, i: usize) -> Result<u8>;
+    /// Try getting a `u16` value at the given index.
     fn get_ushort(&self, i: usize) -> Result<u16>;
+    /// Try getting a `u32` value at the given index.
     fn get_uint(&self, i: usize) -> Result<u32>;
+    /// Try getting a `u64` value at the given index.
     fn get_ulong(&self, i: usize) -> Result<u64>;
+    /// Try getting a `f16` value at the given index.
     fn get_float16(&self, i: usize) -> Result<f16>;
+    /// Try getting a `f32` value at the given index.
     fn get_float(&self, i: usize) -> Result<f32>;
+    /// Try getting a `f64` value at the given index.
     fn get_double(&self, i: usize) -> Result<f64>;
+    /// Try getting a `timestamp` as milliseconds value
+    /// encoded as `i64` at the given index.
     fn get_timestamp_millis(&self, i: usize) -> Result<i64>;
+    /// Try getting a `timestamp` as microseconds value
+    /// encoded as `i64` at the given index.
     fn get_timestamp_micros(&self, i: usize) -> Result<i64>;
+    /// Try getting a `decimal` value at the given index.
     fn get_decimal(&self, i: usize) -> Result<&Decimal>;
+    /// Try getting a `string` value at the given index.
     fn get_string(&self, i: usize) -> Result<&String>;
+    /// Try getting a `bytes` value at the given index.
     fn get_bytes(&self, i: usize) -> Result<&ByteArray>;
+    /// Try getting a `group` value at the given index.
     fn get_group(&self, i: usize) -> Result<&Row>;
+    /// Try getting a `list` value at the given index.
     fn get_list(&self, i: usize) -> Result<&List>;
+    /// Try getting a `map` value at the given index.
     fn get_map(&self, i: usize) -> Result<&Map>;
 }
 
@@ -420,6 +464,7 @@ impl Map {
         self.entries.len()
     }
 
+    /// Get the reference to the key-value pairs in this map
     pub fn entries(&self) -> &[(Field, Field)] {
         self.entries.as_slice()
     }
@@ -433,7 +478,9 @@ pub fn make_map(entries: Vec<(Field, Field)>) -> Map {
 
 /// Trait for type-safe access of an index for a `Map`
 pub trait MapAccessor {
+    /// Get the keys of the map.
     fn get_keys<'a>(&'a self) -> Box<dyn ListAccessor + 'a>;
+    /// Get the values of the map.
     fn get_values<'a>(&'a self) -> Box<dyn ListAccessor + 'a>;
 }
 
@@ -458,7 +505,7 @@ macro_rules! map_list_primitive_accessor {
     };
 }
 
-impl<'a> ListAccessor for MapList<'a> {
+impl ListAccessor for MapList<'_> {
     map_list_primitive_accessor!(get_bool, Bool, bool);
 
     map_list_primitive_accessor!(get_byte, Byte, i8);
@@ -532,13 +579,13 @@ pub enum Field {
     Int(i32),
     /// Signed integer INT_64.
     Long(i64),
-    // Unsigned integer UINT_8.
+    /// Unsigned integer UINT_8.
     UByte(u8),
-    // Unsigned integer UINT_16.
+    /// Unsigned integer UINT_16.
     UShort(u16),
-    // Unsigned integer UINT_32.
+    /// Unsigned integer UINT_32.
     UInt(u32),
-    // Unsigned integer UINT_64.
+    /// Unsigned integer UINT_64.
     ULong(u64),
     /// IEEE 16-bit floating point value.
     Float16(f16),
@@ -717,6 +764,7 @@ impl Field {
         Ok(field)
     }
 
+    /// Converts the Parquet field into a JSON [`Value`].
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
         use base64::prelude::BASE64_STANDARD;
@@ -1337,7 +1385,7 @@ mod tests {
             ("z".to_string(), Field::Float(3.1)),
             ("a".to_string(), Field::Str("abc".to_string())),
         ];
-        let row = Field::Group(make_row(fields));
+        let row = Field::Group(Row::new(fields));
         assert_eq!(format!("{row}"), "{x: null, Y: 2, z: 3.1, a: \"abc\"}");
 
         let row = Field::ListInternal(make_list(vec![
@@ -1382,7 +1430,7 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert!(!Field::Group(make_row(vec![
+        assert!(!Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
             ("z".to_string(), Field::Float(3.1)),
@@ -1409,7 +1457,7 @@ mod tests {
     #[test]
     fn test_row_primitive_field_fmt() {
         // Primitives types
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("00".to_string(), Field::Null),
             ("01".to_string(), Field::Bool(false)),
             ("02".to_string(), Field::Byte(3)),
@@ -1464,10 +1512,10 @@ mod tests {
     #[test]
     fn test_row_complex_field_fmt() {
         // Complex types
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "00".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1499,7 +1547,7 @@ mod tests {
     #[test]
     fn test_row_primitive_accessors() {
         // primitives
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("a".to_string(), Field::Null),
             ("b".to_string(), Field::Bool(false)),
             ("c".to_string(), Field::Byte(3)),
@@ -1541,7 +1589,7 @@ mod tests {
     #[test]
     fn test_row_primitive_invalid_accessors() {
         // primitives
-        let row = make_row(vec![
+        let row = Row::new(vec![
             ("a".to_string(), Field::Null),
             ("b".to_string(), Field::Bool(false)),
             ("c".to_string(), Field::Byte(3)),
@@ -1570,10 +1618,10 @@ mod tests {
 
     #[test]
     fn test_row_complex_accessors() {
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "a".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1604,10 +1652,10 @@ mod tests {
 
     #[test]
     fn test_row_complex_invalid_accessors() {
-        let row = make_row(vec![
+        let row = Row::new(vec![
             (
                 "a".to_string(),
-                Field::Group(make_row(vec![
+                Field::Group(Row::new(vec![
                     ("x".to_string(), Field::Null),
                     ("Y".to_string(), Field::Int(2)),
                 ])),
@@ -1753,7 +1801,7 @@ mod tests {
 
     #[test]
     fn test_list_complex_accessors() {
-        let list = make_list(vec![Field::Group(make_row(vec![
+        let list = make_list(vec![Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
         ]))]);
@@ -1777,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_list_complex_invalid_accessors() {
-        let list = make_list(vec![Field::Group(make_row(vec![
+        let list = make_list(vec![Field::Group(Row::new(vec![
             ("x".to_string(), Field::Null),
             ("Y".to_string(), Field::Int(2)),
         ]))]);
@@ -1912,7 +1960,7 @@ mod tests {
             ("Y".to_string(), Field::Double(2.2)),
             ("Z".to_string(), Field::Str("abc".to_string())),
         ];
-        let row = Field::Group(make_row(fields));
+        let row = Field::Group(Row::new(fields));
         assert_eq!(
             row.to_json_value(),
             serde_json::json!({"X": 1, "Y": 2.2, "Z": "abc"})
@@ -1941,14 +1989,14 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use super::{make_list, make_map, make_row};
+    use super::{make_list, make_map, Row};
     use crate::record::Field;
 
     #[test]
     fn test_field_visibility() {
-        let row = make_row(vec![(
+        let row = Row::new(vec![(
             "a".to_string(),
-            Field::Group(make_row(vec![
+            Field::Group(Row::new(vec![
                 ("x".to_string(), Field::Null),
                 ("Y".to_string(), Field::Int(2)),
             ])),
@@ -1960,7 +2008,7 @@ mod api_tests {
                 match column.1 {
                     Field::Group(r) => {
                         assert_eq!(
-                            &make_row(vec![
+                            &Row::new(vec![
                                 ("x".to_string(), Field::Null),
                                 ("Y".to_string(), Field::Int(2)),
                             ]),
@@ -1978,7 +2026,7 @@ mod api_tests {
     fn test_list_element_access() {
         let expected = vec![
             Field::Int(1),
-            Field::Group(make_row(vec![
+            Field::Group(Row::new(vec![
                 ("x".to_string(), Field::Null),
                 ("Y".to_string(), Field::Int(2)),
             ])),

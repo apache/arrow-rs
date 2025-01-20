@@ -30,7 +30,7 @@ use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::rank::rank;
+use crate::rank::{can_rank, rank};
 pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -188,15 +188,6 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
             indices.partition(|index| array.is_valid(*index as usize))
         }
     }
-}
-
-/// Whether `arrow_ord::rank` can rank an array of given data type.
-fn can_rank(data_type: &DataType) -> bool {
-    data_type.is_primitive()
-        || matches!(
-            data_type,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
-        )
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.

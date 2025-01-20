@@ -32,7 +32,6 @@ use reqwest::header::{
 };
 use reqwest::{Client, Method, Request, RequestBuilder};
 use serde::Deserialize;
-use snafu::{ResultExt, Snafu};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -71,31 +70,31 @@ const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 /// <https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-access-azure-active-directory#microsoft-authentication-library-msal>
 const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Error performing token request: {}", source))]
+    #[error("Error performing token request: {}", source)]
     TokenRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting token response body: {}", source))]
+    #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Error reading federated token file "))]
+    #[error("Error reading federated token file ")]
     FederatedTokenFile,
 
-    #[snafu(display("Invalid Access Key: {}", source))]
+    #[error("Invalid Access Key: {}", source)]
     InvalidAccessKey { source: base64::DecodeError },
 
-    #[snafu(display("'az account get-access-token' command failed: {message}"))]
+    #[error("'az account get-access-token' command failed: {message}")]
     AzureCli { message: String },
 
-    #[snafu(display("Failed to parse azure cli response: {source}"))]
+    #[error("Failed to parse azure cli response: {source}")]
     AzureCliResponse { source: serde_json::Error },
 
-    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    #[error("Generating SAS keys with SAS tokens auth is not supported")]
     SASforSASNotSupported,
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 impl From<Error> for crate::Error {
     fn from(value: Error) -> Self {
@@ -113,7 +112,10 @@ pub struct AzureAccessKey(Vec<u8>);
 impl AzureAccessKey {
     /// Create a new [`AzureAccessKey`], checking it for validity
     pub fn try_new(key: &str) -> Result<Self> {
-        let key = BASE64_STANDARD.decode(key).context(InvalidAccessKeySnafu)?;
+        let key = BASE64_STANDARD
+            .decode(key)
+            .map_err(|source| Error::InvalidAccessKey { source })?;
+
         Ok(Self(key))
     }
 }
@@ -168,7 +170,7 @@ pub(crate) struct AzureSigner {
 }
 
 impl AzureSigner {
-    pub fn new(
+    pub(crate) fn new(
         signing_key: AzureAccessKey,
         account: String,
         start: DateTime<Utc>,
@@ -184,7 +186,7 @@ impl AzureSigner {
         }
     }
 
-    pub fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+    pub(crate) fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
         let (str_to_sign, query_pairs) = match &self.delegation_key {
             Some(delegation_key) => string_to_sign_user_delegation_sas(
                 url,
@@ -584,7 +586,7 @@ struct OAuthTokenResponse {
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow#first-case-access-token-request-with-a-shared-secret>
 #[derive(Debug)]
-pub struct ClientSecretOAuthProvider {
+pub(crate) struct ClientSecretOAuthProvider {
     token_url: String,
     client_id: String,
     client_secret: String,
@@ -592,7 +594,7 @@ pub struct ClientSecretOAuthProvider {
 
 impl ClientSecretOAuthProvider {
     /// Create a new [`ClientSecretOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: String,
         client_secret: String,
         tenant_id: impl AsRef<str>,
@@ -636,10 +638,10 @@ impl TokenProvider for ClientSecretOAuthProvider {
             .idempotent(true)
             .send()
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(TemporaryToken {
             token: Arc::new(AzureCredential::BearerToken(response.access_token)),
@@ -676,7 +678,7 @@ struct ImdsTokenResponse {
 /// This authentication type works in Azure VMs, App Service and Azure Functions applications, as well as the Azure Cloud Shell
 /// <https://learn.microsoft.com/en-gb/azure/active-directory/managed-identities-azure-resources/how-to-use-vm-token#get-a-token-using-http>
 #[derive(Debug)]
-pub struct ImdsManagedIdentityProvider {
+pub(crate) struct ImdsManagedIdentityProvider {
     msi_endpoint: String,
     client_id: Option<String>,
     object_id: Option<String>,
@@ -685,7 +687,7 @@ pub struct ImdsManagedIdentityProvider {
 
 impl ImdsManagedIdentityProvider {
     /// Create a new [`ImdsManagedIdentityProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: Option<String>,
         object_id: Option<String>,
         msi_res_id: Option<String>,
@@ -744,10 +746,10 @@ impl TokenProvider for ImdsManagedIdentityProvider {
         let response: ImdsTokenResponse = builder
             .send_retry(retry)
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(TemporaryToken {
             token: Arc::new(AzureCredential::BearerToken(response.access_token)),
@@ -760,7 +762,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
 ///
 /// <https://learn.microsoft.com/en-us/azure/active-directory/develop/workload-identity-federation>
 #[derive(Debug)]
-pub struct WorkloadIdentityOAuthProvider {
+pub(crate) struct WorkloadIdentityOAuthProvider {
     token_url: String,
     client_id: String,
     federated_token_file: String,
@@ -768,7 +770,7 @@ pub struct WorkloadIdentityOAuthProvider {
 
 impl WorkloadIdentityOAuthProvider {
     /// Create a new [`WorkloadIdentityOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         client_id: impl Into<String>,
         federated_token_file: impl Into<String>,
         tenant_id: impl AsRef<str>,
@@ -820,10 +822,10 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
             .idempotent(true)
             .send()
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(TemporaryToken {
             token: Arc::new(AzureCredential::BearerToken(response.access_token)),
@@ -836,7 +838,7 @@ mod az_cli_date_format {
     use chrono::{DateTime, TimeZone};
     use serde::{self, Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -863,12 +865,12 @@ struct AzureCliTokenResponse {
 }
 
 #[derive(Default, Debug)]
-pub struct AzureCliCredential {
+pub(crate) struct AzureCliCredential {
     cache: TokenCache<Arc<AzureCredential>>,
 }
 
 impl AzureCliCredential {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -900,7 +902,8 @@ impl AzureCliCredential {
                 })?;
 
                 let token_response = serde_json::from_str::<AzureCliTokenResponse>(output)
-                    .context(AzureCliResponseSnafu)?;
+                    .map_err(|source| Error::AzureCliResponse { source })?;
+
                 if !token_response.token_type.eq_ignore_ascii_case("bearer") {
                     return Err(Error::AzureCli {
                         message: format!(
@@ -941,7 +944,7 @@ impl AzureCliCredential {
 
 /// Encapsulates the logic to perform an OAuth token challenge for Fabric
 #[derive(Debug)]
-pub struct FabricTokenOAuthProvider {
+pub(crate) struct FabricTokenOAuthProvider {
     fabric_token_service_url: String,
     fabric_workload_host: String,
     fabric_session_token: String,
@@ -957,7 +960,7 @@ struct Claims {
 
 impl FabricTokenOAuthProvider {
     /// Create a new [`FabricTokenOAuthProvider`] for an azure backed store
-    pub fn new(
+    pub(crate) fn new(
         fabric_token_service_url: impl Into<String>,
         fabric_workload_host: impl Into<String>,
         fabric_session_token: impl Into<String>,
@@ -1033,10 +1036,10 @@ impl TokenProvider for FabricTokenOAuthProvider {
             .idempotent(true)
             .send()
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .text()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
         let exp_in = Self::validate_and_get_expiry(&access_token)
             .map_or(3600, |expiry| expiry - Self::get_current_timestamp());
         Ok(TemporaryToken {

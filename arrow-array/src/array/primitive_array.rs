@@ -880,7 +880,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// let c = a.unary_mut(|x| x * 2 + 1).unwrap();
     /// assert_eq!(c, Int32Array::from(vec![Some(11), Some(15), None]));
     /// ```
-
     pub fn unary_mut<F>(self, op: F) -> Result<PrimitiveArray<T>, PrimitiveArray<T>>
     where
         F: Fn(T::Native) -> T::Native,
@@ -1153,12 +1152,23 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -1174,7 +1184,7 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     }
 }
 
-impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
+impl<T: ArrowPrimitiveType> ArrayAccessor for &PrimitiveArray<T> {
     type Item = T::Native;
 
     fn value(&self, index: usize) -> Self::Item {
@@ -1477,24 +1487,6 @@ def_numeric_from_vec!(TimestampMicrosecondType);
 def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<i64>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<Option<i64>>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
     /// Returns the timezone of this array if any
     pub fn timezone(&self) -> Option<&str> {
         match self.data_type() {
@@ -2293,7 +2285,7 @@ mod tests {
         ];
         let array_data = ArrayData::builder(DataType::Decimal128(38, 6))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);

@@ -45,25 +45,38 @@ pub trait Length {
     fn len(&self) -> u64;
 }
 
-/// The ChunkReader trait generates readers of chunks of a source.
+/// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
-/// For more information see [`File::try_clone`]
+/// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
+/// multiple decoders to read concurrently from different locations in the same file.
+///
+/// The trait provides:
+/// * random access (via [`Self::get_bytes`])
+/// * sequential (via [`Self::get_read`])
+///
+/// # Provided Implementations
+/// * [`File`] for reading from local file system
+/// * [`Bytes`] for reading from an in-memory buffer
+///
+/// User provided implementations can implement more sophisticated behaviors
+/// such as on-demand buffering or scan sharing.
 pub trait ChunkReader: Length + Send + Sync {
+    /// The concrete type of reader returned by this trait
     type T: Read;
 
-    /// Get a [`Read`] starting at the provided file offset
+    /// Get a [`Read`] instance starting at the provided file offset
     ///
-    /// Subsequent or concurrent calls to [`Self::get_read`] or [`Self::get_bytes`] may
-    /// side-effect on previously returned [`Self::T`]. Care should be taken to avoid this
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Returned readers follow the model of [`File::try_clone`] where mutations
+    /// of one reader affect all readers. Thus subsequent or concurrent calls to
+    /// [`Self::get_read`] or [`Self::get_bytes`] may cause side-effects on
+    /// previously returned readers. Callers of `get_read` should take care
+    /// to avoid race conditions.
     fn get_read(&self, start: u64) -> Result<Self::T>;
 
-    /// Get a range as bytes
+    /// Get a range of data in memory as [`Bytes`]
     ///
-    /// Concurrent calls to [`Self::get_bytes`] may result in interleaved output
-    ///
-    /// See [`File::try_clone`] for more information
+    /// Similarly to [`Self::get_read`], this method may have side-effects on
+    /// previously returned readers.
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes>;
 }
 

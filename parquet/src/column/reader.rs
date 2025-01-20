@@ -34,13 +34,21 @@ pub(crate) mod decoder;
 
 /// Column reader for a Parquet type.
 pub enum ColumnReader {
+    /// Column reader for boolean type
     BoolColumnReader(ColumnReaderImpl<BoolType>),
+    /// Column reader for int32 type
     Int32ColumnReader(ColumnReaderImpl<Int32Type>),
+    /// Column reader for int64 type
     Int64ColumnReader(ColumnReaderImpl<Int64Type>),
+    /// Column reader for int96 type
     Int96ColumnReader(ColumnReaderImpl<Int96Type>),
+    /// Column reader for float type
     FloatColumnReader(ColumnReaderImpl<FloatType>),
+    /// Column reader for double type
     DoubleColumnReader(ColumnReaderImpl<DoubleType>),
+    /// Column reader for byte array type
     ByteArrayColumnReader(ColumnReaderImpl<ByteArrayType>),
+    /// Column reader for fixed length byte array type
     FixedLenByteArrayColumnReader(ColumnReaderImpl<FixedLenByteArrayType>),
 }
 
@@ -175,31 +183,6 @@ where
             values_decoder,
             has_record_delimiter: false,
         }
-    }
-
-    /// Reads a batch of values of at most `batch_size`, returning a tuple containing the
-    /// actual number of non-null values read, followed by the corresponding number of levels,
-    /// i.e, the total number of values including nulls, empty lists, etc...
-    ///
-    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// `values` will be contiguously populated with the non-null values. Note that if the column
-    /// is not required, this may be less than either `batch_size` or the number of levels read
-    #[deprecated(note = "Use read_records")]
-    pub fn read_batch(
-        &mut self,
-        batch_size: usize,
-        def_levels: Option<&mut D::Buffer>,
-        rep_levels: Option<&mut R::Buffer>,
-        values: &mut V::Buffer,
-    ) -> Result<(usize, usize)> {
-        let (_, values, levels) = self.read_records(batch_size, def_levels, rep_levels, values)?;
-
-        Ok((values, levels))
     }
 
     /// Read up to `max_records` whole records, returning the number of complete

@@ -415,7 +415,7 @@ mod tests {
     fn test_mask_set_quick_check() {
         for i in 0..1_000_000 {
             let result = Block::mask(i);
-            assert!(result.0.iter().all(|&x| x.count_ones() == 1));
+            assert!(result.0.iter().all(|&x| x.is_power_of_two()));
         }
     }
 

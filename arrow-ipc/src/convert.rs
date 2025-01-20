@@ -66,7 +66,7 @@ pub struct IpcSchemaEncoder<'a> {
     dictionary_tracker: Option<&'a mut DictionaryTracker>,
 }
 
-impl<'a> Default for IpcSchemaEncoder<'a> {
+impl Default for IpcSchemaEncoder<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -133,6 +133,7 @@ pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
     IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
+/// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     metadata: &HashMap<String, String>,
@@ -152,7 +153,7 @@ pub fn metadata_to_fb<'a>(
     fbb.create_vector(&custom_metadata)
 }
 
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
+/// Adds a [Schema] to a flatbuffer and returns the offset
 pub fn schema_to_fb_offset<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     schema: &Schema,
@@ -161,9 +162,10 @@ pub fn schema_to_fb_offset<'a>(
 }
 
 /// Convert an IPC Field to Arrow Field
-impl<'a> From<crate::Field<'a>> for Field {
+impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
+            #[allow(deprecated)]
             Field::new_dict(
                 field.name().unwrap(),
                 get_data_type(field, true),
@@ -518,6 +520,7 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
+                #[allow(deprecated)]
                 tracker.set_dict_id(field),
                 field
                     .dict_is_ordered()
@@ -526,6 +529,7 @@ pub(crate) fn build_field<'a>(
             )),
             None => Some(get_fb_dictionary(
                 index_type,
+                #[allow(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary type must have a dictionary id"),
@@ -1025,10 +1029,14 @@ mod tests {
                 Field::new("utf8_view", DataType::Utf8View, false),
                 Field::new("binary", DataType::Binary, false),
                 Field::new("binary_view", DataType::BinaryView, false),
-                Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
+                Field::new_list(
+                    "list[u8]",
+                    Field::new_list_field(DataType::UInt8, false),
+                    true,
+                ),
                 Field::new_fixed_size_list(
                     "fixed_size_list[u8]",
-                    Field::new("item", DataType::UInt8, false),
+                    Field::new_list_field(DataType::UInt8, false),
                     2,
                     true,
                 ),
@@ -1138,6 +1146,7 @@ mod tests {
                     ),
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1145,6 +1154,7 @@ mod tests {
                     123,
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),

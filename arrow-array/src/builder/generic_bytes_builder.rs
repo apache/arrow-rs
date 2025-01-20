@@ -22,7 +22,6 @@ use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 /// Builder for [`GenericByteArray`]
@@ -287,10 +286,9 @@ impl<T: ByteArrayType, V: AsRef<T::Native>> Extend<Option<V>> for GenericByteBui
 /// assert_eq!(array.value(0), "foobarbaz");
 /// assert_eq!(array.value(1), "v2");
 /// ```
-///
 pub type GenericStringBuilder<O> = GenericByteBuilder<GenericStringType<O>>;
 
-impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
+impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.value_builder.append_slice(s.as_bytes());
         Ok(())
@@ -318,13 +316,50 @@ impl<O: OffsetSizeTrait> Write for GenericStringBuilder<O> {
 /// assert_eq!(array.value(0), b"foo");
 /// assert_eq!(array.value(1), b"\x00\x01\x02");
 /// ```
+///
+/// # Example incrementally writing bytes with `write_bytes`
+///
+/// ```
+/// # use std::io::Write;
+/// # use arrow_array::builder::GenericBinaryBuilder;
+/// let mut builder = GenericBinaryBuilder::<i32>::new();
+///
+/// // Write data in multiple `write_bytes` calls
+/// write!(builder, "foo").unwrap();
+/// write!(builder, "bar").unwrap();
+/// // The next call to append_value finishes the current string
+/// // including all previously written strings.
+/// builder.append_value("baz");
+///
+/// // Write second value with a single write call
+/// write!(builder, "v2").unwrap();
+/// // finish the value by calling append_value with an empty string
+/// builder.append_value("");
+///
+/// let array = builder.finish();
+/// assert_eq!(array.value(0), "foobarbaz".as_bytes());
+/// assert_eq!(array.value(1), "v2".as_bytes());
+/// ```
 pub type GenericBinaryBuilder<O> = GenericByteBuilder<GenericBinaryType<O>>;
+
+impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
+    fn write(&mut self, bs: &[u8]) -> std::io::Result<usize> {
+        self.value_builder.append_slice(bs);
+        Ok(bs.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::array::Array;
     use crate::GenericStringArray;
+    use std::fmt::Write as _;
+    use std::io::Write as _;
 
     fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new();
@@ -527,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write() {
+    fn test_write_str() {
         let mut builder = GenericStringBuilder::<i32>::new();
         write!(builder, "foo").unwrap();
         builder.append_value("");
@@ -539,5 +574,23 @@ mod tests {
         let a = builder.finish();
         let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(r, &["foo", "bar\n", "fizbuz"])
+    }
+
+    #[test]
+    fn test_write_bytes() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        write!(builder, "foo").unwrap();
+        builder.append_value("");
+        writeln!(builder, "bar").unwrap();
+        builder.append_value("");
+        write!(builder, "fiz").unwrap();
+        write!(builder, "buz").unwrap();
+        builder.append_value("");
+        let a = builder.finish();
+        let r: Vec<_> = a.iter().flatten().collect();
+        assert_eq!(
+            r,
+            &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
+        )
     }
 }

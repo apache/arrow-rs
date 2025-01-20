@@ -66,7 +66,7 @@ pub struct ListPrefix {
 #[serde(rename_all = "PascalCase")]
 pub struct ListContents {
     pub key: String,
-    pub size: usize,
+    pub size: u64,
     pub last_modified: DateTime<Utc>,
     #[serde(rename = "ETag")]
     pub e_tag: Option<String>,
@@ -88,14 +88,29 @@ impl TryFrom<ListContents> for ObjectMeta {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct InitiateMultipartUploadResult {
+pub(crate) struct InitiateMultipartUploadResult {
     pub upload_id: String,
+}
+
+#[cfg(feature = "aws")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct CopyPartResult {
+    #[serde(rename = "ETag")]
+    pub e_tag: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct CompleteMultipartUpload {
+pub(crate) struct CompleteMultipartUpload {
     pub part: Vec<MultipartPart>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct PartMetadata {
+    pub e_tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_sha256: Option<String>,
 }
 
 impl From<Vec<PartId>> for CompleteMultipartUpload {
@@ -103,9 +118,20 @@ impl From<Vec<PartId>> for CompleteMultipartUpload {
         let part = value
             .into_iter()
             .enumerate()
-            .map(|(part_number, part)| MultipartPart {
-                e_tag: part.content_id,
-                part_number: part_number + 1,
+            .map(|(part_idx, part)| {
+                let md = match quick_xml::de::from_str::<PartMetadata>(&part.content_id) {
+                    Ok(md) => md,
+                    // fallback to old way
+                    Err(_) => PartMetadata {
+                        e_tag: part.content_id.clone(),
+                        checksum_sha256: None,
+                    },
+                };
+                MultipartPart {
+                    e_tag: md.e_tag,
+                    part_number: part_idx + 1,
+                    checksum_sha256: md.checksum_sha256,
+                }
             })
             .collect();
         Self { part }
@@ -113,16 +139,19 @@ impl From<Vec<PartId>> for CompleteMultipartUpload {
 }
 
 #[derive(Debug, Serialize)]
-pub struct MultipartPart {
+pub(crate) struct MultipartPart {
     #[serde(rename = "ETag")]
     pub e_tag: String,
     #[serde(rename = "PartNumber")]
     pub part_number: usize,
+    #[serde(rename = "ChecksumSHA256")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct CompleteMultipartUploadResult {
+pub(crate) struct CompleteMultipartUploadResult {
     #[serde(rename = "ETag")]
     pub e_tag: String,
 }

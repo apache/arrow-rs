@@ -16,14 +16,13 @@
 // under the License.
 
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
-use std::str::FromStr;
-use std::{collections::HashMap, sync::Arc};
-
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
+use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc};
 
 /// Default value for [`WriterProperties::data_page_size_limit`]
 pub const DEFAULT_PAGE_SIZE: usize = 1024 * 1024;
@@ -42,6 +41,7 @@ pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 /// Default value for [`WriterProperties::max_statistics_size`]
+#[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
@@ -57,6 +57,10 @@ pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
 pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
+/// Default value for [`WriterProperties::offset_index_disabled`]
+pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
+/// Default values for [`WriterProperties::coerce_types`]
+pub const DEFAULT_COERCE_TYPES: bool = false;
 
 /// Parquet writer version.
 ///
@@ -64,7 +68,9 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum WriterVersion {
+    /// Parquet format version 1.0
     PARQUET_1_0,
+    /// Parquet format version 2.0
     PARQUET_2_0,
 }
 
@@ -155,12 +161,14 @@ pub struct WriterProperties {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
+    offset_index_disabled: bool,
     pub(crate) key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
+    coerce_types: bool,
 }
 
 impl Default for WriterProperties {
@@ -186,26 +194,10 @@ impl WriterProperties {
     /// Returns data page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
-    #[deprecated(since = "41.0.0", note = "Use data_page_size_limit")]
-    pub fn data_pagesize_limit(&self) -> usize {
-        self.data_page_size_limit
-    }
-
-    /// Returns data page size limit.
-    ///
-    /// Note: this is a best effort limit based on the write batch size
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_size_limit`]
     pub fn data_page_size_limit(&self) -> usize {
         self.data_page_size_limit
-    }
-
-    /// Returns dictionary page size limit.
-    ///
-    /// Note: this is a best effort limit based on the write batch size
-    #[deprecated(since = "41.0.0", note = "Use dictionary_page_size_limit")]
-    pub fn dictionary_pagesize_limit(&self) -> usize {
-        self.dictionary_page_size_limit
     }
 
     /// Returns dictionary page size limit.
@@ -255,6 +247,22 @@ impl WriterProperties {
         &self.created_by
     }
 
+    /// Returns `true` if offset index writing is disabled.
+    pub fn offset_index_disabled(&self) -> bool {
+        // If page statistics are to be collected, then do not disable the offset indexes.
+        let default_page_stats_enabled =
+            self.default_column_properties.statistics_enabled() == Some(EnabledStatistics::Page);
+        let column_page_stats_enabled = self
+            .column_properties
+            .iter()
+            .any(|path_props| path_props.1.statistics_enabled() == Some(EnabledStatistics::Page));
+        if default_page_stats_enabled || column_page_stats_enabled {
+            return false;
+        }
+
+        self.offset_index_disabled
+    }
+
     /// Returns `key_value_metadata` KeyValue pairs.
     pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
         self.key_value_metadata.as_ref()
@@ -277,6 +285,11 @@ impl WriterProperties {
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
     pub fn statistics_truncate_length(&self) -> Option<usize> {
         self.statistics_truncate_length
+    }
+
+    /// Returns `true` if type coercion is enabled.
+    pub fn coerce_types(&self) -> bool {
+        self.coerce_types
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -338,7 +351,9 @@ impl WriterProperties {
 
     /// Returns max size for statistics.
     /// Only applicable if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
+        #[allow(deprecated)]
         self.column_properties
             .get(col)
             .and_then(|c| c.max_statistics_size())
@@ -369,12 +384,14 @@ pub struct WriterPropertiesBuilder {
     bloom_filter_position: BloomFilterPosition,
     writer_version: WriterVersion,
     created_by: String,
+    offset_index_disabled: bool,
     key_value_metadata: Option<Vec<KeyValue>>,
     default_column_properties: ColumnProperties,
     column_properties: HashMap<ColumnPath, ColumnProperties>,
     sorting_columns: Option<Vec<SortingColumn>>,
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
+    coerce_types: bool,
 }
 
 impl WriterPropertiesBuilder {
@@ -389,12 +406,14 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
+            offset_index_disabled: DEFAULT_OFFSET_INDEX_DISABLED,
             key_value_metadata: None,
             default_column_properties: Default::default(),
             column_properties: HashMap::new(),
             sorting_columns: None,
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
+            coerce_types: DEFAULT_COERCE_TYPES,
         }
     }
 
@@ -409,12 +428,14 @@ impl WriterPropertiesBuilder {
             bloom_filter_position: self.bloom_filter_position,
             writer_version: self.writer_version,
             created_by: self.created_by,
+            offset_index_disabled: self.offset_index_disabled,
             key_value_metadata: self.key_value_metadata,
             default_column_properties: self.default_column_properties,
             column_properties: self.column_properties,
             sorting_columns: self.sorting_columns,
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
+            coerce_types: self.coerce_types,
         }
     }
 
@@ -428,16 +449,6 @@ impl WriterPropertiesBuilder {
     /// [`PARQUET_1_0`]: [WriterVersion::PARQUET_1_0]
     pub fn set_writer_version(mut self, value: WriterVersion) -> Self {
         self.writer_version = value;
-        self
-    }
-
-    /// Sets best effort maximum size of a data page in bytes.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    #[deprecated(since = "41.0.0", note = "Use set_data_page_size_limit")]
-    pub fn set_data_pagesize_limit(mut self, value: usize) -> Self {
-        self.data_page_size_limit = value;
         self
     }
 
@@ -466,16 +477,6 @@ impl WriterPropertiesBuilder {
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         self.data_page_row_count_limit = value;
-        self
-    }
-
-    /// Sets best effort maximum dictionary page size, in bytes.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    #[deprecated(since = "41.0.0", note = "Use set_dictionary_page_size_limit")]
-    pub fn set_dictionary_pagesize_limit(mut self, value: usize) -> Self {
-        self.dictionary_page_size_limit = value;
         self
     }
 
@@ -527,6 +528,21 @@ impl WriterPropertiesBuilder {
     /// Sets "created by" property (defaults to `parquet-rs version <VERSION>`).
     pub fn set_created_by(mut self, value: String) -> Self {
         self.created_by = value;
+        self
+    }
+
+    /// Sets whether the writing of offset indexes is disabled (defaults to `false`).
+    ///
+    /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
+    ///
+    /// Note: As the offset indexes are useful for accessing data by row number,
+    /// they are always written by default, regardless of whether other statistics
+    /// are enabled. Disabling this metadata may result in a degradation in read
+    /// performance, so use this option with care.
+    ///
+    /// [`Page`]: EnabledStatistics::Page
+    pub fn set_offset_index_disabled(mut self, value: bool) -> Self {
+        self.offset_index_disabled = value;
         self
     }
 
@@ -588,7 +604,9 @@ impl WriterPropertiesBuilder {
     /// Sets default max statistics size for all columns (defaults to `4096`).
     ///
     /// Applicable only if statistics are enabled.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_max_statistics_size(mut self, value: usize) -> Self {
+        #[allow(deprecated)]
         self.default_column_properties
             .set_max_statistics_size(value);
         self
@@ -693,7 +711,9 @@ impl WriterPropertiesBuilder {
     /// Sets max size for statistics for a specific column.
     ///
     /// Takes precedence over [`Self::set_max_statistics_size`].
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
+        #[allow(deprecated)]
         self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
@@ -763,6 +783,29 @@ impl WriterPropertiesBuilder {
         }
 
         self.statistics_truncate_length = max_length;
+        self
+    }
+
+    /// Should the writer coerce types to parquet native types (defaults to `false`).
+    ///
+    /// Leaving this option the default `false` will ensure the exact same data
+    /// written to parquet using this library will be read.
+    ///
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but potentially lose information in the process.
+    ///
+    /// * Types such as [`DataType::Date64`], which have no direct corresponding
+    ///   Parquet type, may be stored with lower precision.
+    ///
+    /// * The internal field names of `List` and `Map` types will be renamed if
+    ///   necessary to match what is required by the newest Parquet specification.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
+    pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
         self
     }
 }
@@ -860,6 +903,7 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
@@ -892,12 +936,14 @@ impl ColumnProperties {
         self.dictionary_enabled = Some(enabled);
     }
 
-    /// Sets whether or not statistics are enabled for this column.
+    /// Sets the statistics level for this column.
     fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
     }
 
     /// Sets max size for statistics for this column.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
+    #[allow(deprecated)]
     fn set_max_statistics_size(&mut self, value: usize) {
         self.max_statistics_size = Some(value);
     }
@@ -955,14 +1001,16 @@ impl ColumnProperties {
         self.dictionary_enabled
     }
 
-    /// Returns `Some(true)` if statistics are enabled for this column, if disabled then
-    /// returns `Some(false)`. If result is `None`, then no setting has been provided.
+    /// Returns optional statistics level requested for this column. If result is `None`,
+    /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
     }
 
     /// Returns optional max size in bytes for statistics.
+    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     fn max_statistics_size(&self) -> Option<usize> {
+        #[allow(deprecated)]
         self.max_statistics_size
     }
 
@@ -1106,10 +1154,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert_eq!(
-            props.max_statistics_size(&ColumnPath::from("col")),
-            DEFAULT_MAX_STATISTICS_SIZE
-        );
         assert!(props
             .bloom_filter_properties(&ColumnPath::from("col"))
             .is_none());
@@ -1186,13 +1230,11 @@ mod tests {
             .set_compression(Compression::GZIP(Default::default()))
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_max_statistics_size(50)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
             .set_column_statistics_enabled(ColumnPath::from("col"), EnabledStatistics::Chunk)
-            .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .set_column_bloom_filter_enabled(ColumnPath::from("col"), true)
             .set_column_bloom_filter_ndv(ColumnPath::from("col"), 100_u64)
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
@@ -1224,7 +1266,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("a")),
             EnabledStatistics::None
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
             props.encoding(&ColumnPath::from("col")),
@@ -1239,7 +1280,6 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             EnabledStatistics::Chunk
         );
-        assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
         assert_eq!(
             props.bloom_filter_properties(&ColumnPath::from("col")),
             Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })

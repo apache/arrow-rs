@@ -111,8 +111,7 @@ use std::{fmt::Debug, io::Write};
 use arrow_array::*;
 use arrow_schema::*;
 
-use crate::writer::encoder::EncoderOptions;
-use encoder::make_encoder;
+use encoder::{make_encoder, EncoderOptions};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -368,10 +367,15 @@ where
     /// all record batches have been produced. (e.g. producing the final `']'` if writing
     /// arrays.
     pub fn finish(&mut self) -> Result<(), ArrowError> {
-        if self.started && !self.finished {
+        if !self.started {
+            self.format.start_stream(&mut self.writer)?;
+            self.started = true;
+        }
+        if !self.finished {
             self.format.end_stream(&mut self.writer)?;
             self.finished = true;
         }
+
         Ok(())
     }
 
@@ -397,6 +401,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::str;
     use std::fs::{read_to_string, File};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
@@ -405,7 +410,7 @@ mod tests {
 
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
+    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
     use arrow_data::ArrayData;
 
     use crate::reader::*;
@@ -457,16 +462,22 @@ mod tests {
     }
 
     #[test]
-    fn write_large_utf8() {
+    fn write_large_utf8_and_utf8_view() {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::LargeUtf8, true),
+            Field::new("c3", DataType::Utf8View, true),
         ]);
 
         let a = StringArray::from(vec![Some("a"), None, Some("c"), Some("d"), None]);
         let b = LargeStringArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
+        let c = StringViewArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+        )
+        .unwrap();
 
         let mut buf = Vec::new();
         {
@@ -476,10 +487,10 @@ mod tests {
 
         assert_json_eq(
             &buf,
-            r#"{"c1":"a","c2":"a"}
-{"c2":"b"}
+            r#"{"c1":"a","c2":"a","c3":"a"}
+{"c2":"b","c3":"b"}
 {"c1":"c"}
-{"c1":"d","c2":"d"}
+{"c1":"d","c2":"d","c3":"d"}
 {}
 "#,
         );
@@ -1111,7 +1122,7 @@ mod tests {
             }
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
@@ -1147,10 +1158,43 @@ mod tests {
     }
 
     #[test]
-    fn json_writer_empty() {
+    fn json_line_writer_empty() {
+        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
+    }
+
+    #[test]
+    fn json_array_writer_empty() {
         let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
         writer.finish().unwrap();
-        assert_eq!(String::from_utf8(writer.into_inner()).unwrap(), "");
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
+    }
+
+    #[test]
+    fn json_line_writer_empty_batch() {
+        let mut writer = LineDelimitedWriter::new(vec![] as Vec<u8>);
+
+        let array = Int32Array::from(Vec::<i32>::new());
+        let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "");
+    }
+
+    #[test]
+    fn json_array_writer_empty_batch() {
+        let mut writer = ArrayWriter::new(vec![] as Vec<u8>);
+
+        let array = Int32Array::from(Vec::<i32>::new());
+        let schema = Schema::new(vec![Field::new("c", DataType::Int32, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(str::from_utf8(&writer.into_inner()).unwrap(), "[]");
     }
 
     #[test]
@@ -1279,7 +1323,7 @@ mod tests {
             writer.write(&batch).unwrap();
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         for (r, e) in result.lines().zip(expected.lines()) {
             let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
@@ -1321,7 +1365,7 @@ mod tests {
             writer.write_batches(&batches).unwrap();
         }
 
-        let result = String::from_utf8(buf).unwrap();
+        let result = str::from_utf8(&buf).unwrap();
         let expected = read_to_string(test_file).unwrap();
         // result is eq to 2 same batches
         let expected = format!("{expected}\n{expected}");
@@ -1727,7 +1771,7 @@ mod tests {
     #[test]
     fn test_writer_fixed_size_list() {
         let size = 3;
-        let field = FieldRef::new(Field::new("item", DataType::Int32, true));
+        let field = FieldRef::new(Field::new_list_field(DataType::Int32, true));
         let schema = SchemaRef::new(Schema::new(vec![Field::new(
             "list",
             DataType::FixedSizeList(field, size),
@@ -1804,5 +1848,109 @@ mod tests {
                 json_value
             );
         }
+    }
+
+    #[test]
+    fn test_writer_null_dict() {
+        let keys = Int32Array::from_iter(vec![Some(0), None, Some(1)]);
+        let values = Arc::new(StringArray::from_iter(vec![Some("a"), None]));
+        let dict = DictionaryArray::new(keys, values);
+
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "my_dict",
+            DataType::Dictionary(DataType::Int32.into(), DataType::Utf8.into()),
+            true,
+        )]));
+
+        let array = Arc::new(dict) as ArrayRef;
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let mut json = Vec::new();
+        let write_builder = WriterBuilder::new().with_explicit_nulls(true);
+        let mut writer = write_builder.build::<_, JsonArray>(&mut json);
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let json_str = str::from_utf8(&json).unwrap();
+        assert_eq!(
+            json_str,
+            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#
+        )
+    }
+
+    #[test]
+    fn test_decimal128_encoder() {
+        let array = Decimal128Array::from_iter_values([1234, 5678, 9012])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{"decimal":56.78}
+{"decimal":90.12}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_decimal256_encoder() {
+        let array = Decimal256Array::from_iter_values([
+            i256::from(123400),
+            i256::from(567800),
+            i256::from(901200),
+        ])
+        .with_precision_and_scale(10, 4)
+        .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.3400}
+{"decimal":56.7800}
+{"decimal":90.1200}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_decimal_encoder_with_nulls() {
+        let array = Decimal128Array::from_iter([Some(1234), None, Some(5678)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{}
+{"decimal":56.78}
+"#,
+        );
     }
 }

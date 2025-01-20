@@ -43,6 +43,10 @@ pub struct Field {
     name: String,
     data_type: DataType,
     nullable: bool,
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
@@ -122,8 +126,12 @@ impl Hash for Field {
 }
 
 impl Field {
+    /// Default list member field name
+    pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
+
     /// Creates a new field with the given name, type, and nullability
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
+        #[allow(deprecated)]
         Field {
             name: name.into(),
             data_type,
@@ -149,10 +157,14 @@ impl Field {
     /// );
     /// ```
     pub fn new_list_field(data_type: DataType, nullable: bool) -> Self {
-        Self::new("item", data_type, nullable)
+        Self::new(Self::LIST_FIELD_DEFAULT_NAME, data_type, nullable)
     }
 
     /// Creates a new field that has additional dictionary information
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With the dict_id field disappearing this function signature will change by removing the dict_id parameter."
+    )]
     pub fn new_dict(
         name: impl Into<String>,
         data_type: DataType,
@@ -160,6 +172,7 @@ impl Field {
         dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
+        #[allow(deprecated)]
         Field {
             name: name.into(),
             data_type,
@@ -566,31 +579,67 @@ impl Field {
     /// Returns a vector containing all (potentially nested) `Field` instances selected by the
     /// dictionary ID they use
     #[inline]
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
         self.fields()
             .into_iter()
             .filter(|&field| {
-                matches!(field.data_type(), DataType::Dictionary(_, _)) && field.dict_id == id
+                #[allow(deprecated)]
+                let matching_dict_id = field.dict_id == id;
+                matches!(field.data_type(), DataType::Dictionary(_, _)) && matching_dict_id
             })
             .collect()
     }
 
     /// Returns the dictionary ID, if this is a dictionary type.
     #[inline]
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     pub const fn dict_id(&self) -> Option<i64> {
         match self.data_type {
+            #[allow(deprecated)]
             DataType::Dictionary(_, _) => Some(self.dict_id),
             _ => None,
         }
     }
 
     /// Returns whether this `Field`'s dictionary is ordered, if this is a dictionary type.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{DataType, Field};
+    /// // non dictionaries do not have a dict is ordered flat
+    /// let field = Field::new("c1", DataType::Int64, false);
+    /// assert_eq!(field.dict_is_ordered(), None);
+    /// // by default dictionary is not ordered
+    /// let field = Field::new("c1", DataType::Dictionary(Box::new(DataType::Int64), Box::new(DataType::Utf8)), false);
+    /// assert_eq!(field.dict_is_ordered(), Some(false));
+    /// let field = field.with_dict_is_ordered(true);
+    /// assert_eq!(field.dict_is_ordered(), Some(true));
+    /// ```
     #[inline]
     pub const fn dict_is_ordered(&self) -> Option<bool> {
         match self.data_type {
             DataType::Dictionary(_, _) => Some(self.dict_is_ordered),
             _ => None,
         }
+    }
+
+    /// Set the is ordered field for this `Field`, if it is a dictionary.
+    ///
+    /// Does nothing if this is not a dictionary type.
+    ///
+    /// See [`Field::dict_is_ordered`] for more information.
+    pub fn with_dict_is_ordered(mut self, dict_is_ordered: bool) -> Self {
+        if matches!(self.data_type, DataType::Dictionary(_, _)) {
+            self.dict_is_ordered = dict_is_ordered;
+        };
+        self
     }
 
     /// Merge this field into self if it is compatible.
@@ -608,6 +657,7 @@ impl Field {
     /// assert!(field.is_nullable());
     /// ```
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
+        #[allow(deprecated)]
         if from.dict_id != self.dict_id {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field '{}' because from dict_id = {} does not match {}",
@@ -750,9 +800,11 @@ impl Field {
     /// * self.metadata is a superset of other.metadata
     /// * all other fields are equal
     pub fn contains(&self, other: &Field) -> bool {
+        #[allow(deprecated)]
+        let matching_dict_id = self.dict_id == other.dict_id;
         self.name == other.name
         && self.data_type.contains(&other.data_type)
-        && self.dict_id == other.dict_id
+        && matching_dict_id
         && self.dict_is_ordered == other.dict_is_ordered
         // self need to be nullable or both of them are not nullable
         && (self.nullable || !other.nullable)
@@ -793,14 +845,15 @@ mod test {
     #[test]
     fn test_new_with_string() {
         // Fields should allow owned Strings to support reuse
-        let s = String::from("c1");
+        let s = "c1";
         Field::new(s, DataType::Int64, false);
     }
 
     #[test]
     fn test_new_dict_with_string() {
         // Fields should allow owned Strings to support reuse
-        let s = String::from("c1");
+        let s = "c1";
+        #[allow(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
     }
 
@@ -918,6 +971,7 @@ mod test {
 
     #[test]
     fn test_fields_with_dict_id() {
+        #[allow(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -925,6 +979,7 @@ mod test {
             10,
             false,
         );
+        #[allow(deprecated)]
         let dict2 = Field::new_dict(
             "dict2",
             DataType::Dictionary(DataType::Int32.into(), DataType::Int8.into()),
@@ -961,9 +1016,11 @@ mod test {
             false,
         );
 
+        #[allow(deprecated)]
         for field in field.fields_with_dict_id(10) {
             assert_eq!(dict1, *field);
         }
+        #[allow(deprecated)]
         for field in field.fields_with_dict_id(20) {
             assert_eq!(dict2, *field);
         }
@@ -978,6 +1035,7 @@ mod test {
     #[test]
     fn test_field_comparison_case() {
         // dictionary-encoding properties not used for field comparison
+        #[allow(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -985,6 +1043,7 @@ mod test {
             10,
             false,
         );
+        #[allow(deprecated)]
         let dict2 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
@@ -996,6 +1055,7 @@ mod test {
         assert_eq!(dict1, dict2);
         assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
 
+        #[allow(deprecated)]
         let dict1 = Field::new_dict(
             "dict0",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),

@@ -21,6 +21,7 @@
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
+#![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
 use num::BigInt;
@@ -49,8 +50,11 @@ pub use schema::*;
 /// See <https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format>
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJson {
+    /// The Arrow schema for JSON file
     pub schema: ArrowJsonSchema,
+    /// The `RecordBatch`es in the JSON file
     pub batches: Vec<ArrowJsonBatch>,
+    /// The dictionaries in the JSON file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictionaries: Option<Vec<ArrowJsonDictionaryBatch>>,
 }
@@ -60,7 +64,9 @@ pub struct ArrowJson {
 /// Fields are left as JSON `Value` as they vary by `DataType`
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonSchema {
+    /// An array of JSON fields
     pub fields: Vec<ArrowJsonField>,
+    /// An array of metadata key-value pairs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Vec<HashMap<String, String>>>,
 }
@@ -68,13 +74,20 @@ pub struct ArrowJsonSchema {
 /// Fields are left as JSON `Value` as they vary by `DataType`
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonField {
+    /// The name of the field
     pub name: String,
+    /// The data type of the field,
+    /// can be any valid JSON value
     #[serde(rename = "type")]
     pub field_type: Value,
+    /// Whether the field is nullable
     pub nullable: bool,
+    /// The children fields
     pub children: Vec<ArrowJsonField>,
+    /// The dictionary for the field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dictionary: Option<ArrowJsonFieldDictionary>,
+    /// The metadata for the field, if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
@@ -115,20 +128,28 @@ impl From<&Field> for ArrowJsonField {
     }
 }
 
+/// Represents a dictionary-encoded field in the Arrow JSON format
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonFieldDictionary {
+    /// A unique identifier for the dictionary
     pub id: i64,
+    /// The type of the dictionary index
     #[serde(rename = "indexType")]
     pub index_type: DictionaryIndexType,
+    /// Whether the dictionary is ordered
     #[serde(rename = "isOrdered")]
     pub is_ordered: bool,
 }
 
+/// Type of an index for a dictionary-encoded field in the Arrow JSON format
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DictionaryIndexType {
+    /// The name of the dictionary index type
     pub name: String,
+    /// Whether the dictionary index type is signed
     #[serde(rename = "isSigned")]
     pub is_signed: bool,
+    /// The bit width of the dictionary index type
     #[serde(rename = "bitWidth")]
     pub bit_width: i64,
 }
@@ -137,6 +158,7 @@ pub struct DictionaryIndexType {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArrowJsonBatch {
     count: usize,
+    /// The columns in the record batch
     pub columns: Vec<ArrowJsonColumn>,
 }
 
@@ -144,7 +166,9 @@ pub struct ArrowJsonBatch {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[allow(non_snake_case)]
 pub struct ArrowJsonDictionaryBatch {
+    /// The unique identifier for the dictionary
     pub id: i64,
+    /// The data for the dictionary
     pub data: ArrowJsonBatch,
 }
 
@@ -152,15 +176,21 @@ pub struct ArrowJsonDictionaryBatch {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ArrowJsonColumn {
     name: String,
+    /// The number of elements in the column
     pub count: usize,
+    /// The validity bitmap to determine null values
     #[serde(rename = "VALIDITY")]
     pub validity: Option<Vec<u8>>,
+    /// The data values in the column
     #[serde(rename = "DATA")]
     pub data: Option<Vec<Value>>,
+    /// The offsets for variable-sized data types
     #[serde(rename = "OFFSET")]
     pub offset: Option<Vec<Value>>, // leaving as Value as 64-bit offsets are strings
+    /// The type id for union types
     #[serde(rename = "TYPE_ID")]
     pub type_id: Option<Vec<i8>>,
+    /// The children columns for nested types
     pub children: Option<Vec<ArrowJsonColumn>>,
 }
 
@@ -189,6 +219,7 @@ impl ArrowJson {
         Ok(true)
     }
 
+    /// Convert the stored dictionaries to `Vec[RecordBatch]`
     pub fn get_record_batches(&self) -> Result<Vec<RecordBatch>> {
         let schema = self.schema.to_arrow_schema()?;
 
@@ -275,6 +306,7 @@ impl ArrowJsonField {
     }
 }
 
+/// Generates a [`RecordBatch`] from an Arrow JSON batch, given a schema
 pub fn record_batch_from_json(
     schema: &Schema,
     json_batch: ArrowJsonBatch,
@@ -755,6 +787,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
+            #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
             })?;
@@ -877,6 +910,7 @@ pub fn array_from_json(
     }
 }
 
+/// Construct a [`DictionaryArray`] from a partially typed JSON column
 pub fn dictionary_array_from_json(
     field: &Field,
     json_col: ArrowJsonColumn,
@@ -897,10 +931,12 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
+            #[allow(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
+                #[allow(deprecated)]
                 field
                     .dict_id()
                     .expect("Dictionary fields must have a dict_id value"),
@@ -965,6 +1001,7 @@ fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
 }
 
 impl ArrowJsonBatch {
+    /// Convert a [`RecordBatch`] to an [`ArrowJsonBatch`]
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),
@@ -1158,7 +1195,7 @@ mod tests {
             Field::new("utf8s", DataType::Utf8, true),
             Field::new(
                 "lists",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
             Field::new(
@@ -1215,7 +1252,7 @@ mod tests {
 
         let value_data = Int32Array::from(vec![None, Some(2), None, None]);
         let value_offsets = Buffer::from_slice_ref([0, 3, 4, 4]);
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)

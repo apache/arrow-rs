@@ -86,14 +86,14 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     let v1 = FixedSizeListArray::try_new(
-        Arc::new(Field::new("item", DataType::Int32, true)),
+        Arc::new(Field::new_list_field(DataType::Int32, true)),
         1024,
         Arc::new(create_primitive_array::<Int32Type>(1024 * 1024, 0.0)),
         None,
     )
     .unwrap();
     let v2 = FixedSizeListArray::try_new(
-        Arc::new(Field::new("item", DataType::Int32, true)),
+        Arc::new(Field::new_list_field(DataType::Int32, true)),
         1024,
         Arc::new(create_primitive_array::<Int32Type>(1024 * 1024, 0.0)),
         None,

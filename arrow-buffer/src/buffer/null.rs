@@ -19,13 +19,16 @@ use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer};
 
-/// A [`BooleanBuffer`] used to encode validity for arrow arrays
+/// A [`BooleanBuffer`] used to encode validity for Arrow arrays
 ///
-/// As per the [Arrow specification], array validity is encoded in a packed bitmask with a
+/// In the [Arrow specification], array validity is encoded in a packed bitmask with a
 /// `true` value indicating the corresponding slot is not null, and `false` indicating
 /// that it is null.
 ///
+/// `NullBuffer`s can be creating using [`NullBufferBuilder`]
+///
 /// [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
+/// [`NullBufferBuilder`]: crate::NullBufferBuilder
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NullBuffer {
     buffer: BooleanBuffer,
@@ -49,7 +52,8 @@ impl NullBuffer {
 
     /// Create a new [`NullBuffer`] of length `len` where all values are valid
     ///
-    /// Note: it is more efficient to not set the null buffer if it is known to be all valid
+    /// Note: it is more efficient to not set the null buffer if it is known to
+    /// be all valid (aka all values are not null)
     pub fn new_valid(len: usize) -> Self {
         Self {
             buffer: BooleanBuffer::new_set(len),
@@ -128,6 +132,11 @@ impl NullBuffer {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.buffer.shrink_to_fit();
     }
 
     /// Returns the null count for this [`NullBuffer`]
@@ -232,6 +241,12 @@ impl From<BooleanBuffer> for NullBuffer {
 impl From<&[bool]> for NullBuffer {
     fn from(value: &[bool]) -> Self {
         BooleanBuffer::from(value).into()
+    }
+}
+
+impl<const N: usize> From<&[bool; N]> for NullBuffer {
+    fn from(value: &[bool; N]) -> Self {
+        value[..].into()
     }
 }
 

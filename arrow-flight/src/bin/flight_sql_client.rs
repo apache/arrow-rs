@@ -26,6 +26,7 @@ use arrow_flight::{
 };
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
+use core::str;
 use futures::TryStreamExt;
 use tonic::{
     metadata::MetadataMap,
@@ -356,7 +357,7 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_while_idle(true);
 
     if args.tls {
-        let tls_config = ClientTlsConfig::new();
+        let tls_config = ClientTlsConfig::new().with_enabled_roots();
         endpoint = endpoint
             .tls_config(tls_config)
             .context("create TLS endpoint")?;

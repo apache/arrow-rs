@@ -44,7 +44,7 @@ use crate::{PutPayload, Result};
 #[derive(Debug)]
 pub struct ChunkedStore {
     inner: Arc<dyn ObjectStore>,
-    chunk_size: usize,
+    chunk_size: usize, // chunks are in memory, so we use usize not u64
 }
 
 impl ChunkedStore {
@@ -86,6 +86,7 @@ impl ObjectStore for ChunkedStore {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let r = self.inner.get_opts(location, options).await?;
         let stream = match r.payload {
+            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
                 crate::local::chunked_stream(file, path, r.range.clone(), self.chunk_size)
             }
@@ -137,7 +138,7 @@ impl ObjectStore for ChunkedStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -149,7 +150,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
@@ -157,7 +158,7 @@ impl ObjectStore for ChunkedStore {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 
@@ -178,7 +179,9 @@ impl ObjectStore for ChunkedStore {
 mod tests {
     use futures::StreamExt;
 
+    #[cfg(feature = "fs")]
     use crate::integration::*;
+    #[cfg(feature = "fs")]
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
@@ -200,8 +203,8 @@ mod tests {
 
             let mut remaining = 1001;
             while let Some(next) = s.next().await {
-                let size = next.unwrap().len();
-                let expected = remaining.min(chunk_size);
+                let size = next.unwrap().len() as u64;
+                let expected = remaining.min(chunk_size as u64);
                 assert_eq!(size, expected);
                 remaining -= expected;
             }
@@ -209,6 +212,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fs")]
     #[tokio::test]
     async fn test_chunked() {
         let temporary = tempfile::tempdir().unwrap();

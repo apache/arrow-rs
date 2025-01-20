@@ -29,23 +29,22 @@ use percent_encoding::utf8_percent_encode;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
-use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 use url::Url;
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 #[allow(clippy::enum_variant_names)]
 enum Error {
-    #[snafu(display("Error performing CreateSession request: {source}"))]
+    #[error("Error performing CreateSession request: {source}")]
     CreateSessionRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting CreateSession response: {source}"))]
+    #[error("Error getting CreateSession response: {source}")]
     CreateSessionResponse { source: reqwest::Error },
 
-    #[snafu(display("Invalid CreateSessionOutput response: {source}"))]
+    #[error("Invalid CreateSessionOutput response: {source}")]
     CreateSessionOutput { source: quick_xml::DeError },
 }
 
@@ -101,11 +100,14 @@ pub struct AwsAuthorizer<'a> {
     region: &'a str,
     token_header: Option<HeaderName>,
     sign_payload: bool,
+    request_payer: bool,
 }
 
 static DATE_HEADER: HeaderName = HeaderName::from_static("x-amz-date");
 static HASH_HEADER: HeaderName = HeaderName::from_static("x-amz-content-sha256");
 static TOKEN_HEADER: HeaderName = HeaderName::from_static("x-amz-security-token");
+static REQUEST_PAYER_HEADER: HeaderName = HeaderName::from_static("x-amz-request-payer");
+static REQUEST_PAYER_HEADER_VALUE: HeaderValue = HeaderValue::from_static("requester");
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
@@ -118,6 +120,7 @@ impl<'a> AwsAuthorizer<'a> {
             date: None,
             sign_payload: true,
             token_header: None,
+            request_payer: false,
         }
     }
 
@@ -131,6 +134,14 @@ impl<'a> AwsAuthorizer<'a> {
     /// Overrides the header name for security tokens, defaults to `x-amz-security-token`
     pub(crate) fn with_token_header(mut self, header: HeaderName) -> Self {
         self.token_header = Some(header);
+        self
+    }
+
+    /// Set whether to include requester pays headers
+    ///
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html>
+    pub fn with_request_payer(mut self, request_payer: bool) -> Self {
+        self.request_payer = request_payer;
         self
     }
 
@@ -180,6 +191,15 @@ impl<'a> AwsAuthorizer<'a> {
         let header_digest = HeaderValue::from_str(&digest).unwrap();
         request.headers_mut().insert(&HASH_HEADER, header_digest);
 
+        if self.request_payer {
+            // For DELETE, GET, HEAD, POST, and PUT requests, include x-amz-request-payer :
+            // requester in the header
+            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+            request
+                .headers_mut()
+                .insert(&REQUEST_PAYER_HEADER, REQUEST_PAYER_HEADER_VALUE.clone());
+        }
+
         let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
 
         let scope = self.scope(date);
@@ -225,6 +245,13 @@ impl<'a> AwsAuthorizer<'a> {
             .append_pair("X-Amz-Date", &date.format("%Y%m%dT%H%M%SZ").to_string())
             .append_pair("X-Amz-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Amz-SignedHeaders", "host");
+
+        if self.request_payer {
+            // For signed URLs, include x-amz-request-payer=requester in the request
+            // https://docs.aws.amazon.com/AmazonS3/latest/userguide/ObjectsinRequesterPaysBuckets.html
+            url.query_pairs_mut()
+                .append_pair("x-amz-request-payer", "requester");
+        }
 
         // For S3, you must include the X-Amz-Security-Token query parameter in the URL if
         // using credentials sourced from the STS service.
@@ -314,7 +341,7 @@ impl<'a> AwsAuthorizer<'a> {
     }
 }
 
-pub trait CredentialExt {
+pub(crate) trait CredentialExt {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_aws_sigv4(
         self,
@@ -423,7 +450,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
 ///
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
 #[derive(Debug)]
-pub struct InstanceCredentialProvider {
+pub(crate) struct InstanceCredentialProvider {
     pub imdsv1_fallback: bool,
     pub metadata_endpoint: String,
 }
@@ -450,7 +477,7 @@ impl TokenProvider for InstanceCredentialProvider {
 ///
 /// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 #[derive(Debug)]
-pub struct WebIdentityProvider {
+pub(crate) struct WebIdentityProvider {
     pub token_path: String,
     pub role_arn: String,
     pub session_name: String,
@@ -633,7 +660,7 @@ async fn web_identity(
 ///
 /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
 #[derive(Debug)]
-pub struct TaskCredentialProvider {
+pub(crate) struct TaskCredentialProvider {
     pub url: String,
     pub retry: RetryConfig,
     pub client: Client,
@@ -675,7 +702,7 @@ async fn task_credential(
 ///
 /// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateSession.html>
 #[derive(Debug)]
-pub struct SessionProvider {
+pub(crate) struct SessionProvider {
     pub endpoint: String,
     pub region: String,
     pub credentials: AwsCredentialProvider,
@@ -698,13 +725,13 @@ impl TokenProvider for SessionProvider {
             .with_aws_sigv4(Some(authorizer), None)
             .send_retry(retry)
             .await
-            .context(CreateSessionRequestSnafu)?
+            .map_err(|source| Error::CreateSessionRequest { source })?
             .bytes()
             .await
-            .context(CreateSessionResponseSnafu)?;
+            .map_err(|source| Error::CreateSessionResponse { source })?;
 
-        let resp: CreateSessionOutput =
-            quick_xml::de::from_reader(bytes.reader()).context(CreateSessionOutputSnafu)?;
+        let resp: CreateSessionOutput = quick_xml::de::from_reader(bytes.reader())
+            .map_err(|source| Error::CreateSessionOutput { source })?;
 
         let creds = resp.credentials;
         Ok(TemporaryToken {
@@ -763,10 +790,51 @@ mod tests {
             region: "us-east-1",
             sign_payload: true,
             token_header: None,
+            request_payer: false,
         };
 
         signer.authorize(&mut request, None);
         assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+    }
+
+    #[test]
+    fn test_sign_with_signed_payload_request_payer() {
+        let client = Client::new();
+
+        // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        // method = 'GET'
+        // service = 'ec2'
+        // host = 'ec2.amazonaws.com'
+        // region = 'us-east-1'
+        // endpoint = 'https://ec2.amazonaws.com'
+        // request_parameters = ''
+        let date = DateTime::parse_from_rfc3339("2022-08-06T18:01:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut request = client
+            .request(Method::GET, "https://ec2.amazon.com/")
+            .build()
+            .unwrap();
+
+        let signer = AwsAuthorizer {
+            date: Some(date),
+            credential: &credential,
+            service: "ec2",
+            region: "us-east-1",
+            sign_payload: true,
+            token_header: None,
+            request_payer: true,
+        };
+
+        signer.authorize(&mut request, None);
+        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d")
     }
 
     #[test]
@@ -802,6 +870,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: false,
+            request_payer: false,
         };
 
         authorizer.authorize(&mut request, None);
@@ -828,6 +897,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: false,
+            request_payer: false,
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
@@ -843,6 +913,48 @@ mod tests {
                 X-Amz-Expires=86400&\
                 X-Amz-SignedHeaders=host&\
                 X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn signed_get_url_request_payer() {
+        // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2013-05-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let authorizer = AwsAuthorizer {
+            date: Some(date),
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+            token_header: None,
+            sign_payload: false,
+            request_payer: true,
+        };
+
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+
+        assert_eq!(
+            url,
+            Url::parse(
+                "https://examplebucket.s3.amazonaws.com/test.txt?\
+                X-Amz-Algorithm=AWS4-HMAC-SHA256&\
+                X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&\
+                X-Amz-Date=20130524T000000Z&\
+                X-Amz-Expires=86400&\
+                X-Amz-SignedHeaders=host&\
+                x-amz-request-payer=requester&\
+                X-Amz-Signature=9ad7c781cc30121f199b47d35ed3528473e4375b63c5d91cd87c927803e4e00a"
             )
             .unwrap()
         );
@@ -880,6 +992,7 @@ mod tests {
             region: "us-east-1",
             token_header: None,
             sign_payload: true,
+            request_payer: false,
         };
 
         authorizer.authorize(&mut request, None);

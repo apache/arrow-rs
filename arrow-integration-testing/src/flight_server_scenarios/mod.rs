@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Collection of utilities for testing the Flight server.
 use std::net::SocketAddr;
 
 use arrow_flight::{FlightEndpoint, Location, Ticket};
@@ -27,6 +28,7 @@ pub mod middleware;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+/// Listen on a port and return the address
 pub async fn listen_on(port: u16) -> Result<SocketAddr> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
 
@@ -36,6 +38,7 @@ pub async fn listen_on(port: u16) -> Result<SocketAddr> {
     Ok(addr)
 }
 
+/// Create a FlightEndpoint with a ticket and location
 pub fn endpoint(ticket: &str, location_uri: impl Into<String>) -> FlightEndpoint {
     FlightEndpoint {
         ticket: Some(Ticket {

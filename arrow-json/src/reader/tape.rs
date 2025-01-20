@@ -648,7 +648,7 @@ impl<'a> BufIter<'a> {
     }
 }
 
-impl<'a> Iterator for BufIter<'a> {
+impl Iterator for BufIter<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -660,7 +660,7 @@ impl<'a> Iterator for BufIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for BufIter<'a> {}
+impl ExactSizeIterator for BufIter<'_> {}
 
 /// Returns an error for a given byte `b` and context `ctx`
 fn err(b: u8, ctx: &str) -> ArrowError {

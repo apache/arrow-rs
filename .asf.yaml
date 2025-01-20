@@ -26,6 +26,11 @@ notifications:
 github:
   description: "Official Rust implementation of Apache Arrow"
   homepage: https://arrow.apache.org/
+  labels:
+    - arrow
+    - parquet
+    - object-store
+    - rust
   enabled_merge_buttons:
     squash: true
     merge: false
@@ -33,7 +38,7 @@ github:
   features:
     issues: true
   protected_branches:
-    master:
+    main:
       required_status_checks:
         # require branches to be up-to-date before merging
         strict: true

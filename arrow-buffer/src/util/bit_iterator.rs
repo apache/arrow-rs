@@ -53,7 +53,7 @@ impl<'a> BitIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitIterator<'a> {
+impl Iterator for BitIterator<'_> {
     type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -66,11 +66,16 @@ impl<'a> Iterator for BitIterator<'a> {
         self.current_offset += 1;
         Some(v)
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining_bits = self.end_offset - self.current_offset;
+        (remaining_bits, Some(remaining_bits))
+    }
 }
 
-impl<'a> ExactSizeIterator for BitIterator<'a> {}
+impl ExactSizeIterator for BitIterator<'_> {}
 
-impl<'a> DoubleEndedIterator for BitIterator<'a> {
+impl DoubleEndedIterator for BitIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_offset == self.end_offset {
             return None;
@@ -133,7 +138,7 @@ impl<'a> BitSliceIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitSliceIterator<'a> {
+impl Iterator for BitSliceIterator<'_> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -206,7 +211,7 @@ impl<'a> BitIndexIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitIndexIterator<'a> {
+impl Iterator for BitIndexIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -262,6 +267,30 @@ pub fn try_for_each_valid_idx<E, F: FnMut(usize) -> Result<(), E>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bit_iterator_size_hint() {
+        let mut b = BitIterator::new(&[0b00000011], 0, 2);
+        assert_eq!(
+            b.size_hint(),
+            (2, Some(2)),
+            "Expected size_hint to be (2, Some(2))"
+        );
+
+        b.next();
+        assert_eq!(
+            b.size_hint(),
+            (1, Some(1)),
+            "Expected size_hint to be (1, Some(1)) after one bit consumed"
+        );
+
+        b.next();
+        assert_eq!(
+            b.size_hint(),
+            (0, Some(0)),
+            "Expected size_hint to be (0, Some(0)) after all bits consumed"
+        );
+    }
 
     #[test]
     fn test_bit_iterator() {

@@ -28,7 +28,7 @@ use parquet::arrow::ArrowWriter as ParquetWriter;
 use parquet::basic::Encoding;
 use parquet::errors::Result;
 use parquet::file::properties::{BloomFilterPosition, WriterProperties};
-use sysinfo::{MemoryRefreshKind, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 #[derive(ValueEnum, Clone)]
 enum BloomFilterPositionArg {
@@ -66,8 +66,10 @@ fn mem(system: &mut System) -> String {
         Err(e) => return format!("Can't get process PID: {e}"),
     };
 
+    let remove_dead_processes = true;
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
+        remove_dead_processes,
         ProcessRefreshKind::everything(),
     );
 
@@ -95,8 +97,7 @@ fn main() -> Result<()> {
     let file = File::create(args.path).unwrap();
     let mut writer = ParquetWriter::try_new(file, schema.clone(), Some(properties))?;
 
-    let mut system =
-        System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()));
+    let mut system = System::new_with_specifics(RefreshKind::everything());
     eprintln!(
         "{} Writing {} batches of {} rows. RSS = {}",
         now(),

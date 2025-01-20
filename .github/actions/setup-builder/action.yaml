@@ -30,7 +30,7 @@ runs:
   using: "composite"
   steps:
     - name: Cache Cargo
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         # these represent dependencies downloaded by cargo
         # and thus do not depend on the OS, arch nor rust version.

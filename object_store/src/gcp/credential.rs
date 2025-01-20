@@ -33,7 +33,6 @@ use percent_encoding::utf8_percent_encode;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use serde::Deserialize;
-use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
@@ -44,9 +43,9 @@ use std::time::{Duration, Instant};
 use tracing::info;
 use url::Url;
 
-pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+pub(crate) const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-pub const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
+pub(crate) const DEFAULT_GCS_BASE_URL: &str = "https://storage.googleapis.com";
 
 const DEFAULT_GCS_PLAYLOAD_STRING: &str = "UNSIGNED-PAYLOAD";
 const DEFAULT_GCS_SIGN_BLOB_HOST: &str = "storage.googleapis.com";
@@ -54,36 +53,39 @@ const DEFAULT_GCS_SIGN_BLOB_HOST: &str = "storage.googleapis.com";
 const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
 const DEFAULT_METADATA_IP: &str = "169.254.169.254";
 
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[snafu(display("Unable to open service account file from {}: {}", path.display(), source))]
+    #[error("Unable to open service account file from {}: {}", path.display(), source)]
     OpenCredentials {
         source: std::io::Error,
         path: PathBuf,
     },
 
-    #[snafu(display("Unable to decode service account file: {}", source))]
+    #[error("Unable to decode service account file: {}", source)]
     DecodeCredentials { source: serde_json::Error },
 
-    #[snafu(display("No RSA key found in pem file"))]
+    #[error("No RSA key found in pem file")]
     MissingKey,
 
-    #[snafu(display("Invalid RSA key: {}", source), context(false))]
-    InvalidKey { source: ring::error::KeyRejected },
+    #[error("Invalid RSA key: {}", source)]
+    InvalidKey {
+        #[from]
+        source: ring::error::KeyRejected,
+    },
 
-    #[snafu(display("Error signing: {}", source))]
+    #[error("Error signing: {}", source)]
     Sign { source: ring::error::Unspecified },
 
-    #[snafu(display("Error encoding jwt payload: {}", source))]
+    #[error("Error encoding jwt payload: {}", source)]
     Encode { source: serde_json::Error },
 
-    #[snafu(display("Unsupported key encoding: {}", encoding))]
+    #[error("Unsupported key encoding: {}", encoding)]
     UnsupportedKey { encoding: String },
 
-    #[snafu(display("Error performing token request: {}", source))]
+    #[error("Error performing token request: {}", source)]
     TokenRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting token response body: {}", source))]
+    #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: reqwest::Error },
 }
 
@@ -153,7 +155,7 @@ impl ServiceAccountKey {
                 string_to_sign.as_bytes(),
                 &mut signature,
             )
-            .context(SignSnafu)?;
+            .map_err(|source| Error::Sign { source })?;
 
         Ok(hex_encode(&signature))
     }
@@ -166,10 +168,10 @@ pub struct GcpCredential {
     pub bearer: String,
 }
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Default, serde::Serialize)]
-pub struct JwtHeader<'a> {
+pub(crate) struct JwtHeader<'a> {
     /// The type of JWS: it can only be "JWT" here
     ///
     /// Defined in [RFC7515#4.1.9](https://tools.ietf.org/html/rfc7515#section-4.1.9).
@@ -226,7 +228,7 @@ struct TokenResponse {
 /// # References
 /// - <https://google.aip.dev/auth/4111>
 #[derive(Debug)]
-pub struct SelfSignedJwt {
+pub(crate) struct SelfSignedJwt {
     issuer: String,
     scope: String,
     private_key: ServiceAccountKey,
@@ -235,7 +237,7 @@ pub struct SelfSignedJwt {
 
 impl SelfSignedJwt {
     /// Create a new [`SelfSignedJwt`]
-    pub fn new(
+    pub(crate) fn new(
         key_id: String,
         issuer: String,
         private_key: ServiceAccountKey,
@@ -289,7 +291,7 @@ impl TokenProvider for SelfSignedJwt {
                 message.as_bytes(),
                 &mut sig_bytes,
             )
-            .context(SignSnafu)?;
+            .map_err(|source| Error::Sign { source })?;
 
         let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
         let bearer = [message, signature].join(".");
@@ -305,16 +307,17 @@ fn read_credentials_file<T>(service_account_path: impl AsRef<std::path::Path>) -
 where
     T: serde::de::DeserializeOwned,
 {
-    let file = File::open(&service_account_path).context(OpenCredentialsSnafu {
-        path: service_account_path.as_ref().to_owned(),
+    let file = File::open(&service_account_path).map_err(|source| {
+        let path = service_account_path.as_ref().to_owned();
+        Error::OpenCredentials { source, path }
     })?;
     let reader = BufReader::new(file);
-    serde_json::from_reader(reader).context(DecodeCredentialsSnafu)
+    serde_json::from_reader(reader).map_err(|source| Error::DecodeCredentials { source })
 }
 
 /// A deserialized `service-account-********.json`-file.
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct ServiceAccountCredentials {
+pub(crate) struct ServiceAccountCredentials {
     /// The private key in RSA format.
     pub private_key: String,
 
@@ -335,13 +338,13 @@ pub struct ServiceAccountCredentials {
 
 impl ServiceAccountCredentials {
     /// Create a new [`ServiceAccountCredentials`] from a file.
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub(crate) fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         read_credentials_file(path)
     }
 
     /// Create a new [`ServiceAccountCredentials`] from a string.
-    pub fn from_key(key: &str) -> Result<Self> {
-        serde_json::from_str(key).context(DecodeCredentialsSnafu)
+    pub(crate) fn from_key(key: &str) -> Result<Self> {
+        serde_json::from_str(key).map_err(|source| Error::DecodeCredentials { source })
     }
 
     /// Create a [`SelfSignedJwt`] from this credentials struct.
@@ -352,7 +355,7 @@ impl ServiceAccountCredentials {
     /// # References
     /// - <https://stackoverflow.com/questions/63222450/service-account-authorization-without-oauth-can-we-get-file-from-google-cloud/71834557#71834557>
     /// - <https://www.codejam.info/2022/05/google-cloud-service-account-authorization-without-oauth.html>
-    pub fn token_provider(self) -> crate::Result<SelfSignedJwt> {
+    pub(crate) fn token_provider(self) -> crate::Result<SelfSignedJwt> {
         Ok(SelfSignedJwt::new(
             self.private_key_id,
             self.client_email,
@@ -361,7 +364,7 @@ impl ServiceAccountCredentials {
         )?)
     }
 
-    pub fn signing_credentials(self) -> crate::Result<GcpSigningCredentialProvider> {
+    pub(crate) fn signing_credentials(self) -> crate::Result<GcpSigningCredentialProvider> {
         Ok(Arc::new(StaticCredentialProvider::new(
             GcpSigningCredential {
                 email: self.client_email,
@@ -380,7 +383,7 @@ fn seconds_since_epoch() -> u64 {
 }
 
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
-    let string = serde_json::to_string(obj).context(EncodeSnafu)?;
+    let string = serde_json::to_string(obj).map_err(|source| Error::Encode { source })?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(string))
 }
 
@@ -388,7 +391,7 @@ fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
 ///
 /// <https://cloud.google.com/docs/authentication/get-id-token#metadata-server>
 #[derive(Debug, Default)]
-pub struct InstanceCredentialProvider {}
+pub(crate) struct InstanceCredentialProvider {}
 
 /// Make a request to the metadata server to fetch a token, using a a given hostname.
 async fn make_metadata_request(
@@ -404,10 +407,10 @@ async fn make_metadata_request(
         .query(&[("audience", "https://www.googleapis.com/oauth2/v4/token")])
         .send_retry(retry)
         .await
-        .context(TokenRequestSnafu)?
+        .map_err(|source| Error::TokenRequest { source })?
         .json()
         .await
-        .context(TokenResponseBodySnafu)?;
+        .map_err(|source| Error::TokenResponseBody { source })?;
     Ok(response)
 }
 
@@ -467,10 +470,10 @@ async fn make_metadata_request_for_email(
         .header("Metadata-Flavor", "Google")
         .send_retry(retry)
         .await
-        .context(TokenRequestSnafu)?
+        .map_err(|source| Error::TokenRequest { source })?
         .text()
         .await
-        .context(TokenResponseBodySnafu)?;
+        .map_err(|source| Error::TokenResponseBody { source })?;
     Ok(response)
 }
 
@@ -478,7 +481,7 @@ async fn make_metadata_request_for_email(
 ///
 /// <https://cloud.google.com/appengine/docs/legacy/standard/java/accessing-instance-metadata>
 #[derive(Debug, Default)]
-pub struct InstanceSigningCredentialProvider {}
+pub(crate) struct InstanceSigningCredentialProvider {}
 
 #[async_trait]
 impl TokenProvider for InstanceSigningCredentialProvider {
@@ -533,7 +536,7 @@ impl TokenProvider for InstanceSigningCredentialProvider {
 /// - <https://google.aip.dev/auth/4110>
 #[derive(serde::Deserialize, Clone)]
 #[serde(tag = "type")]
-pub enum ApplicationDefaultCredentials {
+pub(crate) enum ApplicationDefaultCredentials {
     /// Service Account.
     ///
     /// # References
@@ -558,7 +561,7 @@ impl ApplicationDefaultCredentials {
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
     //  2. without argument if the well-known configuration file is present.
-    pub fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
+    pub(crate) fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
             return read_credentials_file::<Self>(path).map(Some);
         }
@@ -580,14 +583,14 @@ const DEFAULT_TOKEN_GCP_URI: &str = "https://accounts.google.com/o/oauth2/token"
 
 /// <https://google.aip.dev/auth/4113>
 #[derive(Debug, Deserialize, Clone)]
-pub struct AuthorizedUserCredentials {
+pub(crate) struct AuthorizedUserCredentials {
     client_id: String,
     client_secret: String,
     refresh_token: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AuthorizedUserSigningCredentials {
+pub(crate) struct AuthorizedUserSigningCredentials {
     credential: AuthorizedUserCredentials,
 }
 
@@ -598,7 +601,7 @@ struct EmailResponse {
 }
 
 impl AuthorizedUserSigningCredentials {
-    pub fn from(credential: AuthorizedUserCredentials) -> crate::Result<Self> {
+    pub(crate) fn from(credential: AuthorizedUserCredentials) -> crate::Result<Self> {
         Ok(Self { credential })
     }
 
@@ -608,10 +611,10 @@ impl AuthorizedUserSigningCredentials {
             .query(&[("access_token", &self.credential.refresh_token)])
             .send_retry(retry)
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json::<EmailResponse>()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(response.email)
     }
@@ -659,10 +662,10 @@ impl TokenProvider for AuthorizedUserCredentials {
             .idempotent(true)
             .send()
             .await
-            .context(TokenRequestSnafu)?
+            .map_err(|source| Error::TokenRequest { source })?
             .json::<TokenResponse>()
             .await
-            .context(TokenResponseBodySnafu)?;
+            .map_err(|source| Error::TokenResponseBody { source })?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {
@@ -684,14 +687,14 @@ fn trim_header_value(value: &str) -> String {
 ///
 /// [Google SigV4]: https://cloud.google.com/storage/docs/access-control/signed-urls
 #[derive(Debug)]
-pub struct GCSAuthorizer {
+pub(crate) struct GCSAuthorizer {
     date: Option<DateTime<Utc>>,
     credential: Arc<GcpSigningCredential>,
 }
 
 impl GCSAuthorizer {
     /// Create a new [`GCSAuthorizer`]
-    pub fn new(credential: Arc<GcpSigningCredential>) -> Self {
+    pub(crate) fn new(credential: Arc<GcpSigningCredential>) -> Self {
         Self {
             date: None,
             credential,
@@ -821,7 +824,7 @@ impl GCSAuthorizer {
     ///```
     ///`ACTIVE_DATETIME` format:`YYYYMMDD'T'HHMMSS'Z'`
     /// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
-    pub fn string_to_sign(
+    pub(crate) fn string_to_sign(
         &self,
         date: DateTime<Utc>,
         request_method: &Method,

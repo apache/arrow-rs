@@ -308,12 +308,23 @@ impl Array for BooleanArray {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         self.values.offset()
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -329,7 +340,7 @@ impl Array for BooleanArray {
     }
 }
 
-impl<'a> ArrayAccessor for &'a BooleanArray {
+impl ArrayAccessor for &BooleanArray {
     type Item = bool;
 
     fn value(&self, index: usize) -> Self::Item {

@@ -136,6 +136,12 @@ where
         self.len == 0
     }
 
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
+        self.run_ends.shrink_to_fit();
+    }
+
     /// Returns the values of this [`RunEndBuffer`] not including any offset
     #[inline]
     pub fn values(&self) -> &[E] {

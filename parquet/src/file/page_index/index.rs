@@ -50,18 +50,31 @@ pub struct PageIndex<T> {
 }
 
 impl<T> PageIndex<T> {
+    /// Returns the minimum value in the page
+    ///
+    /// It is `None` when all values are null
     pub fn min(&self) -> Option<&T> {
         self.min.as_ref()
     }
+
+    /// Returns the maximum value in the page
+    ///
+    /// It is `None` when all values are null
     pub fn max(&self) -> Option<&T> {
         self.max.as_ref()
     }
+
+    /// Returns the number of null values in the page
     pub fn null_count(&self) -> Option<i64> {
         self.null_count
     }
+
+    /// Returns the repetition level histogram for the page
     pub fn repetition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.repetition_level_histogram.as_ref()
     }
+
+    /// Returns the definition level histogram for the page
     pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()
     }
@@ -71,10 +84,16 @@ impl<T> PageIndex<T>
 where
     T: AsBytes,
 {
+    /// Returns the minimum value in the page as bytes
+    ///
+    /// It is `None` when all values are null
     pub fn max_bytes(&self) -> Option<&[u8]> {
         self.max.as_ref().map(|x| x.as_bytes())
     }
 
+    /// Returns the maximum value in the page as bytes
+    ///
+    /// It is `None` when all values are null
     pub fn min_bytes(&self) -> Option<&[u8]> {
         self.min.as_ref().map(|x| x.as_bytes())
     }
@@ -90,13 +109,21 @@ pub enum Index {
     /// will only return pageLocations without min_max index,
     /// `NONE` represents this lack of index information
     NONE,
+    /// Boolean type index
     BOOLEAN(NativeIndex<bool>),
+    /// 32-bit integer type index
     INT32(NativeIndex<i32>),
+    /// 64-bit integer type index
     INT64(NativeIndex<i64>),
+    /// 96-bit integer type (timestamp) index
     INT96(NativeIndex<Int96>),
+    /// 32-bit floating point type index
     FLOAT(NativeIndex<f32>),
+    /// 64-bit floating point type index
     DOUBLE(NativeIndex<f64>),
+    /// Byte array type index
     BYTE_ARRAY(NativeIndex<ByteArray>),
+    /// Fixed length byte array type index
     FIXED_LEN_BYTE_ARRAY(NativeIndex<FixedLenByteArray>),
 }
 
@@ -155,6 +182,7 @@ pub struct NativeIndex<T: ParquetValueType> {
 }
 
 impl<T: ParquetValueType> NativeIndex<T> {
+    /// The physical data type of the column
     pub const PHYSICAL_TYPE: Type = T::PHYSICAL_TYPE;
 
     /// Creates a new [`NativeIndex`]

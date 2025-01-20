@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 /// A client that can perform paginated list requests
 #[async_trait]
-pub trait ListClient: Send + Sync + 'static {
+pub(crate) trait ListClient: Send + Sync + 'static {
     async fn list_request(
         &self,
         prefix: Option<&str>,
@@ -38,43 +38,44 @@ pub trait ListClient: Send + Sync + 'static {
 
 /// Extension trait for [`ListClient`] that adds common listing functionality
 #[async_trait]
-pub trait ListClientExt {
+pub(crate) trait ListClientExt {
     fn list_paginated(
         &self,
         prefix: Option<&Path>,
         delimiter: bool,
         offset: Option<&Path>,
-    ) -> BoxStream<'_, Result<ListResult>>;
+    ) -> BoxStream<'static, Result<ListResult>>;
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     #[allow(unused)]
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>>;
+    ) -> BoxStream<'static, Result<ObjectMeta>>;
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 }
 
 #[async_trait]
-impl<T: ListClient> ListClientExt for T {
+impl<T: ListClient + Clone> ListClientExt for T {
     fn list_paginated(
         &self,
         prefix: Option<&Path>,
         delimiter: bool,
         offset: Option<&Path>,
-    ) -> BoxStream<'_, Result<ListResult>> {
+    ) -> BoxStream<'static, Result<ListResult>> {
         let offset = offset.map(|x| x.to_string());
         let prefix = prefix
             .filter(|x| !x.as_ref().is_empty())
             .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER));
 
         stream_paginated(
+            self.clone(),
             (prefix, offset),
-            move |(prefix, offset), token| async move {
-                let (r, next_token) = self
+            move |client, (prefix, offset), token| async move {
+                let (r, next_token) = client
                     .list_request(
                         prefix.as_deref(),
                         delimiter,
@@ -88,7 +89,7 @@ impl<T: ListClient> ListClientExt for T {
         .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'_, Result<ObjectMeta>> {
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_paginated(prefix, false, None)
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
@@ -99,7 +100,7 @@ impl<T: ListClient> ListClientExt for T {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'_, Result<ObjectMeta>> {
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_paginated(prefix, false, Some(offset))
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()

@@ -45,15 +45,24 @@ pub type ColumnDescPtr = Arc<ColumnDescriptor>;
 /// repetition is `None`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type {
+    /// Represents a primitive leaf field.
     PrimitiveType {
+        /// Basic information about the type.
         basic_info: BasicTypeInfo,
+        /// Physical type of this primitive type.
         physical_type: PhysicalType,
+        /// Length of this type.
         type_length: i32,
+        /// Scale of this type.
         scale: i32,
+        /// Precision of this type.
         precision: i32,
     },
+    /// Represents a group of fields (similar to struct).
     GroupType {
+        /// Basic information about the type.
         basic_info: BasicTypeInfo,
+        /// Fields of this group type.
         fields: Vec<TypePtr>,
     },
 }
@@ -192,6 +201,29 @@ impl Type {
     pub fn is_optional(&self) -> bool {
         self.get_basic_info().has_repetition()
             && self.get_basic_info().repetition() != Repetition::REQUIRED
+    }
+
+    /// Returns `true` if this type is annotated as a list.
+    pub(crate) fn is_list(&self) -> bool {
+        if self.is_group() {
+            let basic_info = self.get_basic_info();
+            if let Some(logical_type) = basic_info.logical_type() {
+                return logical_type == LogicalType::List;
+            }
+            return basic_info.converted_type() == ConvertedType::LIST;
+        }
+        false
+    }
+
+    /// Returns `true` if this type is a group with a single child field that is `repeated`.
+    pub(crate) fn has_single_repeated_child(&self) -> bool {
+        if self.is_group() {
+            let children = self.get_fields();
+            return children.len() == 1
+                && children[0].get_basic_info().has_repetition()
+                && children[0].get_basic_info().repetition() == Repetition::REPEATED;
+        }
+        false
     }
 }
 
@@ -524,7 +556,11 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
             }
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                let max_precision = (2f64.powi(8 * self.length - 1) - 1f64).log10().floor() as i32;
+                let length = self
+                    .length
+                    .checked_mul(8)
+                    .ok_or(general_err!("Invalid length {} for Decimal", self.length))?;
+                let max_precision = (2f64.powi(length - 1) - 1f64).log10().floor() as i32;
 
                 if self.precision > max_precision {
                     return Err(general_err!(
@@ -745,6 +781,7 @@ impl ColumnPath {
         self.parts.append(&mut tail);
     }
 
+    /// Returns a slice of path components.
     pub fn parts(&self) -> &[String] {
         &self.parts
     }
@@ -762,7 +799,7 @@ impl From<Vec<String>> for ColumnPath {
     }
 }
 
-impl<'a> From<&'a str> for ColumnPath {
+impl From<&str> for ColumnPath {
     fn from(single_path: &str) -> Self {
         let s = String::from(single_path);
         ColumnPath::from(s)
@@ -916,6 +953,32 @@ impl ColumnDescriptor {
 ///
 /// Encapsulates the file's schema ([`Type`]) and [`ColumnDescriptor`]s for
 /// each primitive (leaf) column.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// use parquet::schema::types::{SchemaDescriptor, Type};
+/// use parquet::basic; // note there are two `Type`s that are different
+/// // Schema for a table with two columns: "a" (int64) and "b" (int32, stored as a date)
+/// let descriptor = SchemaDescriptor::new(
+///   Arc::new(
+///     Type::group_type_builder("my_schema")
+///       .with_fields(vec![
+///         Arc::new(
+///          Type::primitive_type_builder("a", basic::Type::INT64)
+///           .build().unwrap()
+///         ),
+///         Arc::new(
+///          Type::primitive_type_builder("b", basic::Type::INT32)
+///           .with_converted_type(basic::ConvertedType::DATE)
+///           .with_logical_type(Some(basic::LogicalType::Date))
+///           .build().unwrap()
+///         ),
+///      ])
+///      .build().unwrap()
+///   )
+/// );
+/// ```
 #[derive(PartialEq)]
 pub struct SchemaDescriptor {
     /// The top-level logical schema (the "message" type).
@@ -1033,6 +1096,7 @@ impl SchemaDescriptor {
         self.schema.as_ref()
     }
 
+    /// Returns schema as [`TypePtr`] for cheap cloning.
     pub fn root_schema_ptr(&self) -> TypePtr {
         self.schema.clone()
     }
@@ -1111,7 +1175,23 @@ pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
         ));
     }
 
+    if !schema_nodes[0].is_group() {
+        return Err(general_err!("Expected root node to be a group type"));
+    }
+
     Ok(schema_nodes.remove(0))
+}
+
+/// Checks if the logical type is valid.
+fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
+    if let Some(LogicalType::Integer { bit_width, .. }) = *logical_type {
+        if bit_width != 8 && bit_width != 16 && bit_width != 32 && bit_width != 64 {
+            return Err(general_err!(
+                "Bit width must be 8, 16, 32, or 64 for Integer logical type"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Constructs a new Type from the `elements`, starting at index `index`.
@@ -1123,7 +1203,7 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
 
-    if index > elements.len() {
+    if index >= elements.len() {
         return Err(general_err!(
             "Index out of bound, index = {}, len = {}",
             index,
@@ -1131,6 +1211,13 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
         ));
     }
     let element = &elements[index];
+
+    // Check for empty schema
+    if let (true, None | Some(0)) = (is_root_node, element.num_children) {
+        let builder = Type::group_type_builder(&element.name);
+        return Ok((index + 1, Arc::new(builder.build().unwrap())));
+    }
+
     let converted_type = ConvertedType::try_from(element.converted_type)?;
     // LogicalType is only present in v2 Parquet files. ConvertedType is always
     // populated, regardless of the version of the file (v1 or v2).
@@ -1138,6 +1225,9 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
         .logical_type
         .as_ref()
         .map(|value| LogicalType::from(value.clone()));
+
+    check_logical_type(&logical_type)?;
+
     let field_id = elements[index].field_id;
     match elements[index].num_children {
         // From parquet-format:

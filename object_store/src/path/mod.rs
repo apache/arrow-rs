@@ -19,7 +19,6 @@
 
 use itertools::Itertools;
 use percent_encoding::percent_decode;
-use snafu::{ensure, ResultExt, Snafu};
 use std::fmt::Formatter;
 #[cfg(not(target_arch = "wasm32"))]
 use url::Url;
@@ -35,33 +34,58 @@ mod parts;
 pub use parts::{InvalidPart, PathPart};
 
 /// Error returned by [`Path::parse`]
-#[derive(Debug, Snafu)]
-#[allow(missing_docs)]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[snafu(display("Path \"{}\" contained empty path segment", path))]
-    EmptySegment { path: String },
+    /// Error when there's an empty segment between two slashes `/` in the path
+    #[error("Path \"{}\" contained empty path segment", path)]
+    EmptySegment {
+        /// The source path
+        path: String,
+    },
 
-    #[snafu(display("Error parsing Path \"{}\": {}", path, source))]
-    BadSegment { path: String, source: InvalidPart },
+    /// Error when an invalid segment is encountered in the given path
+    #[error("Error parsing Path \"{}\": {}", path, source)]
+    BadSegment {
+        /// The source path
+        path: String,
+        /// The part containing the error
+        source: InvalidPart,
+    },
 
-    #[snafu(display("Failed to canonicalize path \"{}\": {}", path.display(), source))]
+    /// Error when path cannot be canonicalized
+    #[error("Failed to canonicalize path \"{}\": {}", path.display(), source)]
     Canonicalize {
+        /// The source path
         path: std::path::PathBuf,
+        /// The underlying error
         source: std::io::Error,
     },
 
-    #[snafu(display("Unable to convert path \"{}\" to URL", path.display()))]
-    InvalidPath { path: std::path::PathBuf },
+    /// Error when the path is not a valid URL
+    #[error("Unable to convert path \"{}\" to URL", path.display())]
+    InvalidPath {
+        /// The source path
+        path: std::path::PathBuf,
+    },
 
-    #[snafu(display("Path \"{}\" contained non-unicode characters: {}", path, source))]
+    /// Error when a path contains non-unicode characters
+    #[error("Path \"{}\" contained non-unicode characters: {}", path, source)]
     NonUnicode {
+        /// The source path
         path: String,
+        /// The underlying `UTF8Error`
         source: std::str::Utf8Error,
     },
 
-    #[snafu(display("Path {} does not start with prefix {}", path, prefix))]
-    PrefixMismatch { path: String, prefix: String },
+    /// Error when the a path doesn't start with given prefix
+    #[error("Path {} does not start with prefix {}", path, prefix)]
+    PrefixMismatch {
+        /// The source path
+        path: String,
+        /// The mismatched prefix
+        prefix: String,
+    },
 }
 
 /// A parsed path representation that can be safely written to object storage
@@ -148,8 +172,14 @@ impl Path {
         let stripped = stripped.strip_suffix(DELIMITER).unwrap_or(stripped);
 
         for segment in stripped.split(DELIMITER) {
-            ensure!(!segment.is_empty(), EmptySegmentSnafu { path });
-            PathPart::parse(segment).context(BadSegmentSnafu { path })?;
+            if segment.is_empty() {
+                return Err(Error::EmptySegment { path: path.into() });
+            }
+
+            PathPart::parse(segment).map_err(|source| {
+                let path = path.into();
+                Error::BadSegment { source, path }
+            })?;
         }
 
         Ok(Self {
@@ -165,8 +195,9 @@ impl Path {
     ///
     /// Note: this will canonicalize the provided path, resolving any symlinks
     pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-        let absolute = std::fs::canonicalize(&path).context(CanonicalizeSnafu {
-            path: path.as_ref(),
+        let absolute = std::fs::canonicalize(&path).map_err(|source| {
+            let path = path.as_ref().into();
+            Error::Canonicalize { source, path }
         })?;
 
         Self::from_absolute_path(absolute)
@@ -216,7 +247,10 @@ impl Path {
         let path = path.as_ref();
         let decoded = percent_decode(path.as_bytes())
             .decode_utf8()
-            .context(NonUnicodeSnafu { path })?;
+            .map_err(|source| {
+                let path = path.into();
+                Error::NonUnicode { source, path }
+            })?;
 
         Self::parse(decoded)
     }

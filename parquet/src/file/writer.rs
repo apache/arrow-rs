@@ -322,6 +322,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         }
     }
 
+    /// Add a [`KeyValue`] to the file writer's metadata
     pub fn append_key_value_metadata(&mut self, kv_metadata: KeyValue) {
         self.kv_metadatas.push(kv_metadata);
     }
@@ -377,7 +378,12 @@ fn write_bloom_filters<W: Write + Send>(
         .ordinal()
         .expect("Missing row group ordinal")
         .try_into()
-        .expect("Negative row group ordinal");
+        .map_err(|_| {
+            ParquetError::General(format!(
+                "Negative row group ordinal: {})",
+                row_group.ordinal().unwrap()
+            ))
+        })?;
     let row_group_idx = row_group_idx as usize;
     for (column_idx, column_chunk) in row_group.columns_mut().iter_mut().enumerate() {
         if let Some(bloom_filter) = bloom_filters[row_group_idx][column_idx].take() {
@@ -714,7 +720,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write + Send> PageWriter for SerializedPageWriter<'a, W> {
+impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
@@ -1736,6 +1742,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
             .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .set_offset_index_disabled(true) // this should be ignored because of the line above
             .build();
         let mut file = Vec::with_capacity(1024);
         let mut file_writer =
@@ -1889,6 +1896,44 @@ mod tests {
             .unwrap();
         assert_eq!(page_sizes.len(), 1);
         assert_eq!(page_sizes[0], unenc_size);
+    }
+
+    #[test]
+    fn test_too_many_rowgroups() {
+        let message_type = "
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .set_max_row_group_size(1)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+
+        // Create 32k empty rowgroups. Should error when i == 32768.
+        for i in 0..0x8001 {
+            match writer.next_row_group() {
+                Ok(mut row_group_writer) => {
+                    assert_ne!(i, 0x8000);
+                    let col_writer = row_group_writer.next_column().unwrap().unwrap();
+                    col_writer.close().unwrap();
+                    row_group_writer.close().unwrap();
+                }
+                Err(e) => {
+                    assert_eq!(i, 0x8000);
+                    assert_eq!(
+                        e.to_string(),
+                        "Parquet error: Parquet does not support more than 32767 row groups per file (currently: 32768)"
+                    );
+                }
+            }
+        }
+        writer.close().unwrap();
     }
 
     #[test]

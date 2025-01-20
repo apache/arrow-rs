@@ -21,7 +21,7 @@
 
 - [`builders.rs`](builders.rs): Using the Builder API
 - [`collect.rs`](collect.rs): Using the `FromIter` API
-- [`dynamic_types.rs`](dynamic_types.rs):
+- [`dynamic_types.rs`](dynamic_types.rs): Dealing with mixed types dynamically at runtime
 - [`read_csv.rs`](read_csv.rs): Reading CSV files with explicit schema, pretty printing Arrays
 - [`read_csv_infer_schema.rs`](read_csv_infer_schema.rs): Reading CSV files, pretty printing Arrays
 - [`tensor_builder.rs`](tensor_builder.rs): Using tensor builder

@@ -161,7 +161,52 @@
 //!     array.as_primitive::<Float32Type>().values()
 //! }
 //! ```
+//! # Alternatives to ChunkedArray Support
 //!
+//! The Rust implementation does not provide the ChunkedArray abstraction implemented by the Python
+//! and C++ Arrow implementations. The recommended alternative is to use one of the following:
+//! - `Vec<ArrayRef>` a simple, eager version of a `ChunkedArray`
+//! - `impl Iterator<Item=ArrayRef>` a lazy version of a `ChunkedArray`
+//! - `impl Stream<Item=ArrayRef>` a lazy async version of a `ChunkedArray`
+//!
+//! Similar patterns can be applied at the `RecordBatch` level. For example, [DataFusion] makes
+//! extensive use of [RecordBatchStream].
+//!
+//! This approach integrates well into the Rust ecosystem, simplifies the implementation and
+//! encourages the use of performant lazy and async patterns.
+//! ```rust
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Float32Array, RecordBatch, StringArray};
+//! use arrow_array::cast::AsArray;
+//! use arrow_array::types::Float32Type;
+//! use arrow_schema::DataType;
+//!
+//! let batches = [
+//!    RecordBatch::try_from_iter(vec![
+//!         ("label", Arc::new(StringArray::from(vec!["A", "B", "C"])) as ArrayRef),
+//!         ("value", Arc::new(Float32Array::from(vec![0.1, 0.2, 0.3])) as ArrayRef),
+//!     ]).unwrap(),
+//!    RecordBatch::try_from_iter(vec![
+//!         ("label", Arc::new(StringArray::from(vec!["D", "E"])) as ArrayRef),
+//!         ("value", Arc::new(Float32Array::from(vec![0.4, 0.5])) as ArrayRef),
+//!    ]).unwrap(),
+//! ];
+//!
+//! let labels: Vec<&str> = batches
+//!    .iter()
+//!    .flat_map(|batch| batch.column(0).as_string::<i32>())
+//!    .map(Option::unwrap)
+//!    .collect();
+//!
+//! let values: Vec<f32> = batches
+//!    .iter()
+//!    .flat_map(|batch| batch.column(1).as_primitive::<Float32Type>().values())
+//!    .copied()
+//!    .collect();
+//!
+//! assert_eq!(labels, ["A", "B", "C", "D", "E"]);
+//! assert_eq!(values, [0.1, 0.2, 0.3, 0.4, 0.5]);
+//!```
 //! [`ScalarBuffer<T>`]: arrow_buffer::ScalarBuffer
 //! [`ScalarBuffer<i16>`]: arrow_buffer::ScalarBuffer
 //! [`OffsetBuffer<i32>`]: arrow_buffer::OffsetBuffer
@@ -173,6 +218,8 @@
 //! [`compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 //! [`json`]: https://docs.rs/arrow/latest/arrow/json/index.html
 //! [`csv`]: https://docs.rs/arrow/latest/arrow/csv/index.html
+//! [DataFusion]: https://github.com/apache/arrow-datafusion
+//! [RecordBatchStream]: https://docs.rs/datafusion/latest/datafusion/execution/trait.RecordBatchStream.html
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]

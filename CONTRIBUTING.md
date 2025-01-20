@@ -138,7 +138,7 @@ cargo test
 cargo test -p arrow
 ```
 
-For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/master/.github/workflows). Here are some examples of additional tests you may want to run:
+For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/main/.github/workflows). Here are some examples of additional tests you may want to run:
 
 ```bash
 # run tests for the parquet crate
@@ -164,7 +164,7 @@ Note that currently the above will not check all source files in the parquet cra
 parquet files run the following from the top-level `arrow-rs` directory:
 
 ```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
+cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
 ```
 
 ## Breaking Changes
@@ -217,13 +217,13 @@ cargo bench -p arrow-cast --bench parse_time
 To set the baseline for your benchmarks, use the --save-baseline flag:
 
 ```bash
-git checkout master
+git checkout main
 
-cargo bench --bench parse_time -- --save-baseline master
+cargo bench --bench parse_time -- --save-baseline main
 
 git checkout feature
 
-cargo bench --bench parse_time -- --baseline master
+cargo bench --bench parse_time -- --baseline main
 ```
 
 ## Git Pre-Commit Hook

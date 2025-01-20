@@ -21,6 +21,7 @@ use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
+use half::f16;
 use rand::distributions::uniform::SampleUniform;
 use rand::thread_rng;
 use rand::Rng;
@@ -415,4 +416,49 @@ where
         .unwrap();
 
     DictionaryArray::from(data)
+}
+
+/// Creates a random (but fixed-seeded) f16 array of a given size and nan-value density
+pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < nan_density {
+                Some(f16::NAN)
+            } else {
+                Some(f16::from_f32(rng.gen()))
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) f32 array of a given size and nan-value density
+pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < nan_density {
+                Some(f32::NAN)
+            } else {
+                Some(rng.gen())
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) f64 array of a given size and nan-value density
+pub fn create_f64_array(size: usize, nan_density: f32) -> Float64Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < nan_density {
+                Some(f64::NAN)
+            } else {
+                Some(rng.gen())
+            }
+        })
+        .collect()
 }

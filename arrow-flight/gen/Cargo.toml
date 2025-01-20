@@ -20,7 +20,7 @@ name = "gen"
 description = "Code generation for arrow-flight"
 version = "0.1.0"
 edition = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.71.1"
 authors = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
@@ -32,6 +32,5 @@ publish = false
 [dependencies]
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = { version = "=1.0.86", default-features = false }
-prost-build = { version = "=0.13.3", default-features = false }
+prost-build = { version = "=0.13.4", default-features = false }
 tonic-build = { version = "=0.12.3", default-features = false, features = ["transport", "prost"] }

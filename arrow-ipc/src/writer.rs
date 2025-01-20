@@ -23,6 +23,7 @@
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
@@ -60,10 +61,14 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
-    /// Flag indicating whether the writer should preserver the dictionary IDs defined in the
+    /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
-    /// Defaults to `true`
+    /// Defaults to `false`
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -107,12 +112,13 @@ impl IpcWriteOptions {
             | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
+            #[allow(deprecated)]
             crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
-                preserve_dict_id: true,
+                preserve_dict_id: false,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -120,12 +126,13 @@ impl IpcWriteOptions {
                         "Legacy IPC format only supported on metadata version 4".to_string(),
                     ))
                 } else {
+                    #[allow(deprecated)]
                     Ok(Self {
                         alignment,
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
-                        preserve_dict_id: true,
+                        preserve_dict_id: false,
                     })
                 }
             }
@@ -135,7 +142,14 @@ impl IpcWriteOptions {
         }
     }
 
+    /// Return whether the writer is configured to preserve the dictionary IDs
+    /// defined in the schema
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn preserve_dict_id(&self) -> bool {
+        #[allow(deprecated)]
         self.preserve_dict_id
     }
 
@@ -146,6 +160,11 @@ impl IpcWriteOptions {
     /// to the dictionary batches in order to encode them correctly
     ///
     /// The default will change to `false`  in future releases
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
+    #[allow(deprecated)]
     pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
         self.preserve_dict_id = preserve_dict_id;
         self
@@ -154,12 +173,13 @@ impl IpcWriteOptions {
 
 impl Default for IpcWriteOptions {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self {
             alignment: 64,
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 }
@@ -196,10 +216,14 @@ impl Default for IpcWriteOptions {
 /// ```
 ///
 /// [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
-
 pub struct IpcDataGenerator {}
 
 impl IpcDataGenerator {
+    /// Converts a schema to an IPC message along with `dictionary_tracker`
+    /// and returns it encoded inside [EncodedData] as a flatbuffer
+    ///
+    /// Preferred method over [IpcDataGenerator::schema_to_bytes] since it's
+    /// deprecated since Arrow v54.0.0
     pub fn schema_to_bytes_with_dictionary_tracker(
         &self,
         schema: &Schema,
@@ -234,6 +258,7 @@ impl IpcDataGenerator {
         since = "54.0.0",
         note = "Use `schema_to_bytes_with_dictionary_tracker` instead. This function signature of `schema_to_bytes_with_dictionary_tracker` in the next release."
     )]
+    /// Converts a schema to an IPC message and returns it encoded inside [EncodedData] as a flatbuffer
     pub fn schema_to_bytes(&self, schema: &Schema, write_options: &IpcWriteOptions) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
@@ -412,6 +437,7 @@ impl IpcDataGenerator {
                 // It's importnat to only take the dict_id at this point, because the dict ID
                 // sequence is assigned depth-first, so we need to first encode children and have
                 // them take their assigned dict IDs before we take the dict ID for this field.
+                #[allow(deprecated)]
                 let dict_id = dict_id_seq
                     .next()
                     .or_else(|| field.dict_id())
@@ -759,6 +785,10 @@ pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -774,11 +804,12 @@ impl DictionaryTracker {
     /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
     /// seen)
     pub fn new(error_on_replacement: bool) -> Self {
+        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
             error_on_replacement,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 
@@ -787,7 +818,12 @@ impl DictionaryTracker {
     /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn new_with_preserve_dict_id(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
+        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -803,8 +839,14 @@ impl DictionaryTracker {
     ///
     /// If `preserve_dict_id` is false, this will return the value of the last `dict_id` assigned incremented by 1
     /// or 0 in the case where no dictionary IDs have yet been assigned
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn set_dict_id(&mut self, field: &Field) -> i64 {
+        #[allow(deprecated)]
         let next = if self.preserve_dict_id {
+            #[allow(deprecated)]
             field.dict_id().expect("no dict_id in field")
         } else {
             self.dict_ids
@@ -928,7 +970,9 @@ impl<W: Write> FileWriter<W> {
         writer.write_all(&super::ARROW_MAGIC)?;
         writer.write_all(&PADDING[..pad_len])?;
         // write the schema, set the written bytes to the schema + header
+        #[allow(deprecated)]
         let preserve_dict_id = write_options.preserve_dict_id;
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
         let encoded_message = data_gen.schema_to_bytes_with_dictionary_tracker(
@@ -951,6 +995,7 @@ impl<W: Write> FileWriter<W> {
         })
     }
 
+    /// Adds a key-value pair to the [FileWriter]'s custom metadata
     pub fn write_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.custom_metadata.insert(key.into(), value.into());
     }
@@ -1004,8 +1049,13 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
+        #[allow(deprecated)]
+        let preserve_dict_id = self.write_options.preserve_dict_id;
+        #[allow(deprecated)]
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
         let schema = IpcSchemaEncoder::new()
-            .with_dictionary_tracker(&mut self.dictionary_tracker)
+            .with_dictionary_tracker(&mut dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
@@ -1132,7 +1182,9 @@ impl<W: Write> StreamWriter<W> {
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
+        #[allow(deprecated)]
         let preserve_dict_id = write_options.preserve_dict_id;
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             DictionaryTracker::new_with_preserve_dict_id(false, preserve_dict_id);
 
@@ -1419,7 +1471,13 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let end_offset = offset_slice.last().unwrap();
 
     let offsets = match start_offset.as_usize() {
-        0 => offsets.clone(),
+        0 => {
+            let size = size_of::<O>();
+            offsets.slice_with_length(
+                data.offset() * size,
+                (data.offset() + data.len() + 1) * size,
+            )
+        }
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
 
@@ -2014,6 +2072,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
+        #[allow(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 2, false);
         let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
 
@@ -2031,6 +2090,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
+        #[allow(deprecated)]
         let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2047,6 +2107,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
+        #[allow(deprecated)]
         let dctfield = Arc::new(Field::new_dict(
             "dict",
             array.data_type().clone(),
@@ -2067,6 +2128,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
+        #[allow(deprecated)]
         let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2506,6 +2568,36 @@ mod tests {
         ls.finish()
     }
 
+    fn generate_nested_list_data_starting_at_zero<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls =
+            GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(UInt32Builder::new()));
+
+        for _i in 0..999 {
+            ls.values().append(true);
+            ls.append(true);
+        }
+
+        for j in 0..10 {
+            for value in [j, j, j, j] {
+                ls.values().values().append_value(value);
+            }
+            ls.values().append(true)
+        }
+        ls.append(true);
+
+        for i in 0..9_000 {
+            for j in 0..10 {
+                for value in [i + j, i + j, i + j, i + j] {
+                    ls.values().values().append_value(value);
+                }
+                ls.values().append(true)
+            }
+            ls.append(true);
+        }
+
+        ls.finish()
+    }
+
     fn generate_map_array_data() -> MapArray {
         let keys_builder = UInt32Builder::new();
         let values_builder = UInt32Builder::new();
@@ -2545,7 +2637,7 @@ mod tests {
 
     #[test]
     fn encode_lists() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2557,7 +2649,7 @@ mod tests {
 
     #[test]
     fn encode_empty_list() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2572,7 +2664,7 @@ mod tests {
 
     #[test]
     fn encode_large_lists() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2586,8 +2678,8 @@ mod tests {
 
     #[test]
     fn encode_nested_lists() {
-        let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
-        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
+        let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new_list_field(DataType::List(inner_int), true));
         let list_field = Field::new("val", DataType::List(inner_list_field), true);
         let schema = Arc::new(Schema::new(vec![list_field]));
 
@@ -2595,6 +2687,19 @@ mod tests {
 
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    #[test]
+    fn encode_nested_lists_starting_at_zero() {
+        let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
+        let list_field = Field::new("val", DataType::List(inner_list_field), true);
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let values = Arc::new(generate_nested_list_data_starting_at_zero::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        roundtrip_ensure_sliced_smaller(in_batch, 1);
     }
 
     #[test]

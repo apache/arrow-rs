@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Middleware test for the Flight server.
+
 use std::pin::Pin;
 
 use arrow_flight::{
@@ -31,6 +33,7 @@ type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+/// Run a scenario that tests middleware.
 pub async fn scenario_setup(port: u16) -> Result {
     let service = MiddlewareScenarioImpl {};
     let svc = FlightServiceServer::new(service);
@@ -44,6 +47,7 @@ pub async fn scenario_setup(port: u16) -> Result {
     Ok(())
 }
 
+/// Middleware interceptor for testing
 #[derive(Clone, Default)]
 pub struct MiddlewareScenarioImpl {}
 

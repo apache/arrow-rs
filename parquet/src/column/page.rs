@@ -31,29 +31,51 @@ use crate::format::PageHeader;
 /// used to store uncompressed bytes of the page.
 #[derive(Clone)]
 pub enum Page {
+    /// Data page Parquet format v1.
     DataPage {
+        /// The underlying data buffer
         buf: Bytes,
+        /// Number of values in this page
         num_values: u32,
+        /// Encoding for values in this page
         encoding: Encoding,
+        /// Definition level encoding
         def_level_encoding: Encoding,
+        /// Repetition level encoding
         rep_level_encoding: Encoding,
+        /// Optional statistics for this page
         statistics: Option<Statistics>,
     },
+    /// Data page Parquet format v2.
     DataPageV2 {
+        /// The underlying data buffer
         buf: Bytes,
+        /// Number of values in this page
         num_values: u32,
+        /// Encoding for values in this page
         encoding: Encoding,
+        /// Number of null values in this page
         num_nulls: u32,
+        /// Number of rows in this page
         num_rows: u32,
+        /// Length of definition levels
         def_levels_byte_len: u32,
+        /// Length of repetition levels
         rep_levels_byte_len: u32,
+        /// Is this page compressed
         is_compressed: bool,
+        /// Optional statistics for this page
         statistics: Option<Statistics>,
     },
+    /// Dictionary page.
     DictionaryPage {
+        /// The underlying data buffer
         buf: Bytes,
+        /// Number of values in this page
         num_values: u32,
+        /// Encoding for values in this page
         encoding: Encoding,
+        /// Is dictionary page sorted
         is_sorted: bool,
     },
 }
@@ -235,11 +257,17 @@ impl CompressedPage {
 
 /// Contains page write metrics.
 pub struct PageWriteSpec {
+    /// The type of page being written
     pub page_type: PageType,
+    /// The total size of the page, before compression
     pub uncompressed_size: usize,
+    /// The compressed size of the page
     pub compressed_size: usize,
+    /// The number of values in the page
     pub num_values: u32,
+    /// The offset of the page in the column chunk
     pub offset: u64,
+    /// The number of bytes written to the underlying sink
     pub bytes_written: u64,
 }
 

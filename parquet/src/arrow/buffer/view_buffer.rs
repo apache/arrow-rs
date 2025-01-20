@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_view_buffer_append_view() {
         let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(&b"0123456789long string to test string view"[..]);
+        let string_buffer = Buffer::from(b"0123456789long string to test string view");
         let block_id = buffer.append_block(string_buffer);
 
         unsafe {
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_view_buffer_pad_null() {
         let mut buffer = ViewBuffer::default();
-        let string_buffer = Buffer::from(&b"0123456789long string to test string view"[..]);
+        let string_buffer = Buffer::from(b"0123456789long string to test string view");
         let block_id = buffer.append_block(string_buffer);
 
         unsafe {

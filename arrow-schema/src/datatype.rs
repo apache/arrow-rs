@@ -40,7 +40,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 /// # use arrow_schema::{DataType, Field};
 /// # use std::sync::Arc;
 /// // create a new list of 32-bit signed integers directly
-/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// // Create the same list type with constructor
 /// let list_data_type2 = DataType::new_list(DataType::Int32, true);
 /// assert_eq!(list_data_type, list_data_type2);
@@ -196,6 +196,14 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    ///
+    /// Timezone string parsing
+    /// -----------------------
+    /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
+    ///
+    /// When feature `chrono-tz` is enabled, additional strings supported by [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
+    /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+    /// timezones.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
@@ -544,16 +552,21 @@ impl DataType {
         matches!(self, Int16 | Int32 | Int64)
     }
 
-    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, ListView. LargeListView, Struct, Union,
     /// or Map), or a dictionary of a nested type
     #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
-            List(_) | FixedSizeList(_, _) | LargeList(_) | Struct(_) | Union(_, _) | Map(_, _) => {
-                true
-            }
+            List(_)
+            | FixedSizeList(_, _)
+            | LargeList(_)
+            | ListView(_)
+            | LargeListView(_)
+            | Struct(_)
+            | Union(_, _)
+            | Map(_, _) => true,
             _ => false,
         }
     }
@@ -570,7 +583,9 @@ impl DataType {
     pub fn equals_datatype(&self, other: &DataType) -> bool {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
-            | (DataType::LargeList(a), DataType::LargeList(b)) => {
+            | (DataType::LargeList(a), DataType::LargeList(b))
+            | (DataType::ListView(a), DataType::ListView(b))
+            | (DataType::LargeListView(a), DataType::LargeListView(b)) => {
                 a.is_nullable() == b.is_nullable() && a.data_type().equals_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
@@ -717,7 +732,9 @@ impl DataType {
     pub fn contains(&self, other: &DataType) -> bool {
         match (self, other) {
             (DataType::List(f1), DataType::List(f2))
-            | (DataType::LargeList(f1), DataType::LargeList(f2)) => f1.contains(f2),
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2)) => f1.contains(f2),
             (DataType::FixedSizeList(f1, s1), DataType::FixedSizeList(f2, s2)) => {
                 s1 == s2 && f1.contains(f2)
             }
@@ -837,21 +854,21 @@ mod tests {
     #[test]
     fn test_list_datatype_equality() {
         // tests that list type equality is checked while ignoring list names
-        let list_a = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_a = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_b = DataType::List(Arc::new(Field::new("array", DataType::Int32, true)));
-        let list_c = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
-        let list_d = DataType::List(Arc::new(Field::new("item", DataType::UInt32, true)));
+        let list_c = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_d = DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true)));
         assert!(list_a.equals_datatype(&list_b));
         assert!(!list_a.equals_datatype(&list_c));
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(list_a.clone(), false)), 3);
         let list_f =
             DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            Arc::new(Field::new_list_field(DataType::FixedSizeBinary(3), true)),
             3,
         );
         assert!(list_e.equals_datatype(&list_f));
@@ -998,11 +1015,16 @@ mod tests {
     #[test]
     fn test_nested() {
         let list = DataType::List(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let list_view = DataType::ListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let large_list_view =
+            DataType::LargeListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
 
         assert!(!DataType::is_nested(&DataType::Boolean));
         assert!(!DataType::is_nested(&DataType::Int32));
         assert!(!DataType::is_nested(&DataType::Utf8));
         assert!(DataType::is_nested(&list));
+        assert!(DataType::is_nested(&list_view));
+        assert!(DataType::is_nested(&large_list_view));
 
         assert!(!DataType::is_nested(&DataType::Dictionary(
             Box::new(DataType::Int32),
