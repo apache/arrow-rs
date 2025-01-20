@@ -410,12 +410,15 @@ impl ParquetMetaDataReader {
         };
 
         let bytes = match &fetched {
-            Some((fetched_start, fetched)) if *fetched_start <= range.start && (range.end <= fetched_start + fetched.len()) => {
+            Some((fetched_start, fetched)) if *fetched_start <= range.start => {
                 // `fetched`` is an amount of data spanning from fetched_start to the end of the file
                 // We want to slice out the range we need from that data, but need to adjust the
                 // range we are looking for to be relative to fetched_start.
                 let fetched_start = *fetched_start;
                 let range = range.start - fetched_start..range.end - fetched_start;
+                // santity check: `fetched` should always go until the end of the file
+                // so if our range is beyond that, something is wrong!
+                assert!(range.end <= fetched_start + fetched.len(), "range: {range:?}, fetched: {}, fetched_start: {fetched_start}", fetched.len());
                 fetched.slice(range)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
