@@ -464,7 +464,7 @@ impl RecordBatch {
             .iter()
             .zip(self.schema.fields())
             .rev()
-            .map(|c, f| {
+            .map(|(c, f)| {
                 let name_vec: Vec<&str> = vec![f.name()];
                 (0, c, name_vec, f)
             })
