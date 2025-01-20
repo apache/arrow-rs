@@ -418,7 +418,11 @@ impl ParquetMetaDataReader {
                 let range = range.start - fetched_start..range.end - fetched_start;
                 // santity check: `fetched` should always go until the end of the file
                 // so if our range is beyond that, something is wrong!
-                assert!(range.end <= fetched_start + fetched.len(), "range: {range:?}, fetched: {}, fetched_start: {fetched_start}", fetched.len());
+                assert!(
+                    range.end <= fetched_start + fetched.len(),
+                    "range: {range:?}, fetched: {}, fetched_start: {fetched_start}",
+                    fetched.len()
+                );
                 fetched.slice(range)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
@@ -587,10 +591,7 @@ impl ParquetMetaDataReader {
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
-            Ok((
-                Self::decode_metadata(slice)?,
-                Some((footer_start, suffix)),
-            ))
+            Ok((Self::decode_metadata(slice)?, Some((footer_start, suffix))))
         }
     }
 
@@ -1065,7 +1066,7 @@ mod async_tests {
         let f = MetadataFetchFn(&mut fetch);
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
-            .with_prefetch_hint(Some(len))  // prefetch entire file
+            .with_prefetch_hint(Some(len)) // prefetch entire file
             .load_and_finish(f, len)
             .await
             .unwrap();
