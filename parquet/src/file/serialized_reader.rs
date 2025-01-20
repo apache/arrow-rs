@@ -354,7 +354,7 @@ pub(crate) fn read_page_header<T: Read>(
         if !decryptor.has_footer_key() || !decryptor.footer_decryptor().is_some() {
             let mut prot = TCompactInputProtocol::new(input);
             let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-            return Ok(page_header)
+            return Ok(page_header);
         };
 
         // let file_decryptor = decryptor.column_decryptor();
@@ -380,7 +380,10 @@ pub(crate) fn read_page_header<T: Read>(
         let mut ciphertext: Vec<u8> = vec![];
         input.read_to_end(&mut ciphertext)?;
 
-        let buf = data_decryptor.footer_decryptor().unwrap().decrypt(&ciphertext, aad.as_ref())?;
+        let buf = data_decryptor
+            .footer_decryptor()
+            .unwrap()
+            .decrypt(&ciphertext, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;

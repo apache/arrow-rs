@@ -716,7 +716,12 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
                 .schema_descr()
                 .column(self.column_idx);
 
-            let file_decryptor = self.metadata.file_decryptor().clone().unwrap().get_column_decryptor(column_name.name().as_bytes());
+            let file_decryptor = self
+                .metadata
+                .file_decryptor()
+                .clone()
+                .unwrap()
+                .get_column_decryptor(column_name.name().as_bytes());
             let data_decryptor = Arc::new(file_decryptor.clone());
             let metadata_decryptor = Arc::new(file_decryptor.clone());
 
@@ -1880,8 +1885,8 @@ mod tests {
 
         let decryption_properties = Some(
             ciphers::FileDecryptionProperties::builder()
-                .with_column_key("float_field".as_bytes().to_vec(), column_1_key.to_vec())
-                .with_column_key("double_field".as_bytes().to_vec(), column_2_key.to_vec())
+                .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+                .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
                 .build(),
         );
 

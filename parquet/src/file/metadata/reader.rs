@@ -726,7 +726,6 @@ impl ParquetMetaDataReader {
             if file_decryption_properties.is_none() {
                 return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
             };
-            let file_decryption_properties = file_decryption_properties;
 
             let t_file_crypto_metadata: TFileCryptoMetaData =
                 TFileCryptoMetaData::read_from_in_protocol(&mut prot)
@@ -764,18 +763,6 @@ impl ParquetMetaDataReader {
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-        let mut row_groups = Vec::new();
-        // TODO: row group filtering
-        for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(
-                schema_descr.clone(),
-                rg,
-                #[cfg(feature = "encryption")]
-                decryptor.as_ref(),
-            )?);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
         // todo add file decryptor
         #[cfg(feature = "encryption")]
@@ -788,15 +775,29 @@ impl ParquetMetaDataReader {
             }; // todo decr: add support for GCMCTRV1
             let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
             let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
-            let fdp = file_decryption_properties.unwrap();
+
             decryptor = Some(FileDecryptor::new(
-                fdp,
+                file_decryption_properties.unwrap(),
                 aad_file_unique.clone(),
                 aad_prefix.clone(),
             ));
             // todo get key_metadata etc. Set file decryptor in return value
             // todo check signature
         }
+
+        let mut row_groups = Vec::new();
+        // TODO: row group filtering
+        for rg in t_file_metadata.row_groups {
+            let r = RowGroupMetaData::from_thrift(
+                schema_descr.clone(),
+                rg,
+                #[cfg(feature = "encryption")]
+                decryptor.as_ref(),
+            )?;
+            row_groups.push(r);
+        }
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
         let file_metadata = FileMetaData::new(
             t_file_metadata.version,

@@ -112,8 +112,8 @@ use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData, OffsetIndex,
-    PageLocation, RowGroup, SizeStatistics, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData,
+    EncryptionAlgorithm, OffsetIndex, PageLocation, RowGroup, SizeStatistics, SortingColumn,
 };
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -646,7 +646,7 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
-        for (i, (c, d)) in rg
+        for (i, (mut c, d)) in rg
             .columns
             .drain(0..)
             .zip(schema_descr.columns())
@@ -657,27 +657,25 @@ impl RowGroupMetaData {
             if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
                 c.crypto_metadata.clone()
             {
-                if decryptor.is_none() {
+                if c.encrypted_column_metadata.is_none() {
                     cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                 } else {
+                    let decryptor = decryptor.unwrap();
                     let column_name = crypto_metadata.path_in_schema.join(".");
-                    if !decryptor.unwrap().has_column_key(&column_name.as_bytes()) {
+                    if !decryptor.has_column_key(&column_name.as_bytes()) {
                         cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                         break;
                     }
-                    let aad_file_unique = decryptor.unwrap().aad_file_unique();
-                    let aad_prefix = decryptor
-                        .unwrap()
-                        .decryption_properties()
-                        .aad_prefix()
-                        .unwrap();
-
                     let column_decryptor = decryptor
-                        .unwrap()
                         .get_column_decryptor(column_name.as_bytes())
                         .footer_decryptor()
                         .unwrap();
 
+                    let aad_file_unique = decryptor.aad_file_unique();
+                    let aad_prefix: Vec<u8> = decryptor
+                        .decryption_properties()
+                        .aad_prefix()
+                        .unwrap_or_default();
                     let column_aad = create_module_aad(
                         [aad_prefix.as_slice(), aad_file_unique.as_slice()]
                             .concat()
@@ -688,12 +686,12 @@ impl RowGroupMetaData {
                         None,
                     )?;
 
-                    let buf = c.encrypted_column_metadata.unwrap();
+                    let buf = c.encrypted_column_metadata.clone().unwrap();
                     let decrypted_cc_buf =
                         column_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
 
                     let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
-                    let c = ColumnChunk::read_from_in_protocol(&mut prot)?;
+                    c.meta_data = Some(ColumnMetaData::read_from_in_protocol(&mut prot)?);
                     cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
                 }
             } else {

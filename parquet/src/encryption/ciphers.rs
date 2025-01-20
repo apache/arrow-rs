@@ -241,8 +241,12 @@ impl FileDecryptionProperties {
     }
     pub fn has_footer_key(&self) -> bool { self.footer_key.is_some() }
 
-    pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
-        self.aad_prefix.as_ref()
+    pub fn has_column_keys(&self) -> bool {
+        self.column_keys.is_some()
+    }
+
+    pub fn aad_prefix(&self) -> Option<Vec<u8>> {
+        self.aad_prefix.clone()
     }
 }
 
