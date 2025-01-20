@@ -830,8 +830,8 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i32; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i32; 0]);
 
         let string = LargeListViewArray::from(
             ArrayData::builder(DataType::LargeListView(f))
@@ -841,8 +841,8 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(string.len(), 0);
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i64; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i64; 0]);
     }
 
     #[test]
