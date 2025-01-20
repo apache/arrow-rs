@@ -411,10 +411,10 @@ impl ParquetMetaDataReader {
 
         let bytes = match &remainder {
             Some((remainder_start, remainder)) if *remainder_start <= range.start => {
-                let offset = range.start - *remainder_start;  
-                let end = offset + range.end - range.start;  
-                assert!(end <= remainder.len());  
-                remainder.slice(offset..end)  
+                let offset = range.start - *remainder_start;
+                let end = offset + range.end - range.start;
+                assert!(end <= remainder.len());
+                remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
             _ => fetch.fetch(range.start..range.end).await?,
