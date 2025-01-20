@@ -99,24 +99,26 @@ impl ExtensionType for Json {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Map;
-
+    #[cfg(feature = "canonical-extension-types")]
+    use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{CanonicalExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
     };
+
+    use serde_json::Map;
 
     use super::*;
 
     #[test]
-    fn json() -> Result<(), ArrowError> {
+    fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Utf8, false);
         field.try_with_extension_type(Json::default())?;
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&r#""""#.to_owned())
         );
-        assert!(field.try_extension_type::<Json>().is_ok());
+        field.try_extension_type::<Json>()?;
 
         let mut field = Field::new("", DataType::LargeUtf8, false);
         field.try_with_extension_type(Json(JsonMetadata(serde_json::Value::Object(
@@ -126,26 +128,41 @@ mod tests {
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_owned())
         );
-        assert!(field.try_extension_type::<Json>().is_ok());
+        field.try_extension_type::<Json>()?;
 
         let mut field = Field::new("", DataType::Utf8View, false);
         field.try_with_extension_type(Json::default())?;
-        assert!(field.try_extension_type::<Json>().is_ok());
+        field.try_extension_type::<Json>()?;
+        #[cfg(feature = "canonical-extension-types")]
         assert_eq!(
-            field.try_canonical_extension_type().unwrap(),
+            field.try_canonical_extension_type()?,
             CanonicalExtensionType::Json(Json::default())
         );
         Ok(())
     }
 
     #[test]
+    #[should_panic(expected = "Field extension type name missing")]
+    fn missing_name() {
+        let field = Field::new("", DataType::Int8, false).with_metadata(
+            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "{}".to_owned())]
+                .into_iter()
+                .collect(),
+        );
+        field.extension_type::<Json>();
+    }
+
+    #[test]
     #[should_panic(expected = "expected one of Utf8, LargeUtf8, Utf8View, found Null")]
-    fn json_bad_type() {
+    fn invalid_type() {
         Field::new("", DataType::Null, false).with_extension_type(Json::default());
     }
 
     #[test]
-    fn json_bad_metadata() {
+    #[should_panic(
+        expected = "Json extension type metadata is either an empty string or a JSON string with an empty object"
+    )]
+    fn invalid_metadata() {
         let field = Field::new("", DataType::Utf8, false).with_metadata(
             [
                 (EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned()),
@@ -154,18 +171,19 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        // This returns `None` now because this metadata is invalid.
-        assert!(field.try_extension_type::<Json>().is_err());
+        field.extension_type::<Json>();
     }
 
     #[test]
-    fn json_missing_metadata() {
+    #[should_panic(
+        expected = "Json extension type metadata is either an empty string or a JSON string with an empty object"
+    )]
+    fn missing_metadata() {
         let field = Field::new("", DataType::LargeUtf8, false).with_metadata(
             [(EXTENSION_TYPE_NAME_KEY.to_owned(), Json::NAME.to_owned())]
                 .into_iter()
                 .collect(),
         );
-        // This returns `None` now because the metadata is missing.
-        assert!(field.try_extension_type::<Json>().is_err());
+        field.extension_type::<Json>();
     }
 }

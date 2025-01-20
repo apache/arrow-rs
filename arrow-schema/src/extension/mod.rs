@@ -199,6 +199,8 @@ pub trait ExtensionType: Sized {
     /// extension types, they should not be used for third-party extension
     /// types.
     ///
+    /// Extension names are case-sensitive.
+    ///
     /// [`Field`]: crate::Field
     /// [`Field::metadata`]: crate::Field::metadata
     const NAME: &'static str;

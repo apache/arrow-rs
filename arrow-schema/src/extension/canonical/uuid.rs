@@ -77,42 +77,52 @@ impl ExtensionType for Uuid {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "canonical-extension-types")]
+    use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{CanonicalExtensionType, EXTENSION_TYPE_METADATA_KEY},
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
     };
 
     use super::*;
 
     #[test]
-    fn uuid() -> Result<(), ArrowError> {
+    fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::FixedSizeBinary(16), false);
         field.try_with_extension_type(Uuid)?;
-        assert!(field.try_extension_type::<Uuid>().is_ok());
+        field.try_extension_type::<Uuid>()?;
+        #[cfg(feature = "canonical-extension-types")]
         assert_eq!(
-            field.try_canonical_extension_type().unwrap(),
+            field.try_canonical_extension_type()?,
             CanonicalExtensionType::Uuid(Uuid)
         );
         Ok(())
     }
 
     #[test]
+    #[should_panic(expected = "Field extension type name missing")]
+    fn missing_name() {
+        let field = Field::new("", DataType::FixedSizeBinary(16), false);
+        field.extension_type::<Uuid>();
+    }
+
+    #[test]
     #[should_panic(expected = "expected FixedSizeBinary(16), found FixedSizeBinary(8)")]
-    fn uuid_bad_type() {
+    fn invalid_type() {
         Field::new("", DataType::FixedSizeBinary(8), false).with_extension_type(Uuid);
     }
 
     #[test]
-    fn uuid_with_metadata() {
-        // Add metadata that's not expected for uuid.
-        let field = Field::new("", DataType::FixedSizeBinary(16), false)
-            .with_extension_type(Uuid)
-            .with_metadata(
-                [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
-                    .into_iter()
-                    .collect(),
-            );
-        // This returns an error now because `Uuid` expects no metadata.
-        assert!(field.try_extension_type::<Uuid>().is_err());
+    #[should_panic(expected = "Uuid extension type expects no metadata")]
+    fn with_metadata() {
+        let field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
+            [
+                (EXTENSION_TYPE_NAME_KEY.to_owned(), Uuid::NAME.to_owned()),
+                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        field.extension_type::<Uuid>();
     }
 }

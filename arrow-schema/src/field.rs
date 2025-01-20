@@ -513,24 +513,7 @@ impl Field {
     /// - the construction of the extension type fails
     #[cfg(feature = "canonical-extension-types")]
     pub fn try_canonical_extension_type(&self) -> Result<CanonicalExtensionType, ArrowError> {
-        use crate::extension::{FixedShapeTensor, Json, Uuid};
-
-        // Canonical extension type names start with `arrow.`
-        match self.extension_type_name() {
-            // An extension type name with an `arrow.` prefix
-            Some(name) if name.starts_with("arrow.") => match name {
-                FixedShapeTensor::NAME => self.try_extension_type::<FixedShapeTensor>().map(Into::into),
-                Json::NAME => self.try_extension_type::<Json>().map(Into::into),
-                Uuid::NAME => self.try_extension_type::<Uuid>().map(Into::into),
-                _ => Err(ArrowError::InvalidArgumentError(format!("Unsupported canonical extension type: {name}"))),
-            },
-            // Name missing the expected prefix
-            Some(name) => Err(ArrowError::InvalidArgumentError(format!(
-                "Field extension type name mismatch, expected a name with an `arrow.` prefix, found {name}"
-            ))),
-            // Name missing
-            None => Err(ArrowError::InvalidArgumentError("Field extension type name missing".to_owned())),
-        }
+        CanonicalExtensionType::try_from(self)
     }
 
     /// Indicates whether this [`Field`] supports null values.

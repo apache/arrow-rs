@@ -129,3 +129,73 @@ impl ExtensionType for Opaque {
         Ok(Self::from(metadata))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "canonical-extension-types")]
+    use crate::extension::CanonicalExtensionType;
+    use crate::{
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        Field,
+    };
+
+    use super::*;
+
+    #[test]
+    fn valid() -> Result<(), ArrowError> {
+        let opaque = Opaque::new("name", "vendor");
+        let mut field = Field::new("", DataType::Null, false);
+        field.try_with_extension_type(opaque.clone())?;
+        assert_eq!(field.try_extension_type::<Opaque>()?, opaque);
+        #[cfg(feature = "canonical-extension-types")]
+        assert_eq!(
+            field.try_canonical_extension_type()?,
+            CanonicalExtensionType::Opaque(opaque)
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "Field extension type name missing")]
+    fn missing_name() {
+        let field = Field::new("", DataType::Null, false).with_metadata(
+            [(
+                EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                r#"{ "type_name": "type", "vendor_name": "vendor" }"#.to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        field.extension_type::<Opaque>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Opaque extension types requires metadata")]
+    fn missing_metadata() {
+        let field = Field::new("", DataType::Null, false).with_metadata(
+            [(EXTENSION_TYPE_NAME_KEY.to_owned(), Opaque::NAME.to_owned())]
+                .into_iter()
+                .collect(),
+        );
+        field.extension_type::<Opaque>();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Opaque metadata deserialization failed: missing field `vendor_name`"
+    )]
+    fn invalid_metadata() {
+        let field = Field::new("", DataType::Null, false).with_metadata(
+            [
+                (EXTENSION_TYPE_NAME_KEY.to_owned(), Opaque::NAME.to_owned()),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    r#"{ "type_name": "no-vendor" }"#.to_owned(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        field.extension_type::<Opaque>();
+    }
+}

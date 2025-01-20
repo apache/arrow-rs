@@ -38,6 +38,10 @@ pub use uuid::Uuid;
 mod variable_shape_tensor;
 pub use variable_shape_tensor::{VariableShapeTensor, VariableShapeTensorMetadata};
 
+use crate::{ArrowError, Field};
+
+use super::ExtensionType;
+
 /// Canonical extension types.
 ///
 /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#format-canonical-extensions>
@@ -68,6 +72,37 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#opaque>
     Opaque(Opaque),
+
+    /// The extension type for `Bool8`.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
+    Bool8(Bool8),
+}
+
+impl TryFrom<&Field> for CanonicalExtensionType {
+    type Error = ArrowError;
+
+    fn try_from(value: &Field) -> Result<Self, Self::Error> {
+        // Canonical extension type names start with `arrow.`
+        match value.extension_type_name() {
+            // An extension type name with an `arrow.` prefix
+            Some(name) if name.starts_with("arrow.") => match name {
+                FixedShapeTensor::NAME => value.try_extension_type::<FixedShapeTensor>().map(Into::into),
+                VariableShapeTensor::NAME => value.try_extension_type::<VariableShapeTensor>().map(Into::into),
+                Json::NAME => value.try_extension_type::<Json>().map(Into::into),
+                Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
+                Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
+                Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
+                _ => Err(ArrowError::InvalidArgumentError(format!("Unsupported canonical extension type: {name}"))),
+            },
+            // Name missing the expected prefix
+            Some(name) => Err(ArrowError::InvalidArgumentError(format!(
+                "Field extension type name mismatch, expected a name with an `arrow.` prefix, found {name}"
+            ))),
+            // Name missing
+            None => Err(ArrowError::InvalidArgumentError("Field extension type name missing".to_owned())),
+        }
+    }
 }
 
 impl From<FixedShapeTensor> for CanonicalExtensionType {
@@ -97,5 +132,11 @@ impl From<Uuid> for CanonicalExtensionType {
 impl From<Opaque> for CanonicalExtensionType {
     fn from(value: Opaque) -> Self {
         CanonicalExtensionType::Opaque(value)
+    }
+}
+
+impl From<Bool8> for CanonicalExtensionType {
+    fn from(value: Bool8) -> Self {
+        CanonicalExtensionType::Bool8(value)
     }
 }
