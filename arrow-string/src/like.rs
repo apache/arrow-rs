@@ -53,16 +53,22 @@ impl std::fmt::Display for Op {
 
 /// Perform SQL `left LIKE right`
 ///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+///
 /// There are two wildcards supported with the LIKE operator:
 ///
 /// 1. `%` - The percent sign represents zero, one, or multiple characters
 /// 2. `_` - The underscore represents a single character
 ///
-/// For example:
+/// Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
 /// # use arrow_string::like::like;
-/// #
 /// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
 /// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
 ///
@@ -75,39 +81,107 @@ pub fn like(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowEr
 
 /// Perform SQL `left ILIKE right`
 ///
-/// This is a case-insensitive version of [`like`]
-///
-/// Note: this only implements loose matching as defined by the Unicode standard. For example,
-/// the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
+/// # Notes
+/// - This is a case-insensitive version of [`like`]
+/// - See the documentation on [`like`] for more details
+/// - Implements loose matching as defined by the Unicode standard. For example,
+///   the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
 pub fn ilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(false), left, right)
 }
 
 /// Perform SQL `left NOT LIKE right`
 ///
-/// See the documentation on [`like`] for more details
+/// # Notes
+/// - This is a negative of [`like`]
+/// - See the documentation on [`like`] for more details
 pub fn nlike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Like(true), left, right)
 }
 
 /// Perform SQL `left NOT ILIKE right`
 ///
-/// See the documentation on [`ilike`] for more details
+/// # Notes
+/// - This is a negative of [`like`]
+/// - See the documentation on [`ilike`] for more details
 pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(true), left, right)
 }
 
 /// Perform SQL `STARTSWITH(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "arrow", "arrow-cpp", "p"]);
+///
+/// let result = starts_with(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, true, false, false]));
+/// ```
 pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::StartsWith, left, right)
 }
 
 /// Perform SQL `ENDSWITH(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{ends_with, like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs",  "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "-rs", "t"]);
+///
+/// let result = ends_with(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![false, true, true]));
+/// ```
 pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::EndsWith, left, right)
 }
 
 /// Perform SQL `CONTAINS(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{contains, like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "-rs", "arrow-cpp", "X"]);
+///
+/// let result = contains(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, true, false, false]));
+/// ```
 pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Contains, left, right)
 }
