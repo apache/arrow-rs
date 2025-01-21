@@ -551,8 +551,6 @@ pub struct RowGroupMetaData {
     ordinal: Option<i16>,
 }
 
-// todo:rok
-
 impl RowGroupMetaData {
     /// Returns builder for row group metadata.
     pub fn builder(schema_descr: SchemaDescPtr) -> RowGroupMetaDataBuilder {
@@ -646,49 +644,43 @@ impl RowGroupMetaData {
             .zip(schema_descr.columns())
             .enumerate()
         {
-            let cc;
             #[cfg(feature = "encryption")]
-            if let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
-                c.crypto_metadata.clone()
-            {
-                if c.encrypted_column_metadata.is_none() {
-                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
-                } else {
-                    let decryptor = decryptor.unwrap();
-                    let column_name = crypto_metadata.path_in_schema.join(".");
-                    let column_decryptor = decryptor
-                        .get_column_decryptor(column_name.as_bytes())
-                        .footer_decryptor()
-                        .unwrap();
+            if c.encrypted_column_metadata.is_some() {
+                let decryptor = decryptor.unwrap();
+                let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
+                    c.crypto_metadata.clone()
+                else {
+                    todo!()
+                };
+                let column_name = crypto_metadata.path_in_schema.join(".");
+                let column_decryptor = decryptor
+                    .get_column_decryptor(column_name.as_bytes())
+                    .footer_decryptor()
+                    .unwrap();
 
-                    let aad_file_unique = decryptor.aad_file_unique();
-                    let aad_prefix: Vec<u8> = decryptor
-                        .decryption_properties()
-                        .aad_prefix()
-                        .unwrap_or_default();
-                    let column_aad = create_module_aad(
-                        [aad_prefix.as_slice(), aad_file_unique.as_slice()]
-                            .concat()
-                            .as_slice(),
-                        ModuleType::ColumnMetaData,
-                        rg.ordinal.unwrap() as usize,
-                        i as usize,
-                        None,
-                    )?;
+                let aad_file_unique = decryptor.aad_file_unique();
+                let aad_prefix: Vec<u8> = decryptor
+                    .decryption_properties()
+                    .aad_prefix()
+                    .unwrap_or_default();
+                let column_aad = create_module_aad(
+                    [aad_prefix.as_slice(), aad_file_unique.as_slice()]
+                        .concat()
+                        .as_slice(),
+                    ModuleType::ColumnMetaData,
+                    rg.ordinal.unwrap() as usize,
+                    i,
+                    None,
+                )?;
 
-                    let buf = c.encrypted_column_metadata.clone().unwrap();
-                    let decrypted_cc_buf =
-                        column_decryptor.decrypt(buf.as_slice().as_ref(), column_aad.as_ref())?;
+                let buf = c.encrypted_column_metadata.clone().unwrap();
+                let decrypted_cc_buf =
+                    column_decryptor.decrypt(buf.as_slice(), column_aad.as_ref())?;
 
-                    let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
-                    c.meta_data = Some(ColumnMetaData::read_from_in_protocol(&mut prot)?);
-                    cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
-                }
-            } else {
-                cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
+                let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
+                c.meta_data = Some(ColumnMetaData::read_from_in_protocol(&mut prot)?);
             }
-
-            columns.push(cc);
+            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
         }
         let sorting_columns = rg.sorting_columns;
         Ok(RowGroupMetaData {

@@ -738,11 +738,6 @@ impl ParquetMetaDataReader {
             }; // todo decr: add support for GCMCTRV1
 
             // todo decr: get key_metadata
-
-            // remaining buffer contains encrypted FileMetaData
-
-            // todo decr: get aad_prefix
-            // todo decr: set both aad_prefix and aad_file_unique in file_decryptor
             let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
             let aad_footer = create_footer_aad(aad_file_unique.as_ref())?;
             let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
@@ -764,7 +759,6 @@ impl ParquetMetaDataReader {
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
-        // todo add file decryptor
         #[cfg(feature = "encryption")]
         if t_file_metadata.encryption_algorithm.is_some() {
             let algo = t_file_metadata.encryption_algorithm;

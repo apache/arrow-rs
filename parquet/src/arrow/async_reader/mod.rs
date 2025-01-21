@@ -154,7 +154,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            // todo: use file_decryption_properties
+            // todo: provide file_decryption_properties
             Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
                 &buf,
                 footer.encrypted_footer(),
@@ -971,6 +971,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
+                // todo: provide crypto_context
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
                     self.metadata.column(i),
