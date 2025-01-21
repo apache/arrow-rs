@@ -1934,6 +1934,7 @@ mod tests {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
+    #[cfg(feature = "encryption")]
     fn verify_encryption_test_file_read(
         file: File,
         decryption_properties: ciphers::FileDecryptionProperties,

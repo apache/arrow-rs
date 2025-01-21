@@ -18,9 +18,9 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
+use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
 use std::sync::Arc;
-use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 // use ring::aead::NonceSequence;
 // use ring::rand::{SecureRandom, SystemRandom};
 use crate::errors::{ParquetError, Result};
@@ -147,8 +147,7 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
             &length_and_ciphertext[SIZE_LEN..SIZE_LEN + NONCE_LEN],
         )?;
 
-        self.key
-            .open_in_place(nonce, Aad::from(aad), &mut result)?;
+        self.key.open_in_place(nonce, Aad::from(aad), &mut result)?;
 
         // Truncate result to remove the tag
         result.resize(result.len() - TAG_LEN, 0u8);
@@ -197,7 +196,6 @@ fn create_module_aad(
     column_ordinal: usize,
     page_ordinal: Option<usize>,
 ) -> Result<Vec<u8>> {
-
     let module_buf = [module_type as u8];
 
     if module_buf[0] == (ModuleType::Footer as u8) {
@@ -429,7 +427,7 @@ impl CryptoContext {
         row_group_ordinal: usize,
         column_ordinal: usize,
         data_decryptor: Arc<FileDecryptor>,
-        metadata_decryptor: Arc<FileDecryptor>
+        metadata_decryptor: Arc<FileDecryptor>,
     ) -> Self {
         Self {
             row_group_ordinal,
