@@ -96,15 +96,10 @@ pub(crate) mod reader;
 mod writer;
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
-use crate::data_type::AsBytes;
+use crate::encryption::ciphers::BlockDecryptor;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptor;
-use crate::encryption::ciphers::{
-    create_footer_aad, create_module_aad, create_page_aad, ModuleType,
-};
-use crate::encryption::ciphers::{
-    BlockDecryptor, DecryptionPropertiesBuilder, FileDecryptionProperties,
-};
+use crate::encryption::ciphers::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
@@ -112,8 +107,8 @@ use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData,
-    EncryptionAlgorithm, OffsetIndex, PageLocation, RowGroup, SizeStatistics, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData, OffsetIndex,
+    PageLocation, RowGroup, SizeStatistics, SortingColumn,
 };
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -125,7 +120,6 @@ use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
-use zstd::zstd_safe::WriteBuf;
 
 /// Page level statistics for each column chunk of each row group.
 ///
@@ -662,10 +656,6 @@ impl RowGroupMetaData {
                 } else {
                     let decryptor = decryptor.unwrap();
                     let column_name = crypto_metadata.path_in_schema.join(".");
-                    if !decryptor.has_column_key(&column_name.as_bytes()) {
-                        cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
-                        break;
-                    }
                     let column_decryptor = decryptor
                         .get_column_decryptor(column_name.as_bytes())
                         .footer_decryptor()

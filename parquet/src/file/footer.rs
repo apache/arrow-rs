@@ -18,7 +18,6 @@
 //! Module for working with Parquet file footers.
 
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::FileDecryptionProperties;
 use crate::errors::Result;
 use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE};
 

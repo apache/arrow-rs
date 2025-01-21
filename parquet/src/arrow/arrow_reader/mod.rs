@@ -32,7 +32,6 @@ use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
-use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -42,7 +41,6 @@ mod filter;
 mod selection;
 pub mod statistics;
 
-use crate::encryption::ciphers::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::{CryptoContext, FileDecryptionProperties};
 
@@ -716,7 +714,13 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
                 .schema_descr()
                 .column(self.column_idx);
 
-            if self.metadata.file_decryptor().as_ref().unwrap().is_column_encrypted(column_name.name().as_bytes()) {
+            if self
+                .metadata
+                .file_decryptor()
+                .as_ref()
+                .unwrap()
+                .is_column_encrypted(column_name.name().as_bytes())
+            {
                 let file_decryptor = self
                     .metadata
                     .file_decryptor()
@@ -1930,18 +1934,23 @@ mod tests {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
-    fn verify_encryption_test_file_read(file: File, decryption_properties: ciphers::FileDecryptionProperties) {
+    fn verify_encryption_test_file_read(
+        file: File,
+        decryption_properties: ciphers::FileDecryptionProperties,
+    ) {
         let decryption_properties = Some(decryption_properties);
 
         let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref()).unwrap();
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
+                .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
             file,
             128,
             decryption_properties.as_ref(),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(file_metadata.num_rows(), 50);
         assert_eq!(file_metadata.schema_descr().num_columns(), 8);

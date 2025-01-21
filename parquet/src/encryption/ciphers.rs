@@ -22,9 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
-use zstd::zstd_safe::WriteBuf;
 use crate::errors::{ParquetError, Result};
-use crate::format::EncryptionAlgorithm;
 
 pub trait BlockEncryptor {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
@@ -176,10 +174,6 @@ pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, 0, 0, None)
 }
 
-pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize, column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
-    create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
-}
-
 pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
                          column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
 
@@ -327,10 +321,6 @@ impl FileDecryptor {
     // todo decr: change to BlockDecryptor
     pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
         self.footer_decryptor.unwrap()
-    }
-
-    pub(crate) fn column_decryptor(&self) -> RingGcmBlockDecryptor {
-        RingGcmBlockDecryptor::new(self.decryption_properties.footer_key.as_ref().unwrap())
     }
 
     pub(crate) fn has_column_key(&self, column_name: &[u8]) -> bool {

@@ -704,6 +704,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 offset,
                 remaining_bytes,
                 next_page_header,
+                ..
             } => {
                 loop {
                     if *remaining_bytes == 0 {
@@ -719,7 +720,11 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                         }
                     } else {
                         let mut read = self.reader.get_read(*offset as u64)?;
-                        let (header_len, header) = read_page_header_len(&mut read)?;
+                        let (header_len, header) = read_page_header_len(
+                            &mut read,
+                            #[cfg(feature = "encryption")]
+                            None,
+                        )?;
                         *offset += header_len;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
@@ -1375,6 +1380,8 @@ mod tests {
             row_group.metadata.num_rows() as usize,
             page_locations,
             props,
+            #[cfg(feature = "encryption")]
+            None,
         )
     }
 
