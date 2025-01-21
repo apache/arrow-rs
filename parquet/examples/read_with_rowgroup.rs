@@ -121,6 +121,8 @@ impl RowGroups for InMemoryRowGroup {
                     self.metadata.column(i),
                     self.num_rows(),
                     None,
+                    #[cfg(feature = "encryption")]
+                    None,
                 )?);
 
                 Ok(Box::new(ColumnChunkIterator {
