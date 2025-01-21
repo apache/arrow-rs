@@ -96,27 +96,26 @@ pub(crate) mod reader;
 mod writer;
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
-use crate::encryption::ciphers::BlockDecryptor;
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::FileDecryptor;
-use crate::encryption::ciphers::{create_page_aad, ModuleType};
+use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, FileDecryptor, ModuleType};
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
+#[cfg(feature = "encryption")]
+use crate::format::ColumnCryptoMetaData;
 use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnCryptoMetaData, ColumnIndex, ColumnMetaData, OffsetIndex,
-    PageLocation, RowGroup, SizeStatistics, SortingColumn,
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
+    SizeStatistics, SortingColumn,
 };
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
 #[cfg(feature = "encryption")]
-use crate::thrift::TCompactSliceInputProtocol;
-use crate::thrift::TSerializable;
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 pub use reader::ParquetMetaDataReader;
 use std::ops::Range;
 use std::sync::Arc;
@@ -642,12 +641,7 @@ impl RowGroupMetaData {
         let mut columns = vec![];
 
         #[cfg(not(feature = "encryption"))]
-        for (i, (c, d)) in rg
-            .columns
-            .drain(0..)
-            .zip(schema_descr.columns())
-            .enumerate()
-        {
+        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
             columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
         }
 
