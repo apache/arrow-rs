@@ -1058,7 +1058,7 @@ impl TryFrom<Blob> for ObjectMeta {
         Ok(Self {
             location: Path::parse(value.name)?,
             last_modified: value.properties.last_modified,
-            size: value.properties.content_length as usize,
+            size: value.properties.content_length,
             e_tag: value.properties.e_tag,
             version: None, // For consistency with S3 and GCP which don't include this
         })

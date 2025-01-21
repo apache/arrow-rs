@@ -203,7 +203,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Ok(throttle_get(result, wait_get_per_byte))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let config = self.config();
 
         let sleep_duration =
@@ -214,10 +214,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.get_range(location, range).await
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let config = self.config();
 
-        let total_bytes: usize = ranges.iter().map(|range| range.end - range.start).sum();
+        let total_bytes: u64 = ranges.iter().map(|range| range.end - range.start).sum();
         let sleep_duration =
             config.wait_get_per_call + config.wait_get_per_byte * total_bytes as u32;
 

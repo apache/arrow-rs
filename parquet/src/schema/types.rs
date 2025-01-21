@@ -1211,6 +1211,13 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
         ));
     }
     let element = &elements[index];
+
+    // Check for empty schema
+    if let (true, None | Some(0)) = (is_root_node, element.num_children) {
+        let builder = Type::group_type_builder(&element.name);
+        return Ok((index + 1, Arc::new(builder.build().unwrap())));
+    }
+
     let converted_type = ConvertedType::try_from(element.converted_type)?;
     // LogicalType is only present in v2 Parquet files. ConvertedType is always
     // populated, regardless of the version of the file (v1 or v2).
