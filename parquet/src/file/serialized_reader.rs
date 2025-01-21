@@ -377,8 +377,11 @@ pub(crate) fn read_page_header<T: Read>(
             crypto_context.page_ordinal,
         )?;
 
-        let mut ciphertext: Vec<u8> = vec![];
-        input.read_to_end(&mut ciphertext)?;
+        let mut len_bytes = [0; 4];
+        input.read_exact(&mut len_bytes)?;
+        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut ciphertext = vec![0; 4 + ciphertext_len];
+        input.read_exact(&mut ciphertext[4..])?;
 
         let buf = data_decryptor
             .footer_decryptor()
