@@ -10334,7 +10334,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_throw_error_on_precision_overflow_lower_scale() {
         let array = vec![Some(123456789)];
-        let array = create_decimal128_array(array, 24, 2).unwrap();
+        let array = create_decimal128_array(array, 24, 4).unwrap();
         let input_type = DataType::Decimal128(24, 4);
         let output_type = DataType::Decimal128(6, 2);
         assert!(can_cast_types(&input_type, &output_type));
