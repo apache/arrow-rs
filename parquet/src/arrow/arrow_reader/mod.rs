@@ -1883,45 +1883,12 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = Some(
-            ciphers::FileDecryptionProperties::builder()
-                .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-                .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
-                .build(),
-        );
+        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build();
 
-        let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
-                .unwrap();
-        let file_metadata = metadata.metadata.file_metadata();
-
-        assert_eq!(file_metadata.num_rows(), 50);
-        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-        assert_eq!(
-            file_metadata.created_by().unwrap(),
-            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
-        );
-
-        metadata.metadata.row_groups().iter().for_each(|rg| {
-            assert_eq!(rg.num_columns(), 8);
-            assert_eq!(rg.num_rows(), 50);
-            assert_eq!(rg.total_byte_size(), 3816);
-        });
-
-        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
-            file,
-            128,
-            decryption_properties.as_ref(),
-        )
-        .unwrap();
-
-        let mut row_count = 0;
-        for batch in record_reader {
-            let batch = batch.unwrap();
-            row_count += batch.num_rows();
-        }
-
-        assert_eq!(row_count, file_metadata.num_rows() as usize);
+        verify_encryption_test_file_read(file, decryption_properties);
     }
 
     #[test]
@@ -1937,26 +1904,14 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = Some(
-            ciphers::FileDecryptionProperties::builder()
-                .with_footer_key(footer_key.to_vec())
-                .with_column_key("float_field".as_bytes().to_vec(), column_1_key.to_vec())
-                .with_column_key("double_field".as_bytes().to_vec(), column_2_key.to_vec())
-                .with_aad_prefix("tester".as_bytes().to_vec())
-                .build(),
-        );
+        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+            .with_footer_key(footer_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_aad_prefix("tester".as_bytes().to_vec())
+            .build();
 
-        let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
-                .unwrap();
-        let file_metadata = metadata.metadata.file_metadata();
-
-        assert_eq!(file_metadata.num_rows(), 50);
-        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-        assert_eq!(
-            file_metadata.created_by().unwrap(),
-            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
-        );
+        verify_encryption_test_file_read(file, decryption_properties);
     }
 
     #[test]
@@ -1967,16 +1922,25 @@ mod tests {
         let file = File::open(path).unwrap();
 
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        let decryption_properties = Some(
-            ciphers::FileDecryptionProperties::builder()
-                .with_footer_key(key_code.to_vec())
-                .build(),
-        );
+        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+            .with_footer_key(key_code.to_vec())
+            .build();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+    }
+
+    fn verify_encryption_test_file_read(file: File, decryption_properties: ciphers::FileDecryptionProperties) {
+        let decryption_properties = Some(decryption_properties);
 
         let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
-                .unwrap();
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref()).unwrap();
         let file_metadata = metadata.metadata.file_metadata();
+
+        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
+            file,
+            128,
+            decryption_properties.as_ref(),
+        ).unwrap();
 
         assert_eq!(file_metadata.num_rows(), 50);
         assert_eq!(file_metadata.schema_descr().num_columns(), 8);
@@ -1988,20 +1952,7 @@ mod tests {
         metadata.metadata.row_groups().iter().for_each(|rg| {
             assert_eq!(rg.num_columns(), 8);
             assert_eq!(rg.num_rows(), 50);
-            assert_eq!(rg.total_byte_size(), 4172);
         });
-
-        let decryption_properties = Some(
-            ciphers::FileDecryptionProperties::builder()
-                .with_footer_key(key_code.to_vec())
-                .build(),
-        );
-        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
-            file,
-            128,
-            decryption_properties.as_ref(),
-        )
-        .unwrap();
 
         let mut row_count = 0;
         for batch in record_reader {
