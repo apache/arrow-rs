@@ -716,18 +716,22 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
                 .schema_descr()
                 .column(self.column_idx);
 
-            let file_decryptor = self
-                .metadata
-                .file_decryptor()
-                .clone()
-                .unwrap()
-                .get_column_decryptor(column_name.name().as_bytes());
-            let data_decryptor = Arc::new(file_decryptor.clone());
-            let metadata_decryptor = Arc::new(file_decryptor.clone());
+            if self.metadata.file_decryptor().as_ref().unwrap().is_column_encrypted(column_name.name().as_bytes()) {
+                let file_decryptor = self
+                    .metadata
+                    .file_decryptor()
+                    .clone()
+                    .unwrap()
+                    .get_column_decryptor(column_name.name().as_bytes());
+                let data_decryptor = Arc::new(file_decryptor.clone());
+                let metadata_decryptor = Arc::new(file_decryptor.clone());
 
-            let crypto_context =
-                CryptoContext::new(rg_idx, self.column_idx, data_decryptor, metadata_decryptor);
-            Some(Arc::new(crypto_context))
+                let crypto_context =
+                    CryptoContext::new(rg_idx, self.column_idx, data_decryptor, metadata_decryptor);
+                Some(Arc::new(crypto_context))
+            } else {
+                None
+            }
         } else {
             None
         };

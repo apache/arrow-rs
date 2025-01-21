@@ -377,6 +377,11 @@ impl FileDecryptor {
     pub(crate) fn has_footer_key(&self) -> bool {
         self.decryption_properties.has_footer_key()
     }
+
+    pub(crate) fn is_column_encrypted(&self, column_name: &[u8]) -> bool {
+        // Column is encrypted if either uniform encryption is used or an encryption key is set for the column
+        self.decryption_properties.column_keys.is_none() || self.has_column_key(column_name)
+    }
 }
 
 #[derive(Debug, Clone)]
