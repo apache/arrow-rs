@@ -139,9 +139,8 @@ impl RingGcmBlockDecryptor {
 
 impl BlockDecryptor for RingGcmBlockDecryptor {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        let mut result = Vec::with_capacity(
-            length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN,
-        );
+        let mut result =
+            Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN);
         result.extend_from_slice(&length_and_ciphertext[SIZE_LEN + NONCE_LEN..]);
 
         let nonce = ring::aead::Nonce::try_assume_unique_for_key(
@@ -175,13 +174,29 @@ pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, 0, 0, None)
 }
 
-pub(crate) fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
-                        column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
-    create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
+pub(crate) fn create_page_aad(
+    file_aad: &[u8],
+    module_type: ModuleType,
+    row_group_ordinal: usize,
+    column_ordinal: usize,
+    page_ordinal: Option<usize>,
+) -> Result<Vec<u8>> {
+    create_module_aad(
+        file_aad,
+        module_type,
+        row_group_ordinal,
+        column_ordinal,
+        page_ordinal,
+    )
 }
 
-fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
-                         column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
+fn create_module_aad(
+    file_aad: &[u8],
+    module_type: ModuleType,
+    row_group_ordinal: usize,
+    column_ordinal: usize,
+    page_ordinal: Option<usize>,
+) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
 
@@ -189,34 +204,44 @@ fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal
         let mut aad = Vec::with_capacity(file_aad.len() + 1);
         aad.extend_from_slice(file_aad);
         aad.extend_from_slice(module_buf.as_ref());
-        return Ok(aad)
+        return Ok(aad);
     }
 
     if row_group_ordinal > i16::MAX as usize {
-        return Err(general_err!("Encrypted parquet files can't have more than {} row groups: {}",
-            i16::MAX, row_group_ordinal));
+        return Err(general_err!(
+            "Encrypted parquet files can't have more than {} row groups: {}",
+            i16::MAX,
+            row_group_ordinal
+        ));
     }
     if column_ordinal > i16::MAX as usize {
-        return Err(general_err!("Encrypted parquet files can't have more than {} columns: {}",
-            i16::MAX, column_ordinal));
+        return Err(general_err!(
+            "Encrypted parquet files can't have more than {} columns: {}",
+            i16::MAX,
+            column_ordinal
+        ));
     }
 
-    if module_buf[0] != (ModuleType::DataPageHeader as u8) &&
-        module_buf[0] != (ModuleType::DataPage as u8) {
+    if module_buf[0] != (ModuleType::DataPageHeader as u8)
+        && module_buf[0] != (ModuleType::DataPage as u8)
+    {
         let mut aad = Vec::with_capacity(file_aad.len() + 5);
         aad.extend_from_slice(file_aad);
         aad.extend_from_slice(module_buf.as_ref());
         aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
         aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
-        return Ok(aad)
+        return Ok(aad);
     }
 
-    let page_ordinal = page_ordinal.ok_or_else(|| general_err!(
-        "Page ordinal must be set for data pages"))?;
+    let page_ordinal =
+        page_ordinal.ok_or_else(|| general_err!("Page ordinal must be set for data pages"))?;
 
     if page_ordinal > i16::MAX as usize {
-        return Err(general_err!("Encrypted parquet files can't have more than {} pages per column chunk: {}",
-            i16::MAX, page_ordinal));
+        return Err(general_err!(
+            "Encrypted parquet files can't have more than {} pages per column chunk: {}",
+            i16::MAX,
+            page_ordinal
+        ));
     }
 
     let mut aad = Vec::with_capacity(file_aad.len() + 7);
@@ -239,7 +264,9 @@ impl FileDecryptionProperties {
     pub fn builder() -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::with_defaults()
     }
-    pub fn has_footer_key(&self) -> bool { self.footer_key.is_some() }
+    pub fn has_footer_key(&self) -> bool {
+        self.footer_key.is_some()
+    }
 
     pub fn has_column_keys(&self) -> bool {
         self.column_keys.is_some()
@@ -285,7 +312,7 @@ impl DecryptionPropertiesBuilder {
     }
 
     pub fn with_column_key(mut self, key: Vec<u8>, value: Vec<u8>) -> Self {
-        let mut column_keys= self.column_keys.unwrap_or_default();
+        let mut column_keys = self.column_keys.unwrap_or_default();
         column_keys.insert(key, value);
         self.column_keys = Some(column_keys);
         self
@@ -308,8 +335,15 @@ impl PartialEq for FileDecryptor {
 }
 
 impl FileDecryptor {
-    pub(crate) fn new(decryption_properties: &FileDecryptionProperties, aad_file_unique: Vec<u8>, aad_prefix: Vec<u8>) -> Self {
-        let footer_decryptor = decryption_properties.footer_key.clone().map(|footer_key| RingGcmBlockDecryptor::new(footer_key.as_ref()));
+    pub(crate) fn new(
+        decryption_properties: &FileDecryptionProperties,
+        aad_file_unique: Vec<u8>,
+        aad_prefix: Vec<u8>,
+    ) -> Self {
+        let footer_decryptor = decryption_properties
+            .footer_key
+            .clone()
+            .map(|footer_key| RingGcmBlockDecryptor::new(footer_key.as_ref()));
 
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
@@ -326,7 +360,11 @@ impl FileDecryptor {
     }
 
     pub(crate) fn has_column_key(&self, column_name: &[u8]) -> bool {
-        self.decryption_properties.column_keys.clone().unwrap().contains_key(column_name)
+        self.decryption_properties
+            .column_keys
+            .clone()
+            .unwrap()
+            .contains_key(column_name)
     }
 
     pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> FileDecryptor {
@@ -387,9 +425,12 @@ pub struct CryptoContext {
 }
 
 impl CryptoContext {
-    pub fn new(row_group_ordinal: usize,
-               column_ordinal: usize, data_decryptor: Arc<FileDecryptor>,
-               metadata_decryptor: Arc<FileDecryptor>) -> Self {
+    pub fn new(
+        row_group_ordinal: usize,
+        column_ordinal: usize,
+        data_decryptor: Arc<FileDecryptor>,
+        metadata_decryptor: Arc<FileDecryptor>
+    ) -> Self {
         Self {
             row_group_ordinal,
             column_ordinal,
@@ -422,6 +463,10 @@ impl CryptoContext {
         }
     }
 
-    pub fn data_decryptor(&self) -> Arc<FileDecryptor> { self.data_decryptor.clone()}
-    pub fn metadata_decryptor(&self) -> Arc<FileDecryptor> { self.metadata_decryptor.clone() }
+    pub fn data_decryptor(&self) -> Arc<FileDecryptor> {
+        self.data_decryptor.clone()
+    }
+    pub fn metadata_decryptor(&self) -> Arc<FileDecryptor> {
+        self.metadata_decryptor.clone()
+    }
 }
