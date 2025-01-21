@@ -196,6 +196,13 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    /// For UTC time
+    /// ----------------------------
+    /// For UTC time, it is possible to use either the timezone representation, such as "UTC", or the absolute time zone offset "+00:00".
+    /// However, it is better to use the offset representation, as it is more explicit and less ambiguous.
+    /// This also ensures that other arrow-rs functionalities can interpret the UTC timestamps correctly
+    /// For example, the `with_timezone_utc` method that is applied on timestamp arrays to add the UTC timezone.
+    ///
     ///
     /// Timezone string parsing
     /// -----------------------
