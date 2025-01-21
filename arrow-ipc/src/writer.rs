@@ -1793,9 +1793,9 @@ mod tests {
     use std::io::Cursor;
     use std::io::Seek;
 
-    use arrow_array::builder::GenericListBuilder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
+    use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
@@ -2431,6 +2431,95 @@ mod tests {
             vec![Some(2), Some(3)],
             read_array.iter().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_large_slice_uint32() {
+        ensure_roundtrip(Arc::new(UInt32Array::from_iter((0..8000).map(|i| {
+            if i % 2 == 0 {
+                Some(i)
+            } else {
+                None
+            }
+        }))));
+    }
+
+    #[test]
+    fn test_large_slice_string() {
+        let strings: Vec<_> = (0..8000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    Some(format!("value{}", i))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        ensure_roundtrip(Arc::new(StringArray::from(strings)));
+    }
+
+    #[test]
+    fn test_large_slice_string_list() {
+        let mut ls = ListBuilder::new(StringBuilder::new());
+
+        let mut s = String::new();
+        for row_number in 0..8000 {
+            if row_number % 2 == 0 {
+                for list_element in 0..1000 {
+                    s.clear();
+                    use std::fmt::Write;
+                    write!(&mut s, "value{row_number}-{list_element}").unwrap();
+                    ls.values().append_value(&s);
+                }
+                ls.append(true)
+            } else {
+                ls.append(false); // null
+            }
+        }
+
+        ensure_roundtrip(Arc::new(ls.finish()));
+    }
+
+    /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
+    fn ensure_roundtrip(array: ArrayRef) {
+        let num_rows = array.len();
+        let orig_batch = RecordBatch::try_from_iter(vec![("a", array)]).unwrap();
+        // take off the first element
+        let sliced_batch = orig_batch.slice(1, num_rows - 1);
+
+        let schema = orig_batch.schema();
+        let stream_data = {
+            let mut writer = StreamWriter::try_new(vec![], &schema).unwrap();
+            writer.write(&sliced_batch).unwrap();
+            writer.into_inner().unwrap()
+        };
+        let read_batch = {
+            let projection = None;
+            let mut reader = StreamReader::try_new(Cursor::new(stream_data), projection).unwrap();
+            reader
+                .next()
+                .expect("expect no errors reading batch")
+                .expect("expect batch")
+        };
+        assert_eq!(sliced_batch, read_batch);
+
+        let file_data = {
+            let mut writer = FileWriter::try_new_buffered(vec![], &schema).unwrap();
+            writer.write(&sliced_batch).unwrap();
+            writer.into_inner().unwrap().into_inner().unwrap()
+        };
+        let read_batch = {
+            let projection = None;
+            let mut reader = FileReader::try_new(Cursor::new(file_data), projection).unwrap();
+            reader
+                .next()
+                .expect("expect no errors reading batch")
+                .expect("expect batch")
+        };
+        assert_eq!(sliced_batch, read_batch);
+
+        // TODO test file writer/reader
     }
 
     #[test]
