@@ -99,7 +99,7 @@ use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::encryption::ciphers::BlockDecryptor;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::FileDecryptor;
-use crate::encryption::ciphers::{create_module_aad, ModuleType};
+use crate::encryption::ciphers::{create_page_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
@@ -114,7 +114,9 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+#[cfg(feature = "encryption")]
+use crate::thrift::TCompactSliceInputProtocol;
+use crate::thrift::TSerializable;
 pub use reader::ParquetMetaDataReader;
 use std::ops::Range;
 use std::sync::Arc;
@@ -638,13 +640,24 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
+
+        #[cfg(not(feature = "encryption"))]
+        for (i, (c, d)) in rg
+            .columns
+            .drain(0..)
+            .zip(schema_descr.columns())
+            .enumerate()
+        {
+            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
+        }
+
+        #[cfg(feature = "encryption")]
         for (i, (mut c, d)) in rg
             .columns
             .drain(0..)
             .zip(schema_descr.columns())
             .enumerate()
         {
-            #[cfg(feature = "encryption")]
             if c.encrypted_column_metadata.is_some() {
                 let decryptor = decryptor.unwrap();
                 let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
@@ -663,7 +676,7 @@ impl RowGroupMetaData {
                     .decryption_properties()
                     .aad_prefix()
                     .unwrap_or_default();
-                let column_aad = create_module_aad(
+                let column_aad = create_page_aad(
                     [aad_prefix.as_slice(), aad_file_unique.as_slice()]
                         .concat()
                         .as_slice(),

@@ -23,7 +23,7 @@ use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{create_module_aad, BlockDecryptor, CryptoContext, ModuleType};
+use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -345,19 +345,16 @@ pub(crate) fn read_page_header<T: Read>(
     input: &mut T,
     #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
 ) -> Result<PageHeader> {
-    // todo: if column is not encrypted skip decryption
-
     #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
-        // todo: in case of per-column key, decryptor should be column decryptor
-        if !decryptor.has_footer_key() || !decryptor.footer_decryptor().is_some() {
+
+        if !decryptor.has_footer_key() || decryptor.footer_decryptor().is_none() {
             let mut prot = TCompactInputProtocol::new(input);
             let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
             return Ok(page_header);
         };
 
-        // let file_decryptor = decryptor.column_decryptor();
         let data_decryptor = &crypto_context.data_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
         let aad_prefix = decryptor.aad_prefix();
@@ -367,7 +364,7 @@ pub(crate) fn read_page_header<T: Read>(
         } else {
             ModuleType::DataPageHeader
         };
-        let aad = create_module_aad(
+        let aad = create_page_aad(
             [aad_prefix.as_slice(), aad_file_unique.as_slice()]
                 .concat()
                 .as_slice(),
@@ -485,14 +482,14 @@ pub(crate) fn decode_page(
             } else {
                 ModuleType::DataPage
             };
-            let aad = create_module_aad(
+            let aad = create_page_aad(
                 decryptor.aad_file_unique().as_slice(),
                 module_type,
                 crypto_context.row_group_ordinal,
                 crypto_context.column_ordinal,
                 crypto_context.page_ordinal,
             )?;
-            let decrypted = file_decryptor.unwrap().decrypt(&buffer.as_ref(), &aad)?;
+            let decrypted = file_decryptor.unwrap().decrypt(buffer.as_ref(), &aad)?;
             Bytes::from(decrypted)
         }
     } else {

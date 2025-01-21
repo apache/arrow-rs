@@ -174,7 +174,12 @@ pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, 0, 0, None)
 }
 
-pub fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
+pub fn create_page_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
+                        column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
+    create_module_aad(file_aad, module_type, row_group_ordinal, column_ordinal, page_ordinal)
+}
+
+fn create_module_aad(file_aad: &[u8], module_type: ModuleType, row_group_ordinal: usize,
                          column_ordinal: usize, page_ordinal: Option<usize>) -> Result<Vec<u8>> {
 
     let module_buf = [module_type as u8];
@@ -279,7 +284,7 @@ impl DecryptionPropertiesBuilder {
     }
 
     pub fn with_column_key(mut self, key: Vec<u8>, value: Vec<u8>) -> Self {
-        let mut column_keys= self.column_keys.unwrap_or_else(HashMap::new);
+        let mut column_keys= self.column_keys.unwrap_or_default();
         column_keys.insert(key, value);
         self.column_keys = Some(column_keys);
         self
@@ -303,11 +308,7 @@ impl PartialEq for FileDecryptor {
 
 impl FileDecryptor {
     pub(crate) fn new(decryption_properties: &FileDecryptionProperties, aad_file_unique: Vec<u8>, aad_prefix: Vec<u8>) -> Self {
-        let footer_decryptor = if let Some(footer_key) = decryption_properties.footer_key.clone() {
-            Some(RingGcmBlockDecryptor::new(footer_key.as_ref()))
-        } else {
-            None
-        };
+        let footer_decryptor = decryption_properties.footer_key.clone().map(|footer_key| RingGcmBlockDecryptor::new(footer_key.as_ref()));
 
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
