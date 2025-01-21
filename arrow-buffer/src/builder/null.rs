@@ -27,6 +27,23 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 ///
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
+///
+/// # Example
+/// ```
+/// # use arrow_buffer::NullBufferBuilder;
+/// let mut builder = NullBufferBuilder::new(8);
+/// builder.append_n_non_nulls(8);
+/// // If no non null values are appended, the null buffer is not created
+/// let buffer = builder.finish();
+/// assert!(buffer.is_none());
+/// // however, if a null value is appended, the null buffer is created
+/// let mut builder = NullBufferBuilder::new(8);
+/// builder.append_n_non_nulls(7);
+/// builder.append_null();
+/// let buffer = builder.finish().unwrap();
+/// assert_eq!(buffer.len(), 8);
+/// assert_eq!(buffer.iter().collect::<Vec<_>>(), vec![true, true, true, true, true, true, true, false]);
+/// ```
 #[derive(Debug)]
 pub struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
