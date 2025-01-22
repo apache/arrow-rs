@@ -17,9 +17,9 @@
 
 //! Extension types.
 
-#[cfg(feature = "canonical-extension-types")]
+#[cfg(feature = "canonical_extension_types")]
 mod canonical;
-#[cfg(feature = "canonical-extension-types")]
+#[cfg(feature = "canonical_extension_types")]
 pub use canonical::*;
 
 use crate::{ArrowError, DataType};
@@ -39,7 +39,7 @@ pub const EXTENSION_TYPE_METADATA_KEY: &str = "ARROW:extension:metadata";
 /// - [`EXTENSION_TYPE_METADATA_KEY`]
 ///
 /// Canonical extension types support in this crate requires the
-/// `canonical-extension-types` feature.
+/// `canonical_extension_types` feature.
 ///
 /// Extension types may or may not use the [`EXTENSION_TYPE_METADATA_KEY`]
 /// field.

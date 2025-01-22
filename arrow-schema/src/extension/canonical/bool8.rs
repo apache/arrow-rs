@@ -73,7 +73,7 @@ impl ExtensionType for Bool8 {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "canonical-extension-types")]
+    #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
@@ -87,7 +87,7 @@ mod tests {
         let mut field = Field::new("", DataType::Int8, false);
         field.try_with_extension_type(Bool8)?;
         field.try_extension_type::<Bool8>()?;
-        #[cfg(feature = "canonical-extension-types")]
+        #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
             CanonicalExtensionType::Bool8(Bool8)

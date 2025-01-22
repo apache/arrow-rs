@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::datatype::DataType;
-#[cfg(feature = "canonical-extension-types")]
+#[cfg(feature = "canonical_extension_types")]
 use crate::extension::CanonicalExtensionType;
 use crate::schema::SchemaBuilder;
 use crate::{
@@ -511,7 +511,7 @@ impl Field {
     /// - this field does have a canonical extension type (mismatch or missing)
     /// - the canonical extension is not supported
     /// - the construction of the extension type fails
-    #[cfg(feature = "canonical-extension-types")]
+    #[cfg(feature = "canonical_extension_types")]
     pub fn try_canonical_extension_type(&self) -> Result<CanonicalExtensionType, ArrowError> {
         CanonicalExtensionType::try_from(self)
     }

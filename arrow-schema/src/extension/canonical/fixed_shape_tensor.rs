@@ -294,7 +294,7 @@ impl ExtensionType for FixedShapeTensor {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "canonical-extension-types")]
+    #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
@@ -322,7 +322,7 @@ mod tests {
             field.try_extension_type::<FixedShapeTensor>()?,
             fixed_shape_tensor
         );
-        #[cfg(feature = "canonical-extension-types")]
+        #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
             CanonicalExtensionType::FixedShapeTensor(fixed_shape_tensor)

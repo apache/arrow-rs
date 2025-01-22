@@ -77,7 +77,7 @@ impl ExtensionType for Uuid {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "canonical-extension-types")]
+    #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
@@ -91,7 +91,7 @@ mod tests {
         let mut field = Field::new("", DataType::FixedSizeBinary(16), false);
         field.try_with_extension_type(Uuid)?;
         field.try_extension_type::<Uuid>()?;
-        #[cfg(feature = "canonical-extension-types")]
+        #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
             CanonicalExtensionType::Uuid(Uuid)
