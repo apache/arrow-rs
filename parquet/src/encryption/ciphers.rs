@@ -18,9 +18,9 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-use std::sync::Arc;
-use crate::errors::{ParquetError, Result};
 use crate::encryption::decryption::FileDecryptor;
+use crate::errors::{ParquetError, Result};
+use std::sync::Arc;
 
 #[derive(PartialEq)]
 pub(crate) enum ModuleType {

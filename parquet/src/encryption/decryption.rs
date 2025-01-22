@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
-use arrow_array::Datum;
+use std::collections::HashMap;
 
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
