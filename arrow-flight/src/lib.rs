@@ -58,12 +58,25 @@ mod gen {
     // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
+
+    /// The descriptor used for making the Arrow Flight gRPC API available for [gRPC
+    /// reflection](https://grpc.io/docs/guides/reflection/).
+    ///
+    /// ```
+    /// let reflection_server = tonic_reflection::server::Builder::configure()
+    ///    .register_encoded_file_descriptor_set(arrow_flight::flight_descriptor::FILE_DESCRIPTOR_SET)
+    ///    .build_v1()
+    ///    .unwrap();
+    /// ```
+    pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("flight_descriptor.bin");
 }
 
 /// Defines a `Flight` for generation or retrieval.
 pub mod flight_descriptor {
     use super::gen;
     pub use gen::flight_descriptor::DescriptorType;
+
+    pub use gen::FILE_DESCRIPTOR_SET;
 }
 
 /// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
