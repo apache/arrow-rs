@@ -32,6 +32,8 @@ use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+#[cfg(feature = "encryption")]
+use crate::encryption::{ciphers::CryptoContext, decryption::FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -40,9 +42,6 @@ use crate::schema::types::SchemaDescriptor;
 mod filter;
 mod selection;
 pub mod statistics;
-
-#[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{CryptoContext, FileDecryptionProperties};
 
 /// Builder for constructing parquet readers into arrow.
 ///
@@ -1047,7 +1046,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96Type,
     };
     #[cfg(feature = "encryption")]
-    use crate::encryption::ciphers;
+    use crate::encryption::decryption::FileDecryptionProperties;
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
@@ -1891,7 +1890,7 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+        let decryption_properties = FileDecryptionProperties::builder()
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
             .build();
@@ -1910,7 +1909,7 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+        let decryption_properties = FileDecryptionProperties::builder()
             .with_footer_key(footer_key.to_vec())
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
@@ -1927,7 +1926,7 @@ mod tests {
         let file = File::open(path).unwrap();
 
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        let decryption_properties = ciphers::FileDecryptionProperties::builder()
+        let decryption_properties = FileDecryptionProperties::builder()
             .with_footer_key(key_code.to_vec())
             .build();
 
@@ -1937,7 +1936,7 @@ mod tests {
     #[cfg(feature = "encryption")]
     fn verify_encryption_test_file_read(
         file: File,
-        decryption_properties: ciphers::FileDecryptionProperties,
+        decryption_properties: FileDecryptionProperties,
     ) {
         let decryption_properties = Some(decryption_properties);
 

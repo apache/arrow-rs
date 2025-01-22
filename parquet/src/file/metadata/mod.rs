@@ -97,7 +97,10 @@ mod writer;
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, FileDecryptor, ModuleType};
+use crate::encryption::{
+    ciphers::{create_page_aad, ModuleType},
+    decryption::{BlockDecryptor, FileDecryptor},
+};
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};

@@ -23,7 +23,10 @@ use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{create_page_aad, BlockDecryptor, CryptoContext, ModuleType};
+use crate::encryption::{
+    ciphers::{create_page_aad, CryptoContext, ModuleType},
+    decryption::BlockDecryptor,
+};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{

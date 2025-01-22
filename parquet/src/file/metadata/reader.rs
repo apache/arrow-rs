@@ -21,9 +21,11 @@ use bytes::Bytes;
 
 use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{
-    create_footer_aad, BlockDecryptor, FileDecryptionProperties, FileDecryptor,
+use crate::encryption::{
+    ciphers::create_footer_aad,
+    decryption::{BlockDecryptor, FileDecryptionProperties, FileDecryptor},
 };
+
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
