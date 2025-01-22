@@ -27,7 +27,7 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
     FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
 use arrow_buffer::{i256, Buffer, IntervalDayTime};

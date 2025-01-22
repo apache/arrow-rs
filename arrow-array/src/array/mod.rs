@@ -902,6 +902,13 @@ where
 }
 
 #[cfg(test)]
+pub mod test_helpers {
+    pub trait DecimalCtor: Sized {
+        fn 
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cast::{as_union_array, downcast_array};

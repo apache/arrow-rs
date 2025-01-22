@@ -34,7 +34,7 @@ use arrow_array::builder::{
 };
 use arrow_array::{
     new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, Float16Array, Float32Array,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, Float16Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
