@@ -929,8 +929,6 @@ impl DictionaryTracker {
 /// writer.write(&batch).unwrap();
 /// // When all batches are written, call finish to flush all buffers
 /// writer.finish().unwrap();
-/// // must drop the writer to release the reference to the file.
-/// drop(writer);
 /// ```
 /// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 pub struct FileWriter<W> {
@@ -1182,8 +1180,6 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 /// writer.write(&batch).unwrap();
 /// // When all batches are written, call finish to flush all buffers
 /// writer.finish().unwrap();
-/// // must drop the writer to release the stream reference
-/// drop(writer);
 /// ```
 ///
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format

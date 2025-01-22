@@ -1009,7 +1009,7 @@ impl FileReaderBuilder {
 /// # See Also
 ///
 /// * [`Self::set_index`] for random access
-/// * [`StreamReader`] for a reading streaming data
+/// * [`StreamReader`] for reading streaming data
 ///
 /// # Example: Reading from a `File`
 /// ```
