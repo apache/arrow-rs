@@ -18,6 +18,8 @@
 #![warn(missing_docs)]
 //! Arrow string kernels
 
+mod binary_like;
+mod binary_predicate;
 pub mod concat_elements;
 pub mod length;
 pub mod like;
