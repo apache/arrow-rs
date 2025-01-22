@@ -21,105 +21,16 @@
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
 use std::sync::Arc;
-// use ring::aead::NonceSequence;
-// use ring::rand::{SecureRandom, SystemRandom};
 use crate::errors::{ParquetError, Result};
-
-// pub trait BlockEncryptor {
-//     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
-// }
 
 pub trait BlockDecryptor {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
-// const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const SIZE_LEN: usize = 4;
 
-// struct CounterNonce {
-//     start: u128,
-//     counter: u128,
-// }
-//
-// impl CounterNonce {
-//     pub fn new(rng: &SystemRandom) -> Self {
-//         let mut buf = [0; 16];
-//         rng.fill(&mut buf).unwrap();
-//
-//         // Since this is a random seed value, endianess doesn't matter at all,
-//         // and we can use whatever is platform-native.
-//         let start = u128::from_ne_bytes(buf) & RIGHT_TWELVE;
-//         let counter = start.wrapping_add(1);
-//
-//         Self { start, counter }
-//     }
-//
-//     /// One accessor for the nonce bytes to avoid potentially flipping endianess
-//     #[inline]
-//     pub fn get_bytes(&self) -> [u8; NONCE_LEN] {
-//         self.counter.to_le_bytes()[0..NONCE_LEN].try_into().unwrap()
-//     }
-// }
-//
-// impl NonceSequence for CounterNonce {
-//     fn advance(&mut self) -> Result<ring::aead::Nonce, ring::error::Unspecified> {
-//         // If we've wrapped around, we've exhausted this nonce sequence
-//         if (self.counter & RIGHT_TWELVE) == (self.start & RIGHT_TWELVE) {
-//             Err(ring::error::Unspecified)
-//         } else {
-//             // Otherwise, just advance and return the new value
-//             let buf: [u8; NONCE_LEN] = self.get_bytes();
-//             self.counter = self.counter.wrapping_add(1);
-//             Ok(ring::aead::Nonce::assume_unique_for_key(buf))
-//         }
-//     }
-// }
-//
-// pub(crate) struct RingGcmBlockEncryptor {
-//     key: LessSafeKey,
-//     nonce_sequence: CounterNonce,
-// }
-//
-// impl RingGcmBlockEncryptor {
-//     // todo TBD: some KMS systems produce data keys, need to be able to pass them to Encryptor.
-//     // todo TBD: for other KMSs, we will create data keys inside arrow-rs, making sure to use SystemRandom
-//     /// Create a new `RingGcmBlockEncryptor` with a given key and random nonce.
-//     /// The nonce will advance appropriately with each block encryption and
-//     /// return an error if it wraps around.
-//     pub(crate) fn new(key_bytes: &[u8]) -> Self {
-//         let rng = SystemRandom::new();
-//
-//         // todo support other key sizes
-//         let key = UnboundKey::new(&AES_128_GCM, key_bytes.as_ref()).unwrap();
-//         let nonce = CounterNonce::new(&rng);
-//
-//         Self {
-//             key: LessSafeKey::new(key),
-//             nonce_sequence: nonce,
-//         }
-//     }
-// }
-//
-// impl BlockEncryptor for RingGcmBlockEncryptor {
-//     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-//         let nonce = self.nonce_sequence.advance()?;
-//         let ciphertext_len = plaintext.len() + NONCE_LEN + TAG_LEN;
-//         // todo TBD: add first 4 bytes with the length, per https://github.com/apache/parquet-format/blob/master/Encryption.md#51-encrypted-module-serialization
-//         let mut result = Vec::with_capacity(SIZE_LEN + ciphertext_len);
-//         result.extend_from_slice((ciphertext_len as i32).to_le_bytes().as_ref());
-//         result.extend_from_slice(nonce.as_ref());
-//         result.extend_from_slice(plaintext);
-//
-//         let tag = self
-//             .key
-//             .seal_in_place_separate_tag(nonce, Aad::from(aad), &mut result[SIZE_LEN + NONCE_LEN..])?;
-//         result.extend_from_slice(tag.as_ref());
-//
-//         Ok(result)
-//     }
-// }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RingGcmBlockDecryptor {
@@ -163,10 +74,6 @@ pub(crate) enum ModuleType {
     DictionaryPage = 3,
     DataPageHeader = 4,
     DictionaryPageHeader = 5,
-    // ColumnIndex = 6,
-    // OffsetIndex = 7,
-    // BloomFilterHeader = 8,
-    // BloomFilterBitset = 9,
 }
 
 pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
