@@ -209,6 +209,12 @@ pub trait ExtensionType: Sized {
 
     /// The metadata type of this extension type.
     ///
+    /// Implementations can use strongly or loosly typed data structures here
+    /// depending on the complexity of the metadata.
+    ///
+    /// Implementations can also use `Self` here if the extension type can be
+    /// constructed directly from its metadata.
+    ///
     /// If an extension type defines no metadata it should use `()` to indicate
     /// this.
     type Metadata;
