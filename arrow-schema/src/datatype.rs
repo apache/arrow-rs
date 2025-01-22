@@ -196,6 +196,13 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    /// For UTC time
+    /// ----------------------------
+    /// For UTC time, it is possible to use either the timezone representation, such as "UTC", or the absolute time zone offset "+00:00".
+    /// However, it is better to use the offset representation, as it is more explicit and less ambiguous.
+    /// This also ensures that other arrow-rs functionalities can interpret the UTC timestamps correctly
+    /// For example, the `with_timezone_utc` method that is applied on timestamp arrays to add the UTC timezone.
+    ///
     ///
     /// Timezone string parsing
     /// -----------------------
@@ -582,16 +589,21 @@ impl DataType {
         matches!(self, Int16 | Int32 | Int64)
     }
 
-    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, ListView. LargeListView, Struct, Union,
     /// or Map), or a dictionary of a nested type
     #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
-            List(_) | FixedSizeList(_, _) | LargeList(_) | Struct(_) | Union(_, _) | Map(_, _) => {
-                true
-            }
+            List(_)
+            | FixedSizeList(_, _)
+            | LargeList(_)
+            | ListView(_)
+            | LargeListView(_)
+            | Struct(_)
+            | Union(_, _)
+            | Map(_, _) => true,
             _ => false,
         }
     }
@@ -608,7 +620,9 @@ impl DataType {
     pub fn equals_datatype(&self, other: &DataType) -> bool {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
-            | (DataType::LargeList(a), DataType::LargeList(b)) => {
+            | (DataType::LargeList(a), DataType::LargeList(b))
+            | (DataType::ListView(a), DataType::ListView(b))
+            | (DataType::LargeListView(a), DataType::LargeListView(b)) => {
                 a.is_nullable() == b.is_nullable() && a.data_type().equals_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
@@ -759,7 +773,9 @@ impl DataType {
     pub fn contains(&self, other: &DataType) -> bool {
         match (self, other) {
             (DataType::List(f1), DataType::List(f2))
-            | (DataType::LargeList(f1), DataType::LargeList(f2)) => f1.contains(f2),
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2)) => f1.contains(f2),
             (DataType::FixedSizeList(f1, s1), DataType::FixedSizeList(f2, s2)) => {
                 s1 == s2 && f1.contains(f2)
             }
@@ -1058,11 +1074,16 @@ mod tests {
     #[test]
     fn test_nested() {
         let list = DataType::List(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let list_view = DataType::ListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let large_list_view =
+            DataType::LargeListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
 
         assert!(!DataType::is_nested(&DataType::Boolean));
         assert!(!DataType::is_nested(&DataType::Int32));
         assert!(!DataType::is_nested(&DataType::Utf8));
         assert!(DataType::is_nested(&list));
+        assert!(DataType::is_nested(&list_view));
+        assert!(DataType::is_nested(&large_list_view));
 
         assert!(!DataType::is_nested(&DataType::Dictionary(
             Box::new(DataType::Int32),
