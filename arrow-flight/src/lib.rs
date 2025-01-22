@@ -75,7 +75,6 @@ mod gen {
 pub mod flight_descriptor {
     use super::gen;
     pub use gen::flight_descriptor::DescriptorType;
-
     pub use gen::FILE_DESCRIPTOR_SET;
 }
 
