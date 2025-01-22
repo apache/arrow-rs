@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::{ParquetError, Result};
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
 
@@ -23,7 +24,7 @@ const TAG_LEN: usize = 16;
 const SIZE_LEN: usize = 4;
 
 pub trait BlockDecryptor {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> crate::errors::Result<Vec<u8>>;
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +44,7 @@ impl RingGcmBlockDecryptor {
 }
 
 impl BlockDecryptor for RingGcmBlockDecryptor {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> crate::errors::Result<Vec<u8>> {
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         let mut result =
             Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN);
         result.extend_from_slice(&length_and_ciphertext[SIZE_LEN + NONCE_LEN..]);
@@ -99,12 +100,16 @@ impl DecryptionPropertiesBuilder {
         }
     }
 
-    pub fn build(self) -> FileDecryptionProperties {
-        FileDecryptionProperties {
+    pub fn build(self) -> Result<FileDecryptionProperties> {
+        if self.footer_key.is_none() && self.column_keys.is_none() {
+            return Err(ParquetError::General("Footer or at least one column key is required".to_string()))
+        }
+
+        Ok(FileDecryptionProperties {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
-        }
+        })
     }
 
     // todo decr: doc comment
@@ -184,6 +189,7 @@ impl FileDecryptor {
                 .with_footer_key(column_key.clone())
                 .with_aad_prefix(self.aad_prefix.clone())
                 .build()
+                .unwrap()
         } else {
             self.decryption_properties.clone()
         };

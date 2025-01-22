@@ -1893,7 +1893,8 @@ mod tests {
         let decryption_properties = FileDecryptionProperties::builder()
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
-            .build();
+            .build()
+            .unwrap();
 
         verify_encryption_test_file_read(file, decryption_properties);
     }
@@ -1913,7 +1914,8 @@ mod tests {
             .with_footer_key(footer_key.to_vec())
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
-            .build();
+            .build()
+            .unwrap();
 
         verify_encryption_test_file_read(file, decryption_properties);
     }
@@ -1928,7 +1930,8 @@ mod tests {
         let key_code: &[u8] = "0123456789012345".as_bytes();
         let decryption_properties = FileDecryptionProperties::builder()
             .with_footer_key(key_code.to_vec())
-            .build();
+            .build()
+            .unwrap();
 
         verify_encryption_test_file_read(file, decryption_properties);
     }
