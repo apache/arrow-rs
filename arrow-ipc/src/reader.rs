@@ -687,6 +687,10 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 ///
 /// For a higher-level interface see [`FileReader`]
 ///
+/// For an example of using this API with `mmap` see the [`zero_copy_ipc`] example.
+///
+/// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
+///
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
@@ -1007,7 +1011,7 @@ impl FileReaderBuilder {
 /// * [`Self::set_index`] for random access
 /// * [`StreamReader`] for a reading streaming data
 ///
-/// # Example
+/// # Example: Reading from a `File`
 /// ```
 /// # use std::io::Cursor;
 /// use arrow_array::record_batch;
@@ -1034,8 +1038,13 @@ impl FileReaderBuilder {
 /// }
 /// assert_eq!(num_rows, 3);
 /// ```
+/// # Example: Reading from `mmap`ed file
+///
+/// For an example creating Arrays without copying using  memory mapped (`mmap`)
+/// files see the [`zero_copy_ipc`] example.
 ///
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+/// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking
     reader: R,
