@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn test_booleans() {
+    fn test_nullable_booleans() {
         let descending = SortOptions {
             descending: true,
             nulls_first: true,
@@ -305,6 +305,37 @@ mod tests {
         let a = BooleanArray::new(vec![true, true, true, false, false].into(), Some(nulls));
         let res = rank(&a, None).unwrap();
         assert_eq!(res, &[5, 5, 1, 3, 3]);
+    }
+
+    #[test]
+    fn test_booleans() {
+        let descending = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        let nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let nulls_last_descending = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+
+        let a = BooleanArray::from(vec![true, false, false, false, true]);
+        let res = rank(&a, None).unwrap();
+        assert_eq!(res, &[5, 3, 3, 3, 5]);
+
+        let res = rank(&a, Some(descending)).unwrap();
+        assert_eq!(res, &[2, 5, 5, 5, 2]);
+
+        let res = rank(&a, Some(nulls_last)).unwrap();
+        assert_eq!(res, &[5, 3, 3, 3, 5]);
+
+        let res = rank(&a, Some(nulls_last_descending)).unwrap();
+        assert_eq!(res, &[2, 5, 5, 5, 2]);
     }
 
     #[test]
