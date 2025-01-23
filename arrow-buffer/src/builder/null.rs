@@ -74,11 +74,12 @@ impl NullBufferBuilder {
 
     /// Creates a new builder from a `MutableBuffer`.
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
-        let capacity = buffer.len() * 8;
+        let mut capacity = buffer.len() * 8;
 
         assert!(len <= capacity);
 
         let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
+        capacity = bitmap_builder.as_ref().unwrap().capacity();
         Self {
             bitmap_builder,
             len,
@@ -147,7 +148,7 @@ impl NullBufferBuilder {
 
     /// Gets a bit in the buffer at `index`
     #[inline]
-    pub fn get_bit(&mut self, index: usize) -> bool {
+    pub fn is_valid(&mut self, index: usize) -> bool {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.get_bit(index)
         } else {
@@ -165,7 +166,8 @@ impl NullBufferBuilder {
         }
 
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.truncate(len)
+            buf.truncate(len);
+            self.capacity = buf.capacity()
         } else {
             self.len = len
         }
@@ -305,16 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn test_null_buffer_builder_get_bit() {
+    fn test_null_buffer_builder_is_valid() {
         let mut builder = NullBufferBuilder::new(0);
         builder.append_n_non_nulls(6);
-        assert!(builder.get_bit(0));
+        assert!(builder.is_valid(0));
 
         builder.append_null();
-        assert!(!builder.get_bit(6));
+        assert!(!builder.is_valid(6));
 
         builder.append_non_null();
-        assert!(builder.get_bit(7));
+        assert!(builder.is_valid(7));
     }
 
     #[test]
