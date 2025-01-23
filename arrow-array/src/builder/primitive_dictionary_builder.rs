@@ -168,6 +168,22 @@ where
             map: HashMap::with_capacity(values_capacity),
         }
     }
+
+    /// By default the [`PrimitiveBuilder`] used in the `values_builder` uses [`ArrowPrimitiveType::DATA_TYPE`] as the
+    /// data type of the generated array.
+    ///
+    /// This method allows overriding the data type, to allow specifying timezones
+    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`] and [`DataType::Decimal256`]
+    ///
+    /// # Panics
+    ///
+    /// This method panics if `value_data_type` is not [PrimitiveArray::is_compatible]
+    pub fn with_value_data_type(self, value_data_type: DataType) -> Self {
+        Self {
+            values_builder: self.values_builder.with_data_type(value_data_type),
+            ..self
+        }
+    }
 }
 
 impl<K, V> ArrayBuilder for PrimitiveDictionaryBuilder<K, V>
@@ -632,5 +648,18 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(values, [None, None]);
+    }
+
+    #[test]
+    fn creating_dictionary_with_custom_value_type_should_work() {
+        let value_data_type = DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+08:00".into()));
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_data_type.clone()));
+
+        let mut builder =
+            PrimitiveDictionaryBuilder::<Int32Type, crate::types::TimestampMicrosecondType>::with_capacity(1, 2)
+                .with_value_data_type(value_data_type);
+
+        assert_eq!(builder.finish().data_type(), &data_type);
     }
 }
