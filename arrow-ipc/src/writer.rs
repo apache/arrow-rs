@@ -1473,10 +1473,7 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let offsets = match start_offset.as_usize() {
         0 => {
             let size = size_of::<O>();
-            offsets.slice_with_length(
-                data.offset() * size,
-                (data.len() + 1) * size,
-            )
+            offsets.slice_with_length(data.offset() * size, (data.len() + 1) * size)
         }
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
@@ -2620,8 +2617,12 @@ mod tests {
         let original_list = generate_list_data::<i32>();
         let original_data = original_list.into_data();
         let slice_data = original_data.slice(75, 7);
-        let (new_offsets, original_start, length) = reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
-        assert_eq!(vec![0, 3, 6, 9, 12, 15, 18, 21], new_offsets.typed_data::<i32>());
+        let (new_offsets, original_start, length) =
+            reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
+        assert_eq!(
+            vec![0, 3, 6, 9, 12, 15, 18, 21],
+            new_offsets.typed_data::<i32>()
+        );
         assert_eq!(225, original_start);
         assert_eq!(21, length);
     }
@@ -2638,7 +2639,8 @@ mod tests {
         let original_data = original_list.into_data();
 
         let slice_data = original_data.slice(1, 1);
-        let (new_offsets, original_start, length) = reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
+        let (new_offsets, original_start, length) =
+            reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
         assert_eq!(vec![0, 2], new_offsets.typed_data::<i32>());
         assert_eq!(0, original_start);
         assert_eq!(2, length);
