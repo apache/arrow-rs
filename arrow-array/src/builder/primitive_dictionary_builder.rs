@@ -144,7 +144,7 @@ where
     ) -> Self {
         let keys = keys_builder.values_slice();
         let values = values_builder.values_slice();
-        let mut map = HashMap::with_capacity(values.len());
+        let mut map = HashMap::with_capacity(values_builder.capacity());
 
         keys.iter().zip(values.iter()).for_each(|(key, value)| {
             map.insert(Value(*value), K::Native::to_usize(*key).unwrap());
@@ -166,22 +166,6 @@ where
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: PrimitiveBuilder::with_capacity(values_capacity),
             map: HashMap::with_capacity(values_capacity),
-        }
-    }
-
-    /// By default the [`PrimitiveBuilder`] used in the `values_builder` uses [`ArrowPrimitiveType::DATA_TYPE`] as the
-    /// data type of the generated array.
-    ///
-    /// This method allows overriding the data type, to allow specifying timezones
-    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`] and [`DataType::Decimal256`]
-    ///
-    /// # Panics
-    ///
-    /// This method panics if `value_data_type` is not [PrimitiveArray::is_compatible]
-    pub fn with_value_data_type(self, value_data_type: DataType) -> Self {
-        Self {
-            values_builder: self.values_builder.with_data_type(value_data_type),
-            ..self
         }
     }
 }
@@ -651,15 +635,19 @@ mod tests {
     }
 
     #[test]
-    fn creating_dictionary_with_custom_value_type_should_work() {
-        let value_data_type = DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+08:00".into()));
-        let data_type =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_data_type.clone()));
+    fn creating_dictionary_from_builders_should_use_values_capacity_for_the_map() {
+        let builder = unsafe {
+            PrimitiveDictionaryBuilder::<Int32Type, crate::types::TimestampMicrosecondType>::new_from_builders(
+                  PrimitiveBuilder::with_capacity(1).with_data_type(DataType::Int32),
+                  PrimitiveBuilder::with_capacity(2).with_data_type(DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+08:00".into()))),
+              )
+        };
 
-        let mut builder =
-            PrimitiveDictionaryBuilder::<Int32Type, crate::types::TimestampMicrosecondType>::with_capacity(1, 2)
-                .with_value_data_type(value_data_type);
-
-        assert_eq!(builder.finish().data_type(), &data_type);
+        assert!(
+            builder.map.capacity() >= builder.values_builder.capacity(),
+            "map capacity {} should be at least the values capacity {}",
+            builder.map.capacity(),
+            builder.values_builder.capacity()
+        )
     }
 }
