@@ -87,6 +87,9 @@ criterion = { version = "0.5", default-features = false }
 half = { version = "2.1", default-features = false }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+# used in examples
+memmap2 = "0.9.3"
+bytes = "1.9"
 
 [build-dependencies]
 
@@ -104,6 +107,11 @@ path = "./examples/read_csv.rs"
 name = "read_csv_infer_schema"
 required-features = ["prettyprint", "csv"]
 path = "./examples/read_csv_infer_schema.rs"
+
+[[example]]
+name = "zero_copy_ipc"
+required-features = ["prettyprint"]
+path = "examples/zero_copy_ipc.rs"
 
 [[bench]]
 name = "aggregate_kernels"
