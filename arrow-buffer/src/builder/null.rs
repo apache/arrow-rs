@@ -136,7 +136,6 @@ impl NullBufferBuilder {
         } else {
             self.append_null();
         }
-
         self.capacity = self.bitmap_builder.as_ref().unwrap().capacity()
     }
 
