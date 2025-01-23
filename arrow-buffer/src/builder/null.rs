@@ -161,6 +161,10 @@ impl NullBufferBuilder {
     /// If `len` is greater than the buffer's current length, this has no effect
     #[inline]
     pub fn truncate(&mut self, len: usize) {
+        if len > self.len {
+            return;
+        }
+
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.truncate(len)
         } else {
@@ -316,16 +320,17 @@ mod tests {
 
     #[test]
     fn test_null_buffer_builder_truncate() {
-        let b = MutableBuffer::from_iter([true, true, true, true]);
-        let mut builder = NullBufferBuilder::new_from_buffer(b, 4);
-        let finished = builder.finish();
-        assert_eq!(None, finished);
-
-        // builder.append_null();
-        // builder.append_non_null();
-        // builder.append_null();
-        // let finished = builder.finish().unwrap();
-        // assert!(finished.is_null(4));
-        // assert!(finished.is_null(6));
+        let mut builder = NullBufferBuilder::new(10);
+        builder.append_n_non_nulls(16);
+        assert_eq!(builder.as_slice(), None);
+        builder.truncate(20);
+        assert_eq!(builder.as_slice(), None);
+        assert_eq!(builder.len(), 16);
+        builder.truncate(14);
+        assert_eq!(builder.as_slice(), None);
+        assert_eq!(builder.len(), 14);
+        builder.append_null();
+        builder.append_non_null();
+        assert_eq!(builder.as_slice().unwrap(), &[0xFF, 0b10111111]);
     }
 }
