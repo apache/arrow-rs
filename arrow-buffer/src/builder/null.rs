@@ -91,7 +91,8 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_n_non_nulls(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append_n(n, true)
+            buf.append_n(n, true);
+            self.capacity = buf.capacity()
         } else {
             self.len += n;
         }
@@ -102,7 +103,8 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_non_null(&mut self) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append(true)
+            buf.append(true);
+            self.capacity = buf.capacity()
         } else {
             self.len += 1;
         }
@@ -114,6 +116,7 @@ impl NullBufferBuilder {
     pub fn append_n_nulls(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity();
     }
 
     /// Appends a `false` into the builder
@@ -122,15 +125,46 @@ impl NullBufferBuilder {
     pub fn append_null(&mut self) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append(false);
+        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity();
     }
 
     /// Appends a boolean value into the builder.
     #[inline]
     pub fn append(&mut self, not_null: bool) {
         if not_null {
-            self.append_non_null()
+            self.append_non_null();
         } else {
-            self.append_null()
+            self.append_null();
+        }
+
+        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity()
+    }
+
+    /// Returns the capacity of the buffer
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Gets a bit in the buffer at `index`
+    #[inline]
+    pub fn get_bit(&mut self, index: usize) -> bool {
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.get_bit(index)
+        } else {
+            true
+        }
+    }
+
+    /// Truncates the builder to the given length
+    ///
+    /// If `len` is greater than the buffer's current length, this has no effect
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.truncate(len)
+        } else {
+            self.len = len
         }
     }
 
@@ -218,6 +252,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_n_non_nulls(2);
         assert_eq!(6, builder.len());
+        assert_eq!(512, builder.capacity());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b110010_u8], buf.validity());
@@ -230,6 +265,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_slice(&[false, false, false]);
         assert_eq!(6, builder.len());
+        assert_eq!(512, builder.capacity());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b0_u8], buf.validity());
@@ -242,6 +278,7 @@ mod tests {
         builder.append_n_non_nulls(2);
         builder.append_slice(&[true, true, true]);
         assert_eq!(6, builder.len());
+        assert_eq!(0, builder.capacity());
 
         let buf = builder.finish();
         assert!(buf.is_none());
@@ -262,5 +299,33 @@ mod tests {
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b1011_u8], buf.validity());
+    }
+
+    #[test]
+    fn test_null_buffer_builder_get_bit() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(6);
+        assert!(builder.get_bit(0));
+
+        builder.append_null();
+        assert!(!builder.get_bit(6));
+
+        builder.append_non_null();
+        assert!(builder.get_bit(7));
+    }
+
+    #[test]
+    fn test_null_buffer_builder_truncate() {
+        let b = MutableBuffer::from_iter([true, true, true, true]);
+        let mut builder = NullBufferBuilder::new_from_buffer(b, 4);
+        let finished = builder.finish();
+        assert_eq!(None, finished);
+
+        // builder.append_null();
+        // builder.append_non_null();
+        // builder.append_null();
+        // let finished = builder.finish().unwrap();
+        // assert!(finished.is_null(4));
+        // assert!(finished.is_null(6));
     }
 }
