@@ -18,6 +18,7 @@
 use crate::errors::{ParquetError, Result};
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
+use std::io::Read;
 
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -25,6 +26,8 @@ const SIZE_LEN: usize = 4;
 
 pub trait BlockDecryptor {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
+
+    fn read_and_decrypt<T: Read>(&self, input: &mut T, aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +61,16 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
         // Truncate result to remove the tag
         result.resize(result.len() - TAG_LEN, 0u8);
         Ok(result)
+    }
+
+    fn read_and_decrypt<T: Read>(&self, input: &mut T, aad: &[u8]) -> Result<Vec<u8>> {
+        let mut len_bytes = [0; 4];
+        input.read_exact(&mut len_bytes)?;
+        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
+        let mut ciphertext = vec![0; 4 + ciphertext_len];
+        input.read_exact(&mut ciphertext[4..])?;
+
+        self.decrypt(&ciphertext, aad.as_ref())
     }
 }
 
@@ -102,7 +115,9 @@ impl DecryptionPropertiesBuilder {
 
     pub fn build(self) -> Result<FileDecryptionProperties> {
         if self.footer_key.is_none() && self.column_keys.is_none() {
-            return Err(ParquetError::General("Footer or at least one column key is required".to_string()))
+            return Err(ParquetError::General(
+                "Footer or at least one column key is required".to_string(),
+            ));
         }
 
         Ok(FileDecryptionProperties {

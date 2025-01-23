@@ -377,16 +377,10 @@ pub(crate) fn read_page_header<T: Read>(
             crypto_context.page_ordinal,
         )?;
 
-        let mut len_bytes = [0; 4];
-        input.read_exact(&mut len_bytes)?;
-        let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
-        let mut ciphertext = vec![0; 4 + ciphertext_len];
-        input.read_exact(&mut ciphertext[4..])?;
-
         let buf = data_decryptor
             .footer_decryptor()
             .unwrap()
-            .decrypt(&ciphertext, aad.as_ref())?;
+            .read_and_decrypt(input, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
