@@ -2478,6 +2478,37 @@ mod tests {
         ensure_roundtrip(Arc::new(ls.finish()));
     }
 
+    #[test]
+    fn test_large_slice_string_list_of_lists() {
+        // The reason for the special test is to verify reencode_offsets which looks both at
+        // the starting offset and the data offset.  So need a dataset where the starting_offset
+        // is zero but the data offset is not.
+        let mut ls = ListBuilder::new(ListBuilder::new(StringBuilder::new()));
+
+        for _ in 0..4000 {
+            ls.values().append(true);
+            ls.append(true)
+        }
+
+        let mut s = String::new();
+        for row_number in 0..4000 {
+            if row_number % 2 == 0 {
+                for list_element in 0..1000 {
+                    s.clear();
+                    use std::fmt::Write;
+                    write!(&mut s, "value{row_number}-{list_element}").unwrap();
+                    ls.values().values().append_value(&s);
+                }
+                ls.values().append(true);
+                ls.append(true)
+            } else {
+                ls.append(false); // null
+            }
+        }
+
+        ensure_roundtrip(Arc::new(ls.finish()));
+    }
+
     /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
     fn ensure_roundtrip(array: ArrayRef) {
         let num_rows = array.len();
