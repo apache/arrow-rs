@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
 use std::io::Read;
@@ -76,17 +76,14 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileDecryptionProperties {
-    footer_key: Option<Vec<u8>>,
+    footer_key: Vec<u8>,
     column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
     aad_prefix: Option<Vec<u8>>,
 }
 
 impl FileDecryptionProperties {
-    pub fn builder() -> DecryptionPropertiesBuilder {
-        DecryptionPropertiesBuilder::with_defaults()
-    }
-    pub fn has_footer_key(&self) -> bool {
-        self.footer_key.is_some()
+    pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
+        DecryptionPropertiesBuilder::new(footer_key)
     }
 
     pub fn has_column_keys(&self) -> bool {
@@ -99,38 +96,26 @@ impl FileDecryptionProperties {
 }
 
 pub struct DecryptionPropertiesBuilder {
-    footer_key: Option<Vec<u8>>,
+    footer_key: Vec<u8>,
     column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
     aad_prefix: Option<Vec<u8>>,
 }
 
 impl DecryptionPropertiesBuilder {
-    pub fn with_defaults() -> Self {
+    pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
-            footer_key: None,
+            footer_key,
             column_keys: None,
             aad_prefix: None,
         }
     }
 
     pub fn build(self) -> Result<FileDecryptionProperties> {
-        if self.footer_key.is_none() && self.column_keys.is_none() {
-            return Err(ParquetError::General(
-                "Footer or at least one column key is required".to_string(),
-            ));
-        }
-
         Ok(FileDecryptionProperties {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
         })
-    }
-
-    // todo decr: doc comment
-    pub fn with_footer_key(mut self, value: Vec<u8>) -> Self {
-        self.footer_key = Some(value);
-        self
     }
 
     pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
@@ -167,14 +152,11 @@ impl FileDecryptor {
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
     ) -> Self {
-        let footer_decryptor = decryption_properties
-            .footer_key
-            .clone()
-            .map(|footer_key| RingGcmBlockDecryptor::new(footer_key.as_ref()));
+        let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key);
 
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
-            footer_decryptor,
+            footer_decryptor: Some(footer_decryptor),
             decryption_properties: decryption_properties.clone(),
             aad_file_unique,
             aad_prefix,
@@ -200,8 +182,7 @@ impl FileDecryptor {
         }
         let column_keys = &self.decryption_properties.column_keys.clone().unwrap();
         let decryption_properties = if let Some(column_key) = column_keys.get(column_name) {
-            DecryptionPropertiesBuilder::with_defaults()
-                .with_footer_key(column_key.clone())
+            DecryptionPropertiesBuilder::new(column_key.clone())
                 .with_aad_prefix(self.aad_prefix.clone())
                 .build()
                 .unwrap()
@@ -230,10 +211,6 @@ impl FileDecryptor {
 
     pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
         &self.aad_prefix
-    }
-
-    pub(crate) fn has_footer_key(&self) -> bool {
-        self.decryption_properties.has_footer_key()
     }
 
     pub(crate) fn is_column_encrypted(&self, column_name: &[u8]) -> bool {

@@ -1887,10 +1887,13 @@ mod tests {
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
         let file = File::open(path).unwrap();
 
+        // There is always a footer key even with a plaintext footer,
+        // but this is used for signing the footer.
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = FileDecryptionProperties::builder()
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
             .build()
@@ -1910,8 +1913,7 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = FileDecryptionProperties::builder()
-            .with_footer_key(footer_key.to_vec())
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
             .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
             .build()
@@ -1928,8 +1930,7 @@ mod tests {
         let file = File::open(path).unwrap();
 
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        let decryption_properties = FileDecryptionProperties::builder()
-            .with_footer_key(key_code.to_vec())
+        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
             .build()
             .unwrap();
 

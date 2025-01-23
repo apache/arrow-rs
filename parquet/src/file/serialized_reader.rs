@@ -352,12 +352,6 @@ pub(crate) fn read_page_header<T: Read>(
     if let Some(crypto_context) = crypto_context {
         let decryptor = &crypto_context.data_decryptor();
 
-        if !decryptor.has_footer_key() || decryptor.footer_decryptor().is_none() {
-            let mut prot = TCompactInputProtocol::new(input);
-            let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-            return Ok(page_header);
-        };
-
         let data_decryptor = &crypto_context.data_decryptor();
         let aad_file_unique = decryptor.aad_file_unique();
         let aad_prefix = decryptor.aad_prefix();
