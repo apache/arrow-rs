@@ -18,9 +18,8 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-use crate::encryption::decryption::FileDecryptor;
+use crate::encryption::decryption::RingGcmBlockDecryptor;
 use crate::errors::{ParquetError, Result};
-use std::sync::Arc;
 
 #[derive(PartialEq)]
 pub(crate) enum ModuleType {
@@ -120,16 +119,21 @@ pub struct CryptoContext {
     pub(crate) column_ordinal: usize,
     pub(crate) page_ordinal: Option<usize>,
     pub(crate) dictionary_page: bool,
-    pub(crate) data_decryptor: Arc<FileDecryptor>,
-    pub(crate) metadata_decryptor: Arc<FileDecryptor>,
+    // We have separate data and metadata decryptors because
+    // in GCM CTR mode, the metadata and data pages use
+    // different algorithms.
+    data_decryptor: RingGcmBlockDecryptor,
+    metadata_decryptor: RingGcmBlockDecryptor,
+    file_aad: Vec<u8>,
 }
 
 impl CryptoContext {
     pub fn new(
         row_group_ordinal: usize,
         column_ordinal: usize,
-        data_decryptor: Arc<FileDecryptor>,
-        metadata_decryptor: Arc<FileDecryptor>,
+        data_decryptor: RingGcmBlockDecryptor,
+        metadata_decryptor: RingGcmBlockDecryptor,
+        file_aad: Vec<u8>,
     ) -> Self {
         Self {
             row_group_ordinal,
@@ -138,6 +142,7 @@ impl CryptoContext {
             dictionary_page: false,
             data_decryptor,
             metadata_decryptor,
+            file_aad,
         }
     }
 
@@ -149,6 +154,7 @@ impl CryptoContext {
             dictionary_page: false,
             data_decryptor: self.data_decryptor.clone(),
             metadata_decryptor: self.metadata_decryptor.clone(),
+            file_aad: self.file_aad.clone(),
         }
     }
 
@@ -160,13 +166,19 @@ impl CryptoContext {
             dictionary_page: true,
             data_decryptor: self.data_decryptor.clone(),
             metadata_decryptor: self.metadata_decryptor.clone(),
+            file_aad: self.file_aad.clone(),
         }
     }
 
-    pub fn data_decryptor(&self) -> Arc<FileDecryptor> {
-        self.data_decryptor.clone()
+    pub fn data_decryptor(&self) -> &RingGcmBlockDecryptor {
+        &self.data_decryptor
     }
-    pub fn metadata_decryptor(&self) -> Arc<FileDecryptor> {
-        self.metadata_decryptor.clone()
+
+    pub fn metadata_decryptor(&self) -> &RingGcmBlockDecryptor {
+        &self.metadata_decryptor
+    }
+
+    pub fn file_aad(&self) -> &Vec<u8> {
+        &self.file_aad
     }
 }

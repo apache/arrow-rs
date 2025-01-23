@@ -31,7 +31,8 @@ pub trait BlockDecryptor {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RingGcmBlockDecryptor {
+// TODO: Make non-pub
+pub struct RingGcmBlockDecryptor {
     key: LessSafeKey,
 }
 
@@ -136,8 +137,7 @@ pub struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
     // todo decr: change to BlockDecryptor
     footer_decryptor: Option<RingGcmBlockDecryptor>,
-    aad_file_unique: Vec<u8>,
-    aad_prefix: Vec<u8>,
+    file_aad: Vec<u8>,
 }
 
 impl PartialEq for FileDecryptor {
@@ -152,20 +152,20 @@ impl FileDecryptor {
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
     ) -> Self {
+        let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
         let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key);
 
         Self {
             // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
             footer_decryptor: Some(footer_decryptor),
             decryption_properties: decryption_properties.clone(),
-            aad_file_unique,
-            aad_prefix,
+            file_aad,
         }
     }
 
     // todo decr: change to BlockDecryptor
-    pub(crate) fn get_footer_decryptor(self) -> RingGcmBlockDecryptor {
-        self.footer_decryptor.unwrap()
+    pub(crate) fn get_footer_decryptor(&self) -> RingGcmBlockDecryptor {
+        self.footer_decryptor.clone().unwrap()
     }
 
     pub(crate) fn has_column_key(&self, column_name: &[u8]) -> bool {
@@ -176,41 +176,27 @@ impl FileDecryptor {
             .contains_key(column_name)
     }
 
-    pub(crate) fn get_column_decryptor(&self, column_name: &[u8]) -> FileDecryptor {
-        if self.decryption_properties.column_keys.is_none() || !self.has_column_key(column_name) {
-            return self.clone();
+    pub(crate) fn get_column_data_decryptor(&self, column_name: &[u8]) -> RingGcmBlockDecryptor {
+        match self.decryption_properties.column_keys.as_ref() {
+            None => self.get_footer_decryptor(),
+            Some(column_keys) => {
+                match column_keys.get(column_name) {
+                    None => self.get_footer_decryptor(),
+                    Some(column_key) => {
+                        RingGcmBlockDecryptor::new(column_key)
+                    }
+                }
+            }
         }
-        let column_keys = &self.decryption_properties.column_keys.clone().unwrap();
-        let decryption_properties = if let Some(column_key) = column_keys.get(column_name) {
-            DecryptionPropertiesBuilder::new(column_key.clone())
-                .with_aad_prefix(self.aad_prefix.clone())
-                .build()
-                .unwrap()
-        } else {
-            self.decryption_properties.clone()
-        };
-
-        FileDecryptor::new(
-            &decryption_properties,
-            self.aad_file_unique.clone(),
-            self.aad_prefix.clone(),
-        )
     }
 
-    pub(crate) fn decryption_properties(&self) -> &FileDecryptionProperties {
-        &self.decryption_properties
+    pub(crate) fn get_column_metadata_decryptor(&self, column_name: &[u8]) -> RingGcmBlockDecryptor {
+        // Once GCM CTR mode is implemented, data and metadata decryptors may be different
+        self.get_column_data_decryptor(column_name)
     }
 
-    pub(crate) fn footer_decryptor(&self) -> Option<RingGcmBlockDecryptor> {
-        self.footer_decryptor.clone()
-    }
-
-    pub(crate) fn aad_file_unique(&self) -> &Vec<u8> {
-        &self.aad_file_unique
-    }
-
-    pub(crate) fn aad_prefix(&self) -> &Vec<u8> {
-        &self.aad_prefix
+    pub(crate) fn file_aad(&self) -> &Vec<u8> {
+        &self.file_aad
     }
 
     pub(crate) fn is_column_encrypted(&self, column_name: &[u8]) -> bool {

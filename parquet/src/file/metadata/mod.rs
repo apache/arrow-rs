@@ -656,6 +656,8 @@ impl RowGroupMetaData {
             .enumerate()
         {
             if c.encrypted_column_metadata.is_some() {
+                // TODO: Allow ignoring encrypted column metadata in plaintext mode when no
+                // decryptor is set
                 let decryptor = decryptor.unwrap();
                 let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
                     c.crypto_metadata.clone()
@@ -663,20 +665,11 @@ impl RowGroupMetaData {
                     todo!()
                 };
                 let column_name = crypto_metadata.path_in_schema.join(".");
-                let column_decryptor = decryptor
-                    .get_column_decryptor(column_name.as_bytes())
-                    .footer_decryptor()
-                    .unwrap();
+                let column_decryptor =
+                    decryptor.get_column_metadata_decryptor(column_name.as_bytes());
 
-                let aad_file_unique = decryptor.aad_file_unique();
-                let aad_prefix: Vec<u8> = decryptor
-                    .decryption_properties()
-                    .aad_prefix()
-                    .unwrap_or_default();
                 let column_aad = create_page_aad(
-                    [aad_prefix.as_slice(), aad_file_unique.as_slice()]
-                        .concat()
-                        .as_slice(),
+                    decryptor.file_aad(),
                     ModuleType::ColumnMetaData,
                     rg.ordinal.unwrap() as usize,
                     i,

@@ -741,15 +741,16 @@ impl ParquetMetaDataReader {
 
             // todo decr: get key_metadata
             let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
-            let aad_footer = create_footer_aad(aad_file_unique.as_ref())?;
             let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
 
             decryptor = Some(FileDecryptor::new(
                 file_decryption_properties.unwrap(),
-                aad_file_unique.clone(),
-                aad_prefix.clone(),
+                aad_file_unique,
+                aad_prefix,
             ));
             let footer_decryptor = decryptor.clone().unwrap().get_footer_decryptor();
+
+            let aad_footer = create_footer_aad(decryptor.as_ref().unwrap().file_aad())?;
 
             decrypted_fmd_buf =
                 footer_decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
@@ -774,8 +775,8 @@ impl ParquetMetaDataReader {
 
             decryptor = Some(FileDecryptor::new(
                 file_decryption_properties.unwrap(),
-                aad_file_unique.clone(),
-                aad_prefix.clone(),
+                aad_file_unique,
+                aad_prefix,
             ));
             // todo get key_metadata etc. Set file decryptor in return value
             // todo check signature
