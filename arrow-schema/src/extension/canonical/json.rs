@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#json>
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{extension::ExtensionType, ArrowError, DataType};
 
@@ -42,14 +42,8 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 pub struct Json(JsonMetadata);
 
 /// Extension type metadata for [`Json`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct JsonMetadata(Value);
-
-impl Default for JsonMetadata {
-    fn default() -> Self {
-        Self(Value::String(Default::default()))
-    }
-}
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct JsonMetadata(Option<Map<String, Value>>);
 
 impl ExtensionType for Json {
     const NAME: &'static str = "arrow.json";
@@ -61,7 +55,14 @@ impl ExtensionType for Json {
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        Some(self.metadata().0.to_string())
+        Some(
+            self.metadata()
+                .0
+                .as_ref()
+                .map(serde_json::to_string)
+                .map(Result::unwrap)
+                .unwrap_or_else(|| "".to_owned()),
+        )
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
@@ -69,13 +70,16 @@ impl ExtensionType for Json {
         metadata
             .map_or_else(
                 || Err(ArrowError::InvalidArgumentError(ERR.to_owned())),
-                |metadata| match metadata {
-                    r#""""# => Ok(Value::String(Default::default())),
-                    value => value
-                        .parse::<Value>()
-                        .ok()
-                        .filter(|value| matches!(value.as_object(), Some(map) if map.is_empty()))
-                        .ok_or_else(|| ArrowError::InvalidArgumentError(ERR.to_owned())),
+                |metadata| {
+                    match metadata {
+                        // Empty string
+                        "" => Ok(None),
+                        value => match serde_json::from_str::<Map<_, _>>(value) {
+                            // JSON string with an empty object
+                            Ok(map) if map.is_empty() => Ok(Some(map)),
+                            _ => Err(ArrowError::InvalidArgumentError(ERR.to_owned())),
+                        },
+                    }
                 },
             )
             .map(JsonMetadata)
@@ -116,14 +120,12 @@ mod tests {
         field.try_with_extension_type(Json::default())?;
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
-            Some(&r#""""#.to_owned())
+            Some(&"".to_owned())
         );
         field.try_extension_type::<Json>()?;
 
         let mut field = Field::new("", DataType::LargeUtf8, false);
-        field.try_with_extension_type(Json(JsonMetadata(serde_json::Value::Object(
-            Map::default(),
-        ))))?;
+        field.try_with_extension_type(Json(JsonMetadata(Some(Map::default()))))?;
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_owned())
