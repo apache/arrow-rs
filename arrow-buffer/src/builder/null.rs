@@ -90,7 +90,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_n_non_nulls(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append_n(n, true);
+            buf.append_n(n, true)
         } else {
             self.len += n;
         }
@@ -101,7 +101,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_non_null(&mut self) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append(true);
+            buf.append(true)
         } else {
             self.len += 1;
         }
@@ -127,9 +127,9 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append(&mut self, not_null: bool) {
         if not_null {
-            self.append_non_null();
+            self.append_non_null()
         } else {
-            self.append_null();
+            self.append_null()
         }
     }
 
