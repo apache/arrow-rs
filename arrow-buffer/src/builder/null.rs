@@ -74,12 +74,10 @@ impl NullBufferBuilder {
 
     /// Creates a new builder from a `MutableBuffer`.
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
-        let mut capacity = buffer.len() * 8;
-
+        let capacity = buffer.len() * 8;
         assert!(len <= capacity);
 
         let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
-        capacity = bitmap_builder.as_ref().unwrap().capacity();
         Self {
             bitmap_builder,
             len,
@@ -93,7 +91,6 @@ impl NullBufferBuilder {
     pub fn append_n_non_nulls(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true);
-            self.capacity = buf.capacity()
         } else {
             self.len += n;
         }
@@ -105,7 +102,6 @@ impl NullBufferBuilder {
     pub fn append_non_null(&mut self) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append(true);
-            self.capacity = buf.capacity()
         } else {
             self.len += 1;
         }
@@ -117,7 +113,6 @@ impl NullBufferBuilder {
     pub fn append_n_nulls(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
-        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity();
     }
 
     /// Appends a `false` into the builder
@@ -126,7 +121,6 @@ impl NullBufferBuilder {
     pub fn append_null(&mut self) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append(false);
-        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity();
     }
 
     /// Appends a boolean value into the builder.
@@ -137,13 +131,16 @@ impl NullBufferBuilder {
         } else {
             self.append_null();
         }
-        self.capacity = self.bitmap_builder.as_ref().unwrap().capacity()
     }
 
     /// Returns the capacity of the buffer
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.capacity
+        if let Some(buf) = self.bitmap_builder.as_ref() {
+            buf.capacity()
+        } else {
+            0
+        }
     }
 
     /// Gets a bit in the buffer at `index`
@@ -167,7 +164,6 @@ impl NullBufferBuilder {
 
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.truncate(len);
-            self.capacity = buf.capacity()
         } else {
             self.len = len
         }
@@ -327,7 +323,7 @@ mod tests {
         builder.truncate(20);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 16);
-        assert_eq!(builder.capacity(), 10);
+        assert_eq!(builder.capacity(), 0);
         builder.truncate(14);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 14);
