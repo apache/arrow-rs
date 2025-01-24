@@ -483,71 +483,11 @@ impl ObjectStore for LocalFileSystem {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        let config = Arc::clone(&self.config);
+        self.list_with_maybe_offset(prefix, None)
+    }
 
-        let root_path = match prefix {
-            Some(prefix) => match config.prefix_to_filesystem(prefix) {
-                Ok(path) => path,
-                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
-            },
-            None => self.config.root.to_file_path().unwrap(),
-        };
-
-        let walkdir = WalkDir::new(root_path)
-            // Don't include the root directory itself
-            .min_depth(1)
-            .follow_links(true);
-
-        let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
-            let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
-                Ok(entry) => entry,
-                Err(e) => return Some(Err(e)),
-            };
-
-            if !entry.path().is_file() {
-                return None;
-            }
-
-            match config.filesystem_to_path(entry.path()) {
-                Ok(path) => match is_valid_file_path(&path) {
-                    true => convert_entry(entry, path).transpose(),
-                    false => None,
-                },
-                Err(e) => Some(Err(e)),
-            }
-        });
-
-        // If no tokio context, return iterator directly as no
-        // need to perform chunked spawn_blocking reads
-        if tokio::runtime::Handle::try_current().is_err() {
-            return futures::stream::iter(s).boxed();
-        }
-
-        // Otherwise list in batches of CHUNK_SIZE
-        const CHUNK_SIZE: usize = 1024;
-
-        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-            if buffer.is_empty() {
-                (s, buffer) = tokio::task::spawn_blocking(move || {
-                    for _ in 0..CHUNK_SIZE {
-                        match s.next() {
-                            Some(r) => buffer.push_back(r),
-                            None => break,
-                        }
-                    }
-                    (s, buffer)
-                })
-                .await?;
-            }
-
-            match buffer.pop_front() {
-                Some(Err(e)) => Err(e),
-                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                None => Ok(None),
-            }
-        })
-        .boxed()
+    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_with_maybe_offset(prefix, Some(offset))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -677,6 +617,94 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 }
+
+impl LocalFileSystem {
+
+    fn list_with_maybe_offset(&self, prefix: Option<&Path>, maybe_offset: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+
+        let config = Arc::clone(&self.config);
+
+        let root_path = match prefix {
+            Some(prefix) => match config.prefix_to_filesystem(prefix) {
+                Ok(path) => path,
+                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
+            },
+            None => config.root.to_file_path().unwrap(),
+        };
+
+        let walkdir = WalkDir::new(root_path)
+            // Don't include the root directory itself
+            .min_depth(1)
+            .follow_links(true);
+
+        let maybe_offset_clone = maybe_offset.map(move |o| o.clone());
+
+        let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
+
+
+            if maybe_offset_clone.as_ref().is_some() && result_dir_entry.is_ok() {
+                let offset = maybe_offset_clone.as_ref().unwrap();
+                let entry = result_dir_entry.as_ref().unwrap();
+                let location = config.filesystem_to_path(entry.path());
+
+                if location.unwrap() <= *offset {
+                    return None;
+                }
+            }
+
+            let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
+                Ok(entry) => entry,
+                Err(e) => return Some(Err(e)),
+            };
+
+            if !entry.path().is_file() {
+                return None;
+            }
+
+            match config.filesystem_to_path(entry.path()) {
+                Ok(path) => match is_valid_file_path(&path) {
+                    true => convert_entry(entry, path).transpose(),
+                    false => None,
+                },
+                Err(e) => Some(Err(e)),
+            }
+        });
+
+        // If no tokio context, return iterator directly as no
+        // need to perform chunked spawn_blocking reads
+        if tokio::runtime::Handle::try_current().is_err() {
+            return futures::stream::iter(s).boxed();
+        }
+
+        // Otherwise list in batches of CHUNK_SIZE
+        const CHUNK_SIZE: usize = 1024;
+
+        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
+        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+            if buffer.is_empty() {
+                (s, buffer) = tokio::task::spawn_blocking(move || {
+                    for _ in 0..CHUNK_SIZE {
+                        match s.next() {
+                            Some(r) => buffer.push_back(r),
+                            None => break,
+                        }
+                    }
+                    (s, buffer)
+                })
+                    .await?;
+            }
+
+            match buffer.pop_front() {
+                Some(Err(e)) => Err(e),
+                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                None => Ok(None),
+            }
+        })
+            .boxed()
+    }
+}
+
+
 
 /// Creates the parent directories of `path` or returns an error based on `source` if no parent
 fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
@@ -1399,6 +1427,24 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn daniel() {
+        let str = "/mnt/.../_delta_log";
+
+        let path = PathBuf::from(str);
+
+        let integration = LocalFileSystem::new_with_prefix(path).unwrap();
+
+        let offset = Path::from("00000000000000016280");
+
+
+        let mut res  = integration.list_with_offset(None, &offset);
+        let mut actual: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
+
+        println!("{}", actual.len());
+
     }
 
     #[tokio::test]
