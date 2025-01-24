@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#json>
 
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
 
 use crate::{extension::ExtensionType, ArrowError, DataType};
 
@@ -41,9 +41,14 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Json(JsonMetadata);
 
+/// Empty object
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+
 /// Extension type metadata for [`Json`].
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct JsonMetadata(Option<Map<String, Value>>);
+pub struct JsonMetadata(Option<Empty>);
 
 impl ExtensionType for Json {
     const NAME: &'static str = "arrow.json";
@@ -74,11 +79,9 @@ impl ExtensionType for Json {
                     match metadata {
                         // Empty string
                         "" => Ok(None),
-                        value => match serde_json::from_str::<Map<_, _>>(value) {
-                            // JSON string with an empty object
-                            Ok(map) if map.is_empty() => Ok(Some(map)),
-                            _ => Err(ArrowError::InvalidArgumentError(ERR.to_owned())),
-                        },
+                        value => serde_json::from_str::<Empty>(value)
+                            .map(Option::Some)
+                            .map_err(|_| ArrowError::InvalidArgumentError(ERR.to_owned())),
                     }
                 },
             )
@@ -110,8 +113,6 @@ mod tests {
         Field,
     };
 
-    use serde_json::Map;
-
     use super::*;
 
     #[test]
@@ -122,15 +123,21 @@ mod tests {
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"".to_owned())
         );
-        field.try_extension_type::<Json>()?;
+        assert_eq!(
+            field.try_extension_type::<Json>()?,
+            Json(JsonMetadata(None))
+        );
 
         let mut field = Field::new("", DataType::LargeUtf8, false);
-        field.try_with_extension_type(Json(JsonMetadata(Some(Map::default()))))?;
+        field.try_with_extension_type(Json(JsonMetadata(Some(Empty {}))))?;
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
             Some(&"{}".to_owned())
         );
-        field.try_extension_type::<Json>()?;
+        assert_eq!(
+            field.try_extension_type::<Json>()?,
+            Json(JsonMetadata(Some(Empty {})))
+        );
 
         let mut field = Field::new("", DataType::Utf8View, false);
         field.try_with_extension_type(Json::default())?;
