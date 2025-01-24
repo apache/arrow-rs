@@ -1928,7 +1928,11 @@ mod tests {
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata.clone())
             .set_row_groups(row_group_meta_with_stats)
             .build();
-        let base_expected_size = 3008;
+
+        #[cfg(not(feature = "encryption"))]
+        let base_expected_size = 2312;
+        #[cfg(feature = "encryption")]
+        let base_expected_size = 2448;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1955,7 +1959,11 @@ mod tests {
             ]]))
             .build();
 
-        let bigger_expected_size = 3512;
+        #[cfg(not(feature = "encryption"))]
+        let bigger_expected_size = 2816;
+        #[cfg(feature = "encryption")]
+        let bigger_expected_size = 2952;
+
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
