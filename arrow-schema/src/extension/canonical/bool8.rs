@@ -47,14 +47,13 @@ impl ExtensionType for Bool8 {
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
-        const ERR: &str = "Bool8 extension type expects an empty string as metadata";
-        metadata.map_or_else(
-            || Err(ArrowError::InvalidArgumentError(ERR.to_owned())),
-            |value| match value {
-                "" => Ok(""),
-                _ => Err(ArrowError::InvalidArgumentError(ERR.to_owned())),
-            },
-        )
+        if metadata.is_some_and(str::is_empty) {
+            Ok("")
+        } else {
+            Err(ArrowError::InvalidArgumentError(
+                "Bool8 extension type expects an empty string as metadata".to_owned(),
+            ))
+        }
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
