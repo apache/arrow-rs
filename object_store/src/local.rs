@@ -645,10 +645,9 @@ impl LocalFileSystem {
             if let (Some(offset), Ok(entry)) = (maybe_offset.as_ref(), result_dir_entry.as_ref()) {
                 let location = config.filesystem_to_path(entry.path());
                 match location {
-                    Ok(path) => if path <= *offset {
-                        return None;
-                    },
+                    Ok(path) if path <= *offset => return None,
                     Err(e) => return Some(Err(e)),
+                    _ => {}
                 }
 
             }
