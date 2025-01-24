@@ -245,7 +245,7 @@ pub enum DataType {
     ///
     /// # Recommendation
     ///
-    /// Users should prefer [`DataType::Date32`] to cleanly represent the number
+    /// Users should prefer [`Date32`] to cleanly represent the number
     /// of days, or one of the Timestamp variants to include time as part of the
     /// representation, depending on their use case.
     ///
@@ -253,6 +253,7 @@ pub enum DataType {
     ///
     /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
     ///
+    /// [`Date32`]: Self::Date32
     /// [Schema.fbs]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
@@ -282,10 +283,12 @@ pub enum DataType {
     LargeBinary,
     /// Opaque binary data of variable length.
     ///
-    /// Logically the same as [`Self::Binary`], but the internal representation uses a view
+    /// Logically the same as [`Binary`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
     /// inline (for small strings) or an inlined prefix, an index of another buffer,
     /// and an offset pointing to a slice in that buffer (for non-small strings).
+    ///
+    /// [`Binary`]: Self::Binary
     BinaryView,
     /// A variable-length string in Unicode with UTF-8 encoding.
     ///
@@ -299,10 +302,12 @@ pub enum DataType {
     LargeUtf8,
     /// A variable-length string in Unicode with UTF-8 encoding
     ///
-    /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
+    /// Logically the same as [`Utf8`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
     /// inline (for small strings) or an inlined prefix, an index of another buffer,
     /// and an offset pointing to a slice in that buffer (for non-small strings).
+    ///
+    /// [`Utf8`]: Self::Utf8
     Utf8View,
     /// A list of some logical data type with variable length.
     ///
@@ -311,11 +316,12 @@ pub enum DataType {
 
     /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length.
     ///
+    /// Logically the same as [`List`], but the internal representation differs in how child
+    /// data is referenced, allowing flexibility in how data is layed out.
+    ///
     /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
-    /// The ListView layout is defined by three buffers:
-    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets are both 32 bits for this type
+    /// [`List`]: Self::List
     ListView(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
@@ -326,11 +332,12 @@ pub enum DataType {
 
     /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length and 64-bit offsets.
     ///
+    /// Logically the same as [`LargeList`], but the internal representation differs in how child
+    /// data is referenced, allowing flexibility in how data is layed out.
+    ///
     /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
-    /// The LargeListView layout is defined by three buffers:
-    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets are both 64 bits for this type
+    /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
