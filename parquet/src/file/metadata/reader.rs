@@ -719,42 +719,31 @@ impl ParquetMetaDataReader {
         }
 
         #[cfg(feature = "encryption")]
-        let mut decryptor = None;
+        let mut file_decryptor = None;
         #[cfg(feature = "encryption")]
         let decrypted_fmd_buf;
 
         #[cfg(feature = "encryption")]
         if encrypted_footer {
-            if file_decryption_properties.is_none() {
-                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
-            };
+            if let Some(file_decryption_properties) = file_decryption_properties {
+                let t_file_crypto_metadata: TFileCryptoMetaData =
+                    TFileCryptoMetaData::read_from_in_protocol(&mut prot)
+                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+                let decryptor = get_file_decryptor(
+                    t_file_crypto_metadata.encryption_algorithm,
+                    file_decryption_properties,
+                );
+                let footer_decryptor = decryptor.get_footer_decryptor();
+                let aad_footer = create_footer_aad(decryptor.file_aad())?;
 
-            let t_file_crypto_metadata: TFileCryptoMetaData =
-                TFileCryptoMetaData::read_from_in_protocol(&mut prot)
-                    .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-            let algo = t_file_crypto_metadata.encryption_algorithm;
-            let aes_gcm_algo = if let EncryptionAlgorithm::AESGCMV1(a) = algo {
-                a
+                decrypted_fmd_buf =
+                    footer_decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
+                prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
+
+                file_decryptor = Some(decryptor);
             } else {
-                unreachable!()
-            }; // todo decr: add support for GCMCTRV1
-
-            // todo decr: get key_metadata
-            let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
-            let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
-
-            decryptor = Some(FileDecryptor::new(
-                file_decryption_properties.unwrap(),
-                aad_file_unique,
-                aad_prefix,
-            ));
-            let footer_decryptor = decryptor.clone().unwrap().get_footer_decryptor();
-
-            let aad_footer = create_footer_aad(decryptor.as_ref().unwrap().file_aad())?;
-
-            decrypted_fmd_buf =
-                footer_decryptor.decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())?;
-            prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
+                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
+            }
         }
 
         let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
@@ -763,33 +752,21 @@ impl ParquetMetaDataReader {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
         #[cfg(feature = "encryption")]
-        if t_file_metadata.encryption_algorithm.is_some() {
-            let algo = t_file_metadata.encryption_algorithm;
-            let aes_gcm_algo = if let Some(EncryptionAlgorithm::AESGCMV1(a)) = algo {
-                a
-            } else {
-                unreachable!()
-            }; // todo decr: add support for GCMCTRV1
-            let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
-            let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
-
-            decryptor = Some(FileDecryptor::new(
-                file_decryption_properties.unwrap(),
-                aad_file_unique,
-                aad_prefix,
-            ));
-            // todo get key_metadata etc. Set file decryptor in return value
-            // todo check signature
+        if let (Some(algo), Some(file_decryption_properties)) = (
+            t_file_metadata.encryption_algorithm,
+            file_decryption_properties,
+        ) {
+            // File has a plaintext footer but encryption algorithm is set
+            file_decryptor = Some(get_file_decryptor(algo, file_decryption_properties));
         }
 
         let mut row_groups = Vec::new();
-        // TODO: row group filtering
         for rg in t_file_metadata.row_groups {
             let r = RowGroupMetaData::from_thrift(
                 schema_descr.clone(),
                 rg,
                 #[cfg(feature = "encryption")]
-                decryptor.as_ref(),
+                file_decryptor.as_ref(),
             )?;
             row_groups.push(r);
         }
@@ -808,7 +785,7 @@ impl ParquetMetaDataReader {
             file_metadata,
             row_groups,
             #[cfg(feature = "encryption")]
-            decryptor,
+            file_decryptor,
         ))
     }
 
@@ -842,6 +819,23 @@ impl ParquetMetaDataReader {
             None => Ok(None),
         }
     }
+}
+
+#[cfg(feature = "encryption")]
+fn get_file_decryptor(
+    encryption_algorithm: EncryptionAlgorithm,
+    file_decryption_properties: &FileDecryptionProperties,
+) -> FileDecryptor {
+    let aes_gcm_algo = if let EncryptionAlgorithm::AESGCMV1(a) = encryption_algorithm {
+        a
+    } else {
+        todo!("GCMCTRV1 encryption algorithm")
+    };
+
+    let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
+    let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
+
+    FileDecryptor::new(file_decryption_properties, aad_file_unique, aad_prefix)
 }
 
 #[cfg(test)]

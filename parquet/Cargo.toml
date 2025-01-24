@@ -128,7 +128,6 @@ sysinfo = ["dep:sysinfo"]
 crc = ["dep:crc32fast"]
 # Enable SIMD UTF-8 validation
 simdutf8 = ["dep:simdutf8"]
-#encryption = ["aes-gcm", "base64"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
 

@@ -655,18 +655,23 @@ impl RowGroupMetaData {
             .zip(schema_descr.columns())
             .enumerate()
         {
-            if c.encrypted_column_metadata.is_some() {
-                // TODO: Allow ignoring encrypted column metadata in plaintext mode when no
-                // decryptor is set
-                let decryptor = decryptor.unwrap();
-                let Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) =
-                    c.crypto_metadata.clone()
-                else {
-                    todo!()
+            // Read encrypted metadata if it's present and we have a decryptor.
+            if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
+                let column_decryptor = match c.crypto_metadata.as_ref() {
+                    None => {
+                        return Err(general_err!(
+                            "No crypto_metadata is set for column {}, which has encrypted metadata",
+                            i
+                        ));
+                    }
+                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
+                        let column_name = crypto_metadata.path_in_schema.join(".");
+                        decryptor.get_column_metadata_decryptor(column_name.as_bytes())
+                    }
+                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                        decryptor.get_footer_decryptor()
+                    }
                 };
-                let column_name = crypto_metadata.path_in_schema.join(".");
-                let column_decryptor =
-                    decryptor.get_column_metadata_decryptor(column_name.as_bytes());
 
                 let column_aad = create_page_aad(
                     decryptor.file_aad(),

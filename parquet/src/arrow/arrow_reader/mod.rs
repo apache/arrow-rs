@@ -1026,7 +1026,6 @@ mod tests {
     };
     use arrow_select::concat::concat_batches;
 
-    #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::ArrowReaderMetadata;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -1895,6 +1894,69 @@ mod tests {
             .unwrap();
 
         verify_encryption_test_file_read(file, decryption_properties);
+    }
+
+    #[test]
+    fn test_non_uniform_encryption_plaintext_footer_without_decryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let file = File::open(&path).unwrap();
+
+        let metadata = ArrowReaderMetadata::load(
+            &file,
+            Default::default(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
+        );
+
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+        });
+
+        // Should be able to read unencrypted columns. Test reading one column.
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
+        let record_reader = builder.with_projection(mask).build().unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let time_col = batch
+                .column(0)
+                .as_primitive::<types::Time32MillisecondType>();
+            for (i, x) in time_col.iter().enumerate() {
+                assert_eq!(x.unwrap(), i as i32);
+            }
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+
+        // Reading an encrypted column should fail
+        let file = File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
+        let mut record_reader = builder.with_projection(mask).build().unwrap();
+
+        match record_reader.next() {
+            Some(Err(ArrowError::ParquetError(s))) => {
+                assert!(s.contains("protocol error"));
+            }
+            _ => {
+                panic!("Expected ArrowError::ParquetError");
+            }
+        };
     }
 
     #[test]
