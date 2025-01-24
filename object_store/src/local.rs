@@ -1430,20 +1430,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daniel() {
-        let str = "/mnt/.../_delta_log";
+    async fn test_path_with_offset() {
+        let root_str = "../testing/data/arrow-ipc-file";
+        let root = PathBuf::from(root_str);
 
-        let path = PathBuf::from(str);
+        let integration = LocalFileSystem::new_with_prefix(root).unwrap();
 
-        let integration = LocalFileSystem::new_with_prefix(path).unwrap();
-
-        let offset = Path::from("00000000000000016280");
-
+        let filter_str = "clusterfuzz-testcase-minimized-arrow-ipc-file-fuzz-";
+        let filter = String::from(filter_str);
+        let offset_str = filter + "6298268401401856";
+        let offset = Path::from(offset_str.clone());
 
         let mut res  = integration.list_with_offset(None, &offset);
-        let mut actual: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
+        let mut offset_paths: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
+        let offset_files: Vec<_> = offset_paths.iter().map(|x| String::from(x.filename().unwrap())).collect();
 
-        println!("{}", actual.len());
+        let files = fs::read_dir(root_str).unwrap();
+        let filtered_files = files
+            .filter_map(Result::ok)
+            .filter_map(|d| d.file_name().to_str().and_then(|f|
+                if f.contains(filter_str) { Some(String::from(f)) } else { None }))
+            .collect::<Vec<_>>();
+
+        let expected_offset_files: Vec<_> = filtered_files.iter()
+            .filter(|s| **s > offset_str)
+            .cloned()
+            .collect();
+
+        fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
+            let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
+            matching == a.len() && matching == b.len()
+        }
+
+        println!("Expected Offset Files: {:?}", expected_offset_files);
+        println!("Actual Offset Files: {:?}", offset_files);
+        assert_eq!(offset_files.len(), expected_offset_files.len());
+
+        assert!(do_vecs_match(&expected_offset_files, &offset_files));
 
     }
 
@@ -1472,7 +1495,8 @@ mod tests {
 
         let integration = LocalFileSystem::new();
         let path = Path::from_filesystem_path(".").unwrap();
-        integration.list_with_delimiter(Some(&path)).await.unwrap();
+        let res = integration.list_with_delimiter(Some(&path)).await.unwrap();
+        println!("{:?}", res);
     }
 
     #[test]
