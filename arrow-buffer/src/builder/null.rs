@@ -327,11 +327,13 @@ mod tests {
         builder.truncate(20);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 16);
+        assert_eq!(builder.capacity(), 10);
         builder.truncate(14);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 14);
         builder.append_null();
         builder.append_non_null();
         assert_eq!(builder.as_slice().unwrap(), &[0xFF, 0b10111111]);
+        assert_eq!(builder.capacity(), 512);
     }
 }
