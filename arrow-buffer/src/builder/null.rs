@@ -136,7 +136,7 @@ impl NullBufferBuilder {
     /// Returns the capacity of the buffer
     #[inline]
     pub fn capacity(&self) -> usize {
-        if let Some(buf) = self.bitmap_builder.as_ref() {
+        if let Some(ref buf) = self.bitmap_builder {
             buf.capacity()
         } else {
             0
@@ -145,8 +145,8 @@ impl NullBufferBuilder {
 
     /// Gets a bit in the buffer at `index`
     #[inline]
-    pub fn is_valid(&mut self, index: usize) -> bool {
-        if let Some(buf) = self.bitmap_builder.as_mut() {
+    pub fn is_valid(&self, index: usize) -> bool {
+        if let Some(ref buf) = self.bitmap_builder {
             buf.get_bit(index)
         } else {
             true
