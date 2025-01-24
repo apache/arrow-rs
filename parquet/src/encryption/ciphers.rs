@@ -15,171 +15,48 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encryption implementation specific to Parquet, as described
-//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
+use crate::errors::Result;
+use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
+use std::fmt::Debug;
 
-use crate::encryption::decryption::BlockDecryptor;
-use crate::errors::{ParquetError, Result};
-use std::sync::Arc;
+const NONCE_LEN: usize = 12;
+const TAG_LEN: usize = 16;
+const SIZE_LEN: usize = 4;
 
-#[derive(PartialEq)]
-pub(crate) enum ModuleType {
-    Footer = 0,
-    ColumnMetaData = 1,
-    DataPage = 2,
-    DictionaryPage = 3,
-    DataPageHeader = 4,
-    DictionaryPageHeader = 5,
-}
-
-pub fn create_footer_aad(file_aad: &[u8]) -> Result<Vec<u8>> {
-    create_module_aad(file_aad, ModuleType::Footer, 0, 0, None)
-}
-
-pub(crate) fn create_page_aad(
-    file_aad: &[u8],
-    module_type: ModuleType,
-    row_group_ordinal: usize,
-    column_ordinal: usize,
-    page_ordinal: Option<usize>,
-) -> Result<Vec<u8>> {
-    create_module_aad(
-        file_aad,
-        module_type,
-        row_group_ordinal,
-        column_ordinal,
-        page_ordinal,
-    )
-}
-
-fn create_module_aad(
-    file_aad: &[u8],
-    module_type: ModuleType,
-    row_group_ordinal: usize,
-    column_ordinal: usize,
-    page_ordinal: Option<usize>,
-) -> Result<Vec<u8>> {
-    let module_buf = [module_type as u8];
-
-    if module_buf[0] == (ModuleType::Footer as u8) {
-        let mut aad = Vec::with_capacity(file_aad.len() + 1);
-        aad.extend_from_slice(file_aad);
-        aad.extend_from_slice(module_buf.as_ref());
-        return Ok(aad);
-    }
-
-    if row_group_ordinal > i16::MAX as usize {
-        return Err(general_err!(
-            "Encrypted parquet files can't have more than {} row groups: {}",
-            i16::MAX,
-            row_group_ordinal
-        ));
-    }
-    if column_ordinal > i16::MAX as usize {
-        return Err(general_err!(
-            "Encrypted parquet files can't have more than {} columns: {}",
-            i16::MAX,
-            column_ordinal
-        ));
-    }
-
-    if module_buf[0] != (ModuleType::DataPageHeader as u8)
-        && module_buf[0] != (ModuleType::DataPage as u8)
-    {
-        let mut aad = Vec::with_capacity(file_aad.len() + 5);
-        aad.extend_from_slice(file_aad);
-        aad.extend_from_slice(module_buf.as_ref());
-        aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
-        aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
-        return Ok(aad);
-    }
-
-    let page_ordinal =
-        page_ordinal.ok_or_else(|| general_err!("Page ordinal must be set for data pages"))?;
-
-    if page_ordinal > i16::MAX as usize {
-        return Err(general_err!(
-            "Encrypted parquet files can't have more than {} pages per column chunk: {}",
-            i16::MAX,
-            page_ordinal
-        ));
-    }
-
-    let mut aad = Vec::with_capacity(file_aad.len() + 7);
-    aad.extend_from_slice(file_aad);
-    aad.extend_from_slice(module_buf.as_ref());
-    aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
-    aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
-    aad.extend_from_slice((page_ordinal as i16).to_le_bytes().as_ref());
-    Ok(aad)
+pub trait BlockDecryptor: Debug + Send + Sync {
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
-pub struct CryptoContext {
-    pub(crate) row_group_ordinal: usize,
-    pub(crate) column_ordinal: usize,
-    pub(crate) page_ordinal: Option<usize>,
-    pub(crate) dictionary_page: bool,
-    // We have separate data and metadata decryptors because
-    // in GCM CTR mode, the metadata and data pages use
-    // different algorithms.
-    data_decryptor: Arc<dyn BlockDecryptor>,
-    metadata_decryptor: Arc<dyn BlockDecryptor>,
-    file_aad: Vec<u8>,
+pub(crate) struct RingGcmBlockDecryptor {
+    key: LessSafeKey,
 }
 
-impl CryptoContext {
-    pub fn new(
-        row_group_ordinal: usize,
-        column_ordinal: usize,
-        data_decryptor: Arc<dyn BlockDecryptor>,
-        metadata_decryptor: Arc<dyn BlockDecryptor>,
-        file_aad: Vec<u8>,
-    ) -> Self {
+impl RingGcmBlockDecryptor {
+    pub(crate) fn new(key_bytes: &[u8]) -> Self {
+        // todo support other key sizes
+        let key = UnboundKey::new(&AES_128_GCM, key_bytes).unwrap();
+
         Self {
-            row_group_ordinal,
-            column_ordinal,
-            page_ordinal: None,
-            dictionary_page: false,
-            data_decryptor,
-            metadata_decryptor,
-            file_aad,
+            key: LessSafeKey::new(key),
         }
     }
+}
 
-    pub fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
-        Self {
-            row_group_ordinal: self.row_group_ordinal,
-            column_ordinal: self.column_ordinal,
-            page_ordinal: Some(page_ordinal),
-            dictionary_page: false,
-            data_decryptor: self.data_decryptor.clone(),
-            metadata_decryptor: self.metadata_decryptor.clone(),
-            file_aad: self.file_aad.clone(),
-        }
-    }
+impl BlockDecryptor for RingGcmBlockDecryptor {
+    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+        let mut result =
+            Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN);
+        result.extend_from_slice(&length_and_ciphertext[SIZE_LEN + NONCE_LEN..]);
 
-    pub fn for_dictionary_page(&self) -> Self {
-        Self {
-            row_group_ordinal: self.row_group_ordinal,
-            column_ordinal: self.column_ordinal,
-            page_ordinal: self.page_ordinal,
-            dictionary_page: true,
-            data_decryptor: self.data_decryptor.clone(),
-            metadata_decryptor: self.metadata_decryptor.clone(),
-            file_aad: self.file_aad.clone(),
-        }
-    }
+        let nonce = ring::aead::Nonce::try_assume_unique_for_key(
+            &length_and_ciphertext[SIZE_LEN..SIZE_LEN + NONCE_LEN],
+        )?;
 
-    pub fn data_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
-        &self.data_decryptor
-    }
+        self.key.open_in_place(nonce, Aad::from(aad), &mut result)?;
 
-    pub fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
-        &self.metadata_decryptor
-    }
-
-    pub fn file_aad(&self) -> &Vec<u8> {
-        &self.file_aad
+        // Truncate result to remove the tag
+        result.resize(result.len() - TAG_LEN, 0u8);
+        Ok(result)
     }
 }

@@ -98,8 +98,8 @@ mod writer;
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    ciphers::{create_page_aad, ModuleType},
     decryption::FileDecryptor,
+    modules::{create_page_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;

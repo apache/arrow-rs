@@ -15,54 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
 use crate::errors::Result;
-use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::io::Read;
 use std::sync::Arc;
-
-const NONCE_LEN: usize = 12;
-const TAG_LEN: usize = 16;
-const SIZE_LEN: usize = 4;
-
-pub trait BlockDecryptor: Debug + Send + Sync {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RingGcmBlockDecryptor {
-    key: LessSafeKey,
-}
-
-impl RingGcmBlockDecryptor {
-    pub(crate) fn new(key_bytes: &[u8]) -> Self {
-        // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes).unwrap();
-
-        Self {
-            key: LessSafeKey::new(key),
-        }
-    }
-}
-
-impl BlockDecryptor for RingGcmBlockDecryptor {
-    fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        let mut result =
-            Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN - TAG_LEN);
-        result.extend_from_slice(&length_and_ciphertext[SIZE_LEN + NONCE_LEN..]);
-
-        let nonce = ring::aead::Nonce::try_assume_unique_for_key(
-            &length_and_ciphertext[SIZE_LEN..SIZE_LEN + NONCE_LEN],
-        )?;
-
-        self.key.open_in_place(nonce, Aad::from(aad), &mut result)?;
-
-        // Truncate result to remove the tag
-        result.resize(result.len() - TAG_LEN, 0u8);
-        Ok(result)
-    }
-}
 
 pub fn read_and_decrypt<T: Read>(
     decryptor: &Arc<dyn BlockDecryptor>,
@@ -76,6 +33,76 @@ pub fn read_and_decrypt<T: Read>(
     input.read_exact(&mut ciphertext[4..])?;
 
     decryptor.decrypt(&ciphertext, aad.as_ref())
+}
+
+#[derive(Debug, Clone)]
+pub struct CryptoContext {
+    pub(crate) row_group_ordinal: usize,
+    pub(crate) column_ordinal: usize,
+    pub(crate) page_ordinal: Option<usize>,
+    pub(crate) dictionary_page: bool,
+    // We have separate data and metadata decryptors because
+    // in GCM CTR mode, the metadata and data pages use
+    // different algorithms.
+    data_decryptor: Arc<dyn BlockDecryptor>,
+    metadata_decryptor: Arc<dyn BlockDecryptor>,
+    file_aad: Vec<u8>,
+}
+
+impl CryptoContext {
+    pub fn new(
+        row_group_ordinal: usize,
+        column_ordinal: usize,
+        data_decryptor: Arc<dyn BlockDecryptor>,
+        metadata_decryptor: Arc<dyn BlockDecryptor>,
+        file_aad: Vec<u8>,
+    ) -> Self {
+        Self {
+            row_group_ordinal,
+            column_ordinal,
+            page_ordinal: None,
+            dictionary_page: false,
+            data_decryptor,
+            metadata_decryptor,
+            file_aad,
+        }
+    }
+
+    pub fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
+        Self {
+            row_group_ordinal: self.row_group_ordinal,
+            column_ordinal: self.column_ordinal,
+            page_ordinal: Some(page_ordinal),
+            dictionary_page: false,
+            data_decryptor: self.data_decryptor.clone(),
+            metadata_decryptor: self.metadata_decryptor.clone(),
+            file_aad: self.file_aad.clone(),
+        }
+    }
+
+    pub fn for_dictionary_page(&self) -> Self {
+        Self {
+            row_group_ordinal: self.row_group_ordinal,
+            column_ordinal: self.column_ordinal,
+            page_ordinal: self.page_ordinal,
+            dictionary_page: true,
+            data_decryptor: self.data_decryptor.clone(),
+            metadata_decryptor: self.metadata_decryptor.clone(),
+            file_aad: self.file_aad.clone(),
+        }
+    }
+
+    pub fn data_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
+        &self.data_decryptor
+    }
+
+    pub fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
+        &self.metadata_decryptor
+    }
+
+    pub fn file_aad(&self) -> &Vec<u8> {
+        &self.file_aad
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

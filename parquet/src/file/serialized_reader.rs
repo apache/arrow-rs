@@ -24,8 +24,8 @@ use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    ciphers::{create_page_aad, CryptoContext, ModuleType},
-    decryption::read_and_decrypt,
+    decryption::{read_and_decrypt, CryptoContext},
+    modules::{create_page_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;

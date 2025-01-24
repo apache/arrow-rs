@@ -20,3 +20,4 @@
 
 pub mod ciphers;
 pub mod decryption;
+pub mod modules;

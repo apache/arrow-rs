@@ -22,8 +22,8 @@ use bytes::Bytes;
 use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    ciphers::create_footer_aad,
     decryption::{FileDecryptionProperties, FileDecryptor},
+    modules::create_footer_aad,
 };
 
 use crate::errors::{ParquetError, Result};
