@@ -1994,6 +1994,37 @@ mod tests {
         verify_encryption_test_file_read(file, decryption_properties);
     }
 
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_aes_ctr_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer_ctr.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        let decryption_properties = Some(decryption_properties);
+        let metadata =
+            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref());
+
+        match metadata {
+            Err(crate::errors::ParquetError::NYI(s)) => {
+                assert!(s.contains("AES_GCM_CTR_V1"));
+            }
+            _ => {
+                panic!("Expected ParquetError::NYI");
+            }
+        };
+    }
+
     #[cfg(feature = "encryption")]
     fn verify_encryption_test_file_read(
         file: File,

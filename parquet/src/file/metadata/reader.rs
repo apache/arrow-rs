@@ -732,7 +732,7 @@ impl ParquetMetaDataReader {
                 let decryptor = get_file_decryptor(
                     t_file_crypto_metadata.encryption_algorithm,
                     file_decryption_properties,
-                );
+                )?;
                 let footer_decryptor = decryptor.get_footer_decryptor();
                 let aad_footer = create_footer_aad(decryptor.file_aad())?;
 
@@ -757,7 +757,7 @@ impl ParquetMetaDataReader {
             file_decryption_properties,
         ) {
             // File has a plaintext footer but encryption algorithm is set
-            file_decryptor = Some(get_file_decryptor(algo, file_decryption_properties));
+            file_decryptor = Some(get_file_decryptor(algo, file_decryption_properties)?);
         }
 
         let mut row_groups = Vec::new();
@@ -825,17 +825,24 @@ impl ParquetMetaDataReader {
 fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
     file_decryption_properties: &FileDecryptionProperties,
-) -> FileDecryptor {
-    let aes_gcm_algo = if let EncryptionAlgorithm::AESGCMV1(a) = encryption_algorithm {
-        a
-    } else {
-        todo!("GCMCTRV1 encryption algorithm")
-    };
+) -> Result<FileDecryptor> {
+    match encryption_algorithm {
+        EncryptionAlgorithm::AESGCMV1(algo) => {
+            let aad_file_unique = algo
+                .aad_file_unique
+                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
+            let aad_prefix: Vec<u8> = algo.aad_prefix.unwrap_or_default();
 
-    let aad_file_unique = aes_gcm_algo.aad_file_unique.unwrap();
-    let aad_prefix: Vec<u8> = aes_gcm_algo.aad_prefix.unwrap_or_default();
-
-    FileDecryptor::new(file_decryption_properties, aad_file_unique, aad_prefix)
+            Ok(FileDecryptor::new(
+                file_decryption_properties,
+                aad_file_unique,
+                aad_prefix,
+            ))
+        }
+        EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
+            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
+        )),
+    }
 }
 
 #[cfg(test)]
