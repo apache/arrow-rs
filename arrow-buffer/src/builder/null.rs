@@ -57,7 +57,7 @@ impl NullBufferBuilder {
     ///
     /// Note that this method does not allocate any memory, regardless of the
     /// `capacity` parameter. If an allocation is required, `capacity` is the
-    /// size in bits (not bytes) that will be allocated.
+    /// size in bits (not bytes) that will be allocated at minimum.
     pub fn new(capacity: usize) -> Self {
         Self {
             bitmap_builder: None,
