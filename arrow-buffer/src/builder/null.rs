@@ -332,4 +332,14 @@ mod tests {
         assert_eq!(builder.as_slice().unwrap(), &[0xFF, 0b10111111]);
         assert_eq!(builder.capacity(), 512);
     }
+
+    #[test]
+    fn test_null_buffer_builder_truncate_after_push() {
+        let mut builder = NullBufferBuilder::new(0);
+        assert_eq!(builder.len(), 0);
+        builder.append_n_nulls(2);
+        assert_eq!(builder.len(), 2);
+        builder.truncate(1);
+        assert_eq!(builder.len(), 1);
+    }
 }
