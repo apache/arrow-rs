@@ -1462,10 +1462,10 @@ mod tests {
             matching == a.len() && matching == b.len()
         }
 
-        println!("Expected Offset Files: {:?}", expected_offset_files);
-        println!("Actual Offset Files: {:?}", offset_files);
-        assert_eq!(offset_files.len(), expected_offset_files.len());
+        // println!("Expected Offset Files: {:?}", expected_offset_files);
+        // println!("Actual Offset Files: {:?}", offset_files);
 
+        assert_eq!(offset_files.len(), expected_offset_files.len());
         assert!(do_vecs_match(&expected_offset_files, &offset_files));
 
     }
@@ -1495,8 +1495,7 @@ mod tests {
 
         let integration = LocalFileSystem::new();
         let path = Path::from_filesystem_path(".").unwrap();
-        let res = integration.list_with_delimiter(Some(&path)).await.unwrap();
-        println!("{:?}", res);
+        integration.list_with_delimiter(Some(&path)).await.unwrap();
     }
 
     #[test]
