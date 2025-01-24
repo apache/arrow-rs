@@ -637,7 +637,7 @@ impl LocalFileSystem {
             .min_depth(1)
             .follow_links(true);
 
-        let maybe_offset_clone = maybe_offset.map(move |o| o.clone());
+        let maybe_offset = maybe_offset.cloned();
 
         let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
             // Apply offset filter before proceeding, to reduce statx file system calls
