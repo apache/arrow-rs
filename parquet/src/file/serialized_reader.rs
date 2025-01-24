@@ -25,7 +25,7 @@ use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     ciphers::{create_page_aad, CryptoContext, ModuleType},
-    decryption::BlockDecryptor,
+    decryption::read_and_decrypt,
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
@@ -365,7 +365,7 @@ pub(crate) fn read_page_header<T: Read>(
             crypto_context.page_ordinal,
         )?;
 
-        let buf = data_decryptor.read_and_decrypt(input, aad.as_ref())?;
+        let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
 
         let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
         let page_header = PageHeader::read_from_in_protocol(&mut prot)?;

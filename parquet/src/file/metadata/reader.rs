@@ -23,7 +23,7 @@ use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     ciphers::create_footer_aad,
-    decryption::{BlockDecryptor, FileDecryptionProperties, FileDecryptor},
+    decryption::{FileDecryptionProperties, FileDecryptor},
 };
 
 use crate::errors::{ParquetError, Result};

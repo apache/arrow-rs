@@ -18,8 +18,9 @@
 //! Encryption implementation specific to Parquet, as described
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-use crate::encryption::decryption::RingGcmBlockDecryptor;
+use crate::encryption::decryption::BlockDecryptor;
 use crate::errors::{ParquetError, Result};
+use std::sync::Arc;
 
 #[derive(PartialEq)]
 pub(crate) enum ModuleType {
@@ -122,8 +123,8 @@ pub struct CryptoContext {
     // We have separate data and metadata decryptors because
     // in GCM CTR mode, the metadata and data pages use
     // different algorithms.
-    data_decryptor: RingGcmBlockDecryptor,
-    metadata_decryptor: RingGcmBlockDecryptor,
+    data_decryptor: Arc<dyn BlockDecryptor>,
+    metadata_decryptor: Arc<dyn BlockDecryptor>,
     file_aad: Vec<u8>,
 }
 
@@ -131,8 +132,8 @@ impl CryptoContext {
     pub fn new(
         row_group_ordinal: usize,
         column_ordinal: usize,
-        data_decryptor: RingGcmBlockDecryptor,
-        metadata_decryptor: RingGcmBlockDecryptor,
+        data_decryptor: Arc<dyn BlockDecryptor>,
+        metadata_decryptor: Arc<dyn BlockDecryptor>,
         file_aad: Vec<u8>,
     ) -> Self {
         Self {
@@ -170,11 +171,11 @@ impl CryptoContext {
         }
     }
 
-    pub fn data_decryptor(&self) -> &RingGcmBlockDecryptor {
+    pub fn data_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
         &self.data_decryptor
     }
 
-    pub fn metadata_decryptor(&self) -> &RingGcmBlockDecryptor {
+    pub fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
         &self.metadata_decryptor
     }
 
