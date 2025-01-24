@@ -642,14 +642,15 @@ impl LocalFileSystem {
         let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
             // Apply offset filter before proceeding, to reduce statx file system calls
             // This matters for NFS mounts
-            if maybe_offset_clone.as_ref().is_some() && result_dir_entry.is_ok() {
-                let offset = maybe_offset_clone.as_ref().unwrap();
-                let entry = result_dir_entry.as_ref().unwrap();
+            if let (Some(offset), Ok(entry)) = (maybe_offset.as_ref(), result_dir_entry.as_ref()) {
                 let location = config.filesystem_to_path(entry.path());
-
-                if location.unwrap() <= *offset {
-                    return None;
+                match location {
+                    Ok(path) => if path <= *offset {
+                        return None;
+                    },
+                    Err(e) => return Some(Err(e)),
                 }
+
             }
 
             let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
