@@ -54,7 +54,10 @@ pub struct NullBufferBuilder {
 
 impl NullBufferBuilder {
     /// Creates a new empty builder.
-    /// `capacity` is the number of bits in the null buffer.
+    ///
+    /// Note that this method does not allocate any memory, regardless of the
+    /// `capacity` parameter. If an allocation is required, `capacity` is the
+    /// size in bits (not bytes) that will be allocated.
     pub fn new(capacity: usize) -> Self {
         Self {
             bitmap_builder: None,
