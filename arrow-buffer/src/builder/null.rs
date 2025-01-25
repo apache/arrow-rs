@@ -17,6 +17,16 @@
 
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
+#[derive(Debug)]
+enum NullBufferBuilderState {
+    /// All values are non-null (`true`)
+    NonMaterialized { len: usize, capacity: usize },
+    /// Materialized an actual [`BooleanBufferBuilder`], usually when encountering first null (`false`)
+    Materialized {
+        bitmap_builder: BooleanBufferBuilder,
+    },
+}
+
 /// Builder for creating [`NullBuffer`]
 ///
 /// # Performance
@@ -48,16 +58,8 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 /// ```
 #[derive(Debug)]
 pub struct NullBufferBuilder {
-    /// The bitmap builder to store the null buffer:
-    /// * `Some` if any nulls have been appended ("materialized")
-    /// * `None` if no nulls have been appended.
-    bitmap_builder: Option<BooleanBufferBuilder>,
-    /// Length of the buffer before materializing.
-    ///
-    /// if `bitmap_buffer` buffer is `Some`, this value is not used.
-    len: usize,
-    /// Initial capacity of the `bitmap_builder`, when it is materialized.
-    capacity: usize,
+    state: NullBufferBuilderState,
+    initial_capacity: usize,
 }
 
 impl NullBufferBuilder {
@@ -68,18 +70,16 @@ impl NullBufferBuilder {
     /// size in bits (not bytes) that will be allocated at minimum.
     pub fn new(capacity: usize) -> Self {
         Self {
-            bitmap_builder: None,
-            len: 0,
-            capacity,
+            state: NullBufferBuilderState::NonMaterialized { len: 0, capacity },
+            initial_capacity: capacity,
         }
     }
 
     /// Creates a new builder with given length.
     pub fn new_with_len(len: usize) -> Self {
         Self {
-            bitmap_builder: None,
-            len,
-            capacity: len,
+            state: NullBufferBuilderState::NonMaterialized { len, capacity: len },
+            initial_capacity: len,
         }
     }
 
@@ -88,11 +88,10 @@ impl NullBufferBuilder {
         let capacity = buffer.len() * 8;
         assert!(len <= capacity);
 
-        let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
+        let bitmap_builder = BooleanBufferBuilder::new_from_buffer(buffer, len);
         Self {
-            bitmap_builder,
-            len,
-            capacity,
+            state: NullBufferBuilderState::Materialized { bitmap_builder },
+            initial_capacity: capacity,
         }
     }
 
@@ -100,10 +99,11 @@ impl NullBufferBuilder {
     /// to indicate that these `n` items are not nulls.
     #[inline]
     pub fn append_n_non_nulls(&mut self, n: usize) {
-        if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append_n(n, true)
-        } else {
-            self.len += n;
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += n,
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                bitmap_builder.append_n(n, true)
+            }
         }
     }
 
@@ -111,10 +111,9 @@ impl NullBufferBuilder {
     /// to indicate that this item is not null.
     #[inline]
     pub fn append_non_null(&mut self) {
-        if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append(true)
-        } else {
-            self.len += 1;
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += 1,
+            NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.append(true),
         }
     }
 
@@ -123,7 +122,11 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_n_nulls(&mut self, n: usize) {
         self.materialize_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        if let NullBufferBuilderState::Materialized { bitmap_builder } = &mut self.state {
+            bitmap_builder.append_n(n, false);
+        } else {
+            unreachable!("Materialization should have occurred by now")
+        }
     }
 
     /// Appends a `false` into the builder
@@ -131,7 +134,11 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_null(&mut self) {
         self.materialize_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append(false);
+        if let NullBufferBuilderState::Materialized { bitmap_builder } = &mut self.state {
+            bitmap_builder.append(false);
+        } else {
+            unreachable!("Materialization should have occurred by now")
+        }
     }
 
     /// Appends a boolean value into the builder.
@@ -147,10 +154,11 @@ impl NullBufferBuilder {
     /// Gets a bit in the buffer at `index`
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
-        if let Some(ref buf) = self.bitmap_builder {
-            buf.get_bit(index)
-        } else {
-            true
+        match &self.state {
+            NullBufferBuilderState::NonMaterialized { .. } => true,
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                bitmap_builder.get_bit(index)
+            }
         }
     }
 
@@ -159,10 +167,12 @@ impl NullBufferBuilder {
     /// If `len` is greater than the buffer's current length, this has no effect
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.truncate(len);
-        } else if len <= self.len {
-            self.len = len
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { len: state_len, .. } if len <= *state_len => {
+                *state_len = len
+            }
+            NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.truncate(len),
+            _ => (),
         }
     }
 
@@ -172,64 +182,95 @@ impl NullBufferBuilder {
         if slice.iter().any(|v| !v) {
             self.materialize_if_needed()
         }
-        if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append_slice(slice)
-        } else {
-            self.len += slice.len();
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += slice.len(),
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                bitmap_builder.append_slice(slice)
+            }
         }
     }
 
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
-        self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => {
+                *len = 0;
+                None
+            }
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                let a = bitmap_builder.finish();
+                self.state = NullBufferBuilderState::NonMaterialized {
+                    len: 0,
+                    capacity: self.initial_capacity,
+                };
+                Some(NullBuffer::new(a))
+            }
+        }
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
     pub fn finish_cloned(&self) -> Option<NullBuffer> {
-        let buffer = self.bitmap_builder.as_ref()?.finish_cloned();
-        Some(NullBuffer::new(buffer))
+        match &self.state {
+            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                let buffer = bitmap_builder.finish_cloned();
+                Some(NullBuffer::new(buffer))
+            }
+        }
     }
 
     /// Returns the inner bitmap builder as slice
     pub fn as_slice(&self) -> Option<&[u8]> {
-        Some(self.bitmap_builder.as_ref()?.as_slice())
+        match &self.state {
+            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                Some(bitmap_builder.as_slice())
+            }
+        }
     }
 
     fn materialize_if_needed(&mut self) {
-        if self.bitmap_builder.is_none() {
+        if let NullBufferBuilderState::NonMaterialized { .. } = self.state {
             self.materialize()
         }
     }
 
     #[cold]
     fn materialize(&mut self) {
-        if self.bitmap_builder.is_none() {
-            let mut b = BooleanBufferBuilder::new(self.len.max(self.capacity));
-            b.append_n(self.len, true);
-            self.bitmap_builder = Some(b);
+        if let NullBufferBuilderState::NonMaterialized { len, capacity } = self.state {
+            let mut bitmap_builder = BooleanBufferBuilder::new(len.max(capacity));
+            bitmap_builder.append_n(len, true);
+            self.state = NullBufferBuilderState::Materialized { bitmap_builder }
         }
     }
 
     /// Return a mutable reference to the inner bitmap slice.
     pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
-        self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
+        match &mut self.state {
+            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Materialized { bitmap_builder } => {
+                Some(bitmap_builder.as_slice_mut())
+            }
+        }
     }
 
     /// Return the allocated size of this builder, in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
-        self.bitmap_builder
-            .as_ref()
-            .map(|b| b.capacity())
-            .unwrap_or(0)
+        match &self.state {
+            NullBufferBuilderState::NonMaterialized { .. } => 0,
+            NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.capacity(),
+        }
     }
 }
 
 impl NullBufferBuilder {
     /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
-        self.bitmap_builder.as_ref().map_or(self.len, |b| b.len())
+        match &self.state {
+            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len,
+            NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.len(),
+        }
     }
 
     /// Check if the builder is empty.
