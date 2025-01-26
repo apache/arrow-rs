@@ -74,6 +74,35 @@ pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer, WriterBuilder};
 use half::f16;
 use serde_json::{Number, Value};
 
+/// Specifies what is considered valid JSON when reading or writing
+/// RecordBatches or StructArrays.
+///
+/// This enum controls which form(s) the Reader will accept and which form the
+/// Writer will produce. For example, if the RecordBatch Schema is
+/// `[("a", Int32), ("r", Struct([("b", Boolean), ("c", Utf8)]))]`
+/// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
+/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
+/// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
+/// rows formatted similarly.
+///
+/// The list encoding is more compact if the schema is known, and is used by
+/// tools such as [Presto] and [Trino].
+///
+/// When reading objects, the order of the key does not matter. When reading
+/// lists, the entries must be the same number and in the same order as the
+/// struct fields. Map columns are not affected by this option.
+///
+/// [Presto]: (https://prestodb.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
+/// [Trino]: (https://trino.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum StructMode {
+    #[default]
+    /// Encode/decode structs as objects (e.g., {"a": 1, "b": "c"})
+    ObjectOnly,
+    /// Encode/decode structs as lists (e.g., [1, "c"])
+    ListOnly,
+}
+
 /// Trait declaring any type that is serializable to JSON. This includes all primitive types (bool, i32, etc.).
 pub trait JsonSerializable: 'static {
     /// Converts self into json value if its possible
@@ -155,5 +184,73 @@ mod tests {
             0.01f64.into_json_value()
         );
         assert_eq!(None, f32::NAN.into_json_value());
+    }
+
+    #[test]
+    fn test_json_roundtrip_structs() {
+        use crate::writer::LineDelimited;
+        use arrow_schema::DataType;
+        use arrow_schema::Field;
+        use arrow_schema::Fields;
+        use arrow_schema::Schema;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("c11", DataType::Int32, true),
+                    Field::new(
+                        "c12",
+                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
+                        false,
+                    ),
+                ])),
+                false,
+            ),
+            Field::new("c2", DataType::Utf8, false),
+        ]));
+
+        {
+            let object_input = r#"{"c1":{"c11":1,"c12":{"c121":"e"}},"c2":"a"}
+{"c1":{"c12":{"c121":"f"}},"c2":"b"}
+{"c1":{"c11":5,"c12":{"c121":"g"}},"c2":"c"}
+"#
+            .as_bytes();
+            let object_reader = ReaderBuilder::new(schema.clone())
+                .with_struct_mode(StructMode::ObjectOnly)
+                .build(object_input)
+                .unwrap();
+
+            let mut object_output: Vec<u8> = Vec::new();
+            let mut object_writer = WriterBuilder::new()
+                .with_struct_mode(StructMode::ObjectOnly)
+                .build::<_, LineDelimited>(&mut object_output);
+            for batch_res in object_reader {
+                object_writer.write(&batch_res.unwrap()).unwrap();
+            }
+            assert_eq!(object_input, &object_output);
+        }
+
+        {
+            let list_input = r#"[[1,["e"]],"a"]
+[[null,["f"]],"b"]
+[[5,["g"]],"c"]
+"#
+            .as_bytes();
+            let list_reader = ReaderBuilder::new(schema.clone())
+                .with_struct_mode(StructMode::ListOnly)
+                .build(list_input)
+                .unwrap();
+
+            let mut list_output: Vec<u8> = Vec::new();
+            let mut list_writer = WriterBuilder::new()
+                .with_struct_mode(StructMode::ListOnly)
+                .build::<_, LineDelimited>(&mut list_output);
+            for batch_res in list_reader {
+                list_writer.write(&batch_res.unwrap()).unwrap();
+            }
+            assert_eq!(list_input, &list_output);
+        }
     }
 }

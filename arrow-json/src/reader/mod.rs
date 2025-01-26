@@ -133,6 +133,7 @@
 //! ```
 //!
 
+use crate::StructMode;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -176,6 +177,7 @@ pub struct ReaderBuilder {
     coerce_primitive: bool,
     strict_mode: bool,
     is_field: bool,
+    struct_mode: StructMode,
 
     schema: SchemaRef,
 }
@@ -195,6 +197,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             is_field: false,
+            struct_mode: Default::default(),
             schema,
         }
     }
@@ -235,6 +238,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             is_field: true,
+            struct_mode: Default::default(),
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -253,11 +257,24 @@ impl ReaderBuilder {
         }
     }
 
-    /// Sets if the decoder should return an error if it encounters a column not present
-    /// in `schema`
+    /// Sets if the decoder should return an error if it encounters a column not
+    /// present in `schema`. If `struct_mode` is `ListOnly` the value of
+    /// `strict_mode` is effectively `true`. It is required for all fields of
+    /// the struct to be in the list: without field names, there is no way to
+    /// determine which field is missing.
     pub fn with_strict_mode(self, strict_mode: bool) -> Self {
         Self {
             strict_mode,
+            ..self
+        }
+    }
+
+    /// Set the [`StructMode`] for the reader, which determines whether structs
+    /// can be decoded from JSON as objects or lists. For more details refer to
+    /// the enum documentation. Default is to use `ObjectOnly`.
+    pub fn with_struct_mode(self, struct_mode: StructMode) -> Self {
+        Self {
+            struct_mode,
             ..self
         }
     }
@@ -280,7 +297,13 @@ impl ReaderBuilder {
             }
         };
 
-        let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
+        let decoder = make_decoder(
+            data_type,
+            self.coerce_primitive,
+            self.strict_mode,
+            nullable,
+            self.struct_mode,
+        )?;
 
         let num_fields = self.schema.flattened_fields().len();
 
@@ -643,6 +666,7 @@ fn make_decoder(
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
+    struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
@@ -693,13 +717,13 @@ fn make_decoder(
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -715,7 +739,7 @@ mod tests {
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Fields};
 
     use super::*;
 
@@ -2341,6 +2365,267 @@ mod tests {
                 ]
             )
             .unwrap()
+        );
+    }
+
+    // Parse the given `row` in `struct_mode` as a type given by fields.
+    //
+    // If as_struct == true, wrap the fields in a Struct field with name "r".
+    // If as_struct == false, wrap the fields in a Schema.
+    fn _parse_structs(
+        row: &str,
+        struct_mode: StructMode,
+        fields: Fields,
+        as_struct: bool,
+    ) -> Result<RecordBatch, ArrowError> {
+        let builder = if as_struct {
+            ReaderBuilder::new_with_field(Field::new("r", DataType::Struct(fields), true))
+        } else {
+            ReaderBuilder::new(Arc::new(Schema::new(fields)))
+        };
+        builder
+            .with_struct_mode(struct_mode)
+            .build(Cursor::new(row.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_struct_decoding_list_length() {
+        use arrow_array::array;
+
+        let row = "[1, 2]";
+
+        let mut fields = vec![Field::new("a", DataType::Int32, true)];
+        let too_few_fields = Fields::from(fields.clone());
+        fields.push(Field::new("b", DataType::Int32, true));
+        let correct_fields = Fields::from(fields.clone());
+        fields.push(Field::new("c", DataType::Int32, true));
+        let too_many_fields = Fields::from(fields.clone());
+
+        let parse = |fields: Fields, as_struct: bool| {
+            _parse_structs(row, StructMode::ListOnly, fields, as_struct)
+        };
+
+        let expected_row = StructArray::new(
+            correct_fields.clone(),
+            vec![
+                Arc::new(array::Int32Array::from(vec![1])),
+                Arc::new(array::Int32Array::from(vec![2])),
+            ],
+            None,
+        );
+        let row_field = Field::new("r", DataType::Struct(correct_fields.clone()), true);
+
+        assert_eq!(
+            parse(too_few_fields.clone(), true).unwrap_err().to_string(),
+            "Json error: found extra columns for 1 fields".to_string()
+        );
+        assert_eq!(
+            parse(too_few_fields, false).unwrap_err().to_string(),
+            "Json error: found extra columns for 1 fields".to_string()
+        );
+        assert_eq!(
+            parse(correct_fields.clone(), true).unwrap(),
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![row_field])),
+                vec![Arc::new(expected_row.clone())]
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            parse(correct_fields, false).unwrap(),
+            RecordBatch::from(expected_row)
+        );
+        assert_eq!(
+            parse(too_many_fields.clone(), true)
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 2 columns for 3 fields".to_string()
+        );
+        assert_eq!(
+            parse(too_many_fields, false).unwrap_err().to_string(),
+            "Json error: found 2 columns for 3 fields".to_string()
+        );
+    }
+
+    #[test]
+    fn test_struct_decoding() {
+        use arrow_array::builder;
+
+        let nested_object_json = r#"{"a": {"b": [1, 2], "c": {"d": 3}}}"#;
+        let nested_list_json = r#"[[[1, 2], {"d": 3}]]"#;
+        let nested_mixed_json = r#"{"a": [[1, 2], {"d": 3}]}"#;
+
+        let struct_fields = Fields::from(vec![
+            Field::new("b", DataType::new_list(DataType::Int32, true), true),
+            Field::new_map(
+                "c",
+                "entries",
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
+                false,
+                false,
+            ),
+        ]);
+
+        let list_array =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1), Some(2)])]);
+
+        let map_array = {
+            let mut map_builder = builder::MapBuilder::new(
+                None,
+                builder::StringBuilder::new(),
+                builder::Int32Builder::new(),
+            );
+            map_builder.keys().append_value("d");
+            map_builder.values().append_value(3);
+            map_builder.append(true).unwrap();
+            map_builder.finish()
+        };
+
+        let struct_array = StructArray::new(
+            struct_fields.clone(),
+            vec![Arc::new(list_array), Arc::new(map_array)],
+            None,
+        );
+
+        let fields = Fields::from(vec![Field::new("a", DataType::Struct(struct_fields), true)]);
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let expected = RecordBatch::try_new(schema.clone(), vec![Arc::new(struct_array)]).unwrap();
+
+        let parse = |row: &str, struct_mode: StructMode| {
+            _parse_structs(row, struct_mode, fields.clone(), false)
+        };
+
+        assert_eq!(
+            parse(nested_object_json, StructMode::ObjectOnly).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse(nested_list_json, StructMode::ObjectOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected { got [[[1, 2], {\"d\": 3}]]".to_owned()
+        );
+        assert_eq!(
+            parse(nested_mixed_json, StructMode::ObjectOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': expected { got [[1, 2], {\"d\": 3}]".to_owned()
+        );
+
+        assert_eq!(
+            parse(nested_list_json, StructMode::ListOnly).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse(nested_object_json, StructMode::ListOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected [ got {\"a\": {\"b\": [1, 2]\"c\": {\"d\": 3}}}".to_owned()
+        );
+        assert_eq!(
+            parse(nested_mixed_json, StructMode::ListOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected [ got {\"a\": [[1, 2], {\"d\": 3}]}".to_owned()
+        );
+    }
+
+    // Test cases:
+    // [] -> RecordBatch row with no entries.  Schema = [('a', Int32)] -> Error
+    // [] -> RecordBatch row with no entries. Schema = [('r', [('a', Int32)])] -> Error
+    // [] -> StructArray row with no entries. Fields [('a', Int32')] -> Error
+    // [[]] -> RecordBatch row with empty struct entry. Schema = [('r', [('a', Int32)])] -> Error
+    #[test]
+    fn test_struct_decoding_empty_list() {
+        let int_field = Field::new("a", DataType::Int32, true);
+        let struct_field = Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            true,
+        );
+
+        let parse = |row: &str, as_struct: bool, field: Field| {
+            _parse_structs(
+                row,
+                StructMode::ListOnly,
+                Fields::from(vec![field]),
+                as_struct,
+            )
+        };
+
+        // Missing fields
+        assert_eq!(
+            parse("[]", true, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[]", false, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[]", false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[[]]", false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': found 0 columns for 1 fields".to_owned()
+        );
+    }
+
+    #[test]
+    fn test_decode_list_struct_with_wrong_types() {
+        let int_field = Field::new("a", DataType::Int32, true);
+        let struct_field = Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            true,
+        );
+
+        let parse = |row: &str, as_struct: bool, field: Field| {
+            _parse_structs(
+                row,
+                StructMode::ListOnly,
+                Fields::from(vec![field]),
+                as_struct,
+            )
+        };
+
+        // Wrong values
+        assert_eq!(
+            parse(r#"[["a"]]"#, false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"[["a"]]"#, true, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"["a"]"#, true, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"["a"]"#, false, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
         );
     }
 }
