@@ -1444,8 +1444,8 @@ mod tests {
         let offset_str = filter + "6298268401401856";
         let offset = Path::from(offset_str.clone());
 
-        let mut res = integration.list_with_offset(None, &offset);
-        let mut offset_paths: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
+        let res = integration.list_with_offset(None, &offset);
+        let offset_paths: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
         let offset_files: Vec<_> = offset_paths
             .iter()
             .map(|x| String::from(x.filename().unwrap()))
@@ -1471,7 +1471,7 @@ mod tests {
             .cloned()
             .collect();
 
-        fn do_vecs_match<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
+        fn do_vecs_match<T: PartialEq>(a: &[T], b: &[T]) -> bool {
             let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
             matching == a.len() && matching == b.len()
         }
