@@ -486,7 +486,11 @@ impl ObjectStore for LocalFileSystem {
         self.list_with_maybe_offset(prefix, None)
     }
 
-    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_with_maybe_offset(prefix, Some(offset))
     }
 
@@ -619,9 +623,11 @@ impl ObjectStore for LocalFileSystem {
 }
 
 impl LocalFileSystem {
-
-    fn list_with_maybe_offset(&self, prefix: Option<&Path>, maybe_offset: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-
+    fn list_with_maybe_offset(
+        &self,
+        prefix: Option<&Path>,
+        maybe_offset: Option<&Path>,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
@@ -649,7 +655,6 @@ impl LocalFileSystem {
                     Err(e) => return Some(Err(e)),
                     _ => {}
                 }
-
             }
 
             let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
@@ -691,7 +696,7 @@ impl LocalFileSystem {
                     }
                     (s, buffer)
                 })
-                    .await?;
+                .await?;
             }
 
             match buffer.pop_front() {
@@ -700,11 +705,9 @@ impl LocalFileSystem {
                 None => Ok(None),
             }
         })
-            .boxed()
+        .boxed()
     }
 }
-
-
 
 /// Creates the parent directories of `path` or returns an error based on `source` if no parent
 fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
@@ -1441,18 +1444,29 @@ mod tests {
         let offset_str = filter + "6298268401401856";
         let offset = Path::from(offset_str.clone());
 
-        let mut res  = integration.list_with_offset(None, &offset);
+        let mut res = integration.list_with_offset(None, &offset);
         let mut offset_paths: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
-        let offset_files: Vec<_> = offset_paths.iter().map(|x| String::from(x.filename().unwrap())).collect();
+        let offset_files: Vec<_> = offset_paths
+            .iter()
+            .map(|x| String::from(x.filename().unwrap()))
+            .collect();
 
         let files = fs::read_dir(root_str).unwrap();
         let filtered_files = files
             .filter_map(Result::ok)
-            .filter_map(|d| d.file_name().to_str().and_then(|f|
-                if f.contains(filter_str) { Some(String::from(f)) } else { None }))
+            .filter_map(|d| {
+                d.file_name().to_str().and_then(|f| {
+                    if f.contains(filter_str) {
+                        Some(String::from(f))
+                    } else {
+                        None
+                    }
+                })
+            })
             .collect::<Vec<_>>();
 
-        let expected_offset_files: Vec<_> = filtered_files.iter()
+        let expected_offset_files: Vec<_> = filtered_files
+            .iter()
             .filter(|s| **s > offset_str)
             .cloned()
             .collect();
@@ -1467,7 +1481,6 @@ mod tests {
 
         assert_eq!(offset_files.len(), expected_offset_files.len());
         assert!(do_vecs_match(&expected_offset_files, &offset_files));
-
     }
 
     #[tokio::test]
