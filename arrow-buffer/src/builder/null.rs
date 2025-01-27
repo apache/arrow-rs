@@ -133,7 +133,10 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Returns the capacity of the buffer
+    /// Returns the allocated capacity of the buffer, if any
+    ///
+    /// Note: if no nulls have been added, no buffer has been materialized
+    /// and this function will return 0, regardless of the capacity passed to `Self::new`
     #[inline]
     pub fn capacity(&self) -> usize {
         if let Some(ref buf) = self.bitmap_builder {
