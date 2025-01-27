@@ -63,7 +63,7 @@ git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v README.md`
 git commit -a -m 'Update version'
 
 # ensure your github token is available
