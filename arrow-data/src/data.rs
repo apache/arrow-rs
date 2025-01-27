@@ -1789,6 +1789,8 @@ mod private {
     /// Defaults to a value of false.
     ///
     /// This structure is used to enforce safety in the [`ArrayDataBuilder`]
+    ///
+    /// [`ArrayDataBuilder`]: super::ArrayDataBuilder
     #[derive(Debug)]
     pub struct UnsafeFlag(bool);
 
