@@ -65,7 +65,7 @@ fn read_buffer(
         (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
-impl ArrayReader<'_> {
+impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
     /// `variadic_counts` encodes the number of buffers to read for variadic types (e.g., Utf8View, BinaryView)
@@ -370,8 +370,11 @@ fn create_dictionary_array(
     }
 }
 
-/// State for decoding arrays from an encoded [`RecordBatch`]
-struct ArrayReader<'a> {
+/// State for decoding Arrow arrays from an [IPC RecordBatch] structure to
+/// [`RecordBatch`]
+///
+/// [IPC RecordBatch]: crate::RecordBatch
+struct RecordBatchDecoder<'a> {
     /// The flatbuffers encoded record batch
     batch: crate::RecordBatch<'a>,
     /// The output schema
@@ -389,14 +392,14 @@ struct ArrayReader<'a> {
     /// The buffers comprising this array
     buffers: VectorIter<'a, crate::Buffer>,
     /// Projection (subset of columns) to read, if any
-    /// See [`ArrayReader::with_projection`] for details
+    /// See [`RecordBatchDecoder::with_projection`] for details
     projection: Option<&'a [usize]>,
     /// Are buffers required to already be aligned? See
-    /// [`ArrayReader::with_require_alignment`] for details
+    /// [`RecordBatchDecoder::with_require_alignment`] for details
     require_alignment: bool,
 }
 
-impl<'a> ArrayReader<'a> {
+impl<'a> RecordBatchDecoder<'a> {
     /// Create a reader for decoding arrays from an encoded [`RecordBatch`]
     fn try_new(
         buf: &'a Buffer,
@@ -604,7 +607,7 @@ pub fn read_record_batch(
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
 ) -> Result<RecordBatch, ArrowError> {
-    ArrayReader::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+    RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
         .with_projection(projection)
         .with_require_alignment(false)
         .read_record_batch()
@@ -652,7 +655,7 @@ fn read_dictionary_impl(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
-            let record_batch = ArrayReader::try_new(
+            let record_batch = RecordBatchDecoder::try_new(
                 buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
@@ -876,7 +879,7 @@ impl FileDecoder {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
                 // read the block that makes up the record batch into a buffer
-                ArrayReader::try_new(
+                RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     self.schema.clone(),
@@ -1426,7 +1429,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                ArrayReader::try_new(
+                RecordBatchDecoder::try_new(
                     &buf.into(),
                     batch,
                     self.schema(),
@@ -2277,7 +2280,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let roundtrip = ArrayReader::try_new(
+        let roundtrip = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
             batch.schema(),
@@ -2316,7 +2319,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let result = ArrayReader::try_new(
+        let result = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
             batch.schema(),
