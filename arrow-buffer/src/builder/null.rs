@@ -48,9 +48,15 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 /// ```
 #[derive(Debug)]
 pub struct NullBufferBuilder {
+    /// The bitmap builder to store the null buffer:
+    /// * `Some` if any nulls have been appended ("materialized")
+    /// * `None` if no nulls have been appended.
     bitmap_builder: Option<BooleanBufferBuilder>,
-    /// Store the length of the buffer before materializing.
+    /// Length of the buffer before materializing.
+    ///
+    /// if `bitmap_buffer` buffer is `Some`, this value is not used.
     len: usize,
+    /// Initial capacity of the `bitmap_builder`, when it is materialized.
     capacity: usize,
 }
 
@@ -153,13 +159,9 @@ impl NullBufferBuilder {
     /// If `len` is greater than the buffer's current length, this has no effect
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        if len > self.len {
-            return;
-        }
-
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.truncate(len);
-        } else {
+        } else if len <= self.len {
             self.len = len
         }
     }
@@ -329,12 +331,12 @@ mod tests {
     }
 
     #[test]
-    fn test_null_buffer_builder_truncate_after_push() {
+    fn test_null_buffer_builder_truncate_never_materialized() {
         let mut builder = NullBufferBuilder::new(0);
         assert_eq!(builder.len(), 0);
-        builder.append_n_nulls(2);
+        builder.append_n_nulls(2); // doesn't materialize
         assert_eq!(builder.len(), 2);
         builder.truncate(1);
-        assert_eq!(builder.len(), 2);
+        assert_eq!(builder.len(), 1);
     }
 }
