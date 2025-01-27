@@ -1434,24 +1434,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_path_with_offset() {
-        let root_str = "../testing/data/arrow-ipc-file";
-        let root = PathBuf::from(root_str);
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
-        let integration = LocalFileSystem::new_with_prefix(root).unwrap();
-
-        let filter_str = "clusterfuzz-testcase-minimized-arrow-ipc-file-fuzz-";
+        let root_path = root.path();
+        for i in 0..5 {
+            let filename = format!("test{}.parquet", i);
+            let file = root_path.join(filename);
+            std::fs::write(file, "test").unwrap();
+        }
+        let filter_str = "test";
         let filter = String::from(filter_str);
-        let offset_str = filter + "6298268401401856";
+        let offset_str = filter + "1";
         let offset = Path::from(offset_str.clone());
 
+        // Use list_with_offset to retrieve files
         let res = integration.list_with_offset(None, &offset);
         let offset_paths: Vec<_> = res.map_ok(|x| x.location).try_collect().await.unwrap();
-        let offset_files: Vec<_> = offset_paths
+        let mut offset_files: Vec<_> = offset_paths
             .iter()
             .map(|x| String::from(x.filename().unwrap()))
             .collect();
 
-        let files = fs::read_dir(root_str).unwrap();
+        // Check result with direct filesystem read
+        let files = fs::read_dir(root_path).unwrap();
         let filtered_files = files
             .filter_map(Result::ok)
             .filter_map(|d| {
@@ -1465,7 +1471,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let expected_offset_files: Vec<_> = filtered_files
+        let mut expected_offset_files: Vec<_> = filtered_files
             .iter()
             .filter(|s| **s > offset_str)
             .cloned()
@@ -1475,6 +1481,9 @@ mod tests {
             let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
             matching == a.len() && matching == b.len()
         }
+
+        offset_files.sort();
+        expected_offset_files.sort();
 
         // println!("Expected Offset Files: {:?}", expected_offset_files);
         // println!("Actual Offset Files: {:?}", offset_files);
