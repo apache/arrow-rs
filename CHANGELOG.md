@@ -25,17 +25,16 @@
 
 **Implemented enhancements:**
 
-- Re-export `NullBufferBuilder` in the arrow crate [\#6975](https://github.com/apache/arrow-rs/issues/6975)
-- `arrow-string` function should support binary input as well [\#6923](https://github.com/apache/arrow-rs/issues/6923)
-- Release arrow-rs / parquet minor version 53.4.0 \(Jan 2025\) [\#6887](https://github.com/apache/arrow-rs/issues/6887)
-- MMap support for IPC files [\#6709](https://github.com/apache/arrow-rs/issues/6709)
+- Re-export `NullBufferBuilder` in the arrow crate [\#6975](https://github.com/apache/arrow-rs/issues/6975) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `arrow-string` function should support binary input as well [\#6923](https://github.com/apache/arrow-rs/issues/6923) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- MMap support for IPC files [\#6709](https://github.com/apache/arrow-rs/issues/6709) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- `PrimitiveDictionaryBuilder` with specific value data type and capacity [\#7011](https://github.com/apache/arrow-rs/issues/7011)
-- Arrow IPC Writer Panics  If the slice offset is starts with zero [\#6997](https://github.com/apache/arrow-rs/issues/6997)
-- RecordBatch with no columns cannot be roundtripped through Parquet [\#6988](https://github.com/apache/arrow-rs/issues/6988)
-- StringView: Using the Interleave kernel \(and potentially others\) results in many repeated buffers in variadic\_buffers [\#6780](https://github.com/apache/arrow-rs/issues/6780)
+- `PrimitiveDictionaryBuilder` with specific value data type and capacity [\#7011](https://github.com/apache/arrow-rs/issues/7011) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Arrow IPC Writer Panics  If the slice offset is starts with zero [\#6997](https://github.com/apache/arrow-rs/issues/6997) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- RecordBatch with no columns cannot be roundtripped through Parquet [\#6988](https://github.com/apache/arrow-rs/issues/6988) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- StringView: Using the Interleave kernel \(and potentially others\) results in many repeated buffers in variadic\_buffers [\#6780](https://github.com/apache/arrow-rs/issues/6780) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Documentation updates:**
 
@@ -102,9 +101,9 @@
 - Optimize `BooleanBufferBuilder` for non nullable columns [\#6973](https://github.com/apache/arrow-rs/issues/6973) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Speed up Parquet utf8 validation [\#6667](https://github.com/apache/arrow-rs/issues/6667) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
-**Closed issues:**
+**Documentation updates:**
 
-- Avoid panics? [\#6737](https://github.com/apache/arrow-rs/issues/6737)
+- Avoid panics? [\#6737](https://github.com/apache/arrow-rs/issues/6737) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 ## [aal_53.4.0](https://github.com/apache/arrow-rs/tree/aal_53.4.0) (2025-01-13)
 
@@ -112,16 +111,15 @@
 
 **Implemented enhancements:**
 
-- Release object store `0.11.2` \(non API breaking\) Around Dec 15 2024 [\#6902](https://github.com/apache/arrow-rs/issues/6902)
-- `arrow::compute::concat` should merge dictionary type when concatenating list of dictionaries  [\#6888](https://github.com/apache/arrow-rs/issues/6888)
-- Improve error message for unsupported cast between struct and other types [\#6724](https://github.com/apache/arrow-rs/issues/6724)
-- implement regexp\_match, regexp\_scalar\_match and regexp\_array\_match for StringViewArray [\#6717](https://github.com/apache/arrow-rs/issues/6717)
+- `arrow::compute::concat` should merge dictionary type when concatenating list of dictionaries  [\#6888](https://github.com/apache/arrow-rs/issues/6888) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve error message for unsupported cast between struct and other types [\#6724](https://github.com/apache/arrow-rs/issues/6724) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- implement regexp\_match, regexp\_scalar\_match and regexp\_array\_match for StringViewArray [\#6717](https://github.com/apache/arrow-rs/issues/6717) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Writing floating point values containing NaN to Parquet is slow when using dictionary encoding [\#6952](https://github.com/apache/arrow-rs/issues/6952)
-- Public API using private types: `Buffer::from_bytes` takes unexported `Bytes` [\#6754](https://github.com/apache/arrow-rs/issues/6754)
-- Some MSRVs are inaccurate [\#6741](https://github.com/apache/arrow-rs/issues/6741)
+- Writing floating point values containing NaN to Parquet is slow when using dictionary encoding [\#6952](https://github.com/apache/arrow-rs/issues/6952) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Public API using private types: `Buffer::from_bytes` takes unexported `Bytes` [\#6754](https://github.com/apache/arrow-rs/issues/6754) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Some MSRVs are inaccurate [\#6741](https://github.com/apache/arrow-rs/issues/6741) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 
 
 
