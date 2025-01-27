@@ -116,25 +116,13 @@ impl RecordBatchDecoder<'_> {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?, self.next_buffer()?];
                 let values = self.create_array(list_field, variadic_counts)?;
-                create_list_array(
-                    list_node,
-                    data_type,
-                    &list_buffers,
-                    values,
-                    self.require_alignment,
-                )
+                self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             FixedSizeList(ref list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
                 let values = self.create_array(list_field, variadic_counts)?;
-                create_list_array(
-                    list_node,
-                    data_type,
-                    &list_buffers,
-                    values,
-                    self.require_alignment,
-                )
+                self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             Struct(struct_fields) => {
                 let struct_node = self.next_node(field)?;
@@ -303,38 +291,38 @@ impl RecordBatchDecoder<'_> {
 
         Ok(make_array(array_data))
     }
-}
 
-/// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
-fn create_list_array(
-    field_node: &FieldNode,
-    data_type: &DataType,
-    buffers: &[Buffer],
-    child_array: ArrayRef,
-    require_alignment: bool,
-) -> Result<ArrayRef, ArrowError> {
-    let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-    let length = field_node.length() as usize;
-    let child_data = child_array.into_data();
-    let builder = match data_type {
-        List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_buffer(buffers[1].clone())
-            .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
+    /// Reads the correct number of buffers based on list type and null_count, and creates a
+    /// list array ref
+    fn create_list_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        child_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let length = field_node.length() as usize;
+        let child_data = child_array.into_data();
+        let builder = match data_type {
+            List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffers[1].clone())
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer),
 
-        FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
+            FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer),
 
-        _ => unreachable!("Cannot create list or map array from {:?}", data_type),
-    };
+            _ => unreachable!("Cannot create list or map array from {:?}", data_type),
+        };
 
-    let array_data = builder.align_buffers(!require_alignment).build()?;
+        let array_data = builder.align_buffers(!self.require_alignment).build()?;
 
-    Ok(make_array(array_data))
+        Ok(make_array(array_data))
+    }
 }
 
 /// Reads the correct number of buffers based on list type and null_count, and creates a
