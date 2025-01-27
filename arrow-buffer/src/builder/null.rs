@@ -28,6 +28,8 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
 ///
+/// See [`Self::allocated_size`] to get the current memory allocated by the builder.
+///
 /// # Example
 /// ```
 /// # use arrow_buffer::NullBufferBuilder;
@@ -133,16 +135,6 @@ impl NullBufferBuilder {
             self.append_non_null()
         } else {
             self.append_null()
-        }
-    }
-
-    /// Returns the capacity of the buffer
-    #[inline]
-    pub fn capacity(&self) -> usize {
-        if let Some(ref buf) = self.bitmap_builder {
-            buf.capacity()
-        } else {
-            0
         }
     }
 
@@ -256,7 +248,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_n_non_nulls(2);
         assert_eq!(6, builder.len());
-        assert_eq!(512, builder.capacity());
+        assert_eq!(512, builder.allocated_size());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b110010_u8], buf.validity());
@@ -269,7 +261,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_slice(&[false, false, false]);
         assert_eq!(6, builder.len());
-        assert_eq!(512, builder.capacity());
+        assert_eq!(512, builder.allocated_size());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b0_u8], buf.validity());
@@ -282,7 +274,7 @@ mod tests {
         builder.append_n_non_nulls(2);
         builder.append_slice(&[true, true, true]);
         assert_eq!(6, builder.len());
-        assert_eq!(0, builder.capacity());
+        assert_eq!(0, builder.allocated_size());
 
         let buf = builder.finish();
         assert!(buf.is_none());
@@ -326,14 +318,14 @@ mod tests {
         builder.truncate(20);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 16);
-        assert_eq!(builder.capacity(), 0);
+        assert_eq!(builder.allocated_size(), 0);
         builder.truncate(14);
         assert_eq!(builder.as_slice(), None);
         assert_eq!(builder.len(), 14);
         builder.append_null();
         builder.append_non_null();
         assert_eq!(builder.as_slice().unwrap(), &[0xFF, 0b10111111]);
-        assert_eq!(builder.capacity(), 512);
+        assert_eq!(builder.allocated_size(), 512);
     }
 
     #[test]
@@ -343,6 +335,6 @@ mod tests {
         builder.append_n_nulls(2);
         assert_eq!(builder.len(), 2);
         builder.truncate(1);
-        assert_eq!(builder.len(), 1);
+        assert_eq!(builder.len(), 2);
     }
 }
