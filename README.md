@@ -53,7 +53,7 @@ as the [`parquet`] and [`parquet-derive`] crates.
 
 This crate releases every month. We release new major versions (with potentially
 breaking API changes) at most once a quarter, and release incremental minor
-versions in the intervening months. See [this ticket] for more details.
+versions in the intervening months. See [ticket #5368] for more details.
 
 To keep our maintenance burden down, we do regularly scheduled releases (major
 and minor) from the `main` branch. How we handle PRs with breaking API changes
@@ -72,7 +72,7 @@ Planned Release Schedule
 | Feb 2025         | `54.2.0` | Minor, NO breaking API changes             |
 | Mar 2025         | `55.0.0` | Major, potentially breaking API changes    |
 
-[this ticket]: https://github.com/apache/arrow-rs/issues/5368
+[ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
 ### `object_store` crate
@@ -96,9 +96,9 @@ In general, use panics for bad states that are unreachable, unrecoverable or har
 For those caused by invalid user input, however, we prefer to report that invalidity
 gracefully as an error result instead of panicking. In general, invalid input should result
 in an `Error` as soon as possible. It _is_ ok for code paths after validation to assume
-validation has already occurred and panic if not. See [this ticket] for more nuances.
+validation has already occurred and panic if not. See [ticket #6737] for more nuances.
 
-[this ticket]: https://github.com/apache/arrow-rs/issues/6737
+[ticket #6737]: https://github.com/apache/arrow-rs/issues/6737
 
 ### Deprecation Guidelines
 

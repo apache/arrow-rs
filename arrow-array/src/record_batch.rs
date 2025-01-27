@@ -18,8 +18,9 @@
 //! A two-dimensional batch of column-oriented data with a defined
 //! [schema](arrow_schema::Schema).
 
+use crate::cast::AsArray;
 use crate::{new_empty_array, Array, ArrayRef, StructArray};
-use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use std::ops::Index;
 use std::sync::Arc;
 
@@ -392,6 +393,108 @@ impl RecordBatch {
                 row_count: Some(self.row_count),
             },
         )
+    }
+
+    /// Normalize a semi-structured [`RecordBatch`] into a flat table.
+    ///
+    /// Nested [`Field`]s will generate names separated by `separator`, up to a depth of `max_level`
+    /// (unlimited if `None`).
+    ///
+    /// e.g. given a [`RecordBatch`] with schema:
+    ///
+    /// ```text
+    ///     "foo": StructArray<"bar": Utf8>
+    /// ```
+    ///
+    /// A separator of `"."` would generate a batch with the schema:
+    ///
+    /// ```text
+    ///     "foo.bar": Utf8
+    /// ```
+    ///
+    /// Note that giving a depth of `Some(0)` to `max_level` is the same as passing in `None`;
+    /// it will be treated as unlimited.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int64Array, StringArray, StructArray, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Fields, Schema};
+    /// #
+    /// let animals: ArrayRef = Arc::new(StringArray::from(vec!["Parrot", ""]));
+    /// let n_legs: ArrayRef = Arc::new(Int64Array::from(vec![Some(2), Some(4)]));
+    ///
+    /// let animals_field = Arc::new(Field::new("animals", DataType::Utf8, true));
+    /// let n_legs_field = Arc::new(Field::new("n_legs", DataType::Int64, true));
+    ///
+    /// let a = Arc::new(StructArray::from(vec![
+    ///     (animals_field.clone(), Arc::new(animals.clone()) as ArrayRef),
+    ///     (n_legs_field.clone(), Arc::new(n_legs.clone()) as ArrayRef),
+    /// ]));
+    ///
+    /// let schema = Schema::new(vec![
+    ///     Field::new(
+    ///         "a",
+    ///         DataType::Struct(Fields::from(vec![animals_field, n_legs_field])),
+    ///         false,
+    ///     )
+    /// ]);
+    ///
+    /// let normalized = RecordBatch::try_new(Arc::new(schema), vec![a])
+    ///     .expect("valid conversion")
+    ///     .normalize(".", None)
+    ///     .expect("valid normalization");
+    ///
+    /// let expected = RecordBatch::try_from_iter_with_nullable(vec![
+    ///     ("a.animals", animals.clone(), true),
+    ///     ("a.n_legs", n_legs.clone(), true),
+    /// ])
+    /// .expect("valid conversion");
+    ///
+    /// assert_eq!(expected, normalized);
+    /// ```
+    pub fn normalize(&self, separator: &str, max_level: Option<usize>) -> Result<Self, ArrowError> {
+        let max_level = match max_level.unwrap_or(usize::MAX) {
+            0 => usize::MAX,
+            val => val,
+        };
+        let mut stack: Vec<(usize, &ArrayRef, Vec<&str>, &FieldRef)> = self
+            .columns
+            .iter()
+            .zip(self.schema.fields())
+            .rev()
+            .map(|(c, f)| {
+                let name_vec: Vec<&str> = vec![f.name()];
+                (0, c, name_vec, f)
+            })
+            .collect();
+        let mut columns: Vec<ArrayRef> = Vec::new();
+        let mut fields: Vec<FieldRef> = Vec::new();
+
+        while let Some((depth, c, name, field_ref)) = stack.pop() {
+            match field_ref.data_type() {
+                DataType::Struct(ff) if depth < max_level => {
+                    // Need to zip these in reverse to maintain original order
+                    for (cff, fff) in c.as_struct().columns().iter().zip(ff.into_iter()).rev() {
+                        let mut name = name.clone();
+                        name.push(separator);
+                        name.push(fff.name());
+                        stack.push((depth + 1, cff, name, fff))
+                    }
+                }
+                _ => {
+                    let updated_field = Field::new(
+                        name.concat(),
+                        field_ref.data_type().clone(),
+                        field_ref.is_nullable(),
+                    );
+                    columns.push(c.clone());
+                    fields.push(Arc::new(updated_field));
+                }
+            }
+        }
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
     }
 
     /// Returns the number of columns in the record batch.
@@ -768,8 +871,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::{
         BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
@@ -777,6 +878,7 @@ mod tests {
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
+    use std::collections::HashMap;
 
     #[test]
     fn create_record_batch() {
@@ -1195,6 +1297,181 @@ mod tests {
         .unwrap();
 
         assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn normalize_simple() {
+        let animals: ArrayRef = Arc::new(StringArray::from(vec!["Parrot", ""]));
+        let n_legs: ArrayRef = Arc::new(Int64Array::from(vec![Some(2), Some(4)]));
+        let year: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(2022)]));
+
+        let animals_field = Arc::new(Field::new("animals", DataType::Utf8, true));
+        let n_legs_field = Arc::new(Field::new("n_legs", DataType::Int64, true));
+        let year_field = Arc::new(Field::new("year", DataType::Int64, true));
+
+        let a = Arc::new(StructArray::from(vec![
+            (animals_field.clone(), Arc::new(animals.clone()) as ArrayRef),
+            (n_legs_field.clone(), Arc::new(n_legs.clone()) as ArrayRef),
+            (year_field.clone(), Arc::new(year.clone()) as ArrayRef),
+        ]));
+
+        let month = Arc::new(Int64Array::from(vec![Some(4), Some(6)]));
+
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![animals_field, n_legs_field, year_field])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
+        ]);
+
+        let normalized =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![a.clone(), month.clone()])
+                .expect("valid conversion")
+                .normalize(".", Some(0))
+                .expect("valid normalization");
+
+        let expected = RecordBatch::try_from_iter_with_nullable(vec![
+            ("a.animals", animals.clone(), true),
+            ("a.n_legs", n_legs.clone(), true),
+            ("a.year", year.clone(), true),
+            ("month", month.clone(), true),
+        ])
+        .expect("valid conversion");
+
+        assert_eq!(expected, normalized);
+
+        // check 0 and None have the same effect
+        let normalized = RecordBatch::try_new(Arc::new(schema), vec![a, month.clone()])
+            .expect("valid conversion")
+            .normalize(".", None)
+            .expect("valid normalization");
+
+        assert_eq!(expected, normalized);
+    }
+
+    #[test]
+    fn normalize_nested() {
+        // Initialize schema
+        let a = Arc::new(Field::new("a", DataType::Int64, true));
+        let b = Arc::new(Field::new("b", DataType::Int64, false));
+        let c = Arc::new(Field::new("c", DataType::Int64, true));
+
+        let one = Arc::new(Field::new(
+            "1",
+            DataType::Struct(Fields::from(vec![a.clone(), b.clone(), c.clone()])),
+            false,
+        ));
+        let two = Arc::new(Field::new(
+            "2",
+            DataType::Struct(Fields::from(vec![a.clone(), b.clone(), c.clone()])),
+            true,
+        ));
+
+        let exclamation = Arc::new(Field::new(
+            "!",
+            DataType::Struct(Fields::from(vec![one.clone(), two.clone()])),
+            false,
+        ));
+
+        let schema = Schema::new(vec![exclamation.clone()]);
+
+        // Initialize fields
+        let a_field = Int64Array::from(vec![Some(0), Some(1)]);
+        let b_field = Int64Array::from(vec![Some(2), Some(3)]);
+        let c_field = Int64Array::from(vec![None, Some(4)]);
+
+        let one_field = StructArray::from(vec![
+            (a.clone(), Arc::new(a_field.clone()) as ArrayRef),
+            (b.clone(), Arc::new(b_field.clone()) as ArrayRef),
+            (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
+        ]);
+        let two_field = StructArray::from(vec![
+            (a.clone(), Arc::new(a_field.clone()) as ArrayRef),
+            (b.clone(), Arc::new(b_field.clone()) as ArrayRef),
+            (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
+        ]);
+
+        let exclamation_field = Arc::new(StructArray::from(vec![
+            (one.clone(), Arc::new(one_field) as ArrayRef),
+            (two.clone(), Arc::new(two_field) as ArrayRef),
+        ]));
+
+        // Normalize top level
+        let normalized =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![exclamation_field.clone()])
+                .expect("valid conversion")
+                .normalize(".", Some(1))
+                .expect("valid normalization");
+
+        let expected = RecordBatch::try_from_iter_with_nullable(vec![
+            (
+                "!.1",
+                Arc::new(StructArray::from(vec![
+                    (a.clone(), Arc::new(a_field.clone()) as ArrayRef),
+                    (b.clone(), Arc::new(b_field.clone()) as ArrayRef),
+                    (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
+                ])) as ArrayRef,
+                false,
+            ),
+            (
+                "!.2",
+                Arc::new(StructArray::from(vec![
+                    (a.clone(), Arc::new(a_field.clone()) as ArrayRef),
+                    (b.clone(), Arc::new(b_field.clone()) as ArrayRef),
+                    (c.clone(), Arc::new(c_field.clone()) as ArrayRef),
+                ])) as ArrayRef,
+                true,
+            ),
+        ])
+        .expect("valid conversion");
+
+        assert_eq!(expected, normalized);
+
+        // Normalize all levels
+        let normalized = RecordBatch::try_new(Arc::new(schema), vec![exclamation_field])
+            .expect("valid conversion")
+            .normalize(".", None)
+            .expect("valid normalization");
+
+        let expected = RecordBatch::try_from_iter_with_nullable(vec![
+            ("!.1.a", Arc::new(a_field.clone()) as ArrayRef, true),
+            ("!.1.b", Arc::new(b_field.clone()) as ArrayRef, false),
+            ("!.1.c", Arc::new(c_field.clone()) as ArrayRef, true),
+            ("!.2.a", Arc::new(a_field.clone()) as ArrayRef, true),
+            ("!.2.b", Arc::new(b_field.clone()) as ArrayRef, false),
+            ("!.2.c", Arc::new(c_field.clone()) as ArrayRef, true),
+        ])
+        .expect("valid conversion");
+
+        assert_eq!(expected, normalized);
+    }
+
+    #[test]
+    fn normalize_empty() {
+        let animals_field = Arc::new(Field::new("animals", DataType::Utf8, true));
+        let n_legs_field = Arc::new(Field::new("n_legs", DataType::Int64, true));
+        let year_field = Arc::new(Field::new("year", DataType::Int64, true));
+
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Struct(Fields::from(vec![animals_field, n_legs_field, year_field])),
+                false,
+            ),
+            Field::new("month", DataType::Int64, true),
+        ]);
+
+        let normalized = RecordBatch::new_empty(Arc::new(schema.clone()))
+            .normalize(".", Some(0))
+            .expect("valid normalization");
+
+        let expected = RecordBatch::new_empty(Arc::new(
+            schema.normalize(".", Some(0)).expect("valid normalization"),
+        ));
+
+        assert_eq!(expected, normalized);
     }
 
     #[test]
