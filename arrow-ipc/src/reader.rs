@@ -17,8 +17,12 @@
 
 //! Arrow IPC File and Stream Readers
 //!
-//! The `FileReader` and `StreamReader` have similar interfaces,
-//! however the `FileReader` expects a reader that supports `Seek`ing
+//! # Notes
+//!
+//! The [`FileReader`] and [`StreamReader`] have similar interfaces,
+//! however the [`FileReader`] expects a reader that supports [`Seek`]ing
+//!
+//! [`Seek`]: std::io::Seek
 
 mod stream;
 
@@ -1034,10 +1038,49 @@ impl FileReaderBuilder {
     }
 }
 
-/// Arrow File reader
+/// Arrow File Reader
 ///
-/// For an example creating Arrays with memory mapped (`mmap`) files see the [`zero_copy_ipc`] example.
+/// Reads Arrow [`RecordBatch`]es from bytes in the [IPC File Format],
+/// providing random access to the record batches.
 ///
+/// # See Also
+///
+/// * [`Self::set_index`] for random access
+/// * [`StreamReader`] for reading streaming data
+///
+/// # Example: Reading from a `File`
+/// ```
+/// # use std::io::Cursor;
+/// use arrow_array::record_batch;
+/// # use arrow_ipc::reader::FileReader;
+/// # use arrow_ipc::writer::FileWriter;
+/// # let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// # let mut file = vec![]; // mimic a stream for the example
+/// # {
+/// #  let mut writer = FileWriter::try_new(&mut file, &batch.schema()).unwrap();
+/// #  writer.write(&batch).unwrap();
+/// #  writer.write(&batch).unwrap();
+/// #  writer.finish().unwrap();
+/// # }
+/// # let mut file = Cursor::new(&file);
+/// let projection = None; // read all columns
+/// let mut reader = FileReader::try_new(&mut file, projection).unwrap();
+/// // Position the reader to the second batch
+/// reader.set_index(1).unwrap();
+/// // read batches from the reader using the Iterator trait
+/// let mut num_rows = 0;
+/// for batch in reader {
+///    let batch = batch.unwrap();
+///    num_rows += batch.num_rows();
+/// }
+/// assert_eq!(num_rows, 3);
+/// ```
+/// # Example: Reading from `mmap`ed file
+///
+/// For an example creating Arrays without copying using  memory mapped (`mmap`)
+/// files see the [`zero_copy_ipc`] example.
+///
+/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 /// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking
@@ -1115,7 +1158,7 @@ impl<R: Read + Seek> FileReader<R> {
         self.decoder.schema.clone()
     }
 
-    /// Read a specific record batch
+    /// See to a specific [`RecordBatch`]
     ///
     /// Sets the current block to the index, allowing random reads
     pub fn set_index(&mut self, index: usize) -> Result<(), ArrowError> {
@@ -1173,7 +1216,39 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
     }
 }
 
-/// Arrow Stream reader
+/// Arrow Stream Reader
+///
+/// Reads Arrow [`RecordBatch`]es from bytes in the [IPC Streaming Format].
+///
+/// # See Also
+///
+/// * [`FileReader`] for random access.
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::reader::StreamReader;
+/// # use arrow_ipc::writer::StreamWriter;
+/// # let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// # let mut stream = vec![]; // mimic a stream for the example
+/// # {
+/// #  let mut writer = StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+/// #  writer.write(&batch).unwrap();
+/// #  writer.finish().unwrap();
+/// # }
+/// # let stream = stream.as_slice();
+/// let projection = None; // read all columns
+/// let mut reader = StreamReader::try_new(stream, projection).unwrap();
+/// // read batches from the reader using the Iterator trait
+/// let mut num_rows = 0;
+/// for batch in reader {
+///    let batch = batch.unwrap();
+///    num_rows += batch.num_rows();
+/// }
+/// assert_eq!(num_rows, 3);
+/// ```
+///
+/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamReader<R> {
     /// Stream reader
     reader: R,

@@ -55,7 +55,9 @@ impl OffsetSizeTrait for i64 {
 }
 
 /// An array of [variable length lists], similar to JSON arrays
-/// (e.g. `["A", "B", "C"]`).
+/// (e.g. `["A", "B", "C"]`). This struct specifically represents
+/// the [list layout]. Refer to [`GenericListViewArray`] for the
+/// [list-view layout].
 ///
 /// Lists are represented using `offsets` into a `values` child
 /// array. Offsets are stored in two adjacent entries of an
@@ -123,7 +125,10 @@ impl OffsetSizeTrait for i64 {
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
+/// [`GenericListViewArray`]: crate::array::GenericListViewArray
 /// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
+/// [list layout]: https://arrow.apache.org/docs/format/Columnar.html#list-layout
+/// [list-view layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
