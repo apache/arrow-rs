@@ -187,12 +187,11 @@ impl RecordBatchDecoder<'_> {
                     ))
                 })?;
 
-                create_dictionary_array(
+                self.create_dictionary_array(
                     index_node,
                     data_type,
                     &index_buffers,
                     value_array.clone(),
-                    self.require_alignment,
                 )
             }
             Union(fields, mode) => {
@@ -323,30 +322,30 @@ impl RecordBatchDecoder<'_> {
 
         Ok(make_array(array_data))
     }
-}
 
-/// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
-fn create_dictionary_array(
-    field_node: &FieldNode,
-    data_type: &DataType,
-    buffers: &[Buffer],
-    value_array: ArrayRef,
-    require_alignment: bool,
-) -> Result<ArrayRef, ArrowError> {
-    if let Dictionary(_, _) = *data_type {
-        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-        let array_data = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .add_buffer(buffers[1].clone())
-            .add_child_data(value_array.into_data())
-            .null_bit_buffer(null_buffer)
-            .align_buffers(!require_alignment)
-            .build()?;
+    /// Reads the correct number of buffers based on list type and null_count, and creates a
+    /// list array ref
+    fn create_dictionary_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        value_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        if let Dictionary(_, _) = *data_type {
+            let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(field_node.length() as usize)
+                .add_buffer(buffers[1].clone())
+                .add_child_data(value_array.into_data())
+                .null_bit_buffer(null_buffer)
+                .align_buffers(!self.require_alignment)
+                .build()?;
 
-        Ok(make_array(array_data))
-    } else {
-        unreachable!("Cannot create dictionary array from {:?}", data_type)
+            Ok(make_array(array_data))
+        } else {
+            unreachable!("Cannot create dictionary array from {:?}", data_type)
+        }
     }
 }
 
