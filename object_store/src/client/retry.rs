@@ -24,7 +24,7 @@ use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
 use std::error::Error as StdError;
 use std::time::{Duration, Instant};
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// Retry request error
 #[derive(Debug, thiserror::Error)]
