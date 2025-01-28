@@ -370,7 +370,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     ///
-    /// Notes: this mthod does *NOT* slice the underyling values array or modify
+    /// Notes: this method does *NOT* slice the underlying values array or modify
     /// the values in the offsets buffer. See [`Self::values`] and
     /// [`Self::offsets`] for more information.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
