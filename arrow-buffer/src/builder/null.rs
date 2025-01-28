@@ -20,7 +20,7 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 #[derive(Debug)]
 enum NullBufferBuilderState {
     /// All values are non-null (`true`)
-    NonMaterialized { len: usize, capacity: usize },
+    Unmaterialized { len: usize, capacity: usize },
     /// Materialized an actual [`BooleanBufferBuilder`], usually when encountering first null (`false`)
     Materialized {
         bitmap_builder: BooleanBufferBuilder,
@@ -70,7 +70,7 @@ impl NullBufferBuilder {
     /// size in bits (not bytes) that will be allocated at minimum.
     pub fn new(capacity: usize) -> Self {
         Self {
-            state: NullBufferBuilderState::NonMaterialized { len: 0, capacity },
+            state: NullBufferBuilderState::Unmaterialized { len: 0, capacity },
             initial_capacity: capacity,
         }
     }
@@ -78,7 +78,7 @@ impl NullBufferBuilder {
     /// Creates a new builder with given length.
     pub fn new_with_len(len: usize) -> Self {
         Self {
-            state: NullBufferBuilderState::NonMaterialized { len, capacity: len },
+            state: NullBufferBuilderState::Unmaterialized { len, capacity: len },
             initial_capacity: len,
         }
     }
@@ -100,7 +100,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_n_non_nulls(&mut self, n: usize) {
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += n,
+            NullBufferBuilderState::Unmaterialized { len, capacity: _ } => *len += n,
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 bitmap_builder.append_n(n, true)
             }
@@ -112,7 +112,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn append_non_null(&mut self) {
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += 1,
+            NullBufferBuilderState::Unmaterialized { len, capacity: _ } => *len += 1,
             NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.append(true),
         }
     }
@@ -155,7 +155,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
         match &self.state {
-            NullBufferBuilderState::NonMaterialized { .. } => true,
+            NullBufferBuilderState::Unmaterialized { .. } => true,
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 bitmap_builder.get_bit(index)
             }
@@ -168,7 +168,7 @@ impl NullBufferBuilder {
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { len: state_len, .. } if len <= *state_len => {
+            NullBufferBuilderState::Unmaterialized { len: state_len, .. } if len <= *state_len => {
                 *state_len = len
             }
             NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.truncate(len),
@@ -183,7 +183,7 @@ impl NullBufferBuilder {
             self.materialize_if_needed()
         }
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len += slice.len(),
+            NullBufferBuilderState::Unmaterialized { len, capacity: _ } => *len += slice.len(),
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 bitmap_builder.append_slice(slice)
             }
@@ -194,13 +194,13 @@ impl NullBufferBuilder {
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => {
+            NullBufferBuilderState::Unmaterialized { len, capacity: _ } => {
                 *len = 0;
                 None
             }
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 let a = bitmap_builder.finish();
-                self.state = NullBufferBuilderState::NonMaterialized {
+                self.state = NullBufferBuilderState::Unmaterialized {
                     len: 0,
                     capacity: self.initial_capacity,
                 };
@@ -212,7 +212,7 @@ impl NullBufferBuilder {
     /// Builds the [NullBuffer] without resetting the builder.
     pub fn finish_cloned(&self) -> Option<NullBuffer> {
         match &self.state {
-            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Unmaterialized { .. } => None,
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 let buffer = bitmap_builder.finish_cloned();
                 Some(NullBuffer::new(buffer))
@@ -223,7 +223,7 @@ impl NullBufferBuilder {
     /// Returns the inner bitmap builder as slice
     pub fn as_slice(&self) -> Option<&[u8]> {
         match &self.state {
-            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Unmaterialized { .. } => None,
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 Some(bitmap_builder.as_slice())
             }
@@ -231,14 +231,14 @@ impl NullBufferBuilder {
     }
 
     fn materialize_if_needed(&mut self) {
-        if let NullBufferBuilderState::NonMaterialized { .. } = self.state {
+        if let NullBufferBuilderState::Unmaterialized { .. } = self.state {
             self.materialize()
         }
     }
 
     #[cold]
     fn materialize(&mut self) {
-        if let NullBufferBuilderState::NonMaterialized { len, capacity } = self.state {
+        if let NullBufferBuilderState::Unmaterialized { len, capacity } = self.state {
             let mut bitmap_builder = BooleanBufferBuilder::new(len.max(capacity));
             bitmap_builder.append_n(len, true);
             self.state = NullBufferBuilderState::Materialized { bitmap_builder }
@@ -248,7 +248,7 @@ impl NullBufferBuilder {
     /// Return a mutable reference to the inner bitmap slice.
     pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
         match &mut self.state {
-            NullBufferBuilderState::NonMaterialized { .. } => None,
+            NullBufferBuilderState::Unmaterialized { .. } => None,
             NullBufferBuilderState::Materialized { bitmap_builder } => {
                 Some(bitmap_builder.as_slice_mut())
             }
@@ -258,7 +258,7 @@ impl NullBufferBuilder {
     /// Return the allocated size of this builder, in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
         match &self.state {
-            NullBufferBuilderState::NonMaterialized { .. } => 0,
+            NullBufferBuilderState::Unmaterialized { .. } => 0,
             NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.capacity(),
         }
     }
@@ -268,7 +268,7 @@ impl NullBufferBuilder {
     /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
         match &self.state {
-            NullBufferBuilderState::NonMaterialized { len, capacity: _ } => *len,
+            NullBufferBuilderState::Unmaterialized { len, capacity: _ } => *len,
             NullBufferBuilderState::Materialized { bitmap_builder } => bitmap_builder.len(),
         }
     }
