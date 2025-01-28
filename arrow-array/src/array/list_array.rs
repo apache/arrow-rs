@@ -265,7 +265,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
     /// allowing for zero-copy cloning.
     ///
-    /// Notes: the values in the offsets may not
+    /// Notes: The `offsets` may not start at 0 and may not cover all values in
+    /// [`Self::values`]. This can happen when the list array was sliced via
+    /// [`Self::slice`]. See documentation for [`Self`] for more details.
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
         &self.value_offsets
