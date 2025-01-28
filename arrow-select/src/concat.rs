@@ -462,6 +462,34 @@ mod tests {
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
     }
 
+
+    #[test]
+    fn test_concat_primitive_list_arrays_slices() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]),
+            Some(vec![]),  // In slice
+            None, // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(1, 2);
+        let list1_values = list1.into_iter().skip(1).take(2);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
     #[test]
     fn test_concat_primitive_fixed_size_list_arrays() {
         let list1 = vec![
