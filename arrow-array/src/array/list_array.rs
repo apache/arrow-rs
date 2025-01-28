@@ -120,8 +120,41 @@ impl OffsetSizeTrait for i64 {
 ///                 (offsets[i],            │   ListArray               (Array)
 ///                offsets[i+1])                                    └ ─ ─ ─ ─ ─ ─ ┘    │
 ///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
 ///
+/// # Slicing
 ///
+/// Slicing a `ListArray` creates a new `ListArray` without copying any data,
+/// but this means the Values and Offsets may have "unused" data
+///
+/// For exmaple, calling `slice(1, 3)` on the `ListArray` in the above example
+/// would result in the following. Note
+///
+/// 1. `Values` array is unchanged
+/// 2. `Offsets` do not start at `0` nor cover all values in the Values array.
+///
+/// ```text
+///                                 ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///                                 │                         ╔═══╗ ╔═══╗
+///                                                         │ ║ 1 ║ ║ A ║ │ 0  │
+///  ┌─────────────┐  ┌───────┐     │     ┌───┐   ╔═══╗       ╠═══╣ ╠═══╣
+///  │ [] (empty)  │  │ (3,3) │           │ 1 │   ║ 3 ║     │ ║ 1 ║ ║ B ║ │ 1  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ╠───╣       ╠═══╣ ╠═══╣
+///  │    NULL     │  │ (3,4) │           │ 0 │   │ 3 │     │ ║ 1 ║ ║ C ║ │ 2  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠───╣ ╠───╣
+///  │     [D]     │  │ (4,5) │           │ 1 │   │ 4 │     │ │ 0 │ │ ? │ │ 3  │
+///  └─────────────┘  └───────┘     │     └───┘   ├───┤       ├───┤ ├───┤
+///                                               │ 5 │     │ │ 1 │ │ D │ │ 4  │
+///                                 │             └───┘       ├───┤ ├───┤
+///                                                         │ │ 0 │ │ ? │ │ 5  │
+///                                 │  Validity               ╠═══╣ ╠═══╣
+///     Logical       Logical          (nulls)   Offsets    │ ║ 1 ║ ║ F ║ │ 6  │
+///      Values       Offsets       │                         ╚═══╝ ╚═══╝
+///                                                         │    Values   │    │
+///                 (offsets[i],    │   ListArray               (Array)
+///                offsets[i+1])                            └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
