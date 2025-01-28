@@ -497,6 +497,8 @@ mod tests {
         ];
         let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
 
+        // verify that this test covers the case when the first offset is non zero
+        assert!(list1_array.offsets()[0].as_usize() > 0);
         let array_result = concat(&[&list1_array, &list2_array]).unwrap();
 
         let expected = list1_values.chain(list2);
@@ -524,6 +526,10 @@ mod tests {
         ];
         let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
 
+        // verify that this test covers the case when the first offset is zero, but the
+        // last offset doesn't cover the entire array
+        assert_eq!(list1_array.offsets()[0].as_usize(), 0);
+        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
         let array_result = concat(&[&list1_array, &list2_array]).unwrap();
 
         let expected = list1_values.chain(list2);
