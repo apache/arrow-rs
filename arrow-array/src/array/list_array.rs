@@ -125,7 +125,7 @@ impl OffsetSizeTrait for i64 {
 /// # Slicing
 ///
 /// Slicing a `ListArray` creates a new `ListArray` without copying any data,
-/// but this means the Values and Offsets may have "unused" data
+/// but this means the [`Self::values`] and [`Self::offsets`] may have "unused" data
 ///
 /// For example, calling `slice(1, 3)` on the `ListArray` in the above example
 /// would result in the following. Note
