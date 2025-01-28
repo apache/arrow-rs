@@ -24,7 +24,7 @@ use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
 use std::error::Error as StdError;
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{debug, info};
 
 /// Retry request error
 #[derive(Debug, thiserror::Error)]
@@ -296,7 +296,7 @@ impl RetryableRequest {
                         })?;
 
                         let response_body = String::from_utf8_lossy(&bytes);
-                        info!("Checking for error in response_body: {}", response_body);
+                        debug!("Checking for error in response_body: {}", response_body);
 
                         if !body_contains_error(&response_body) {
                             // Success response and no error, clone and return response
