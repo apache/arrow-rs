@@ -207,7 +207,7 @@ Run a command such as the following to create a GitHub release from the tag:
 
 ```shell
 git checkout 4.1.0
-gh release create 4.1.0 --notes-file CHANGELOG.md
+gh release create 4.1.0 --title 4.1.0 --notes-file CHANGELOG.md
 ```
 
 ### Publish on Crates.io
