@@ -143,7 +143,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
         .inspect(|l| {
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
-            list_has_slices |= l.offsets()[0].as_usize() > 0
+            list_has_slices |= l.offsets()[0] > OffsetSize::zero()
                 || l.offsets().last().unwrap().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
