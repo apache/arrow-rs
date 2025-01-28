@@ -263,13 +263,20 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns a reference to the offsets of this list
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning.
+    ///
+    /// Notes: the values in the offsets may not
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
         &self.value_offsets
     }
 
     /// Returns a reference to the values of this list
+    ///
+    /// Note: The list array may not refer to all values in the `values` array.
+    /// For example if the list array was sliced via [`Self::slice`] values will
+    /// still contain values both before and after the slice. See documentation
+    /// for [`Self`] for more details.
     #[inline]
     pub fn values(&self) -> &ArrayRef {
         &self.values
@@ -296,7 +303,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         self.values.slice(start, end - start)
     }
 
-    /// Returns the offset values in the offsets buffer
+    /// Returns the offset values in the offsets buffer.
+    ///
+    /// See [`Self::offsets`] for more details.
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
         &self.value_offsets
@@ -325,6 +334,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// Notes: this mthod does *NOT* slice the underyling values array or modify
+    /// the values in the offsets buffer. See [`Self::values`] and
+    /// [`Self::offsets`] for more information.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -556,12 +569,12 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
 ///
-// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
+/// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
 pub type ListArray = GenericListArray<i32>;
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
 ///
-// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
+/// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]
