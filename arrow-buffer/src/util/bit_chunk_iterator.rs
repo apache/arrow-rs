@@ -642,7 +642,7 @@ mod tests {
             let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = usize
+            let truncate = uusize
                 .sample(&mut rng)
                 .checked_rem(max_truncate)
                 .unwrap_or(0);
