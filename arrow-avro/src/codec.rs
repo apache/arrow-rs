@@ -132,7 +132,8 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 #[derive(Debug, Clone)]
 pub enum Codec {
     /// Primitive Types
-    /// https://avro.apache.org/docs/1.11.1/specification/#primitive-types
+    ///
+    /// <https://avro.apache.org/docs/1.11.1/specification/#primitive-types>
     Null,
     Boolean,
     Int32,
@@ -142,14 +143,16 @@ pub enum Codec {
     Binary,
     String,
     /// Complex Types
-    /// https://avro.apache.org/docs/1.11.1/specification/#complex-types
+    ///
+    /// <https://avro.apache.org/docs/1.11.1/specification/#complex-types>
     Record(Arc<[AvroField]>),
     Enum(Arc<[String]>, Arc<[i32]>),
     Array(Arc<AvroDataType>),
     Map(Arc<AvroDataType>),
     Fixed(i32),
     /// Logical Types
-    /// https://avro.apache.org/docs/1.11.1/specification/#logical-types
+    ///
+    /// <https://avro.apache.org/docs/1.11.1/specification/#logical-types>
     Decimal(usize, Option<usize>, Option<usize>),
     Uuid,
     Date32,
