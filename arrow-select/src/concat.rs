@@ -135,6 +135,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let mut output_len = 0;
     let mut list_has_nulls = false;
+    let mut list_has_slices = false;
 
     let lists = arrays
         .iter()
@@ -142,6 +143,8 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
         .inspect(|l| {
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
+            list_has_slices |= l.offsets()[0] > OffsetSize::zero()
+                || l.offsets().last().unwrap().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
 
@@ -156,10 +159,23 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
         NullBuffer::new(nulls.finish())
     });
 
-    let values: Vec<&dyn Array> = lists
-        .iter()
-        .map(|x| x.values().as_ref())
-        .collect::<Vec<_>>();
+    // If any of the lists have slices, we need to slice the values
+    // to ensure that the offsets are correct
+    let mut sliced_values;
+    let values: Vec<&dyn Array> = if list_has_slices {
+        sliced_values = Vec::with_capacity(lists.len());
+        for l in &lists {
+            // if the first offset is non-zero, we need to slice the values so when
+            // we concatenate them below only the relevant values are included
+            let offsets = l.offsets();
+            let start_offset = offsets[0].as_usize();
+            let end_offset = offsets.last().unwrap().as_usize();
+            sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
+        }
+        sliced_values.iter().map(|a| a.as_ref()).collect()
+    } else {
+        lists.iter().map(|x| x.values().as_ref()).collect()
+    };
 
     let concatenated_values = concat(values.as_slice())?;
 
@@ -457,6 +473,66 @@ mod tests {
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
         let expected = list1.into_iter().chain(list2).chain(list3);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_slices() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]),
+            Some(vec![]), // In slice
+            None,         // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(1, 2);
+        let list1_values = list1.into_iter().skip(1).take(2);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is non zero
+        assert!(list1_array.offsets()[0].as_usize() > 0);
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_sliced_lengths() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]), // In slice
+            Some(vec![]),                                        // In slice
+            None,                                                // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(0, 3); // no offset, but not all values
+        let list1_values = list1.into_iter().take(3);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is zero, but the
+        // last offset doesn't cover the entire array
+        assert_eq!(list1_array.offsets()[0].as_usize(), 0);
+        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
