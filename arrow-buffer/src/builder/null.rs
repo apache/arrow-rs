@@ -28,6 +28,8 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
 ///
+/// See [`Self::allocated_size`] to get the current memory allocated by the builder.
+///
 /// # Example
 /// ```
 /// # use arrow_buffer::NullBufferBuilder;
@@ -46,9 +48,15 @@ use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 /// ```
 #[derive(Debug)]
 pub struct NullBufferBuilder {
+    /// The bitmap builder to store the null buffer:
+    /// * `Some` if any nulls have been appended ("materialized")
+    /// * `None` if no nulls have been appended.
     bitmap_builder: Option<BooleanBufferBuilder>,
-    /// Store the length of the buffer before materializing.
+    /// Length of the buffer before materializing.
+    ///
+    /// if `bitmap_buffer` buffer is `Some`, this value is not used.
     len: usize,
+    /// Initial capacity of the `bitmap_builder`, when it is materialized.
     capacity: usize,
 }
 
@@ -78,7 +86,6 @@ impl NullBufferBuilder {
     /// Creates a new builder from a `MutableBuffer`.
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         let capacity = buffer.len() * 8;
-
         assert!(len <= capacity);
 
         let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
@@ -134,6 +141,28 @@ impl NullBufferBuilder {
             self.append_non_null()
         } else {
             self.append_null()
+        }
+    }
+
+    /// Gets a bit in the buffer at `index`
+    #[inline]
+    pub fn is_valid(&self, index: usize) -> bool {
+        if let Some(ref buf) = self.bitmap_builder {
+            buf.get_bit(index)
+        } else {
+            true
+        }
+    }
+
+    /// Truncates the builder to the given length
+    ///
+    /// If `len` is greater than the buffer's current length, this has no effect
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.truncate(len);
+        } else if len <= self.len {
+            self.len = len
         }
     }
 
@@ -221,6 +250,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_n_non_nulls(2);
         assert_eq!(6, builder.len());
+        assert_eq!(512, builder.allocated_size());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b110010_u8], buf.validity());
@@ -233,6 +263,7 @@ mod tests {
         builder.append_n_nulls(2);
         builder.append_slice(&[false, false, false]);
         assert_eq!(6, builder.len());
+        assert_eq!(512, builder.allocated_size());
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b0_u8], buf.validity());
@@ -245,6 +276,7 @@ mod tests {
         builder.append_n_non_nulls(2);
         builder.append_slice(&[true, true, true]);
         assert_eq!(6, builder.len());
+        assert_eq!(0, builder.allocated_size());
 
         let buf = builder.finish();
         assert!(buf.is_none());
@@ -265,5 +297,46 @@ mod tests {
 
         let buf = builder.finish().unwrap();
         assert_eq!(&[0b1011_u8], buf.validity());
+    }
+
+    #[test]
+    fn test_null_buffer_builder_is_valid() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(6);
+        assert!(builder.is_valid(0));
+
+        builder.append_null();
+        assert!(!builder.is_valid(6));
+
+        builder.append_non_null();
+        assert!(builder.is_valid(7));
+    }
+
+    #[test]
+    fn test_null_buffer_builder_truncate() {
+        let mut builder = NullBufferBuilder::new(10);
+        builder.append_n_non_nulls(16);
+        assert_eq!(builder.as_slice(), None);
+        builder.truncate(20);
+        assert_eq!(builder.as_slice(), None);
+        assert_eq!(builder.len(), 16);
+        assert_eq!(builder.allocated_size(), 0);
+        builder.truncate(14);
+        assert_eq!(builder.as_slice(), None);
+        assert_eq!(builder.len(), 14);
+        builder.append_null();
+        builder.append_non_null();
+        assert_eq!(builder.as_slice().unwrap(), &[0xFF, 0b10111111]);
+        assert_eq!(builder.allocated_size(), 512);
+    }
+
+    #[test]
+    fn test_null_buffer_builder_truncate_never_materialized() {
+        let mut builder = NullBufferBuilder::new(0);
+        assert_eq!(builder.len(), 0);
+        builder.append_n_nulls(2); // doesn't materialize
+        assert_eq!(builder.len(), 2);
+        builder.truncate(1);
+        assert_eq!(builder.len(), 1);
     }
 }
