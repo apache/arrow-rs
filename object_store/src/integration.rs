@@ -35,7 +35,7 @@ use crate::{
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
 
 pub(crate) async fn flatten_list_stream(
@@ -745,7 +745,7 @@ fn get_chunk(chunk_length: usize) -> Bytes {
     let mut rng = rng();
     // Set a random selection of bytes
     for _ in 0..1000 {
-        data[rng.random_range(0..chunk_length)] = rng.gen();
+        data[rng.random_range(0..chunk_length)] = rng.random();
     }
     data.into()
 }

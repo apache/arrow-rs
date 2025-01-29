@@ -313,7 +313,7 @@ mod tests {
 
                     for _ in 0..50 {
                         let chunk_size = rng.random_range(0..30);
-                        let data: Vec<_> = (0..chunk_size).map(|_| rng.gen()).collect();
+                        let data: Vec<_> = (0..chunk_size).map(|_| rng.random()).collect();
                         expected.extend_from_slice(&data);
 
                         match rng.random_bool(method) {

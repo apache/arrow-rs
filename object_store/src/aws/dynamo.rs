@@ -527,7 +527,7 @@ mod tests {
     use super::*;
     use crate::aws::AmazonS3;
     use crate::ObjectStore;
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use rand::{rng, Rng};
 
     #[test]

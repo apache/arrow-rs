@@ -1020,7 +1020,10 @@ mod tests {
         for _ in 0..niters {
             values.clear();
             let rng = rng();
-            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&StandardUniform).take(seed_len).collect();
+            let seed_vec: Vec<u8> = rng
+                .sample_iter::<u8, _>(&StandardUniform)
+                .take(seed_len)
+                .collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
             let mut gen = rand::rngs::StdRng::from_seed(seed);

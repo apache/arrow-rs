@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use rand::prelude::*;
+use rand::{rng, prelude::*};
 use std::time::Duration;
 
 /// Exponential backoff with decorrelated jitter algorithm

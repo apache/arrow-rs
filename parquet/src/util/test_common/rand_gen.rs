@@ -64,7 +64,11 @@ impl RandGen<Int96Type> for Int96Type {
     fn gen(_: i32) -> Int96 {
         let mut rng = rng();
         let mut result = Int96::new();
-        result.set_data(rng.random::<u32>(), rng.random::<u32>(), rng.random::<u32>());
+        result.set_data(
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+        );
         result
     }
 }
