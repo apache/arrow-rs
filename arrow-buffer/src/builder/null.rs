@@ -199,12 +199,15 @@ impl NullBufferBuilder {
                 None
             }
             NullBufferBuilderState::Materialized { bitmap_builder } => {
-                let a = bitmap_builder.finish();
+                let boolean_buffer = bitmap_builder.finish();
                 self.state = NullBufferBuilderState::Unmaterialized {
                     len: 0,
+                    // TODO: Only usage of self.initial_capacity here. Should we be using it,
+                    //       or instead should use bitmap_builder.capacity()? Considering
+                    //       self.initial_capacity <= bitmap_builder.capacity()
                     capacity: self.initial_capacity,
                 };
-                Some(NullBuffer::new(a))
+                Some(NullBuffer::new(boolean_buffer))
             }
         }
     }
@@ -255,7 +258,7 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Return the allocated size of this builder, in bytes, useful for memory accounting.
+    /// Return the allocated size of this builder, in bits, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
         match &self.state {
             NullBufferBuilderState::Unmaterialized { .. } => 0,

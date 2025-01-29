@@ -83,7 +83,7 @@ impl BooleanBufferBuilder {
         self.len == 0
     }
 
-    /// Returns the capacity of the buffer
+    /// Returns the capacity of the buffer (in bits)
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.capacity() * 8
