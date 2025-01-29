@@ -2095,7 +2095,7 @@ mod tests {
         impl EncoderFactory for UnionEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                _field: &'a FieldRef,
+                _field: &FieldRef,
                 array: &dyn Array,
                 _options: &EncoderOptions,
             ) -> Result<Option<Box<dyn Encoder>>, ArrowError> {
@@ -2320,7 +2320,7 @@ mod tests {
         impl EncoderFactory for IntArayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                _field: &'a FieldRef,
+                _field: &FieldRef,
                 array: &'a dyn Array,
                 _options: &EncoderOptions,
             ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {

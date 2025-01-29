@@ -44,7 +44,7 @@ pub trait EncoderFactory: std::fmt::Debug {
     /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
     fn make_default_encoder<'a>(
         &self,
-        _field: &'a FieldRef,
+        _field: &FieldRef,
         _array: &'a dyn Array,
         _options: &EncoderOptions,
     ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
