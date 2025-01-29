@@ -1520,11 +1520,11 @@ mod tests {
     fn fuzz_test_slices_iterator() {
         let mut rng = rng();
 
-        let usize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
             let mask_len = rng.random_range(0..1024);
             let max_offset = 64.min(mask_len);
-            let offset = usize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
+            let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
             let truncate = usize
