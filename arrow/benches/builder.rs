@@ -22,7 +22,7 @@ extern crate rand;
 use std::mem::size_of;
 
 use criterion::*;
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 
 use arrow::array::*;
 use arrow::util::test_util::seedable_rng;
@@ -68,7 +68,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
 
 fn bench_bool(c: &mut Criterion) {
     let data: Vec<bool> = seedable_rng()
-        .sample_iter(&Standard)
+        .sample_iter(&StandardUniform)
         .take(BATCH_SIZE)
         .collect();
     let data_len = data.len();
@@ -110,10 +110,10 @@ fn bench_string(c: &mut Criterion) {
 fn bench_decimal128(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal128Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder.append_value(rng.gen_range::<i128, _>(0..9999999999));
+                decimal_builder.append_value(rng.random_range::<i128, _>(0..9999999999));
             }
             black_box(
                 decimal_builder
@@ -128,11 +128,11 @@ fn bench_decimal128(c: &mut Criterion) {
 fn bench_decimal256(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
                 decimal_builder
-                    .append_value(i256::from_i128(rng.gen_range::<i128, _>(0..99999999999)));
+                    .append_value(i256::from_i128(rng.random_range::<i128, _>(0..99999999999)));
             }
             black_box(
                 decimal_builder
