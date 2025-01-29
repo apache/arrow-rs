@@ -201,14 +201,13 @@ Rust Arrow Crates:
 
 Congratulations! The release is now official!
 
-### Create a GitHub release
+### Check the GitHub release
 
-Run a command such as the following to create a GitHub release from the tag:
+The [`release.yml`] workflow automatically creates a github release for the tag.
+Check that the release is created and contains the correct changelog here:
+https://github.com/apache/arrow-rs/releases
 
-```shell
-git checkout 4.1.0
-gh release create 4.1.0 --title 4.1.0 --notes-file CHANGELOG.md
-```
+[`release.yml`]: https://github.com/apache/arrow-rs/blob/main/.github/workflows/release.yml#L1-L0
 
 ### Publish on Crates.io
 
