@@ -44,6 +44,7 @@ pub trait EncoderFactory: std::fmt::Debug {
     /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
     fn make_default_encoder<'a>(
         &self,
+        _field: &'a FieldRef,
         _array: &'a dyn Array,
         _options: &EncoderOptions,
     ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
@@ -68,10 +69,11 @@ pub trait Encoder {
 }
 
 pub fn make_encoder<'a>(
+    field: &'a FieldRef,
     array: &'a dyn Array,
     options: &EncoderOptions,
 ) -> Result<Box<dyn Encoder + 'a>, ArrowError> {
-    let encoder = make_encoder_impl(array, options)?;
+    let encoder = make_encoder_impl(field, array, options)?;
     for idx in 0..array.len() {
         assert!(!encoder.is_null(idx), "root cannot be nullable");
     }
@@ -79,6 +81,7 @@ pub fn make_encoder<'a>(
 }
 
 fn make_encoder_impl<'a>(
+    field: &'a FieldRef,
     array: &'a dyn Array,
     options: &EncoderOptions,
 ) -> Result<Box<dyn Encoder + 'a>, ArrowError> {
@@ -91,7 +94,7 @@ fn make_encoder_impl<'a>(
     }
 
     if let Some(factory) = &options.encoder_factory {
-        if let Some(encoder) = factory.make_default_encoder(array, options)? {
+        if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
             return Ok(encoder);
         }
     }
@@ -120,25 +123,25 @@ fn make_encoder_impl<'a>(
         }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
-            Box::new(ListEncoder::try_new(array, options)?) as _
+            Box::new(ListEncoder::try_new(field, array, options)?) as _
         }
         DataType::LargeList(_) => {
             let array = array.as_list::<i64>();
-            Box::new(ListEncoder::try_new(array, options)?) as _
+            Box::new(ListEncoder::try_new(field, array, options)?) as _
         }
         DataType::FixedSizeList(_, _) => {
             let array = array.as_fixed_size_list();
-            Box::new(FixedSizeListEncoder::try_new(array, options)?) as _
+            Box::new(FixedSizeListEncoder::try_new(field, array, options)?) as _
         }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => Box::new(DictionaryEncoder::try_new(array, options)?) as _,
+            array => Box::new(DictionaryEncoder::try_new(field, array, options)?) as _,
             _ => unreachable!()
         }
 
         DataType::Map(_, _) => {
             let array = array.as_map();
-            Box::new(MapEncoder::try_new(array, options)?) as _
+            Box::new(MapEncoder::try_new(field, array, options)?) as _
         }
 
         DataType::FixedSizeBinary(_) => {
@@ -159,7 +162,7 @@ fn make_encoder_impl<'a>(
         DataType::Struct(fields) => {
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
-                let encoder = make_encoder_impl(array, options)?;
+                let encoder = make_encoder_impl(field, array, options)?;
                 Ok(FieldEncoder{
                     field: field.clone(),
                     encoder,
@@ -431,11 +434,12 @@ struct ListEncoder<'a, O: OffsetSizeTrait> {
 
 impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a GenericListArray<O>,
         options: &EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(array.values().as_ref(), options)?;
+        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
         Ok(Self {
             offsets: array.offsets().clone(),
             encoder,
@@ -478,11 +482,12 @@ struct FixedSizeListEncoder<'a> {
 
 impl<'a> FixedSizeListEncoder<'a> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a FixedSizeListArray,
         options: &EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(array.values().as_ref(), options)?;
+        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
         Ok(Self {
             encoder,
             value_length: array.value_length().as_usize(),
@@ -526,11 +531,12 @@ struct DictionaryEncoder<'a, K: ArrowDictionaryKeyType> {
 
 impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a DictionaryArray<K>,
         options: &EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(array.values().as_ref(), options)?;
+        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
 
         Ok(Self {
             keys: array.keys().values().clone(),
@@ -626,7 +632,9 @@ struct MapEncoder<'a> {
 }
 
 impl<'a> MapEncoder<'a> {
-    fn try_new(array: &'a MapArray, options: &EncoderOptions) -> Result<Self, ArrowError> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a MapArray, options: &EncoderOptions) -> Result<Self, ArrowError> {
         let values = array.values();
         let keys = array.keys();
         let nulls = array.logical_nulls();
@@ -638,8 +646,8 @@ impl<'a> MapEncoder<'a> {
             )));
         }
 
-        let keys = make_encoder_impl(keys, options)?;
-        let values = make_encoder_impl(values, options)?;
+        let keys = make_encoder_impl(field, keys, options)?;
+        let values = make_encoder_impl(field, values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
         if keys.has_nulls() {

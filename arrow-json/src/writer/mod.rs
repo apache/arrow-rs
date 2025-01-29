@@ -361,7 +361,8 @@ where
         }
 
         let array = StructArray::from(batch.clone());
-        let mut encoder = make_encoder(&array, &self.options)?;
+        let field = Arc::new(Field::new_struct("", batch.schema().fields().iter().cloned().collect::<Vec<_>>(), false));
+        let mut encoder = make_encoder(&field, &array, &self.options)?;
 
         for idx in 0..batch.num_rows() {
             self.format.start_row(&mut buffer, is_first_row)?;
@@ -2090,6 +2091,7 @@ mod tests {
         impl EncoderFactory for UnionEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
+                _field: &'a FieldRef,
                 array: &dyn Array,
                 _options: &EncoderOptions,
             ) -> Result<Option<Box<dyn Encoder>>, ArrowError> {
@@ -2314,6 +2316,7 @@ mod tests {
         impl EncoderFactory for IntArayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
+                _field: &'a FieldRef,
                 array: &'a dyn Array,
                 _options: &EncoderOptions,
             ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
