@@ -361,7 +361,11 @@ where
         }
 
         let array = StructArray::from(batch.clone());
-        let field = Arc::new(Field::new_struct("", batch.schema().fields().iter().cloned().collect::<Vec<_>>(), false));
+        let field = Arc::new(Field::new_struct(
+            "",
+            batch.schema().fields().iter().cloned().collect::<Vec<_>>(),
+            false,
+        ));
         let mut encoder = make_encoder(&field, &array, &self.options)?;
 
         for idx in 0..batch.num_rows() {

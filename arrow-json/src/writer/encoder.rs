@@ -634,7 +634,9 @@ struct MapEncoder<'a> {
 impl<'a> MapEncoder<'a> {
     fn try_new(
         field: &'a FieldRef,
-        array: &'a MapArray, options: &EncoderOptions) -> Result<Self, ArrowError> {
+        array: &'a MapArray,
+        options: &EncoderOptions,
+    ) -> Result<Self, ArrowError> {
         let values = array.values();
         let keys = array.keys();
         let nulls = array.logical_nulls();
