@@ -2050,7 +2050,6 @@ mod tests {
         assert_json_eq(&buf, expected);
     }
 
-    #[test]
     fn make_fallback_encoder_test_data() -> (RecordBatch, Arc<dyn EncoderFactory>) {
         // Note: this is not intended to be an efficient implementation.
         // Just a simple example to demonstrate how to implement a custom encoder.
