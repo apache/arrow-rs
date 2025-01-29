@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Creates a github release on https://github.com/apache/arrow-rs/releases
+# when a tag is pushed to the repository
 name: Release
 on:
   push:
