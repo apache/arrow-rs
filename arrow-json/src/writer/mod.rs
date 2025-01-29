@@ -106,13 +106,14 @@
 //! ```
 mod encoder;
 
-use std::{fmt::Debug, io::Write};
+use std::{fmt::Debug, io::Write, sync::Arc};
 
 use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
 use encoder::{make_encoder, EncoderOptions};
+pub use encoder::{Encoder, EncoderFactory};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -270,6 +271,15 @@ impl WriterBuilder {
         self
     }
 
+    /// Set an encoder factory to use when creating encoders for writing JSON.
+    ///
+    /// This can be used to override how some types are encoded or to provide
+    /// a fallback for types that are not supported by the default encoder.
+    pub fn with_encoder_factory(mut self, factory: Arc<dyn EncoderFactory>) -> Self {
+        self.0.encoder_factory = Some(factory);
+        self
+    }
+
     /// Create a new `Writer` with specified `JsonFormat` and builder options.
     pub fn build<W, F>(self, writer: W) -> Writer<W, F>
     where
@@ -423,11 +433,14 @@ mod tests {
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
     use serde_json::{json, Value};
 
+    use super::LineDelimited;
+    use super::{Encoder, WriterBuilder};
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
+    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice};
     use arrow_data::ArrayData;
 
     use crate::reader::*;
@@ -446,7 +459,7 @@ mod tests {
             .map(|s| (!s.is_empty()).then(|| serde_json::from_slice(s).unwrap()))
             .collect();
 
-        assert_eq!(expected, actual);
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -2035,5 +2048,318 @@ mod tests {
             writer.write_batches(&[&batch]).unwrap();
         }
         assert_json_eq(&buf, expected);
+    }
+
+    #[test]
+    fn make_fallback_encoder_test_data() -> (RecordBatch, Arc<dyn EncoderFactory>) {
+        // Note: this is not intended to be an efficient implementation.
+        // Just a simple example to demonstrate how to implement a custom encoder.
+        #[derive(Debug)]
+        enum UnionValue {
+            Int32(i32),
+            String(String),
+        }
+
+        #[derive(Debug)]
+        struct UnionEncoder {
+            array: Vec<Option<UnionValue>>,
+        }
+
+        impl Encoder for UnionEncoder {
+            fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+                match &self.array[idx] {
+                    None => out.extend_from_slice(b"null"),
+                    Some(UnionValue::Int32(v)) => out.extend_from_slice(v.to_string().as_bytes()),
+                    Some(UnionValue::String(v)) => {
+                        out.extend_from_slice(format!("\"{}\"", v).as_bytes())
+                    }
+                }
+            }
+
+            fn has_nulls(&self) -> bool {
+                self.array.iter().any(Option::is_none)
+            }
+
+            fn is_null(&self, idx: usize) -> bool {
+                self.array[idx].is_none()
+            }
+        }
+
+        #[derive(Debug)]
+        struct UnionEncoderFactory;
+
+        impl EncoderFactory for UnionEncoderFactory {
+            fn make_default_encoder<'a>(
+                &self,
+                array: &dyn Array,
+                _options: &EncoderOptions,
+            ) -> Result<Option<Box<dyn Encoder>>, ArrowError> {
+                let data_type = array.data_type();
+                let fields = match data_type {
+                    DataType::Union(fields, UnionMode::Sparse) => fields,
+                    _ => return Ok(None),
+                };
+                // check that the fields are supported
+                let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
+                for f in fields.iter() {
+                    match f.data_type() {
+                        DataType::Null => {}
+                        DataType::Int32 => {}
+                        DataType::Utf8 => {}
+                        _ => return Ok(None),
+                    }
+                }
+                let (_, type_ids, _, buffers) = array.as_union().clone().into_parts();
+                let mut values = Vec::with_capacity(type_ids.len());
+                for idx in 0..type_ids.len() {
+                    let type_id = type_ids[idx];
+                    let field = &fields[type_id as usize];
+                    let value = match field.data_type() {
+                        DataType::Null => None,
+                        DataType::Int32 => Some(UnionValue::Int32(
+                            buffers[type_id as usize]
+                                .as_any()
+                                .downcast_ref::<Int32Array>()
+                                .unwrap()
+                                .value(idx),
+                        )),
+                        DataType::Utf8 => Some(UnionValue::String(
+                            buffers[type_id as usize]
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .unwrap()
+                                .value(idx)
+                                .to_string(),
+                        )),
+                        _ => unreachable!(),
+                    };
+                    values.push(value);
+                }
+                Ok(Some(Box::new(UnionEncoder { array: values })))
+            }
+        }
+
+        let int_array = Int32Array::from(vec![Some(1), None, None]);
+        let string_array = StringArray::from(vec![None, Some("a"), None]);
+        let null_array = NullArray::new(3);
+        let type_ids = [0_i8, 1, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+            (2, Arc::new(Field::new("C", DataType::Null, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(string_array),
+            Arc::new(null_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields.clone(), type_ids, None, children).unwrap();
+
+        let float_array = Float64Array::from(vec![Some(1.0), None, Some(3.4)]);
+
+        let fields = vec![
+            Field::new(
+                "union",
+                DataType::Union(union_fields, UnionMode::Sparse),
+                true,
+            ),
+            Field::new("float", DataType::Float64, true),
+        ];
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(fields)),
+            vec![
+                Arc::new(array) as Arc<dyn Array>,
+                Arc::new(float_array) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        (batch, Arc::new(UnionEncoderFactory))
+    }
+
+    #[test]
+    fn test_fallback_encoder_factory_line_delimited_implicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(encoder_factory)
+                .with_explicit_nulls(false)
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        println!("{}", str::from_utf8(&buf).unwrap());
+
+        assert_json_eq(
+            &buf,
+            r#"{"union":1,"float":1.0}
+{"union":"a"}
+{"float":3.4}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_fallback_encoder_factory_line_delimited_explicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(encoder_factory)
+                .with_explicit_nulls(true)
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"union":1,"float":1.0}
+{"union":"a","float":null}
+{"union":null,"float":3.4}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_fallback_encoder_factory_array_implicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+
+        let json_value: Value = {
+            let mut buf = Vec::new();
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(encoder_factory)
+                .build::<_, JsonArray>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
+
+        let expected = json!([
+            {"union":1,"float":1.0},
+            {"union":"a"},
+            {"float":3.4},
+        ]);
+
+        assert_eq!(json_value, expected);
+    }
+
+    #[test]
+    fn test_fallback_encoder_factory_array_explicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+
+        let json_value: Value = {
+            let mut buf = Vec::new();
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(encoder_factory)
+                .with_explicit_nulls(true)
+                .build::<_, JsonArray>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
+
+        let expected = json!([
+            {"union":1,"float":1.0},
+            {"union":"a", "float": null},
+            {"union":null,"float":3.4},
+        ]);
+
+        assert_eq!(json_value, expected);
+    }
+
+    #[test]
+    fn test_default_encoder_byte_array() {
+        struct IntArrayBinaryEncoder<B> {
+            array: B,
+        }
+
+        impl<'a, B> Encoder for IntArrayBinaryEncoder<B>
+        where
+            B: ArrayAccessor<Item = &'a [u8]>,
+        {
+            fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+                out.push(b'[');
+                let child = self.array.value(idx);
+                for (idx, byte) in child.iter().enumerate() {
+                    write!(out, "{byte}").unwrap();
+                    if idx < child.len() - 1 {
+                        out.push(b',');
+                    }
+                }
+                out.push(b']');
+            }
+
+            fn has_nulls(&self) -> bool {
+                self.array.is_nullable()
+            }
+
+            fn is_null(&self, idx: usize) -> bool {
+                self.array.is_null(idx)
+            }
+        }
+
+        #[derive(Debug)]
+        struct IntArayBinaryEncoderFactory;
+
+        impl EncoderFactory for IntArayBinaryEncoderFactory {
+            fn make_default_encoder<'a>(
+                &self,
+                array: &'a dyn Array,
+                _options: &EncoderOptions,
+            ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
+                match array.data_type() {
+                    DataType::Binary => {
+                        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                        let encoder = IntArrayBinaryEncoder { array };
+                        Ok(Some(Box::new(encoder)))
+                    }
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let binary_array = BinaryArray::from_opt_vec(vec![Some(b"a"), None, Some(b"b")]);
+        let float_array = Float64Array::from(vec![Some(1.0), Some(2.3), None]);
+        let fields = vec![
+            Field::new("bytes", DataType::Binary, true),
+            Field::new("float", DataType::Float64, true),
+        ];
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(fields)),
+            vec![
+                Arc::new(binary_array) as Arc<dyn Array>,
+                Arc::new(float_array) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let json_value: Value = {
+            let mut buf = Vec::new();
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+                .build::<_, JsonArray>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
+
+        let expected = json!([
+            {"bytes": [97], "float": 1.0},
+            {"float": 2.3},
+            {"bytes": [98]},
+        ]);
+
+        assert_eq!(json_value, expected);
     }
 }
