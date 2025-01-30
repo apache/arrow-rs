@@ -794,19 +794,178 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, RngCore, SeedableRng};
+    use std::ops::Deref;
 
-    fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
-        data.into_iter()
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(23, 6)
-            .unwrap()
+    mod build_arrays_helper {
+        use crate::sort::tests::get_same_lists_length;
+        use arrow_array::{
+            ArrayRef, ArrowPrimitiveType, BinaryArray, Decimal128Array, Decimal256Array,
+            FixedSizeBinaryArray, FixedSizeListArray, GenericListArray,
+            LargeBinaryArray, LargeStringArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+            StringViewArray,
+        };
+        use arrow_buffer::i256;
+        use std::sync::Arc;
+
+        pub fn decimal128_array(data: Vec<Option<i128>>) -> Vec<ArrayRef> {
+            vec![Arc::new(
+                data.into_iter()
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(23, 6)
+                    .unwrap(),
+            )]
+        }
+
+        pub fn decimal256_array(data: Vec<Option<i256>>) -> Vec<ArrayRef> {
+            vec![Arc::new(
+                data.into_iter()
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(53, 6)
+                    .unwrap(),
+            )]
+        }
+
+        pub fn primitive_arrays<T>(data: Vec<Option<T::Native>>) -> Vec<ArrayRef>
+        where
+            T: ArrowPrimitiveType,
+            PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
+        {
+            vec![Arc::new(PrimitiveArray::<T>::from(data)) as ArrayRef]
+        }
+
+        pub fn string_arrays(data: Vec<Option<&str>>) -> Vec<ArrayRef> {
+            vec![
+                Arc::new(StringArray::from(data.clone())) as ArrayRef,
+                Arc::new(LargeStringArray::from(data.clone())) as ArrayRef,
+                Arc::new(StringViewArray::from(data)) as ArrayRef,
+            ]
+        }
+
+        pub fn binary_arrays(data: Vec<Option<Vec<u8>>>) -> Vec<ArrayRef> {
+            let binary_data = data
+                .iter()
+                .map(|binary| binary.as_ref().map(Vec::as_slice))
+                .collect::<Vec<_>>();
+
+            let mut arrays = vec![
+                Arc::new(BinaryArray::from_opt_vec(binary_data.clone())) as ArrayRef,
+                Arc::new(LargeBinaryArray::from_opt_vec(binary_data)) as ArrayRef,
+            ];
+
+            if let Some(first_length) = get_same_lists_length(&data) {
+                arrays.push(Arc::new(
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                        data.iter().cloned(),
+                        first_length as i32,
+                    )
+                    .unwrap(),
+                ));
+            }
+
+            arrays
+        }
+
+        pub fn primitive_generic_list_array<OffsetSize, T>(
+            data: &[Option<Vec<Option<T::Native>>>],
+        ) -> ArrayRef
+        where
+            OffsetSize: OffsetSizeTrait,
+            T: ArrowPrimitiveType,
+        {
+            Arc::new(GenericListArray::<OffsetSize>::from_iter_primitive::<T, _, _>(data.to_vec()))
+        }
+
+        pub fn primitive_fixed_list_array<T>(
+            data: &[Option<Vec<Option<T::Native>>>],
+            length: i32,
+        ) -> ArrayRef
+        where
+            T: ArrowPrimitiveType,
+        {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
+                data.to_vec(),
+                length,
+            ))
+        }
+
+        pub fn primitive_list_arrays<T>(data: Vec<Option<Vec<Option<T::Native>>>>) -> Vec<ArrayRef>
+        where
+            T: ArrowPrimitiveType,
+        {
+            let mut arrays = vec![
+                primitive_generic_list_array::<i32, T>(&data),
+                primitive_generic_list_array::<i64, T>(&data),
+            ];
+
+            if let Some(first_length) = get_same_lists_length(&data) {
+                arrays.push(primitive_fixed_list_array::<T>(&data, first_length as i32));
+            }
+
+            arrays
+        }
     }
 
-    fn create_decimal256_array(data: Vec<Option<i256>>) -> Decimal256Array {
-        data.into_iter()
-            .collect::<Decimal256Array>()
-            .with_precision_and_scale(53, 6)
-            .unwrap()
+    /// Return Some(length) if all lists have the same length, None otherwise
+    fn get_same_lists_length<T>(data: &[Option<Vec<T>>]) -> Option<usize> {
+        let first_length = data
+            .iter()
+            .find_map(|x| x.as_ref().map(|x| x.len()))
+            .unwrap_or(0);
+        let first_non_match_length = data
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.len()).unwrap_or(first_length))
+            .any(|x| x != first_length);
+
+        if first_non_match_length {
+            None
+        } else {
+            Some(first_length)
+        }
+    }
+
+    /// Test sorting arrays
+    ///
+    /// the `into_lists_fn` function is used to convert the data into the list variants wanted to be tested, (e.g. ListArray, LargeListArray, FixedSizeListArray or any other list variant)
+    /// The ordering of the returned vector must be consistent as it will be called with the data and the expected data
+    fn test_sort_arrays<
+        ListItemType: Clone,
+        IntoListFn: Fn(Vec<Option<ListItemType>>) -> Vec<ArrayRef>,
+    >(
+        into_lists_fn: IntoListFn,
+        data: Vec<Option<ListItemType>>,
+        options: Option<SortOptions>,
+        limit: Option<usize>,
+        expected_data: Vec<Option<ListItemType>>,
+    ) {
+        let input = into_lists_fn(data);
+        let mut expected = into_lists_fn(expected_data);
+
+        // Filter out mismatched data types
+        // This can happen for getting some type of Fixed array in the expected (due to limit or something), but not in the input
+        if input.len() != expected.len() {
+            let all_input_specific_class = input
+                .iter()
+                .map(|array| array.data_type())
+                .collect::<Vec<_>>();
+            expected = expected
+                .into_iter()
+                .filter(|array| all_input_specific_class.contains(&array.data_type()))
+                .collect::<Vec<_>>()
+        }
+
+        assert_eq!(
+            input.len(),
+            expected.len(),
+            "The input and expected data must have the same number of array variants"
+        );
+
+        for (input, expected) in input.iter().zip(expected.iter()) {
+            let sorted = match limit {
+                Some(_) => sort_limit(input, options, limit).unwrap(),
+                _ => sort(input, options).unwrap(),
+            };
+            assert_eq!(sorted.deref(), expected.deref());
+        }
     }
 
     fn test_sort_to_indices_decimal128_array(
@@ -815,9 +974,9 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<u32>,
     ) {
-        let output = create_decimal128_array(data);
+        let output = build_arrays_helper::decimal128_array(data)[0].clone();
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
     }
 
@@ -827,40 +986,10 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<u32>,
     ) {
-        let output = create_decimal256_array(data);
+        let output = build_arrays_helper::decimal256_array(data)[0].clone();
         let expected = UInt32Array::from(expected_data);
-        let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
+        let output = sort_to_indices(&output, options, limit).unwrap();
         assert_eq!(output, expected)
-    }
-
-    fn test_sort_decimal128_array(
-        data: Vec<Option<i128>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<i128>>,
-    ) {
-        let output = create_decimal128_array(data);
-        let expected = Arc::new(create_decimal128_array(expected_data)) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected)
-    }
-
-    fn test_sort_decimal256_array(
-        data: Vec<Option<i256>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<i256>>,
-    ) {
-        let output = create_decimal256_array(data);
-        let expected = Arc::new(create_decimal256_array(expected_data)) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected)
     }
 
     fn test_sort_to_indices_boolean_arrays(
@@ -890,24 +1019,6 @@ mod tests {
         assert_eq!(output, expected)
     }
 
-    fn test_sort_primitive_arrays<T>(
-        data: Vec<Option<T::Native>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<T::Native>>,
-    ) where
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        let output = PrimitiveArray::<T>::from(data);
-        let expected = Arc::new(PrimitiveArray::<T>::from(expected_data)) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected)
-    }
-
     fn test_sort_to_indices_string_arrays(
         data: Vec<Option<&str>>,
         options: Option<SortOptions>,
@@ -918,38 +1029,6 @@ mod tests {
         let expected = UInt32Array::from(expected_data);
         let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
-    }
-
-    /// Tests both Utf8 and LargeUtf8
-    fn test_sort_string_arrays(
-        data: Vec<Option<&str>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<&str>>,
-    ) {
-        let output = StringArray::from(data.clone());
-        let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected);
-
-        let output = LargeStringArray::from(data.clone());
-        let expected = Arc::new(LargeStringArray::from(expected_data.clone())) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected);
-
-        let output = StringViewArray::from(data);
-        let expected = Arc::new(StringViewArray::from(expected_data)) as ArrayRef;
-        let output = match limit {
-            Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
-        };
-        assert_eq!(&output, &expected);
     }
 
     fn test_sort_string_dict_arrays<T: ArrowDictionaryKeyType>(
@@ -1041,59 +1120,6 @@ mod tests {
         assert_eq!(sorted_values, expected)
     }
 
-    fn test_sort_list_arrays<T>(
-        data: Vec<Option<Vec<Option<T::Native>>>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<Vec<Option<T::Native>>>>,
-        fixed_length: Option<i32>,
-    ) where
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        // for FixedSizedList
-        if let Some(length) = fixed_length {
-            let input = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
-                data.clone(),
-                length,
-            ));
-            let sorted = match limit {
-                Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-                _ => sort(&(input as ArrayRef), options).unwrap(),
-            };
-            let expected = Arc::new(FixedSizeListArray::from_iter_primitive::<T, _, _>(
-                expected_data.clone(),
-                length,
-            )) as ArrayRef;
-
-            assert_eq!(&sorted, &expected);
-        }
-
-        // for List
-        let input = Arc::new(ListArray::from_iter_primitive::<T, _, _>(data.clone()));
-        let sorted = match limit {
-            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(input as ArrayRef), options).unwrap(),
-        };
-        let expected = Arc::new(ListArray::from_iter_primitive::<T, _, _>(
-            expected_data.clone(),
-        )) as ArrayRef;
-
-        assert_eq!(&sorted, &expected);
-
-        // for LargeList
-        let input = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(data));
-        let sorted = match limit {
-            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-            _ => sort(&(input as ArrayRef), options).unwrap(),
-        };
-        let expected = Arc::new(LargeListArray::from_iter_primitive::<T, _, _>(
-            expected_data,
-        )) as ArrayRef;
-
-        assert_eq!(&sorted, &expected);
-    }
-
     fn test_lex_sort_arrays(
         input: Vec<SortColumn>,
         expected_output: Vec<ArrayRef>,
@@ -1112,64 +1138,6 @@ mod tests {
             .into_iter()
             .map(|array| array.slice(offset, length))
             .collect()
-    }
-
-    fn test_sort_binary_arrays(
-        data: Vec<Option<Vec<u8>>>,
-        options: Option<SortOptions>,
-        limit: Option<usize>,
-        expected_data: Vec<Option<Vec<u8>>>,
-        fixed_length: Option<i32>,
-    ) {
-        // Fixed size binary array
-        if let Some(length) = fixed_length {
-            let input = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.iter().cloned(), length)
-                    .unwrap(),
-            );
-            let sorted = match limit {
-                Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-                None => sort(&(input as ArrayRef), options).unwrap(),
-            };
-            let expected = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-                    expected_data.iter().cloned(),
-                    length,
-                )
-                .unwrap(),
-            ) as ArrayRef;
-
-            assert_eq!(&sorted, &expected);
-        }
-
-        // Generic size binary array
-        fn make_generic_binary_array<S: OffsetSizeTrait>(
-            data: &[Option<Vec<u8>>],
-        ) -> Arc<GenericBinaryArray<S>> {
-            Arc::new(GenericBinaryArray::<S>::from_opt_vec(
-                data.iter()
-                    .map(|binary| binary.as_ref().map(Vec::as_slice))
-                    .collect(),
-            ))
-        }
-
-        // BinaryArray
-        let input = make_generic_binary_array::<i32>(&data);
-        let sorted = match limit {
-            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-            None => sort(&(input as ArrayRef), options).unwrap(),
-        };
-        let expected = make_generic_binary_array::<i32>(&expected_data) as ArrayRef;
-        assert_eq!(&sorted, &expected);
-
-        // LargeBinaryArray
-        let input = make_generic_binary_array::<i64>(&data);
-        let sorted = match limit {
-            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
-            None => sort(&(input as ArrayRef), options).unwrap(),
-        };
-        let expected = make_generic_binary_array::<i64>(&expected_data) as ArrayRef;
-        assert_eq!(&sorted, &expected);
     }
 
     #[test]
@@ -2130,14 +2098,16 @@ mod tests {
     #[test]
     fn test_sort_decimal128() {
         // decimal default
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             None,
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
         );
         // decimal descending
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -2147,7 +2117,8 @@ mod tests {
             vec![Some(5), Some(4), Some(3), Some(2), Some(1), None, None],
         );
         // decimal null_first and descending
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -2157,7 +2128,8 @@ mod tests {
             vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)],
         );
         // decimal null_first
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -2167,14 +2139,16 @@ mod tests {
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
         );
         // limit
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             Some(3),
             vec![None, None, Some(1)],
         );
         // limit descending
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -2184,7 +2158,8 @@ mod tests {
             vec![Some(5), Some(4), Some(3)],
         );
         // limit descending null_first
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -2194,7 +2169,8 @@ mod tests {
             vec![None, None, Some(5)],
         );
         // limit null_first
-        test_sort_decimal128_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal128_array,
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -2217,7 +2193,8 @@ mod tests {
             None,
         ];
         // decimal default
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             None,
             None,
@@ -2227,7 +2204,8 @@ mod tests {
                 .collect(),
         );
         // decimal descending
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             Some(SortOptions {
                 descending: true,
@@ -2240,7 +2218,8 @@ mod tests {
                 .collect(),
         );
         // decimal null_first and descending
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             Some(SortOptions {
                 descending: true,
@@ -2253,7 +2232,8 @@ mod tests {
                 .collect(),
         );
         // decimal null_first
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             Some(SortOptions {
                 descending: false,
@@ -2266,7 +2246,8 @@ mod tests {
                 .collect(),
         );
         // limit
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             None,
             Some(3),
@@ -2276,7 +2257,8 @@ mod tests {
                 .collect(),
         );
         // limit descending
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             Some(SortOptions {
                 descending: true,
@@ -2289,7 +2271,8 @@ mod tests {
                 .collect(),
         );
         // limit descending null_first
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data.clone(),
             Some(SortOptions {
                 descending: true,
@@ -2302,7 +2285,8 @@ mod tests {
                 .collect(),
         );
         // limit null_first
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             data,
             Some(SortOptions {
                 descending: false,
@@ -2318,7 +2302,8 @@ mod tests {
 
     #[test]
     fn test_sort_decimal256_max_min() {
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             vec![
                 None,
                 Some(i256::MIN),
@@ -2342,7 +2327,8 @@ mod tests {
             ],
         );
 
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             vec![
                 None,
                 Some(i256::MIN),
@@ -2366,7 +2352,8 @@ mod tests {
             ],
         );
 
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             vec![
                 None,
                 Some(i256::MIN),
@@ -2383,7 +2370,8 @@ mod tests {
             vec![None, None, Some(i256::MIN), Some(i256::from_i128(-1))],
         );
 
-        test_sort_decimal256_array(
+        test_sort_arrays(
+            build_arrays_helper::decimal256_array,
             vec![
                 None,
                 Some(i256::MIN),
@@ -2404,25 +2392,29 @@ mod tests {
     #[test]
     fn test_sort_primitives() {
         // default case
-        test_sort_primitive_arrays::<UInt8Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<UInt8Type>,
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             None,
             None,
             vec![None, None, Some(2), Some(3), Some(3), Some(5)],
         );
-        test_sort_primitive_arrays::<UInt16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<UInt16Type>,
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             None,
             None,
             vec![None, None, Some(2), Some(3), Some(3), Some(5)],
         );
-        test_sort_primitive_arrays::<UInt32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<UInt32Type>,
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             None,
             None,
             vec![None, None, Some(2), Some(3), Some(3), Some(5)],
         );
-        test_sort_primitive_arrays::<UInt64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<UInt64Type>,
             vec![None, Some(3), Some(5), Some(2), Some(3), None],
             None,
             None,
@@ -2430,7 +2422,8 @@ mod tests {
         );
 
         // descending
-        test_sort_primitive_arrays::<Int8Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int8Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2439,7 +2432,8 @@ mod tests {
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
         );
-        test_sort_primitive_arrays::<Int16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int16Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2448,7 +2442,8 @@ mod tests {
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
         );
-        test_sort_primitive_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int32Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2457,7 +2452,8 @@ mod tests {
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
         );
-        test_sort_primitive_arrays::<Int16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int16Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2468,7 +2464,8 @@ mod tests {
         );
 
         // descending, nulls first
-        test_sort_primitive_arrays::<Int8Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int8Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2477,7 +2474,8 @@ mod tests {
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
         );
-        test_sort_primitive_arrays::<Int16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int16Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2486,7 +2484,8 @@ mod tests {
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
         );
-        test_sort_primitive_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int32Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2495,7 +2494,8 @@ mod tests {
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
         );
-        test_sort_primitive_arrays::<Int64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int64Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2505,7 +2505,8 @@ mod tests {
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
         );
 
-        test_sort_primitive_arrays::<Int64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int64Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: true,
@@ -2515,7 +2516,8 @@ mod tests {
             vec![None, None, Some(2)],
         );
 
-        test_sort_primitive_arrays::<Float16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float16Type>,
             vec![
                 None,
                 Some(f16::from_f32(0.0)),
@@ -2539,7 +2541,8 @@ mod tests {
             ],
         );
 
-        test_sort_primitive_arrays::<Float32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float32Type>,
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(0.0), None],
             Some(SortOptions {
                 descending: true,
@@ -2548,7 +2551,8 @@ mod tests {
             None,
             vec![None, None, Some(2.0), Some(0.0), Some(0.0), Some(-1.0)],
         );
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(f64::NAN), None],
             Some(SortOptions {
                 descending: true,
@@ -2557,7 +2561,8 @@ mod tests {
             None,
             vec![None, None, Some(f64::NAN), Some(2.0), Some(0.0), Some(-1.0)],
         );
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
             Some(SortOptions {
                 descending: true,
@@ -2568,7 +2573,8 @@ mod tests {
         );
 
         // int8 nulls first
-        test_sort_primitive_arrays::<Int8Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int8Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: false,
@@ -2577,7 +2583,8 @@ mod tests {
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
         );
-        test_sort_primitive_arrays::<Int16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int16Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: false,
@@ -2586,7 +2593,8 @@ mod tests {
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
         );
-        test_sort_primitive_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int32Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: false,
@@ -2595,7 +2603,8 @@ mod tests {
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
         );
-        test_sort_primitive_arrays::<Int64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Int64Type>,
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
             Some(SortOptions {
                 descending: false,
@@ -2604,7 +2613,8 @@ mod tests {
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
         );
-        test_sort_primitive_arrays::<Float16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float16Type>,
             vec![
                 None,
                 Some(f16::from_f32(0.0)),
@@ -2627,7 +2637,8 @@ mod tests {
                 Some(f16::from_f32(2.0)),
             ],
         );
-        test_sort_primitive_arrays::<Float32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float32Type>,
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(0.0), None],
             Some(SortOptions {
                 descending: false,
@@ -2636,7 +2647,8 @@ mod tests {
             None,
             vec![None, None, Some(-1.0), Some(0.0), Some(0.0), Some(2.0)],
         );
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![None, Some(0.0), Some(2.0), Some(-1.0), Some(f64::NAN), None],
             Some(SortOptions {
                 descending: false,
@@ -2645,7 +2657,8 @@ mod tests {
             None,
             vec![None, None, Some(-1.0), Some(0.0), Some(2.0), Some(f64::NAN)],
         );
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
             Some(SortOptions {
                 descending: false,
@@ -2656,7 +2669,8 @@ mod tests {
         );
 
         // limit
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
             Some(SortOptions {
                 descending: false,
@@ -2667,7 +2681,8 @@ mod tests {
         );
 
         // limit with actual value
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(2.0), Some(4.0), Some(3.0), Some(1.0)],
             Some(SortOptions {
                 descending: false,
@@ -2678,7 +2693,8 @@ mod tests {
         );
 
         // valid values less than limit with extra nulls
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(2.0), None, None, Some(1.0)],
             Some(SortOptions {
                 descending: false,
@@ -2688,7 +2704,8 @@ mod tests {
             vec![Some(1.0), Some(2.0), None],
         );
 
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(2.0), None, None, Some(1.0)],
             Some(SortOptions {
                 descending: false,
@@ -2699,7 +2716,8 @@ mod tests {
         );
 
         // more nulls than limit
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(2.0), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -2709,7 +2727,8 @@ mod tests {
             vec![None, None],
         );
 
-        test_sort_primitive_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_arrays::<Float64Type>,
             vec![Some(2.0), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -2849,7 +2868,8 @@ mod tests {
 
     #[test]
     fn test_sort_strings() {
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 None,
                 Some("bad"),
@@ -2874,7 +2894,8 @@ mod tests {
             ],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 None,
                 Some("bad"),
@@ -2902,7 +2923,8 @@ mod tests {
             ],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 None,
                 Some("bad"),
@@ -2930,7 +2952,8 @@ mod tests {
             ],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 None,
                 Some("bad"),
@@ -2958,7 +2981,8 @@ mod tests {
             ],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 None,
                 Some("bad"),
@@ -2978,7 +3002,8 @@ mod tests {
         );
 
         // valid values less than limit with extra nulls
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 Some("def long string longer than 12"),
                 None,
@@ -2993,7 +3018,8 @@ mod tests {
             vec![Some("abc"), Some("def long string longer than 12"), None],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![
                 Some("def long string longer than 12"),
                 None,
@@ -3009,7 +3035,8 @@ mod tests {
         );
 
         // more nulls than limit
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -3019,7 +3046,8 @@ mod tests {
             vec![None, None],
         );
 
-        test_sort_string_arrays(
+        test_sort_arrays(
+            build_arrays_helper::string_arrays,
             vec![Some("def long string longer than 12"), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -3299,7 +3327,8 @@ mod tests {
 
     #[test]
     fn test_sort_list() {
-        test_sort_list_arrays::<Int8Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int8Type>,
             vec![
                 Some(vec![Some(1)]),
                 Some(vec![Some(4)]),
@@ -3317,10 +3346,10 @@ mod tests {
                 Some(vec![Some(3)]),
                 Some(vec![Some(4)]),
             ],
-            Some(1),
         );
 
-        test_sort_list_arrays::<Float16Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Float16Type>,
             vec![
                 Some(vec![Some(f16::from_f32(1.0)), Some(f16::from_f32(0.0))]),
                 Some(vec![
@@ -3368,10 +3397,10 @@ mod tests {
                     Some(f16::from_f32(1.0)),
                 ]),
             ],
-            None,
         );
 
-        test_sort_list_arrays::<Float32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Float32Type>,
             vec![
                 Some(vec![Some(1.0), Some(0.0)]),
                 Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
@@ -3391,10 +3420,10 @@ mod tests {
                 Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
                 Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
             ],
-            None,
         );
 
-        test_sort_list_arrays::<Float64Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Float64Type>,
             vec![
                 Some(vec![Some(1.0), Some(0.0)]),
                 Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
@@ -3414,10 +3443,10 @@ mod tests {
                 Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
                 Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
             ],
-            None,
         );
 
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![
                 Some(vec![Some(1), Some(0)]),
                 Some(vec![Some(4), Some(3), Some(2), Some(1)]),
@@ -3437,10 +3466,10 @@ mod tests {
                 Some(vec![Some(3), Some(3), Some(3), Some(3)]),
                 Some(vec![Some(4), Some(3), Some(2), Some(1)]),
             ],
-            None,
         );
 
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![
                 None,
                 Some(vec![Some(4), None, Some(2)]),
@@ -3460,10 +3489,10 @@ mod tests {
                 None,
                 None,
             ],
-            Some(3),
         );
 
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![
                 Some(vec![Some(1), Some(0)]),
                 Some(vec![Some(4), Some(3), Some(2), Some(1)]),
@@ -3477,11 +3506,11 @@ mod tests {
             }),
             Some(2),
             vec![Some(vec![Some(1), Some(0)]), Some(vec![Some(1), Some(1)])],
-            None,
         );
 
         // valid values less than limit with extra nulls
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![Some(vec![Some(1)]), None, None, Some(vec![Some(2)])],
             Some(SortOptions {
                 descending: false,
@@ -3489,10 +3518,10 @@ mod tests {
             }),
             Some(3),
             vec![Some(vec![Some(1)]), Some(vec![Some(2)]), None],
-            None,
         );
 
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![Some(vec![Some(1)]), None, None, Some(vec![Some(2)])],
             Some(SortOptions {
                 descending: false,
@@ -3500,11 +3529,17 @@ mod tests {
             }),
             Some(3),
             vec![None, None, Some(vec![Some(1)])],
-            None,
         );
 
         // more nulls than limit
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            |arrays| {
+                vec![
+                    build_arrays_helper::primitive_generic_list_array::<i32, Int32Type>(&arrays),
+                    build_arrays_helper::primitive_generic_list_array::<i64, Int32Type>(&arrays),
+                    build_arrays_helper::primitive_fixed_list_array::<Int32Type>(&arrays, 1),
+                ]
+            },
             vec![Some(vec![Some(1)]), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -3512,10 +3547,10 @@ mod tests {
             }),
             Some(2),
             vec![None, None],
-            None,
         );
 
-        test_sort_list_arrays::<Int32Type>(
+        test_sort_arrays(
+            build_arrays_helper::primitive_list_arrays::<Int32Type>,
             vec![Some(vec![Some(1)]), None, None, None],
             Some(SortOptions {
                 descending: false,
@@ -3523,13 +3558,13 @@ mod tests {
             }),
             Some(2),
             vec![Some(vec![Some(1)]), None],
-            None,
         );
     }
 
     #[test]
     fn test_sort_binary() {
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![0, 0, 0]),
                 Some(vec![0, 0, 5]),
@@ -3549,11 +3584,11 @@ mod tests {
                 Some(vec![0, 0, 5]),
                 Some(vec![0, 0, 7]),
             ],
-            Some(3),
         );
 
         // with nulls
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![0, 0, 0]),
                 None,
@@ -3575,10 +3610,10 @@ mod tests {
                 None,
                 None,
             ],
-            Some(3),
         );
 
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![3, 5, 7]),
                 None,
@@ -3600,11 +3635,11 @@ mod tests {
                 None,
                 None,
             ],
-            Some(3),
         );
 
         // descending
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![0, 0, 0]),
                 None,
@@ -3626,11 +3661,11 @@ mod tests {
                 None,
                 None,
             ],
-            Some(3),
         );
 
         // nulls first
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![0, 0, 0]),
                 None,
@@ -3652,11 +3687,11 @@ mod tests {
                 Some(vec![0, 0, 3]),
                 Some(vec![0, 0, 7]),
             ],
-            Some(3),
         );
 
         // limit
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(vec![0, 0, 0]),
                 None,
@@ -3671,11 +3706,11 @@ mod tests {
             }),
             Some(4),
             vec![None, None, Some(vec![0, 0, 0]), Some(vec![0, 0, 1])],
-            Some(3),
         );
 
         // var length
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(b"Hello".to_vec()),
                 None,
@@ -3697,11 +3732,11 @@ mod tests {
                 None,
                 None,
             ],
-            None,
         );
 
         // limit
-        test_sort_binary_arrays(
+        test_sort_arrays(
+            build_arrays_helper::binary_arrays,
             vec![
                 Some(b"Hello".to_vec()),
                 None,
@@ -3721,7 +3756,6 @@ mod tests {
                 Some(b"Apache".to_vec()),
                 Some(b"Arrow-rs".to_vec()),
             ],
-            None,
         );
     }
 
