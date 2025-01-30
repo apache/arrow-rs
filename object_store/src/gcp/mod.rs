@@ -298,6 +298,7 @@ mod test {
             stream_get(&integration).await;
             multipart(&integration, &integration).await;
             multipart_race_condition(&integration, true).await;
+            multipart_out_of_order(&integration).await;
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;
