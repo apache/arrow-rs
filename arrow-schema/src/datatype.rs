@@ -458,7 +458,13 @@ pub enum UnionMode {
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            DataType::List(field) => {
+                let nullstr = if field.is_nullable() { "Y" } else { "N" };
+                write!(f, "List({};{})", field.data_type(), nullstr)
+            }
+            _ => write!(f, "{self:?}"),
+        }
     }
 }
 
@@ -1128,5 +1134,19 @@ mod tests {
     fn test_from_str() {
         let data_type: DataType = "UInt64".parse().unwrap();
         assert_eq!(data_type, DataType::UInt64);
+    }
+
+    #[test]
+    fn test_display_list() {
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(Int32;Y)";
+        assert_eq!(list_data_type_string, expected_string);
+
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false)));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(UInt64;N)";
+        assert_eq!(list_data_type_string, expected_string);
     }
 }
