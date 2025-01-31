@@ -460,8 +460,11 @@ impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DataType::List(field) => {
-                let nullstr = if field.is_nullable() { "Y" } else { "N" };
-                write!(f, "List({};{})", field.data_type(), nullstr)
+                if field.is_nullable() {
+                    write!(f, "List({};N)", field.data_type())
+                } else {
+                    write!(f, "List({})", field.data_type())
+                }
             }
             _ => write!(f, "{self:?}"),
         }
@@ -1140,13 +1143,13 @@ mod tests {
     fn test_display_list() {
         let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32;Y)";
+        let expected_string = "List(Int32;N)";
         assert_eq!(list_data_type_string, expected_string);
 
         let list_data_type =
             DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(UInt64;N)";
+        let expected_string = "List(UInt64)";
         assert_eq!(list_data_type_string, expected_string);
     }
 }
