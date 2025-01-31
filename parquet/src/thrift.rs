@@ -251,7 +251,12 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
 
 fn collection_u8_to_type(b: u8) -> thrift::Result<TType> {
     match b {
-        0x01 => Ok(TType::Bool),
+        // For historical and compatibility reasons, a reader should be capable to deal with both cases.
+        // The only valid value in the original spec was 2, but due to an widespread implementation bug
+        // the defacto standard across large parts of the library became 1 instead.
+        // As a result, both values are now allowed.
+        // https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
+        0x01 | 0x02 => Ok(TType::Bool),
         o => u8_to_type(o),
     }
 }
@@ -281,4 +286,30 @@ fn eof_error() -> thrift::Error {
         kind: thrift::TransportErrorKind::EndOfFile,
         message: "Unexpected EOF".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::format::{BoundaryOrder, ColumnIndex};
+    use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+
+    #[test]
+    pub fn read_boolean_list_field_type() {
+        // boolean collection type encoded as 0x02
+        let bytes = vec![25, 34, 2, 1, 25, 8, 25, 8, 21, 0, 0];
+
+        let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
+        let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
+        let expected = ColumnIndex {
+            null_pages: vec![false, true],
+            min_values: vec![],
+            max_values: vec![],
+            boundary_order: BoundaryOrder(0),
+            null_counts: None,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
+        };
+
+        assert_eq!(&index, &expected);
+    }
 }
