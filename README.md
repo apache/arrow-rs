@@ -63,14 +63,11 @@ is described in the [contributing] guide.
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                      |
-| ---------------- | -------- | ------------------------------------------ |
-| Nov 2024         | `53.3.0` | Minor, NO breaking API changes             |
-| Dec 2024         | `54.0.0` | Major, potentially breaking API changes    |
-| Jan 2025         | `53.4.0` | Minor, NO breaking API changes (`53` line) |
-| Jan 2025         | `54.1.0` | Minor, NO breaking API changes             |
-| Feb 2025         | `54.2.0` | Minor, NO breaking API changes             |
-| Mar 2025         | `55.0.0` | Major, potentially breaking API changes    |
+| Approximate Date | Version  | Notes                                   |
+| ---------------- | -------- | --------------------------------------- |
+| Jan 2025         | `54.1.0` | Minor, NO breaking API changes          |
+| Feb 2025         | `54.2.0` | Minor, NO breaking API changes          |
+| Mar 2025         | `55.0.0` | Major, potentially breaking API changes |
 
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
@@ -87,7 +84,6 @@ Planned Release Schedule
 
 | Approximate Date | Version  | Notes                                   |
 | ---------------- | -------- | --------------------------------------- |
-| Dec 2024         | `0.11.2` | Minor, NO breaking API changes          |
 | Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
 
 ### Guidelines for `panic` vs `Result`
