@@ -460,14 +460,19 @@ impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DataType::List(field) => {
-                let nullstr = if field.is_nullable() { ";N" } else { "" };
+                let null_str = if field.is_nullable() { ";N" } else { "" };
+                let metadata_str = if field.metadata().is_empty() {
+                    String::new()
+                } else {
+                    format!(", metadata = {:?}", field.metadata())
+                };
                 write!(
                     f,
-                    "List({}{}, field = '{}', metadata = {:?})",
+                    "List({}{}, field = '{}'{})",
                     field.data_type(),
-                    nullstr,
+                    null_str,
                     field.name(),
-                    field.metadata()
+                    metadata_str,
                 )
             }
             _ => write!(f, "{self:?}"),
@@ -830,6 +835,8 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -1147,7 +1154,7 @@ mod tests {
     fn test_display_list() {
         let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32;N, field = 'item', metadata = {})";
+        let expected_string = "List(Int32;N, field = 'item')";
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -1155,7 +1162,7 @@ mod tests {
     fn test_display_list_with_named_field() {
         let list_data_type = DataType::List(Arc::new(Field::new("foo", DataType::UInt64, false)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(UInt64, field = 'foo', metadata = {})";
+        let expected_string = "List(UInt64, field = 'foo')";
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -1166,8 +1173,22 @@ mod tests {
             false,
         )));
         let nested_data_type_string = nested_data_type.to_string();
-        let nested_expected_string =
-            "List(List(UInt64, field = 'item', metadata = {}), field = 'item', metadata = {})";
+        let nested_expected_string = "List(List(UInt64, field = 'item'), field = 'item')";
         assert_eq!(nested_data_type_string, nested_expected_string);
+    }
+
+    #[test]
+    fn test_display_list_with_metadata() {
+        let mut field = Field::new_list_field(DataType::Int32, true);
+        let metadata = HashMap::from([
+            ("foo1".to_string(), "value1".to_string()),
+            ("foo2".to_string(), "value2".to_string()),
+        ]);
+        field.set_metadata(metadata);
+        let list_data_type = DataType::List(Arc::new(field));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(Int32;N, field = 'item', metadata = {\"foo2\": \"value2\", \"foo1\": \"value1\"})";
+
+        assert_eq!(list_data_type_string, expected_string);
     }
 }
