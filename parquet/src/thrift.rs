@@ -302,7 +302,7 @@ mod tests {
         // Boolean collection type encoded as 0x01, as used by this crate when writing.
         // Values encoded as 1 (true) or 2 (false) as in the current version of the thrift
         // documentation.
-        let bytes = vec![25, 33, 2, 1, 25, 8, 25, 8, 21, 0, 0];
+        let bytes = vec![0x19, 0x21, 2, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
 
         let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
         let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
@@ -310,7 +310,7 @@ mod tests {
             null_pages: vec![false, true],
             min_values: vec![],
             max_values: vec![],
-            boundary_order: BoundaryOrder(0),
+            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
@@ -323,7 +323,7 @@ mod tests {
     pub fn read_boolean_list_alternative_encoding() {
         // Boolean collection type encoded as 0x02, as allowed by the spec.
         // Values encoded as 1 (true) or 0 (false) as before the thrift documentation change on 2024-12-13.
-        let bytes = vec![25, 34, 0, 1, 25, 8, 25, 8, 21, 0, 0];
+        let bytes = vec![0x19, 0x22, 0, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
 
         let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
         let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
@@ -331,7 +331,7 @@ mod tests {
             null_pages: vec![false, true],
             min_values: vec![],
             max_values: vec![],
-            boundary_order: BoundaryOrder(0),
+            boundary_order: BoundaryOrder::UNORDERED,
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
