@@ -444,7 +444,7 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
 }
 
 fn create_decimal32_array(
-    array: Vec<Option<i132>>,
+    array: Vec<Option<i32>>,
     precision: u8,
     scale: i8,
 ) -> Result<Decimal32Array, ArrowError> {
