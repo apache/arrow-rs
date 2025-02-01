@@ -226,12 +226,3 @@ following commands
 cargo publish
 ```
 
-### Remove old artifacts in https://dist.apache.org/repos/dist/
-
-There are RCs in https://dist.apache.org/repos/dist/dev/arrow/ and previous releases in https://dist.apache.org/repos/dist/release/arrow/ . RCs are needless after the vote passed. Previous releases should be removed from https://dist.apache.org/repos/dist/release/arrow/ . See also the ASF release document: https://www.apache.org/legal/release-policy.html#when-to-archive
-
-We can remove old artifacts by the following script:
-
-```shell
-./dev/release/remove-old-artifacts.sh
-```
