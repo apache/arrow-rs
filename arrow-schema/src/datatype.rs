@@ -1151,5 +1151,13 @@ mod tests {
         let list_data_type_string = list_data_type.to_string();
         let expected_string = "List(UInt64)";
         assert_eq!(list_data_type_string, expected_string);
+
+        let nested_data_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        )));
+        let nested_data_type_string = nested_data_type.to_string();
+        let nested_expected_string = "List(List(UInt64))";
+        assert_eq!(nested_data_type_string, nested_expected_string);
     }
 }
