@@ -1712,7 +1712,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Decimal32Builder, Decimal64Builder, Decimal128Builder, Decimal256Builder};
+    use crate::builder::{Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder};
     use crate::cast::downcast_array;
     use crate::BooleanArray;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};

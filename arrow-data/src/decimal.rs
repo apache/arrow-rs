@@ -28,9 +28,10 @@ use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 
 pub use arrow_schema::{
-    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL32_DEFAULT_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL_DEFAULT_SCALE,
+    DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL_DEFAULT_SCALE,
 };
 
 /// `MAX_DECIMAL256_FOR_EACH_PRECISION[p]` holds the maximum [`i256`] value that can
@@ -917,7 +918,7 @@ pub const MIN_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
 /// ```
 ///
 /// [`Decimal64`]: arrow_schema::DataType::Decimal64
-pub(crate) const MAX_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
+pub const MAX_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
     0, // unused first element
     9,
     99,
@@ -954,7 +955,7 @@ pub(crate) const MAX_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
 /// ```
 ///
 /// [`Decimal64`]: arrow_schema::DataType::Decimal64
-pub(crate) const MIN_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
+pub const MIN_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
     0, // unused first element
     -9,
     -99,
@@ -991,7 +992,7 @@ pub(crate) const MIN_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
 /// ```
 ///
 /// [`Decimal32`]: arrow_schema::DataType::Decimal32
-pub(crate) const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
+pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     0, // unused first element
     9,
     99,
@@ -1019,7 +1020,7 @@ pub(crate) const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
 /// ```
 ///
 /// [`Decimal32`]: arrow_schema::DataType::Decimal32
-pub(crate) const MIN_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
+pub const MIN_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     0, // unused first element
     -9,
     -99,

@@ -25,16 +25,17 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{
-    is_validate_decimal256_precision, is_validate_decimal_precision,
-    is_validate_decimal64_precision, is_validate_decimal32_precision,
-    validate_decimal256_precision, validate_decimal_precision,
-    validate_decimal64_precision, validate_decimal32_precision,
+    is_validate_decimal256_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal_precision,
+    validate_decimal256_precision, validate_decimal32_precision,
+    validate_decimal64_precision, validate_decimal_precision,
 };
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL64_DEFAULT_SCALE,
+    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
     DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
@@ -1191,7 +1192,7 @@ pub trait DecimalType:
     /// Default values for [`DataType`]
     const DEFAULT_TYPE: DataType;
 
-    /// "Decima32", "Decimal64", "Decimal128" or "Decimal256", for use in error messages
+    /// "Decimal32", "Decimal64", "Decimal128" or "Decimal256", for use in error messages
     const PREFIX: &'static str;
 
     /// Formats the decimal value with the provided precision and scale
