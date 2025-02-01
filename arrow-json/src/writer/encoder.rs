@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::StructMode;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -29,6 +30,7 @@ use std::io::Write;
 #[derive(Debug, Clone, Default)]
 pub struct EncoderOptions {
     pub explicit_nulls: bool,
+    pub struct_mode: StructMode,
 }
 
 /// A trait to format array values as JSON values
@@ -135,6 +137,7 @@ fn make_encoder_impl<'a>(
             let encoder = StructArrayEncoder{
                 encoders,
                 explicit_nulls: options.explicit_nulls,
+                struct_mode: options.struct_mode,
             };
             (Box::new(encoder) as _, array.nulls().cloned())
         }
@@ -172,6 +175,7 @@ struct FieldEncoder<'a> {
 struct StructArrayEncoder<'a> {
     encoders: Vec<FieldEncoder<'a>>,
     explicit_nulls: bool,
+    struct_mode: StructMode,
 }
 
 /// This API is only stable since 1.70 so can't use it when current MSRV is lower
@@ -185,11 +189,16 @@ fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
 
 impl Encoder for StructArrayEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        out.push(b'{');
+        match self.struct_mode {
+            StructMode::ObjectOnly => out.push(b'{'),
+            StructMode::ListOnly => out.push(b'['),
+        }
         let mut is_first = true;
+        // Nulls can only be dropped in explicit mode
+        let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
         for field_encoder in &mut self.encoders {
             let is_null = is_some_and(field_encoder.nulls.as_ref(), |n| n.is_null(idx));
-            if is_null && !self.explicit_nulls {
+            if drop_nulls && is_null {
                 continue;
             }
 
@@ -198,15 +207,20 @@ impl Encoder for StructArrayEncoder<'_> {
             }
             is_first = false;
 
-            encode_string(field_encoder.field.name(), out);
-            out.push(b':');
+            if self.struct_mode == StructMode::ObjectOnly {
+                encode_string(field_encoder.field.name(), out);
+                out.push(b':');
+            }
 
             match is_null {
                 true => out.extend_from_slice(b"null"),
                 false => field_encoder.encoder.encode(idx, out),
             }
         }
-        out.push(b'}');
+        match self.struct_mode {
+            StructMode::ObjectOnly => out.push(b'}'),
+            StructMode::ListOnly => out.push(b']'),
+        }
     }
 }
 

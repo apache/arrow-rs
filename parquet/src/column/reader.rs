@@ -252,7 +252,7 @@ where
                     let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
 
                     if levels_read != levels_to_read {
-                        return Err(general_err!("insufficient definition levels read from column - expected {rep_levels}, got {read}"));
+                        return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
                     }
 
                     values_read

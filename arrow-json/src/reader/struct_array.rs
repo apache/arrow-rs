@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
+use crate::reader::{make_decoder, ArrayDecoder, StructMode};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -27,6 +27,7 @@ pub struct StructArrayDecoder {
     decoders: Vec<Box<dyn ArrayDecoder>>,
     strict_mode: bool,
     is_nullable: bool,
+    struct_mode: StructMode,
 }
 
 impl StructArrayDecoder {
@@ -35,6 +36,7 @@ impl StructArrayDecoder {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
         let decoders = struct_fields(&data_type)
             .iter()
@@ -48,6 +50,7 @@ impl StructArrayDecoder {
                     coerce_primitive,
                     strict_mode,
                     nullable,
+                    struct_mode,
                 )
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
@@ -57,6 +60,7 @@ impl StructArrayDecoder {
             decoders,
             strict_mode,
             is_nullable,
+            struct_mode,
         })
     }
 }
@@ -70,43 +74,86 @@ impl ArrayDecoder for StructArrayDecoder {
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
 
-        for (row, p) in pos.iter().enumerate() {
-            let end_idx = match (tape.get(*p), nulls.as_mut()) {
-                (TapeElement::StartObject(end_idx), None) => end_idx,
-                (TapeElement::StartObject(end_idx), Some(nulls)) => {
-                    nulls.append(true);
-                    end_idx
-                }
-                (TapeElement::Null, Some(nulls)) => {
-                    nulls.append(false);
-                    continue;
-                }
-                _ => return Err(tape.error(*p, "{")),
-            };
-
-            let mut cur_idx = *p + 1;
-            while cur_idx < end_idx {
-                // Read field name
-                let field_name = match tape.get(cur_idx) {
-                    TapeElement::String(s) => tape.get_string(s),
-                    _ => return Err(tape.error(cur_idx, "field name")),
-                };
-
-                // Update child pos if match found
-                match fields.iter().position(|x| x.name() == field_name) {
-                    Some(field_idx) => child_pos[field_idx][row] = cur_idx + 1,
-                    None => {
-                        if self.strict_mode {
-                            return Err(ArrowError::JsonError(format!(
-                                "column '{}' missing from schema",
-                                field_name
-                            )));
+        // We avoid having the match on self.struct_mode inside the hot loop for performance
+        // TODO: Investigate how to extract duplicated logic.
+        match self.struct_mode {
+            StructMode::ObjectOnly => {
+                for (row, p) in pos.iter().enumerate() {
+                    let end_idx = match (tape.get(*p), nulls.as_mut()) {
+                        (TapeElement::StartObject(end_idx), None) => end_idx,
+                        (TapeElement::StartObject(end_idx), Some(nulls)) => {
+                            nulls.append(true);
+                            end_idx
                         }
+                        (TapeElement::Null, Some(nulls)) => {
+                            nulls.append(false);
+                            continue;
+                        }
+                        (_, _) => return Err(tape.error(*p, "{")),
+                    };
+
+                    let mut cur_idx = *p + 1;
+                    while cur_idx < end_idx {
+                        // Read field name
+                        let field_name = match tape.get(cur_idx) {
+                            TapeElement::String(s) => tape.get_string(s),
+                            _ => return Err(tape.error(cur_idx, "field name")),
+                        };
+
+                        // Update child pos if match found
+                        match fields.iter().position(|x| x.name() == field_name) {
+                            Some(field_idx) => child_pos[field_idx][row] = cur_idx + 1,
+                            None => {
+                                if self.strict_mode {
+                                    return Err(ArrowError::JsonError(format!(
+                                        "column '{}' missing from schema",
+                                        field_name
+                                    )));
+                                }
+                            }
+                        }
+                        // Advance to next field
+                        cur_idx = tape.next(cur_idx + 1, "field value")?;
                     }
                 }
+            }
+            StructMode::ListOnly => {
+                for (row, p) in pos.iter().enumerate() {
+                    let end_idx = match (tape.get(*p), nulls.as_mut()) {
+                        (TapeElement::StartList(end_idx), None) => end_idx,
+                        (TapeElement::StartList(end_idx), Some(nulls)) => {
+                            nulls.append(true);
+                            end_idx
+                        }
+                        (TapeElement::Null, Some(nulls)) => {
+                            nulls.append(false);
+                            continue;
+                        }
+                        (_, _) => return Err(tape.error(*p, "[")),
+                    };
 
-                // Advance to next field
-                cur_idx = tape.next(cur_idx + 1, "field value")?;
+                    let mut cur_idx = *p + 1;
+                    let mut entry_idx = 0;
+                    while cur_idx < end_idx {
+                        if entry_idx >= fields.len() {
+                            return Err(ArrowError::JsonError(format!(
+                                "found extra columns for {} fields",
+                                fields.len()
+                            )));
+                        }
+                        child_pos[entry_idx][row] = cur_idx;
+                        entry_idx += 1;
+                        // Advance to next field
+                        cur_idx = tape.next(cur_idx, "field value")?;
+                    }
+                    if entry_idx != fields.len() {
+                        return Err(ArrowError::JsonError(format!(
+                            "found {} columns for {} fields",
+                            entry_idx,
+                            fields.len()
+                        )));
+                    }
+                }
             }
         }
 

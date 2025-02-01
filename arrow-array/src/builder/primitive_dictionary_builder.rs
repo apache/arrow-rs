@@ -126,10 +126,11 @@ where
             keys_builder.is_empty() && values_builder.is_empty(),
             "keys and values builders must be empty"
         );
+        let values_capacity = values_builder.capacity();
         Self {
             keys_builder,
             values_builder,
-            map: HashMap::new(),
+            map: HashMap::with_capacity(values_capacity),
         }
     }
 
@@ -632,5 +633,20 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(values, [None, None]);
+    }
+
+    #[test]
+    fn creating_dictionary_from_builders_should_use_values_capacity_for_the_map() {
+        let builder = PrimitiveDictionaryBuilder::<Int32Type, crate::types::TimestampMicrosecondType>::new_from_empty_builders(
+                  PrimitiveBuilder::with_capacity(1).with_data_type(DataType::Int32),
+                  PrimitiveBuilder::with_capacity(2).with_data_type(DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+08:00".into()))),
+              );
+
+        assert!(
+            builder.map.capacity() >= builder.values_builder.capacity(),
+            "map capacity {} should be at least the values capacity {}",
+            builder.map.capacity(),
+            builder.values_builder.capacity()
+        )
     }
 }

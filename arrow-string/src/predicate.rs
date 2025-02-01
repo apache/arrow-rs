@@ -24,7 +24,7 @@ use regex::{Regex, RegexBuilder};
 use std::iter::zip;
 
 /// A string based predicate
-pub enum Predicate<'a> {
+pub(crate) enum Predicate<'a> {
     Eq(&'a str),
     Contains(Finder<'a>),
     StartsWith(&'a str),
@@ -42,7 +42,7 @@ pub enum Predicate<'a> {
 
 impl<'a> Predicate<'a> {
     /// Create a predicate for the given like pattern
-    pub fn like(pattern: &'a str) -> Result<Self, ArrowError> {
+    pub(crate) fn like(pattern: &'a str) -> Result<Self, ArrowError> {
         if !contains_like_pattern(pattern) {
             Ok(Self::Eq(pattern))
         } else if pattern.ends_with('%') && !contains_like_pattern(&pattern[..pattern.len() - 1]) {
@@ -59,12 +59,12 @@ impl<'a> Predicate<'a> {
         }
     }
 
-    pub fn contains(needle: &'a str) -> Self {
+    pub(crate) fn contains(needle: &'a str) -> Self {
         Self::Contains(Finder::new(needle.as_bytes()))
     }
 
     /// Create a predicate for the given ilike pattern
-    pub fn ilike(pattern: &'a str, is_ascii: bool) -> Result<Self, ArrowError> {
+    pub(crate) fn ilike(pattern: &'a str, is_ascii: bool) -> Result<Self, ArrowError> {
         if is_ascii && pattern.is_ascii() {
             if !contains_like_pattern(pattern) {
                 return Ok(Self::IEqAscii(pattern));
@@ -81,7 +81,7 @@ impl<'a> Predicate<'a> {
     }
 
     /// Evaluate this predicate against the given haystack
-    pub fn evaluate(&self, haystack: &str) -> bool {
+    pub(crate) fn evaluate(&self, haystack: &str) -> bool {
         match self {
             Predicate::Eq(v) => *v == haystack,
             Predicate::IEqAscii(v) => haystack.eq_ignore_ascii_case(v),
@@ -100,7 +100,7 @@ impl<'a> Predicate<'a> {
     ///
     /// If `negate` is true the result of the predicate will be negated
     #[inline(never)]
-    pub fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
+    pub(crate) fn evaluate_array<'i, T>(&self, array: T, negate: bool) -> BooleanArray
     where
         T: ArrayAccessor<Item = &'i str>,
     {
