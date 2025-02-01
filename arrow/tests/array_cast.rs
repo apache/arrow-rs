@@ -411,7 +411,7 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
-fn create_decimal_array(
+fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
     scale: i8,
