@@ -460,11 +460,15 @@ impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             DataType::List(field) => {
-                if field.is_nullable() {
-                    write!(f, "List({};N)", field.data_type())
-                } else {
-                    write!(f, "List({})", field.data_type())
-                }
+                let nullstr = if field.is_nullable() { ";N" } else { "" };
+                write!(
+                    f,
+                    "List({}{}, field = '{}', metadata = {:?})",
+                    field.data_type(),
+                    nullstr,
+                    field.name(),
+                    field.metadata()
+                )
             }
             _ => write!(f, "{self:?}"),
         }
@@ -1143,21 +1147,27 @@ mod tests {
     fn test_display_list() {
         let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32;N)";
+        let expected_string = "List(Int32;N, field = 'item', metadata = {})";
         assert_eq!(list_data_type_string, expected_string);
+    }
 
-        let list_data_type =
-            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false)));
+    #[test]
+    fn test_display_list_with_named_field() {
+        let list_data_type = DataType::List(Arc::new(Field::new("foo", DataType::UInt64, false)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(UInt64)";
+        let expected_string = "List(UInt64, field = 'foo', metadata = {})";
         assert_eq!(list_data_type_string, expected_string);
+    }
 
+    #[test]
+    fn test_display_nested_list() {
         let nested_data_type = DataType::List(Arc::new(Field::new_list_field(
             DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
             false,
         )));
         let nested_data_type_string = nested_data_type.to_string();
-        let nested_expected_string = "List(List(UInt64))";
+        let nested_expected_string =
+            "List(List(UInt64, field = 'item', metadata = {}), field = 'item', metadata = {})";
         assert_eq!(nested_data_type_string, nested_expected_string);
     }
 }
