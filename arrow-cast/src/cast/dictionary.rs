@@ -217,7 +217,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal32(p, s) => {
             pack_decimal_to_dictionary::<K, Decimal32Type, _>(
                 array,
-                &dict_value_type,
+                dict_value_type,
                 p,
                 s,
                 cast_options
@@ -226,7 +226,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal64(p, s) => {
             pack_decimal_to_dictionary::<K, Decimal64Type, _>(
                 array,
-                &dict_value_type,
+                dict_value_type,
                 p,
                 s,
                 cast_options
@@ -235,7 +235,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal128(p, s) => {
             pack_decimal_to_dictionary::<K, Decimal128Type, _>(
                 array,
-                &dict_value_type,
+                dict_value_type,
                 p,
                 s,
                 cast_options
@@ -244,7 +244,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         Decimal256(p, s) => {
             pack_decimal_to_dictionary::<K, Decimal256Type, _>(
                 array,
-                &dict_value_type,
+                dict_value_type,
                 p,
                 s,
                 cast_options

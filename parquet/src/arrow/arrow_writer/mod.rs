@@ -832,7 +832,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column
                         .as_primitive::<Decimal32Type>()
-                        .unary::<_, Int32Type>(|v| v as i32);
+                        .unary::<_, Int32Type>(|v| v);
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal64(_, _) => {
@@ -914,7 +914,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column
                         .as_primitive::<Decimal64Type>()
-                        .unary::<_, Int64Type>(|v| v as i64);
+                        .unary::<_, Int64Type>(|v| v);
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
