@@ -170,37 +170,37 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // cast one decimal type to another decimal type
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
-            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         // unsigned integer to decimal
         (
             UInt8 | UInt16 | UInt32 | UInt64,
-            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         // signed numeric to decimal
         (
             Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
-            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         // decimal to unsigned numeric
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
-            UInt8 | UInt16 | UInt32 | UInt64
+            UInt8 | UInt16 | UInt32 | UInt64,
         ) => true,
         // decimal to signed numeric
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
-            Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64
+            Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
         ) => true,
         // decimal to string
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
-            Utf8View | Utf8 | LargeUtf8
+            Utf8View | Utf8 | LargeUtf8,
         ) => true,
         // string to decimal
         (
             Utf8View | Utf8 | LargeUtf8,
-            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
             from_fields.len() == to_fields.len() &&
@@ -250,7 +250,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | BinaryView,
         ) => true,
         (Utf8 | LargeUtf8, Utf8View) => true,
-        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View ) => true,
+        (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View) => true,
         (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
         (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
         (_, Utf8View) => from_type.is_numeric(),
@@ -2117,54 +2117,14 @@ where
     use DataType::*;
     // cast decimal to other type
     match to_type {
-        UInt8 => cast_decimal_to_integer::<D, UInt8Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        UInt16 => cast_decimal_to_integer::<D, UInt16Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        UInt32 => cast_decimal_to_integer::<D, UInt32Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        UInt64 => cast_decimal_to_integer::<D, UInt64Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        Int8 => cast_decimal_to_integer::<D, Int8Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        Int16 => cast_decimal_to_integer::<D, Int16Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        Int32 => cast_decimal_to_integer::<D, Int32Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
-        Int64 => cast_decimal_to_integer::<D, Int64Type>(
-            array,
-            base,
-            *scale,
-            cast_options,
-        ),
+        UInt8 => cast_decimal_to_integer::<D, UInt8Type>(array, base, *scale, cast_options),
+        UInt16 => cast_decimal_to_integer::<D, UInt16Type>(array, base, *scale, cast_options),
+        UInt32 => cast_decimal_to_integer::<D, UInt32Type>(array, base, *scale, cast_options),
+        UInt64 => cast_decimal_to_integer::<D, UInt64Type>(array, base, *scale, cast_options),
+        Int8 => cast_decimal_to_integer::<D, Int8Type>(array, base, *scale, cast_options),
+        Int16 => cast_decimal_to_integer::<D, Int16Type>(array, base, *scale, cast_options),
+        Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
+        Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
             (as_float(x) / 10_f64.powi(*scale as i32)) as f32
         }),
@@ -2273,18 +2233,10 @@ where
             *scale,
             cast_options,
         ),
-        Utf8View | Utf8 => cast_string_to_decimal::<D, i32>(
-            array,
-            *precision,
-            *scale,
-            cast_options,
-        ),
-        LargeUtf8 => cast_string_to_decimal::<D, i64>(
-            array,
-            *precision,
-            *scale,
-            cast_options,
-        ),
+        Utf8View | Utf8 => {
+            cast_string_to_decimal::<D, i32>(array, *precision, *scale, cast_options)
+        }
+        LargeUtf8 => cast_string_to_decimal::<D, i64>(array, *precision, *scale, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
         _ => Err(ArrowError::CastError(format!(
             "Casting from {from_type:?} to {to_type:?} not supported"
@@ -3188,89 +3140,89 @@ mod tests {
 
     macro_rules! generate_decimal_to_numeric_cast_test_case {
         ($INPUT_ARRAY: expr) => {
-        // u8
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            UInt8Array,
-            &DataType::UInt8,
-            vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
-        );
-        // u16
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            UInt16Array,
-            &DataType::UInt16,
-            vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
-        );
-        // u32
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            UInt32Array,
-            &DataType::UInt32,
-            vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
-        );
-        // u64
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            UInt64Array,
-            &DataType::UInt64,
-            vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
-        );
-        // i8
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Int8Array,
-            &DataType::Int8,
-            vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
-        );
-        // i16
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Int16Array,
-            &DataType::Int16,
-            vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
-        );
-        // i32
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Int32Array,
-            &DataType::Int32,
-            vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
-        );
-        // i64
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Int64Array,
-            &DataType::Int64,
-            vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
-        );
-        // f32
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Float32Array,
-            &DataType::Float32,
-            vec![
-                Some(1.25_f32),
-                Some(2.25_f32),
-                Some(3.25_f32),
-                None,
-                Some(5.25_f32)
-            ]
-        );
-        // f64
-        generate_cast_test_case!(
-            $INPUT_ARRAY,
-            Float64Array,
-            &DataType::Float64,
-            vec![
-                Some(1.25_f64),
-                Some(2.25_f64),
-                Some(3.25_f64),
-                None,
-                Some(5.25_f64)
-            ]
-        );
-        }
+            // u8
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                UInt8Array,
+                &DataType::UInt8,
+                vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
+            );
+            // u16
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                UInt16Array,
+                &DataType::UInt16,
+                vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
+            );
+            // u32
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                UInt32Array,
+                &DataType::UInt32,
+                vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
+            );
+            // u64
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                UInt64Array,
+                &DataType::UInt64,
+                vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
+            );
+            // i8
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Int8Array,
+                &DataType::Int8,
+                vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
+            );
+            // i16
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Int16Array,
+                &DataType::Int16,
+                vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
+            );
+            // i32
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Int32Array,
+                &DataType::Int32,
+                vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
+            );
+            // i64
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Int64Array,
+                &DataType::Int64,
+                vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
+            );
+            // f32
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Float32Array,
+                &DataType::Float32,
+                vec![
+                    Some(1.25_f32),
+                    Some(2.25_f32),
+                    Some(3.25_f32),
+                    None,
+                    Some(5.25_f32)
+                ]
+            );
+            // f64
+            generate_cast_test_case!(
+                $INPUT_ARRAY,
+                Float64Array,
+                &DataType::Float64,
+                vec![
+                    Some(1.25_f64),
+                    Some(2.25_f64),
+                    Some(3.25_f64),
+                    None,
+                    Some(5.25_f64)
+                ]
+            );
+        };
     }
 
     #[test]
@@ -9609,14 +9561,9 @@ mod tests {
             Some(-123456789),
             None,
         ];
-        let array64: Vec<Option<i64>> = array32
-            .iter()
-            .map(|num| num.map(|x| x as i64))
-            .collect();
-        let array128: Vec<Option<i128>> = array64
-            .iter()
-            .map(|num| num.map(|x| x as i128))
-            .collect();
+        let array64: Vec<Option<i64>> = array32.iter().map(|num| num.map(|x| x as i64)).collect();
+        let array128: Vec<Option<i128>> =
+            array64.iter().map(|num| num.map(|x| x as i128)).collect();
         let array256: Vec<Option<i256>> = array128
             .iter()
             .map(|num| num.map(i256::from_i128))
@@ -9647,7 +9594,7 @@ mod tests {
             DataType::LargeUtf8,
             create_decimal64_array(array64, 7, 3).unwrap(),
         );
-        
+
         test_decimal_to_string::<Decimal128Type, i32>(
             DataType::Utf8View,
             create_decimal128_array(array128.clone(), 7, 3).unwrap(),

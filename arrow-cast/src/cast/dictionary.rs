@@ -214,42 +214,34 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         UInt16 => pack_numeric_to_dictionary::<K, UInt16Type>(array, dict_value_type, cast_options),
         UInt32 => pack_numeric_to_dictionary::<K, UInt32Type>(array, dict_value_type, cast_options),
         UInt64 => pack_numeric_to_dictionary::<K, UInt64Type>(array, dict_value_type, cast_options),
-        Decimal32(p, s) => {
-            pack_decimal_to_dictionary::<K, Decimal32Type, _>(
-                array,
-                dict_value_type,
-                p,
-                s,
-                cast_options
-            )
-        }
-        Decimal64(p, s) => {
-            pack_decimal_to_dictionary::<K, Decimal64Type, _>(
-                array,
-                dict_value_type,
-                p,
-                s,
-                cast_options
-            )
-        }
-        Decimal128(p, s) => {
-            pack_decimal_to_dictionary::<K, Decimal128Type, _>(
-                array,
-                dict_value_type,
-                p,
-                s,
-                cast_options
-            )
-        }
-        Decimal256(p, s) => {
-            pack_decimal_to_dictionary::<K, Decimal256Type, _>(
-                array,
-                dict_value_type,
-                p,
-                s,
-                cast_options
-            )
-        }
+        Decimal32(p, s) => pack_decimal_to_dictionary::<K, Decimal32Type, _>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
+        Decimal64(p, s) => pack_decimal_to_dictionary::<K, Decimal64Type, _>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
+        Decimal128(p, s) => pack_decimal_to_dictionary::<K, Decimal128Type, _>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
+        Decimal256(p, s) => pack_decimal_to_dictionary::<K, Decimal256Type, _>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
         Float16 => {
             pack_numeric_to_dictionary::<K, Float16Type>(array, dict_value_type, cast_options)
         }
@@ -363,19 +355,12 @@ where
     D: DecimalType + ArrowPrimitiveType<Native = M>,
     M: ArrowNativeTypeOp + DecimalCast,
 {
-    let dict = pack_numeric_to_dictionary::<K, D>(
-        array,
-        dict_value_type,
-        cast_options,
-    )?;
+    let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
     let dict = dict
         .as_dictionary::<K>()
         .downcast_dict::<PrimitiveArray<D>>()
         .ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Internal Error: Cannot cast dict to {}",
-                D::PREFIX
-            ))
+            ArrowError::ComputeError(format!("Internal Error: Cannot cast dict to {}", D::PREFIX))
         })?;
     let value = dict.values().clone();
     // Set correct precision/scale

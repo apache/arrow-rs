@@ -19,20 +19,20 @@ use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, NullArray, PrimitiveArray, StringArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, NullArray, PrimitiveArray,
+    StringArray, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array, UnionArray,
 };
 use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano};
 use arrow_cast::pretty::pretty_format_columns;
@@ -266,11 +266,18 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(create_decimal32_array(vec![Some(1), Some(2), Some(3)], 9, 0).unwrap()),
         Arc::new(create_decimal64_array(vec![Some(1), Some(2), Some(3)], 18, 0).unwrap()),
         Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
-        Arc::new(create_decimal256_array(vec![
-            Some(i256::from_i128(1)),
-            Some(i256::from_i128(2)),
-            Some(i256::from_i128(3))
-        ], 40, 0).unwrap()),
+        Arc::new(
+            create_decimal256_array(
+                vec![
+                    Some(i256::from_i128(1)),
+                    Some(i256::from_i128(2)),
+                    Some(i256::from_i128(3)),
+                ],
+                40,
+                0,
+            )
+            .unwrap(),
+        ),
         make_dictionary_primitive::<Int8Type, Decimal32Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal32Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal32Type>(vec![1, 2]),

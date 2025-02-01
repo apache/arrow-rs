@@ -798,14 +798,14 @@ mod tests {
     fn create_decimal_array<T: DecimalType>(
         data: Vec<Option<usize>>,
         precision: u8,
-        scale: i8
+        scale: i8,
     ) -> PrimitiveArray<T> {
         data.into_iter()
             .map(|x| match x {
                 None => None,
                 Some(y) => T::Native::from_usize(y),
             })
-            .collect::<PrimitiveArray::<T>>()
+            .collect::<PrimitiveArray<T>>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
     }
@@ -2129,7 +2129,7 @@ mod tests {
             vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)],
             precision,
             scale,
-       );
+        );
         // decimal null_first
         test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],

@@ -4034,10 +4034,7 @@ mod tests {
         };
 
         let d1 = d(vec![1, 2, 3, 4, 5], 9);
-        let batch = RecordBatch::try_from_iter([
-            ("d1", Arc::new(d1) as ArrayRef),
-        ])
-        .unwrap();
+        let batch = RecordBatch::try_from_iter([("d1", Arc::new(d1) as ArrayRef)]).unwrap();
 
         let mut buffer = Vec::with_capacity(1024);
         let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();

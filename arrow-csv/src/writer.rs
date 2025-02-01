@@ -523,9 +523,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         ]);
         let c4 = c4_builder.finish();
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![
-            Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)
-        ]).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+        )
+        .unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
 

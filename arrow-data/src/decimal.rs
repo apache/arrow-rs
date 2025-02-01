@@ -29,9 +29,8 @@ use arrow_schema::ArrowError;
 
 pub use arrow_schema::{
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
-    DECIMAL_DEFAULT_SCALE,
+    DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 
 /// `MAX_DECIMAL256_FOR_EACH_PRECISION[p]` holds the maximum [`i256`] value that can
@@ -994,15 +993,7 @@ pub const MIN_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
 /// [`Decimal32`]: arrow_schema::DataType::Decimal32
 pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     0, // unused first element
-    9,
-    99,
-    999,
-    9999,
-    99999,
-    999999,
-    9999999,
-    99999999,
-    999999999,
+    9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999,
 ];
 
 /// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum `ialue that can
@@ -1022,15 +1013,7 @@ pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
 /// [`Decimal32`]: arrow_schema::DataType::Decimal32
 pub const MIN_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     0, // unused first element
-    -9,
-    -99,
-    -999,
-    -9999,
-    -99999,
-    -999999,
-    -9999999,
-    -99999999,
-    -999999999,
+    -9, -99, -999, -9999, -99999, -999999, -9999999, -99999999, -999999999,
 ];
 
 /// Validates that the specified `i32` value can be properly

@@ -491,7 +491,7 @@ impl<'a> Tokenizer<'a> {
             "Dictionary" => Token::Dictionary,
 
             "FixedSizeBinary" => Token::FixedSizeBinary,
-            
+
             "Decimal32" => Token::Decimal32,
             "Decimal64" => Token::Decimal64,
             "Decimal128" => Token::Decimal128,

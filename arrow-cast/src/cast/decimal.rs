@@ -580,9 +580,7 @@ where
                             v
                         ))
                     })
-                    .and_then(|v| {
-                        D::validate_decimal_precision(v, precision).map(|_| v)
-                    })
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)

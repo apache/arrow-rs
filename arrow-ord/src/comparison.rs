@@ -3060,10 +3060,13 @@ mod tests {
     }
 
     fn create_decimal_array<T: DecimalType>(data: Vec<Option<T::Native>>) -> PrimitiveArray<T> {
-        data.into_iter().collect::<PrimitiveArray::<T>>()
+        data.into_iter().collect::<PrimitiveArray<T>>()
     }
 
-    fn test_cmp_dict_decimal<T: DecimalType>(values1: Vec<Option<T::Native>>, values2: Vec<Option<T::Native>>) {
+    fn test_cmp_dict_decimal<T: DecimalType>(
+        values1: Vec<Option<T::Native>>,
+        values2: Vec<Option<T::Native>>,
+    ) {
         let values = create_decimal_array::<T>(values1);
         let keys = Int8Array::from_iter_values([1_i8, 2, 5, 4, 3, 0]);
         let array1 = DictionaryArray::new(keys, Arc::new(values));
@@ -3087,7 +3090,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, true, true, true, false]);
         assert_eq!(crate::cmp::gt_eq(&array1, &array2).unwrap(), expected);
     }
-    
+
     #[test]
     fn test_cmp_dict_decimal32() {
         test_cmp_dict_decimal::<Decimal32Type>(
