@@ -1216,6 +1216,7 @@ pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
     let fut1 = multipart_upload.put_part(part1.into());
     let fut2 = multipart_upload.put_part(part2.into());
     let fut3 = multipart_upload.put_part(part3.into());
+    // note order is 2,3,1 , different than the parts were created in
     fut2.await.unwrap();
     fut3.await.unwrap();
     fut1.await.unwrap();
