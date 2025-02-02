@@ -412,7 +412,9 @@ impl ParquetMetaDataReader {
         let bytes = match &remainder {
             Some((remainder_start, remainder)) if *remainder_start <= range.start => {
                 let offset = range.start - *remainder_start;
-                remainder.slice(offset..range.end - *remainder_start + offset)
+                let end = offset + range.end - range.start;
+                assert!(end <= remainder.len());
+                remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
             _ => fetch.fetch(range.start..range.end).await?,
@@ -1047,6 +1049,42 @@ mod async_tests {
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
             .with_prefetch_hint(Some(130650))
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch more than enough but less than the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len - 1000)) // prefetch entire file
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len)) // prefetch entire file
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch more than the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len + 1000)) // prefetch entire file
             .load_and_finish(f, len)
             .await
             .unwrap();
