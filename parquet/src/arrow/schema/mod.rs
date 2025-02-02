@@ -2251,6 +2251,7 @@ mod tests {
         );
 
         // TODO: roundtrip
+        // https://github.com/apache/arrow-rs/issues/7063
         // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
         // assert_eq!(
         //     arrow_schema.field(0).try_extension_type::<Json>()?,
