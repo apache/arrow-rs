@@ -80,6 +80,7 @@ force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
+canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 
 [dev-dependencies]
 chrono = { workspace = true }
