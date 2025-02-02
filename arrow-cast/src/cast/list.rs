@@ -88,10 +88,15 @@ where
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
     // The end position in values of the last incorrectly-sized list slice
     let mut last_pos = 0;
+    let mut null_first = false;
     for (idx, w) in array.offsets().windows(2).enumerate() {
         let start_pos = w[0].as_usize();
         let end_pos = w[1].as_usize();
         let len = end_pos - start_pos;
+
+        if start_pos == 0 && end_pos == 0 {
+            null_first = true;
+        }
 
         if len != size as usize {
             if cast_options.safe || array.is_null(idx) {
@@ -112,16 +117,15 @@ where
         }
     }
 
-    let values = match last_pos {
-        0 => array.values().slice(0, cap), // All slices were the correct length
-        _ => {
-            if mutable.len() != cap {
-                // Remaining slices were all correct length
-                let remaining = cap - mutable.len();
-                mutable.extend(0, last_pos, last_pos + remaining)
-            }
-            make_array(mutable.freeze())
+    let values = if last_pos == 0 && !null_first {
+        array.values().slice(0, cap) // All slices were the correct length
+    } else {
+        if mutable.len() != cap {
+            // Remaining slices were all correct length
+            let remaining = cap - mutable.len();
+            mutable.extend(0, last_pos, last_pos + remaining)
         }
+        make_array(mutable.freeze())
     };
 
     // Cast the inner values if necessary
