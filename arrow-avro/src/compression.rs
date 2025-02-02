@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use std::io;
 use std::io::Read;
 
 /// The metadata key used for storing the JSON encoded [`CompressionCodec`]
@@ -27,6 +26,8 @@ pub enum CompressionCodec {
     Deflate,
     Snappy,
     ZStandard,
+    Bzip2,
+    Xz,
 }
 
 impl CompressionCodec {
@@ -65,7 +66,6 @@ impl CompressionCodec {
             CompressionCodec::Snappy => Err(ArrowError::ParseError(
                 "Snappy codec requires snappy feature".to_string(),
             )),
-
             #[cfg(feature = "zstd")]
             CompressionCodec::ZStandard => {
                 let mut decoder = zstd::Decoder::new(block)?;
@@ -76,6 +76,28 @@ impl CompressionCodec {
             #[cfg(not(feature = "zstd"))]
             CompressionCodec::ZStandard => Err(ArrowError::ParseError(
                 "ZStandard codec requires zstd feature".to_string(),
+            )),
+            #[cfg(feature = "bzip2")]
+            CompressionCodec::Bzip2 => {
+                let mut decoder = bzip2::read::BzDecoder::new(block);
+                let mut out = Vec::new();
+                decoder.read_to_end(&mut out)?;
+                Ok(out)
+            }
+            #[cfg(not(feature = "bzip2"))]
+            CompressionCodec::Bzip2 => Err(ArrowError::ParseError(
+                "Bzip2 codec requires bzip2 feature".to_string(),
+            )),
+            #[cfg(feature = "xz")]
+            CompressionCodec::Xz => {
+                let mut decoder = xz::read::XzDecoder::new(block);
+                let mut out = Vec::new();
+                decoder.read_to_end(&mut out)?;
+                Ok(out)
+            }
+            #[cfg(not(feature = "xz"))]
+            CompressionCodec::Xz => Err(ArrowError::ParseError(
+                "XZ codec requires xz feature".to_string(),
             )),
         }
     }

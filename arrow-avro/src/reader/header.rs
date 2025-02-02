@@ -14,13 +14,13 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 //! Decoder for [`Header`]
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::{Schema, SCHEMA_METADATA_KEY};
 use arrow_schema::ArrowError;
+use std::io::BufRead;
 
 #[derive(Debug)]
 enum HeaderDecoderState {
@@ -74,17 +74,18 @@ impl Header {
         self.sync
     }
 
-    /// Returns the [`CompressionCodec`] if any
+    /// Returns the [`CompressionCodec`] if any.
     pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
         let v = self.get(CODEC_METADATA_KEY);
-
         match v {
             None | Some(b"null") => Ok(None),
             Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
             Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
             Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
+            Some(b"bzip2") => Ok(Some(CompressionCodec::Bzip2)),
+            Some(b"xz") => Ok(Some(CompressionCodec::Xz)),
             Some(v) => Err(ArrowError::ParseError(format!(
-                "Unrecognized compression codec \'{}\'",
+                "Unrecognized compression codec '{}'",
                 String::from_utf8_lossy(v)
             ))),
         }
@@ -146,8 +147,6 @@ impl HeaderDecoder {
     ///
     /// This method can be called multiple times with consecutive chunks of data, allowing
     /// integration with chunked IO systems like [`BufRead::fill_buf`]
-    ///
-    /// All errors should be considered fatal, and decoding aborted
     ///
     /// Once the entire [`Header`] has been decoded this method will not read any further
     /// input bytes, and the header can be obtained with [`Self::flush`]
@@ -264,13 +263,13 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use std::fs::File;
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
 
     #[test]
     fn test_header_decode() {
@@ -352,5 +351,36 @@ mod test {
             u128::from_le_bytes(header.sync()),
             325166208089902833952788552656412487328
         );
+    }
+    #[test]
+    fn test_header_schema_default() {
+        let json_schema = r#"
+        {
+          "type": "record",
+          "name": "TestRecord",
+          "fields": [
+              {"name": "a", "type": "int", "default": 10}
+          ]
+        }
+        "#;
+        let key = "avro.schema";
+        let key_bytes = key.as_bytes();
+        let value_bytes = json_schema.as_bytes();
+        let mut meta_buf = Vec::new();
+        meta_buf.extend_from_slice(key_bytes);
+        meta_buf.extend_from_slice(value_bytes);
+        let meta_offsets = vec![key_bytes.len(), key_bytes.len() + value_bytes.len()];
+        let header = Header {
+            meta_offsets,
+            meta_buf,
+            sync: [0; 16],
+        };
+        let schema = header.schema().unwrap().unwrap();
+        if let crate::schema::Schema::Complex(crate::schema::ComplexType::Record(record)) = schema {
+            assert_eq!(record.fields.len(), 1);
+            assert_eq!(record.fields[0].default, Some(serde_json::json!(10)));
+        } else {
+            panic!("Expected record schema");
+        }
     }
 }

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::codec::Nullability;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -125,7 +126,7 @@ pub struct Record<'a> {
     pub name: &'a str,
     #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
@@ -140,14 +141,14 @@ pub struct Record<'a> {
 pub struct RecordField<'a> {
     #[serde(borrow)]
     pub name: &'a str,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub r#type: Schema<'a>,
-    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
 }
 
 /// An enumeration
@@ -159,14 +160,14 @@ pub struct Enum<'a> {
     pub name: &'a str,
     #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<&'a str>,
-    #[serde(borrow, default)]
+    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<&'a str>,
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub symbols: Vec<&'a str>,
-    #[serde(borrow, default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
@@ -207,6 +208,24 @@ pub struct Fixed<'a> {
     pub size: usize,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
+}
+
+/// An Avro data type (not an Avro schema)
+#[derive(Debug, Clone)]
+pub struct AvroDataType {
+    pub nullability: Option<Nullability>,
+    pub metadata: HashMap<String, String>,
+    pub codec: crate::codec::Codec,
+}
+
+impl AvroDataType {
+    /// Returns an Arrow [`Field`] with the given name,
+    /// respecting this type’s `nullability` (instead of forcing `true`).
+    pub fn field_with_name(&self, name: &str) -> arrow_schema::Field {
+        let d = self.codec.data_type();
+        let is_nullable = self.nullability.is_some();
+        arrow_schema::Field::new(name, d, is_nullable).with_metadata(self.metadata.clone())
+    }
 }
 
 #[cfg(test)]
@@ -365,7 +384,7 @@ mod tests {
                         default: None,
                     }
                 ],
-                attributes: Attributes::default(),
+                attributes: Default::default(),
             }))
         );
 
@@ -507,7 +526,7 @@ mod tests {
                         aliases: vec![],
                         r#type: Schema::Union(vec![
                             Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
-                            Schema::Complex(ComplexType::Map(Map {
+                            Schema::Complex(ComplexType::Map(crate::schema::Map {
                                 values: Box::new(Schema::TypeName(TypeName::Primitive(
                                     PrimitiveType::Bytes
                                 ))),
@@ -568,5 +587,30 @@ mod tests {
         }));
 
         assert_eq!(schema, with_aliases);
+    }
+
+    #[test]
+    fn test_default_parsing() {
+        // Test that a default value is correctly parsed for a record field.
+        let json_schema = r#"
+        {
+            "type": "record",
+            "name": "TestRecord",
+            "fields": [
+                {"name": "a", "type": "int", "default": 10},
+                {"name": "b", "type": "string", "default": "default_str"},
+                {"name": "c", "type": "boolean"}
+            ]
+        }
+        "#;
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
+        if let Schema::Complex(ComplexType::Record(rec)) = schema {
+            assert_eq!(rec.fields.len(), 3);
+            assert_eq!(rec.fields[0].default, Some(json!(10)));
+            assert_eq!(rec.fields[1].default, Some(json!("default_str")));
+            assert_eq!(rec.fields[2].default, None);
+        } else {
+            panic!("Expected record schema");
+        }
     }
 }
