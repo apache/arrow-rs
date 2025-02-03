@@ -295,6 +295,50 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Dictionary(_, value_type) => match value_type.as_ref() {
+                ArrowType::Decimal32(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i)
+                            as Decimal32Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                ArrowType::Decimal64(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i as i64)
+                            as Decimal64Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(|i| i)
+                            as Decimal64Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
                 ArrowType::Decimal128(p, s) => {
                     let array = match array.data_type() {
                         ArrowType::Int32 => array
