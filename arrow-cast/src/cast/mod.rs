@@ -9980,7 +9980,26 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 123456789 is too large to store in a Decimal128 of precision 6. Max is 999999");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal() {
+        let array = vec![Some(520)];
+        let array = create_decimal_array(array, 4, 2).unwrap();
+        let input_type = DataType::Decimal128(4, 2);
+        let output_type = DataType::Decimal128(3, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(
+            result.unwrap().as_primitive::<Decimal128Type>().value(0),
+            520
+        );
     }
 
     #[test]
