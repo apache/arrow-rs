@@ -77,7 +77,6 @@ impl RecordDecoder {
             .iter_mut()
             .map(|x| x.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
-
         RecordBatch::try_new(self.schema.clone(), arrays)
     }
 }
@@ -86,69 +85,42 @@ impl RecordDecoder {
 #[derive(Debug)]
 enum Decoder {
     /// Primitive Types
-    ///
-    /// Avro `null`
     Null(usize),
-    /// Avro `boolean`
     Boolean(BooleanBufferBuilder),
-    /// Avro `int` => i32
     Int32(Vec<i32>),
-    /// Avro `long` => i64
     Int64(Vec<i64>),
-    /// Avro `float` => f32
     Float32(Vec<f32>),
-    /// Avro `double` => f64
     Float64(Vec<f64>),
-    /// Avro `bytes` => Arrow Binary
     Binary(OffsetBufferBuilder<i32>, Vec<u8>),
-    /// Avro `string` => Arrow String
     String(OffsetBufferBuilder<i32>, Vec<u8>),
-    /// Complex Types
-    ///
-    /// Avro `record`
+    /// Complex
     Record(Fields, Vec<Decoder>),
-    /// Avro `enum` => Dictionary(int32 -> string)
     Enum(Arc<[String]>, Vec<i32>),
-    /// Avro `array<T>`
     List(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    /// Avro `map<T>`
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
         OffsetBufferBuilder<i32>,
         Vec<u8>,
         Box<Decoder>,
-        usize,
     ),
-    /// Avro union that includes `null`
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
-    /// Avro `fixed(n)` => Arrow `FixedSizeBinaryArray`
     Fixed(i32, Vec<u8>),
     /// Logical Types
-    ///
-    /// Avro decimal => Arrow decimal
     Decimal(usize, Option<usize>, Option<usize>, DecimalBuilder),
-    /// Avro `date` => Date32
     Date32(Vec<i32>),
-    /// Avro `time-millis` => Time32(Millisecond)
     TimeMillis(Vec<i32>),
-    /// Avro `time-micros` => Time64(Microsecond)
     TimeMicros(Vec<i64>),
-    /// Avro `timestamp-millis` (bool = UTC?)
     TimestampMillis(bool, Vec<i64>),
-    /// Avro `timestamp-micros` (bool = UTC?)
     TimestampMicros(bool, Vec<i64>),
-    /// Avro `interval` => Arrow `IntervalMonthDayNanoType` (12 bytes)
     Interval(Vec<IntervalMonthDayNano>),
 }
 
 impl Decoder {
-    /// Checks if the Decoder is nullable, i.e. wrapped in `Nullable`.
     fn is_nullable(&self) -> bool {
         matches!(self, Self::Nullable(_, _, _))
     }
 
-    /// Create a `Decoder` from an [`AvroDataType`].
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         let decoder = match &data_type.codec {
             Codec::Null => Self::Null(0),
@@ -203,7 +175,6 @@ impl Decoder {
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                     Vec::with_capacity(DEFAULT_CAPACITY),
                     Box::new(Self::try_new(value_type)?),
-                    0,
                 )
             }
             Codec::Fixed(n) => Self::Fixed(*n, Vec::with_capacity(DEFAULT_CAPACITY)),
@@ -234,7 +205,6 @@ impl Decoder {
         }
     }
 
-    /// Append a null to this decoder.
     fn append_null(&mut self) {
         match self {
             Self::Null(n) => *n += 1,
@@ -257,9 +227,10 @@ impl Decoder {
                 off.push_length(0);
                 child.append_null();
             }
-            Self::Map(_, key_off, map_off, _, _, entry_count) => {
+            Self::Map(_, key_off, map_off, _, child) => {
                 key_off.push_length(0);
-                map_off.push_length(*entry_count);
+                map_off.push_length(0);
+                child.append_null();
             }
             Self::Fixed(fsize, buf) => {
                 buf.extend(std::iter::repeat(0u8).take(*fsize as usize));
@@ -278,7 +249,6 @@ impl Decoder {
         }
     }
 
-    /// Decode a single row of data from `buf`.
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         match self {
             Self::Null(count) => *count += 1,
@@ -302,15 +272,15 @@ impl Decoder {
                 let total_items = read_array_blocks(buf, |b| child.decode(b))?;
                 off.push_length(total_items);
             }
-            Self::Map(_, key_off, map_off, key_data, val_decoder, entry_count) => {
+            Self::Map(_, key_off, map_off, key_data, val_decoder) => {
                 let newly_added = read_map_blocks(buf, |b| {
                     let kb = b.get_bytes()?;
                     key_off.push_length(kb.len());
                     key_data.extend_from_slice(kb);
                     val_decoder.decode(b)
                 })?;
-                *entry_count += newly_added;
-                map_off.push_length(*entry_count);
+
+                map_off.push_length(newly_added);
             }
             Self::Nullable(nb, nulls, child) => {
                 let branch = buf.get_int()?;
@@ -372,7 +342,6 @@ impl Decoder {
         Ok(())
     }
 
-    /// Flush buffered data into an [`ArrayRef`], optionally applying `nulls`.
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         match self {
             Self::Null(len) => {
@@ -428,7 +397,7 @@ impl Decoder {
                 let arr = ListArray::new(field.clone(), offsets, child_arr, nulls);
                 Ok(Arc::new(arr))
             }
-            Self::Map(field, key_off, map_off, key_data, val_dec, entry_count) => {
+            Self::Map(field, key_off, map_off, key_data, val_dec) => {
                 let moff = flush_offsets(map_off);
                 let koff = flush_offsets(key_off);
                 let kd = flush_values(key_data).into();
@@ -444,7 +413,6 @@ impl Decoder {
                     None,
                 );
                 let map_arr = MapArray::new(field.clone(), moff, entries, nulls, false);
-                *entry_count = 0;
                 Ok(Arc::new(map_arr))
             }
             Self::Fixed(fsize, raw) => {
@@ -518,7 +486,7 @@ fn read_array_blocks(
             0 => break,
             n if n < 0 => {
                 let item_count = (-n) as usize;
-                let _block_size = buf.get_long()?; // size (ignored)
+                let _block_size = buf.get_long()?;
                 for _ in 0..item_count {
                     decode_item(buf)?;
                 }
@@ -541,20 +509,31 @@ fn read_map_blocks(
     buf: &mut AvroCursor,
     mut decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
-    let block_count = buf.get_long()?;
-    if block_count <= 0 {
-        Ok(0)
-    } else {
-        let n = block_count as usize;
-        for _ in 0..n {
-            decode_entry(buf)?;
+    let mut total_entries = 0usize;
+    loop {
+        let block_count = buf.get_long()?;
+        match block_count {
+            0 => break,
+            n if n < 0 => {
+                let item_count = (-n) as usize;
+                let _block_size = buf.get_long()?;
+                for _ in 0..item_count {
+                    decode_entry(buf)?;
+                }
+                total_entries += item_count;
+            }
+            n => {
+                let item_count = n as usize;
+                for _ in 0..item_count {
+                    decode_entry(buf)?;
+                }
+                total_entries += item_count;
+            }
         }
-        Ok(n)
     }
+    Ok(total_entries)
 }
 
-/// Flush a [`Vec<T>`] of primitive values to a [`PrimitiveArray`], applying optional `nulls`.
-#[inline]
 fn flush_primitive<T: ArrowPrimitiveType>(
     values: &mut Vec<T::Native>,
     nulls: Option<NullBuffer>,
@@ -562,14 +541,10 @@ fn flush_primitive<T: ArrowPrimitiveType>(
     PrimitiveArray::new(flush_values(values).into(), nulls)
 }
 
-/// Flush an [`OffsetBufferBuilder`].
-#[inline]
 fn flush_offsets(offsets: &mut OffsetBufferBuilder<i32>) -> OffsetBuffer<i32> {
     std::mem::replace(offsets, OffsetBufferBuilder::new(DEFAULT_CAPACITY)).finish()
 }
 
-/// Take ownership of `values`.
-#[inline]
 fn flush_values<T>(values: &mut Vec<T>) -> Vec<T> {
     std::mem::replace(values, Vec::with_capacity(DEFAULT_CAPACITY))
 }
@@ -582,7 +557,6 @@ enum DecimalBuilder {
 }
 
 impl DecimalBuilder {
-    /// Create a new DecimalBuilder given precision, scale, and optional byte-size (`fixed`).
     fn new(
         precision: usize,
         scale: Option<usize>,
@@ -622,7 +596,6 @@ impl DecimalBuilder {
         }
     }
 
-    /// Append sign-extended bytes to this decimal builder
     fn append_bytes(&mut self, raw: &[u8]) -> Result<(), ArrowError> {
         match self {
             Self::Decimal128(b) => {
@@ -639,7 +612,6 @@ impl DecimalBuilder {
         Ok(())
     }
 
-    /// Append a null decimal value (0)
     fn append_null(&mut self) -> Result<(), ArrowError> {
         match self {
             Self::Decimal128(b) => {
@@ -654,7 +626,6 @@ impl DecimalBuilder {
         Ok(())
     }
 
-    /// Finish building the decimal array, returning an [`ArrayRef`].
     fn finish(
         self,
         nulls: Option<NullBuffer>,
@@ -680,7 +651,6 @@ impl DecimalBuilder {
     }
 }
 
-/// Sign-extend `raw` to 16 bytes.
 fn sign_extend_to_16(raw: &[u8]) -> Result<[u8; 16], ArrowError> {
     let extended = sign_extend(raw, 16);
     if extended.len() != 16 {
@@ -694,7 +664,6 @@ fn sign_extend_to_16(raw: &[u8]) -> Result<[u8; 16], ArrowError> {
     Ok(arr)
 }
 
-/// Sign-extend `raw` to 32 bytes.
 fn sign_extend_to_32(raw: &[u8]) -> Result<[u8; 32], ArrowError> {
     let extended = sign_extend(raw, 32);
     if extended.len() != 32 {
@@ -708,7 +677,6 @@ fn sign_extend_to_32(raw: &[u8]) -> Result<[u8; 32], ArrowError> {
     Ok(arr)
 }
 
-/// Sign-extend the first byte to produce `target_len` bytes total.
 fn sign_extend(raw: &[u8], target_len: usize) -> Vec<u8> {
     if raw.is_empty() {
         return vec![0; target_len];
@@ -729,7 +697,7 @@ mod tests {
     use super::*;
     use arrow_array::{
         cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-        IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
+        IntervalMonthDayNanoArray, ListArray, MapArray,
     };
     use std::sync::Arc;
 
@@ -982,32 +950,22 @@ mod tests {
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
         let mut decoder = Decoder::try_new(&map_type).unwrap();
         let mut data = Vec::new();
-        data.extend_from_slice(&encode_avro_long(1)); // block_count=1
-        data.extend_from_slice(&encode_avro_bytes(b"hello")); // key
-        data.extend_from_slice(&encode_avro_bytes(b"world")); // value
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&encode_avro_bytes(b"hello"));
+        data.extend_from_slice(&encode_avro_bytes(b"world"));
+        data.extend_from_slice(&encode_avro_long(0));
         let mut cursor = AvroCursor::new(&data);
         decoder.decode(&mut cursor).unwrap();
         let array = decoder.flush(None).unwrap();
         let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map_arr.len(), 1);
         assert_eq!(map_arr.value_length(0), 1);
-        let entries = map_arr.value(0);
-        let struct_entries = entries.as_any().downcast_ref::<StructArray>().unwrap();
-        assert_eq!(struct_entries.len(), 1);
-        let key_arr = struct_entries
-            .column_by_name("key")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let val_arr = struct_entries
-            .column_by_name("value")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(key_arr.value(0), "hello");
-        assert_eq!(val_arr.value(0), "world");
+        let struct_arr = map_arr.value(0);
+        assert_eq!(struct_arr.len(), 1);
+        let keys = struct_arr.column(0).as_string::<i32>();
+        let vals = struct_arr.column(1).as_string::<i32>();
+        assert_eq!(keys.value(0), "hello");
+        assert_eq!(vals.value(0), "world");
     }
 
     #[test]
