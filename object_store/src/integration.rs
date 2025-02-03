@@ -29,8 +29,8 @@ use core::str;
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ObjectStore, PutMode,
-    PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
+    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
@@ -1195,4 +1195,35 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
             .as_str()
         ));
     }
+}
+
+/// Tests performing out of order multipart uploads
+pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
+    let path = Path::from("test_multipart_out_of_order");
+    let mut multipart_upload = storage.put_multipart(&path).await.unwrap();
+
+    let part1 = std::iter::repeat(b'1')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let part2 = std::iter::repeat(b'2')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let part3 = std::iter::repeat(b'3')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let full = [part1.as_ref(), part2.as_ref(), part3.as_ref()].concat();
+
+    let fut1 = multipart_upload.put_part(part1.into());
+    let fut2 = multipart_upload.put_part(part2.into());
+    let fut3 = multipart_upload.put_part(part3.into());
+    // note order is 2,3,1 , different than the parts were created in
+    fut2.await.unwrap();
+    fut3.await.unwrap();
+    fut1.await.unwrap();
+
+    multipart_upload.complete().await.unwrap();
+
+    let result = storage.get(&path).await.unwrap();
+    let bytes = result.bytes().await.unwrap();
+    assert_eq!(bytes, full);
 }
