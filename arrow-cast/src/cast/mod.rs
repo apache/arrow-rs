@@ -4343,7 +4343,7 @@ mod tests {
     fn test_cast_string_with_large_date_to_date32() {
         let array = Arc::new(StringArray::from(vec![
             Some("+10999-12-31"),
-            Some("-0010-02-28")
+            Some("-0010-02-28"),
         ])) as ArrayRef;
         let to_type = DataType::Date32;
         let options = CastOptions {
