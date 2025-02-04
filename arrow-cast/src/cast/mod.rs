@@ -9984,7 +9984,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal_to_decimal() {
+    fn test_decimal_to_decimal_same_scale() {
         let array = vec![Some(520)];
         let array = create_decimal_array(array, 4, 2).unwrap();
         let input_type = DataType::Decimal128(4, 2);
