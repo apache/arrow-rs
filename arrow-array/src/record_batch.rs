@@ -267,6 +267,46 @@ impl RecordBatch {
         }
     }
 
+    /// Creates a `RecordBatch` from a schema, columns and row count without doing any checks.
+    ///
+    /// # Safety
+    /// If any of the following conditions are not met, the behavior is undefined:
+    ///
+    /// 1. the vec of columns must not be empty
+    /// 2. the schema and column data types must have equal lengths and match
+    /// 3. each array in columns must have length equal to the provided row count
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    ///
+    /// let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false)
+    /// ]);
+    ///
+    /// let schema = Arc::new(schema);
+    /// let columns = vec![Arc::new(id_array) as ArrayRef];
+    ///
+    /// let batch = unsafe {
+    ///    RecordBatch::new_unchecked(schema, columns, 5)
+    /// };
+    /// ```
+    pub unsafe fn new_unchecked(
+        schema: SchemaRef,
+        columns: Vec<ArrayRef>,
+        row_count: usize,
+    ) -> Self {
+        RecordBatch {
+            schema,
+            columns,
+            row_count,
+        }
+    }
+
     /// Validate the schema and columns using [`RecordBatchOptions`]. Returns an error
     /// if any validation check fails, otherwise returns the created [`Self`]
     fn try_new_impl(
@@ -333,11 +373,7 @@ impl RecordBatch {
                 "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
         }
 
-        Ok(RecordBatch {
-            schema,
-            columns,
-            row_count,
-        })
+        unsafe { Ok(Self::new_unchecked(schema, columns, row_count)) }
     }
 
     /// Override the schema of this [`RecordBatch`]
@@ -352,11 +388,7 @@ impl RecordBatch {
             )));
         }
 
-        Ok(Self {
-            schema,
-            columns: self.columns,
-            row_count: self.row_count,
-        })
+        unsafe { Ok(Self::new_unchecked(schema, self.columns, self.row_count)) }
     }
 
     /// Returns the [`Schema`] of the record batch.
@@ -611,11 +643,7 @@ impl RecordBatch {
             .map(|column| column.slice(offset, length))
             .collect();
 
-        Self {
-            schema: self.schema.clone(),
-            columns,
-            row_count: length,
-        }
+        unsafe { Self::new_unchecked(self.schema.clone(), columns, length) }
     }
 
     /// Create a `RecordBatch` from an iterable list of pairs of the
@@ -770,11 +798,7 @@ impl From<StructArray> for RecordBatch {
             "Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
         );
 
-        RecordBatch {
-            schema: Arc::new(Schema::new(fields)),
-            row_count,
-            columns,
-        }
+        unsafe { RecordBatch::new_unchecked(Arc::new(Schema::new(fields)), columns, row_count) }
     }
 }
 
@@ -1042,6 +1066,17 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
         assert!(batch.is_err());
+    }
+
+    #[test]
+    fn create_record_batch_unchecked_with_schema_mismatch_should_not_fail() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+        let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
+
+        unsafe {
+            RecordBatch::new_unchecked(Arc::new(schema), vec![Arc::new(a)], 5);
+        }
     }
 
     #[test]
