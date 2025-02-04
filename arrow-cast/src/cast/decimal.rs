@@ -168,7 +168,6 @@ where
         if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
         } else if input_scale <= output_scale {
-            // the scale doesn't change, but precision may change and cause overflow
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
