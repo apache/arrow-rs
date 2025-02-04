@@ -4217,6 +4217,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_with_large_date_to_date32() {
+        let array = Arc::new(StringArray::from(vec![
+            Some("+10999-12-31"),
+            Some("-0010-02-28")
+        ])) as ArrayRef;
+        let to_type = DataType::Date32;
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<Date32Type>();
+        assert_eq!(3298139, c.value(0));
+        assert_eq!(-723122, c.value(1));
+    }
+
+    #[test]
     fn test_cast_string_format_yyyymmdd_to_date32() {
         let a0 = Arc::new(StringViewArray::from(vec![
             Some("2020-12-25"),
