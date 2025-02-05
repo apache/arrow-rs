@@ -10001,7 +10001,7 @@ mod tests {
             520
         );
 
-        // Cast 0 of dcimal(3,0) type to decimal(2,0)
+        // Cast 0 of decimal(3, 0) type to decimal(2, 0)
         assert_eq!(
             &cast(
                 &create_decimal_array(vec![Some(0)], 3, 0).unwrap(),
