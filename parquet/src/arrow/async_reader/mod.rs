@@ -1112,7 +1112,7 @@ mod tests {
         Array, ArrayRef, Int32Array, Int8Array, RecordBatchReader, Scalar, StringArray,
         StructArray, UInt64Array,
     };
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{ArrowError, DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
     use rand::{thread_rng, Rng};
     use std::collections::HashMap;
@@ -2423,14 +2423,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let arrow_reader_metadata = ArrowReaderMetadata::load_async(
-            file,
-            Default::default(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap();
+        let arrow_reader_metadata = ArrowReaderMetadata::load_async(file, Default::default(), None)
+            .await
+            .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
@@ -2508,6 +2503,114 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "encryption")]
+    async fn test_non_uniform_encryption_plaintext_footer() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        // There is always a footer key even with a plaintext footer,
+        // but this is used for signing the footer.
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(&mut file, decryption_properties).await;
+    }
+
+    #[tokio::test]
+    async fn test_non_uniform_encryption_plaintext_footer_without_decryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        let metadata = ArrowReaderMetadata::load_async(
+            &mut file,
+            Default::default(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .await
+        .unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
+        );
+
+        //todo
+
+        // metadata.metadata.row_groups().iter().for_each(|rg| {
+        //     assert_eq!(rg.num_columns(), 8);
+        //     assert_eq!(rg.num_rows(), 50);
+        // });
+        //
+        // // Should be able to read unencrypted columns. Test reading one column.
+        // let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        // let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
+        // let record_reader = builder.with_projection(mask).build().unwrap();
+        //
+        // let mut row_count = 0;
+        // for batch in record_reader {
+        //     let batch = batch.unwrap();
+        //     row_count += batch.num_rows();
+        //
+        //     let time_col = batch
+        //         .column(0)
+        //         .as_primitive::<types::Time32MillisecondType>();
+        //     for (i, x) in time_col.iter().enumerate() {
+        //         assert_eq!(x.unwrap(), i as i32);
+        //     }
+        // }
+        //
+        // assert_eq!(row_count, file_metadata.num_rows() as usize);
+        //
+        // // Reading an encrypted column should fail
+        // let file = std::fs::File::open(&path).unwrap();
+        // let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        // let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
+        // let mut record_reader = builder.with_projection(mask).build().unwrap();
+        //
+        // match record_reader.next() {
+        //     Some(Err(ArrowError::ParquetError(s))) => {
+        //         assert!(s.contains("protocol error"));
+        //     }
+        //     _ => {
+        //         panic!("Expected ArrowError::ParquetError");
+        //     }
+        // };
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
+    async fn test_non_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(&mut file, decryption_properties).await;
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
     async fn test_uniform_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
@@ -2518,6 +2621,41 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read(&mut file, decryption_properties);
+        verify_encryption_test_file_read(&mut file, decryption_properties).await;
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
+    async fn test_aes_ctr_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer_ctr.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        let decryption_properties = Some(decryption_properties);
+        let metadata = ArrowReaderMetadata::load_async(
+            &mut file,
+            Default::default(),
+            decryption_properties.as_ref(),
+        )
+        .await;
+
+        match metadata {
+            Err(crate::errors::ParquetError::NYI(s)) => {
+                assert!(s.contains("AES_GCM_CTR_V1"));
+            }
+            _ => {
+                panic!("Expected ParquetError::NYI");
+            }
+        };
     }
 }
