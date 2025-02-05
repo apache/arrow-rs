@@ -1002,6 +1002,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             match op(unsafe { self.value_unchecked(idx) }) {
                 Some(v) => unsafe { *slice.get_unchecked_mut(idx) = v },
                 None => {
+                    println!("oof {:?}", self.value(idx));
                     out_null_count += 1;
                     null_builder.set_bit(idx, false);
                 }

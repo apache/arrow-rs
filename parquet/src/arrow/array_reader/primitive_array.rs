@@ -224,6 +224,14 @@ where
                     .unary(|i| i as u8) as UInt8Array;
                 Arc::new(array) as ArrayRef
             }
+            ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i8) as arrow_array::Int8Array;
+                Arc::new(array) as ArrayRef
+            }
             ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
                 let array = array
                     .as_any()
