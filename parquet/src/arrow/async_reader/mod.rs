@@ -106,7 +106,12 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
+    fn get_metadata<'a>(
+        &'a mut self,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &'a FileDecryptionProperties,
+        >,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -119,8 +124,16 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        self.as_mut().get_metadata()
+    fn get_metadata<'a>(
+        &'a mut self,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &'a FileDecryptionProperties,
+        >,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        self.as_mut().get_metadata(
+            #[cfg(feature = "encryption")]
+            file_decryption_properties,
+        )
     }
 }
 
@@ -141,7 +154,12 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         .boxed()
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+    fn get_metadata<'a>(
+        &'a mut self,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &'a FileDecryptionProperties,
+        >,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
@@ -157,12 +175,11 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            // todo: provide file_decryption_properties
             Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
                 &buf,
                 footer.encrypted_footer(),
                 #[cfg(feature = "encryption")]
-                None,
+                file_decryption_properties,
             )?))
         }
         .boxed()
@@ -188,7 +205,12 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input.get_metadata().await?;
+        let mut metadata = input
+            .get_metadata(
+                #[cfg(feature = "encryption")]
+                file_decryption_properties,
+            )
+            .await?;
 
         #[cfg(feature = "encryption")]
         let use_encryption = file_decryption_properties.is_some();
@@ -199,12 +221,14 @@ impl ArrowReaderMetadata {
         if options.page_index
             && metadata.column_index().is_none()
             && metadata.offset_index().is_none()
-            || use_encryption
         {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
-            let mut reader = ParquetMetaDataReader::new_with_metadata(m)
-                .with_page_indexes(true)
-                .with_decryption_properties(file_decryption_properties);
+            let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+
+            if use_encryption {
+                reader = reader.with_decryption_properties(file_decryption_properties);
+            }
+
             reader.load_page_index(input).await?;
             metadata = Arc::new(reader.finish()?)
         }
@@ -1112,7 +1136,7 @@ mod tests {
         Array, ArrayRef, Int32Array, Int8Array, RecordBatchReader, Scalar, StringArray,
         StructArray, UInt64Array,
     };
-    use arrow_schema::{ArrowError, DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
     use rand::{thread_rng, Rng};
     use std::collections::HashMap;
@@ -1133,7 +1157,12 @@ mod tests {
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
 
-        fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        fn get_metadata<'a>(
+            &'a mut self,
+            #[cfg(feature = "encryption")] _file_decryption_properties: Option<
+                &'a FileDecryptionProperties,
+            >,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
     }
@@ -2423,9 +2452,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let arrow_reader_metadata = ArrowReaderMetadata::load_async(file, Default::default(), None)
-            .await
-            .unwrap();
+        let arrow_reader_metadata = ArrowReaderMetadata::load_async(
+            file,
+            Default::default(),
+            decryption_properties.as_ref(),
+        )
+        .await
+        .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
@@ -2650,7 +2683,7 @@ mod tests {
         .await;
 
         match metadata {
-            Err(crate::errors::ParquetError::NYI(s)) => {
+            Err(ParquetError::NYI(s)) => {
                 assert!(s.contains("AES_GCM_CTR_V1"));
             }
             _ => {

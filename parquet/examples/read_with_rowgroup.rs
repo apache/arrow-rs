@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let mut file = File::open(&path).await.unwrap();
 
     // The metadata could be cached in other places, this example only shows how to read
-    let metadata = file.get_metadata().await?;
+    let metadata = file.get_metadata(None).await?;
 
     for rg in metadata.row_groups() {
         let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
