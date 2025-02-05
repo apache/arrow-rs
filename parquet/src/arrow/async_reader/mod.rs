@@ -61,6 +61,9 @@ use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHas
 mod metadata;
 pub use metadata::*;
 
+#[cfg(feature = "encryption")]
+use crate::encryption::decryption::FileDecryptionProperties;
+
 #[cfg(feature = "object_store")]
 mod store;
 
@@ -179,17 +182,29 @@ impl ArrowReaderMetadata {
     pub async fn load_async<T: AsyncFileReader>(
         input: &mut T,
         options: ArrowReaderOptions,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &FileDecryptionProperties,
+        >,
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
         let mut metadata = input.get_metadata().await?;
 
+        #[cfg(feature = "encryption")]
+        let use_encryption = file_decryption_properties.is_some();
+
+        #[cfg(not(feature = "encryption"))]
+        let use_encryption = false;
+
         if options.page_index
             && metadata.column_index().is_none()
             && metadata.offset_index().is_none()
+            || use_encryption
         {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
-            let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+            let mut reader = ParquetMetaDataReader::new_with_metadata(m)
+                .with_page_indexes(true)
+                .with_decryption_properties(file_decryption_properties);
             reader.load_page_index(input).await?;
             metadata = Arc::new(reader.finish()?)
         }
@@ -347,13 +362,31 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # }
     /// ```
     pub async fn new(input: T) -> Result<Self> {
-        Self::new_with_options(input, Default::default()).await
+        Self::new_with_options(
+            input,
+            Default::default(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .await
     }
 
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source
     /// and [`ArrowReaderOptions`]
-    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
+    pub async fn new_with_options(
+        mut input: T,
+        options: ArrowReaderOptions,
+        #[cfg(feature = "encryption")] file_decryption_properties: Option<
+            &FileDecryptionProperties,
+        >,
+    ) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load_async(
+            &mut input,
+            options,
+            #[cfg(feature = "encryption")]
+            file_decryption_properties,
+        )
+        .await?;
         Ok(Self::new_with_metadata(input, metadata))
     }
 
@@ -386,7 +419,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // open file with parquet data
     /// let mut file = tokio::fs::File::from_std(file);
     /// // load metadata once
-    /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default()).await.unwrap();
+    /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default(), #[cfg(feature = "encryption")] None).await.unwrap();
     /// // create two readers, a and b, from the same underlying file
     /// // without reading the metadata again
     /// let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
