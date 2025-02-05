@@ -117,15 +117,16 @@ where
         }
     }
 
-    let values = if last_pos == 0 && !null_first {
-        array.values().slice(0, cap) // All slices were the correct length
-    } else {
-        if mutable.len() != cap {
-            // Remaining slices were all correct length
-            let remaining = cap - mutable.len();
-            mutable.extend(0, last_pos, last_pos + remaining)
+    let values = match last_pos {
+        0 if !null_first => array.values().slice(0, cap), // All slices were the correct length
+        _ => {
+            if mutable.len() != cap {
+                // Remaining slices were all correct length
+                let remaining = cap - mutable.len();
+                mutable.extend(0, last_pos, last_pos + remaining)
+            }
+            make_array(mutable.freeze())
         }
-        make_array(mutable.freeze())
     };
 
     // Cast the inner values if necessary
