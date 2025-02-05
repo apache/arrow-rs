@@ -18,14 +18,12 @@
 //! Kernels for operating on [`PrimitiveArray`]s
 
 use arrow_array::builder::BufferBuilder;
-use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
-use std::sync::Arc;
 
 /// See [`PrimitiveArray::unary`]
 pub fn unary<I, F, O>(array: &PrimitiveArray<I>, op: F) -> PrimitiveArray<O>
@@ -69,97 +67,6 @@ where
     F: Fn(I::Native) -> Result<I::Native, ArrowError>,
 {
     array.try_unary_mut(op)
-}
-
-/// A helper function that applies an infallible unary function to a dictionary array with primitive value type.
-fn unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
-where
-    K: ArrowDictionaryKeyType + ArrowNumericType,
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native) -> T::Native,
-{
-    let dict_values = array.values().as_any().downcast_ref().unwrap();
-    let values = unary::<T, F, T>(dict_values, op);
-    Ok(Arc::new(array.with_values(Arc::new(values))))
-}
-
-/// A helper function that applies a fallible unary function to a dictionary array with primitive value type.
-fn try_unary_dict<K, F, T>(array: &DictionaryArray<K>, op: F) -> Result<ArrayRef, ArrowError>
-where
-    K: ArrowDictionaryKeyType + ArrowNumericType,
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native) -> Result<T::Native, ArrowError>,
-{
-    if !PrimitiveArray::<T>::is_compatible(&array.value_type()) {
-        return Err(ArrowError::CastError(format!(
-            "Cannot perform the unary operation of type {} on dictionary array of value type {}",
-            T::DATA_TYPE,
-            array.value_type()
-        )));
-    }
-
-    let dict_values = array.values().as_any().downcast_ref().unwrap();
-    let values = try_unary::<T, F, T>(dict_values, op)?;
-    Ok(Arc::new(array.with_values(Arc::new(values))))
-}
-
-/// Applies an infallible unary function to an array with primitive values.
-#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
-pub fn unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native) -> T::Native,
-{
-    downcast_dictionary_array! {
-        array => unary_dict::<_, F, T>(array, op),
-        t => {
-            if PrimitiveArray::<T>::is_compatible(t) {
-                Ok(Arc::new(unary::<T, F, T>(
-                    array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
-                    op,
-                )))
-            } else {
-                Err(ArrowError::NotYetImplemented(format!(
-                    "Cannot perform unary operation of type {} on array of type {}",
-                    T::DATA_TYPE,
-                    t
-                )))
-            }
-        }
-    }
-}
-
-/// Applies a fallible unary function to an array with primitive values.
-#[deprecated(note = "Use arrow_array::AnyDictionaryArray")]
-pub fn try_unary_dyn<F, T>(array: &dyn Array, op: F) -> Result<ArrayRef, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(T::Native) -> Result<T::Native, ArrowError>,
-{
-    downcast_dictionary_array! {
-        array => if array.values().data_type() == &T::DATA_TYPE {
-            try_unary_dict::<_, F, T>(array, op)
-        } else {
-            Err(ArrowError::NotYetImplemented(format!(
-                "Cannot perform unary operation on dictionary array of type {}",
-                array.data_type()
-            )))
-        },
-        t => {
-            if PrimitiveArray::<T>::is_compatible(t) {
-                Ok(Arc::new(try_unary::<T, F, T>(
-                    array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap(),
-                    op,
-                )?))
-            } else {
-                Err(ArrowError::NotYetImplemented(format!(
-                    "Cannot perform unary operation of type {} on array of type {}",
-                    T::DATA_TYPE,
-                    t
-                )))
-            }
-        }
-    }
 }
 
 /// Allies a binary infallable function to two [`PrimitiveArray`]s,
@@ -510,8 +417,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::*;
     use arrow_array::types::*;
+    use std::sync::Arc;
 
     #[test]
     #[allow(deprecated)]
@@ -522,53 +429,6 @@ mod tests {
         assert_eq!(
             result,
             Float64Array::from(vec![None, Some(7.0), None, Some(7.0)])
-        );
-
-        let result = unary_dyn::<_, Float64Type>(&input_slice, |n| n + 1.0).unwrap();
-
-        assert_eq!(
-            result.as_any().downcast_ref::<Float64Array>().unwrap(),
-            &Float64Array::from(vec![None, Some(7.8), None, Some(8.2)])
-        );
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_unary_dict_and_unary_dyn() {
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-        builder.append(5).unwrap();
-        builder.append(6).unwrap();
-        builder.append(7).unwrap();
-        builder.append(8).unwrap();
-        builder.append_null();
-        builder.append(9).unwrap();
-        let dictionary_array = builder.finish();
-
-        let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-        builder.append(6).unwrap();
-        builder.append(7).unwrap();
-        builder.append(8).unwrap();
-        builder.append(9).unwrap();
-        builder.append_null();
-        builder.append(10).unwrap();
-        let expected = builder.finish();
-
-        let result = unary_dict::<_, _, Int32Type>(&dictionary_array, |n| n + 1).unwrap();
-        assert_eq!(
-            result
-                .as_any()
-                .downcast_ref::<DictionaryArray<Int8Type>>()
-                .unwrap(),
-            &expected
-        );
-
-        let result = unary_dyn::<_, Int32Type>(&dictionary_array, |n| n + 1).unwrap();
-        assert_eq!(
-            result
-                .as_any()
-                .downcast_ref::<DictionaryArray<Int8Type>>()
-                .unwrap(),
-            &expected
         );
     }
 

@@ -78,6 +78,73 @@
 //! ))
 //! ```
 //!
+//! # Using the [`Extend`] trait to append values from an iterable:
+//!
+//! ```
+//! # use arrow_array::{Array};
+//! # use arrow_array::builder::{ArrayBuilder, StringBuilder};
+//!
+//! let mut builder = StringBuilder::new();
+//! builder.extend(vec![Some("🍐"), Some("🍎"), None]);
+//! assert_eq!(builder.finish().len(), 3);
+//! ```
+//!
+//! # Using the [`Extend`] trait to write generic functions:
+//!
+//! ```
+//! # use arrow_array::{Array, ArrayRef, StringArray};
+//! # use arrow_array::builder::{ArrayBuilder, Int32Builder, ListBuilder, StringBuilder};
+//!
+//! // For generic methods that fill a list of values for an [`ArrayBuilder`], use the [`Extend`] trait.
+//! fn filter_and_fill<V, I: IntoIterator<Item = V>>(builder: &mut impl Extend<V>, values: I, filter: V)
+//! where V: PartialEq
+//! {
+//!     builder.extend(values.into_iter().filter(|v| *v == filter));
+//! }
+//! let mut string_builder = StringBuilder::new();
+//! filter_and_fill(
+//!     &mut string_builder,
+//!     vec![Some("🍐"), Some("🍎"), None],
+//!     Some("🍎"),
+//! );
+//! assert_eq!(string_builder.finish().len(), 1);
+//!
+//! let mut int_builder = Int32Builder::new();
+//! filter_and_fill(
+//!     &mut int_builder,
+//!     vec![Some(11), Some(42), None],
+//!     Some(42),
+//! );
+//! assert_eq!(int_builder.finish().len(), 1);
+//!
+//! // For generic methods that fill lists-of-lists for an [`ArrayBuilder`], use the [`Extend`] trait.
+//! fn filter_and_fill_if_contains<T, V, I: IntoIterator<Item = Option<V>>>(
+//!     list_builder: &mut impl Extend<Option<V>>,
+//!     values: I,
+//!     filter: Option<T>,
+//! ) where
+//!     T: PartialEq,
+//!     for<'a> &'a V: IntoIterator<Item = &'a Option<T>>,
+//! {
+//!     list_builder.extend(values.into_iter().filter(|string: &Option<V>| {
+//!         string
+//!             .as_ref()
+//!             .map(|str: &V| str.into_iter().any(|ch: &Option<T>| ch == &filter))
+//!             .unwrap_or(false)
+//!     }));
+//!  }
+//! let builder = StringBuilder::new();
+//! let mut list_builder = ListBuilder::new(builder);
+//! let pear_pear = vec![Some("🍐"),Some("🍐")];
+//! let pear_app = vec![Some("🍐"),Some("🍎")];
+//! filter_and_fill_if_contains(
+//!     &mut list_builder,
+//!     vec![Some(pear_pear), Some(pear_app), None],
+//!     Some("🍎"),
+//! );
+//! assert_eq!(list_builder.finish().len(), 1);
+//! ```
+//!
 //! # Custom Builders
 //!
 //! It is common to have a collection of statically defined Rust types that
@@ -123,7 +190,7 @@
 //!         let string_field = Arc::new(Field::new("i32", DataType::Utf8, false));
 //!
 //!         let i32_list = Arc::new(self.i32_list.finish()) as ArrayRef;
-//!         let value_field = Arc::new(Field::new("item", DataType::Int32, true));
+//!         let value_field = Arc::new(Field::new_list_field(DataType::Int32, true));
 //!         let i32_list_field = Arc::new(Field::new("i32_list", DataType::List(value_field), true));
 //!
 //!         StructArray::from(vec![
@@ -134,6 +201,8 @@
 //!     }
 //! }
 //!
+//! /// For building arrays in generic code, use Extend instead of the append_* methods
+//! /// e.g. append_value, append_option, append_null
 //! impl<'a> Extend<&'a MyRow> for MyRowBuilder {
 //!     fn extend<T: IntoIterator<Item = &'a MyRow>>(&mut self, iter: T) {
 //!         iter.into_iter().for_each(|row| self.append(row));
@@ -147,8 +216,24 @@
 //!     RecordBatch::from(&builder.finish())
 //! }
 //! ```
+//!
+//! # Null / Validity Masks
+//!
+//! The [`NullBufferBuilder`] is optimized for creating the null mask for an array.
+//!
+//! ```
+//! # use arrow_array::builder::NullBufferBuilder;
+//! let mut builder = NullBufferBuilder::new(8);
+//! let mut builder = NullBufferBuilder::new(8);
+//! builder.append_n_non_nulls(7);
+//! builder.append_null();
+//! let buffer = builder.finish().unwrap();
+//! assert_eq!(buffer.len(), 8);
+//! assert_eq!(buffer.iter().collect::<Vec<_>>(), vec![true, true, true, true, true, true, true, false]);
+//! ```
 
 pub use arrow_buffer::BooleanBufferBuilder;
+pub use arrow_buffer::NullBufferBuilder;
 
 mod boolean_builder;
 pub use boolean_builder::*;
@@ -180,6 +265,8 @@ mod generic_byte_run_builder;
 pub use generic_byte_run_builder::*;
 mod generic_bytes_view_builder;
 pub use generic_bytes_view_builder::*;
+mod generic_list_view_builder;
+pub use generic_list_view_builder::*;
 mod union_builder;
 
 pub use union_builder::*;
@@ -303,6 +390,12 @@ pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 
 /// Builder for [`LargeListArray`](crate::array::LargeListArray)
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
+
+/// Builder for [`ListViewArray`](crate::array::ListViewArray)
+pub type ListViewBuilder<T> = GenericListViewBuilder<i32, T>;
+
+/// Builder for [`LargeListViewArray`](crate::array::LargeListViewArray)
+pub type LargeListViewBuilder<T> = GenericListViewBuilder<i64, T>;
 
 /// Builder for [`BinaryArray`](crate::array::BinaryArray)
 ///

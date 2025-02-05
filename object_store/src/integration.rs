@@ -24,17 +24,19 @@
 //!
 //! They are intended solely for testing purposes.
 
+use core::str;
+
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ObjectStore, PutMode,
-    PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
+    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::distr::Alphanumeric;
+use rand::{rng, Rng};
 
 pub(crate) async fn flatten_list_stream(
     storage: &DynObjectStore,
@@ -110,7 +112,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     let range_result = storage.get_range(&location, range.clone()).await;
 
     let bytes = range_result.unwrap();
-    assert_eq!(bytes, data.slice(range.clone()));
+    assert_eq!(bytes, data.slice(range.start as usize..range.end as usize));
 
     let opts = GetOptions {
         range: Some(GetRange::Bounded(2..5)),
@@ -188,11 +190,11 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     let ranges = vec![0..1, 2..3, 0..5];
     let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
     for (range, bytes) in ranges.iter().zip(bytes) {
-        assert_eq!(bytes, data.slice(range.clone()))
+        assert_eq!(bytes, data.slice(range.start as usize..range.end as usize));
     }
 
     let head = storage.head(&location).await.unwrap();
-    assert_eq!(head.size, data.len());
+    assert_eq!(head.size, data.len() as u64);
 
     storage.delete(&location).await.unwrap();
 
@@ -631,7 +633,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     // As a result each conditional operation will need to wait for the lease to timeout before proceeding
     // One solution would be to clear DynamoDB before each test, but this would require non-trivial additional code
     // so we instead just generate a random suffix for the filenames
-    let rng = thread_rng();
+    let rng = rng();
     let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
 
     delete_fixtures(storage).await;
@@ -740,10 +742,10 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
 /// Returns a chunk of length `chunk_length`
 fn get_chunk(chunk_length: usize) -> Bytes {
     let mut data = vec![0_u8; chunk_length];
-    let mut rng = thread_rng();
+    let mut rng = rng();
     // Set a random selection of bytes
     for _ in 0..1000 {
-        data[rng.gen_range(0..chunk_length)] = rng.gen();
+        data[rng.random_range(0..chunk_length)] = rng.random();
     }
     data.into()
 }
@@ -932,7 +934,7 @@ pub async fn list_with_delimiter(storage: &DynObjectStore) {
     let object = &result.objects[0];
 
     assert_eq!(object.location, expected_location);
-    assert_eq!(object.size, data.len());
+    assert_eq!(object.size, data.len() as u64);
 
     // ==================== check: prefix-list `mydb/wb/000/000/001` (partial filename doesn't match) ====================
     let prefix = Path::from("mydb/wb/000/000/001");
@@ -1083,7 +1085,7 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
         .unwrap();
 
     let meta = storage.head(&path).await.unwrap();
-    assert_eq!(meta.size, chunk_size * 2);
+    assert_eq!(meta.size, chunk_size as u64 * 2);
 
     // Empty case
     let path = Path::from("test_empty_multipart");
@@ -1108,4 +1110,120 @@ async fn delete_fixtures(storage: &DynObjectStore) {
         .try_collect::<Vec<_>>()
         .await
         .unwrap();
+}
+
+/// Tests a race condition where 2 threads are performing multipart writes to the same path
+pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_wins: bool) {
+    let path = Path::from("test_multipart_race_condition");
+
+    let mut multipart_upload_1 = storage.put_multipart(&path).await.unwrap();
+    let mut multipart_upload_2 = storage.put_multipart(&path).await.unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 0)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 0)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 1)).into())
+        .await
+        .unwrap();
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 1)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 2)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 2)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 3)).into())
+        .await
+        .unwrap();
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 3)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1
+        .put_part(Bytes::from(format!("1:{:05300000},", 4)).into())
+        .await
+        .unwrap();
+    multipart_upload_2
+        .put_part(Bytes::from(format!("2:{:05300000},", 4)).into())
+        .await
+        .unwrap();
+
+    multipart_upload_1.complete().await.unwrap();
+
+    if last_writer_wins {
+        multipart_upload_2.complete().await.unwrap();
+    } else {
+        let err = multipart_upload_2.complete().await.unwrap_err();
+
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+    }
+
+    let get_result = storage.get(&path).await.unwrap();
+    let bytes = get_result.bytes().await.unwrap();
+    let string_contents = str::from_utf8(&bytes).unwrap();
+
+    if last_writer_wins {
+        assert!(string_contents.starts_with(
+            format!(
+                "2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},",
+                0, 1, 2, 3, 4
+            )
+            .as_str()
+        ));
+    } else {
+        assert!(string_contents.starts_with(
+            format!(
+                "1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},",
+                0, 1, 2, 3, 4
+            )
+            .as_str()
+        ));
+    }
+}
+
+/// Tests performing out of order multipart uploads
+pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
+    let path = Path::from("test_multipart_out_of_order");
+    let mut multipart_upload = storage.put_multipart(&path).await.unwrap();
+
+    let part1 = std::iter::repeat(b'1')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let part2 = std::iter::repeat(b'2')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let part3 = std::iter::repeat(b'3')
+        .take(5 * 1024 * 1024)
+        .collect::<Bytes>();
+    let full = [part1.as_ref(), part2.as_ref(), part3.as_ref()].concat();
+
+    let fut1 = multipart_upload.put_part(part1.into());
+    let fut2 = multipart_upload.put_part(part2.into());
+    let fut3 = multipart_upload.put_part(part3.into());
+    // note order is 2,3,1 , different than the parts were created in
+    fut2.await.unwrap();
+    fut3.await.unwrap();
+    fut1.await.unwrap();
+
+    multipart_upload.complete().await.unwrap();
+
+    let result = storage.get(&path).await.unwrap();
+    let bytes = result.bytes().await.unwrap();
+    assert_eq!(bytes, full);
 }

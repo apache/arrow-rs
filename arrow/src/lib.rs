@@ -336,7 +336,7 @@
 //!
 //! If you think you have found an instance where this is possible, please file
 //! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/master/arrow#safety).
+//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! # Higher-level Processing
 //!

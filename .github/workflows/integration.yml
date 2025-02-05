@@ -21,11 +21,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - .github/**
@@ -65,8 +65,7 @@ jobs:
       ARROW_INTEGRATION_JAVA: ON
       ARROW_INTEGRATION_JS: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
-      # Disable nanoarrow integration, due to https://github.com/apache/arrow-rs/issues/5052
-      ARCHERY_INTEGRATION_WITH_NANOARROW: "0"
+      ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: "1"
       # These are necessary because the github runner overrides $HOME

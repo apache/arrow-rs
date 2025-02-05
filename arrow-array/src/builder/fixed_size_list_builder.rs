@@ -182,7 +182,7 @@ where
         let field = self
             .field
             .clone()
-            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
+            .unwrap_or_else(|| Arc::new(Field::new_list_field(values.data_type().clone(), true)));
 
         FixedSizeListArray::new(field, self.list_len, values, nulls)
     }
@@ -204,7 +204,7 @@ where
         let field = self
             .field
             .clone()
-            .unwrap_or_else(|| Arc::new(Field::new("item", values.data_type().clone(), true)));
+            .unwrap_or_else(|| Arc::new(Field::new_list_field(values.data_type().clone(), true)));
 
         FixedSizeListArray::new(field, self.list_len, values, nulls)
     }

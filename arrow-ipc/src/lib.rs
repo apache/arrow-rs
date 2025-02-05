@@ -17,7 +17,26 @@
 
 //! Support for the [Arrow IPC Format]
 //!
+//! The Arrow IPC format defines how to read and write [`RecordBatch`]es to/from
+//! a file or stream of bytes. This format can be used to serialize and deserialize
+//! data to files and over the network.
+//!
+//! There are two variants of the IPC format:
+//! 1. [IPC Streaming Format]: Supports streaming data sources, implemented by
+//!    [StreamReader] and [StreamWriter]
+//!
+//! 2. [IPC File Format]: Supports random access, implemented by [FileReader] and
+//!    [FileWriter].
+//!
+//! See the [`reader`] and [`writer`] modules for more information.
+//!
 //! [Arrow IPC Format]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
+//! [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+//! [StreamReader]: reader::StreamReader
+//! [StreamWriter]: writer::StreamWriter
+//! [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
+//! [FileReader]: reader::FileReader
+//! [FileWriter]: writer::FileWriter
 
 #![warn(missing_docs)]
 pub mod convert;
@@ -43,3 +62,14 @@ pub use self::gen::Tensor::*;
 
 const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
+
+impl Endianness {
+    /// Returns true if the endianness of the source system matches the endianness of the target system.
+    pub fn equals_to_target_endianness(self) -> bool {
+        match self {
+            Self::Little => cfg!(target_endian = "little"),
+            Self::Big => cfg!(target_endian = "big"),
+            _ => false,
+        }
+    }
+}

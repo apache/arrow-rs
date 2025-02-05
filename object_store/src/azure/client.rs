@@ -31,17 +31,17 @@ use crate::{
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
+use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use hyper::http::HeaderName;
+use rand::Rng as _;
 use reqwest::{
-    header::{HeaderValue, CONTENT_LENGTH, IF_MATCH, IF_NONE_MATCH},
+    header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
     Client as ReqwestClient, Method, RequestBuilder, Response,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,56 +59,84 @@ static MS_CONTENT_LANGUAGE: HeaderName = HeaderName::from_static("x-ms-blob-cont
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 
 /// A specialized `Error` for object store-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[snafu(display("Error performing get request {}: {}", path, source))]
+    #[error("Error performing get request {}: {}", path, source)]
     GetRequest {
         source: crate::client::retry::Error,
         path: String,
     },
 
-    #[snafu(display("Error performing put request {}: {}", path, source))]
+    #[error("Error performing put request {}: {}", path, source)]
     PutRequest {
         source: crate::client::retry::Error,
         path: String,
     },
 
-    #[snafu(display("Error performing delete request {}: {}", path, source))]
+    #[error("Error performing delete request {}: {}", path, source)]
     DeleteRequest {
         source: crate::client::retry::Error,
         path: String,
     },
 
-    #[snafu(display("Error performing list request: {}", source))]
+    #[error("Error performing bulk delete request: {}", source)]
+    BulkDeleteRequest { source: crate::client::retry::Error },
+
+    #[error("Error receiving bulk delete request body: {}", source)]
+    BulkDeleteRequestBody { source: reqwest::Error },
+
+    #[error(
+        "Bulk delete request failed due to invalid input: {} (code: {})",
+        reason,
+        code
+    )]
+    BulkDeleteRequestInvalidInput { code: String, reason: String },
+
+    #[error("Got invalid bulk delete response: {}", reason)]
+    InvalidBulkDeleteResponse { reason: String },
+
+    #[error(
+        "Bulk delete request failed for key {}: {} (code: {})",
+        path,
+        reason,
+        code
+    )]
+    DeleteFailed {
+        path: String,
+        code: String,
+        reason: String,
+    },
+
+    #[error("Error performing list request: {}", source)]
     ListRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting list response body: {}", source))]
+    #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Got invalid list response: {}", source))]
+    #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Unable to extract metadata from headers: {}", source))]
+    #[error("Unable to extract metadata from headers: {}", source)]
     Metadata {
         source: crate::client::header::Error,
     },
 
-    #[snafu(display("ETag required for conditional update"))]
+    #[error("ETag required for conditional update")]
     MissingETag,
 
-    #[snafu(display("Error requesting user delegation key: {}", source))]
+    #[error("Error requesting user delegation key: {}", source)]
     DelegationKeyRequest { source: crate::client::retry::Error },
 
-    #[snafu(display("Error getting user delegation key response body: {}", source))]
+    #[error("Error getting user delegation key response body: {}", source)]
     DelegationKeyResponseBody { source: reqwest::Error },
 
-    #[snafu(display("Got invalid user delegation key response: {}", source))]
+    #[error("Got invalid user delegation key response: {}", source)]
     DelegationKeyResponse { source: quick_xml::de::DeError },
 
-    #[snafu(display("Generating SAS keys with SAS tokens auth is not supported"))]
+    #[error("Generating SAS keys with SAS tokens auth is not supported")]
     SASforSASNotSupported,
 
-    #[snafu(display("Generating SAS keys while skipping signatures is not supported"))]
+    #[error("Generating SAS keys while skipping signatures is not supported")]
     SASwithSkipSignature,
 }
 
@@ -170,7 +198,7 @@ struct PutRequest<'a> {
     idempotent: bool,
 }
 
-impl<'a> PutRequest<'a> {
+impl PutRequest<'_> {
     fn header(self, k: &HeaderName, v: &str) -> Self {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
@@ -239,12 +267,230 @@ impl<'a> PutRequest<'a> {
             .payload(Some(self.payload))
             .send()
             .await
-            .context(PutRequestSnafu {
-                path: self.path.as_ref(),
+            .map_err(|source| {
+                let path = self.path.as_ref().into();
+                Error::PutRequest { path, source }
             })?;
 
         Ok(response)
     }
+}
+
+#[inline]
+fn extend(dst: &mut Vec<u8>, data: &[u8]) {
+    dst.extend_from_slice(data);
+}
+
+// Write header names as title case. The header name is assumed to be ASCII.
+// We need it because Azure is not always treating headers as case insensitive.
+fn title_case(dst: &mut Vec<u8>, name: &[u8]) {
+    dst.reserve(name.len());
+
+    // Ensure first character is uppercased
+    let mut prev = b'-';
+    for &(mut c) in name {
+        if prev == b'-' {
+            c.make_ascii_uppercase();
+        }
+        dst.push(c);
+        prev = c;
+    }
+}
+
+fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {
+    for (name, value) in headers {
+        // We need special case handling here otherwise Azure returns 400
+        // due to `Content-Id` instead of `Content-ID`
+        if name == "content-id" {
+            extend(dst, b"Content-ID");
+        } else {
+            title_case(dst, name.as_str().as_bytes());
+        }
+        extend(dst, b": ");
+        extend(dst, value.as_bytes());
+        extend(dst, b"\r\n");
+    }
+}
+
+// https://docs.oasis-open.org/odata/odata/v4.0/errata02/os/complete/part1-protocol/odata-v4.0-errata02-os-part1-protocol-complete.html#_Toc406398359
+fn serialize_part_delete_request(
+    dst: &mut Vec<u8>,
+    boundary: &str,
+    idx: usize,
+    request: reqwest::Request,
+    relative_url: String,
+) {
+    // Encode start marker for part
+    extend(dst, b"--");
+    extend(dst, boundary.as_bytes());
+    extend(dst, b"\r\n");
+
+    // Encode part headers
+    let mut part_headers = HeaderMap::new();
+    part_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/http"));
+    part_headers.insert(
+        "Content-Transfer-Encoding",
+        HeaderValue::from_static("binary"),
+    );
+    // Azure returns 400 if we send `Content-Id` instead of `Content-ID`
+    part_headers.insert("Content-ID", HeaderValue::from(idx));
+    write_headers(&part_headers, dst);
+    extend(dst, b"\r\n");
+
+    // Encode the subrequest request-line
+    extend(dst, b"DELETE ");
+    extend(dst, format!("/{} ", relative_url).as_bytes());
+    extend(dst, b"HTTP/1.1");
+    extend(dst, b"\r\n");
+
+    // Encode subrequest headers
+    write_headers(request.headers(), dst);
+    extend(dst, b"\r\n");
+    extend(dst, b"\r\n");
+}
+
+fn parse_multipart_response_boundary(response: &Response) -> Result<String> {
+    let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
+        reason: msg.to_string(),
+    };
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .ok_or_else(|| invalid_response("missing Content-Type"))?;
+
+    let boundary = content_type
+        .as_ref()
+        .strip_prefix(b"multipart/mixed; boundary=")
+        .ok_or_else(|| invalid_response("invalid Content-Type value"))?
+        .to_vec();
+
+    let boundary =
+        String::from_utf8(boundary).map_err(|_| invalid_response("invalid multipart boundary"))?;
+
+    Ok(boundary)
+}
+
+fn invalid_response(msg: &str) -> Error {
+    Error::InvalidBulkDeleteResponse {
+        reason: msg.to_string(),
+    }
+}
+
+#[derive(Debug)]
+struct MultipartField {
+    headers: HeaderMap,
+    content: Bytes,
+}
+
+fn parse_multipart_body_fields(body: Bytes, boundary: &[u8]) -> Result<Vec<MultipartField>> {
+    let start_marker = [b"--", boundary, b"\r\n"].concat();
+    let next_marker = &start_marker[..start_marker.len() - 2];
+    let end_marker = [b"--", boundary, b"--\r\n"].concat();
+
+    // There should be at most 256 responses per batch
+    let mut fields = Vec::with_capacity(256);
+    let mut remaining: &[u8] = body.as_ref();
+    loop {
+        remaining = remaining
+            .strip_prefix(start_marker.as_slice())
+            .ok_or_else(|| invalid_response("missing start marker for field"))?;
+
+        // The documentation only mentions two headers for fields, we leave some extra margin
+        let mut scratch = [httparse::EMPTY_HEADER; 10];
+        let mut headers = HeaderMap::new();
+        match httparse::parse_headers(remaining, &mut scratch) {
+            Ok(httparse::Status::Complete((pos, headers_slice))) => {
+                remaining = &remaining[pos..];
+                for header in headers_slice {
+                    headers.insert(
+                        HeaderName::from_bytes(header.name.as_bytes()).expect("valid"),
+                        HeaderValue::from_bytes(header.value).expect("valid"),
+                    );
+                }
+            }
+            _ => return Err(invalid_response("unable to parse field headers").into()),
+        };
+
+        let next_pos = remaining
+            .windows(next_marker.len())
+            .position(|window| window == next_marker)
+            .ok_or_else(|| invalid_response("early EOF while seeking to next boundary"))?;
+
+        fields.push(MultipartField {
+            headers,
+            content: body.slice_ref(&remaining[..next_pos]),
+        });
+
+        remaining = &remaining[next_pos..];
+
+        // Support missing final CRLF
+        if remaining == end_marker || remaining == &end_marker[..end_marker.len() - 2] {
+            break;
+        }
+    }
+    Ok(fields)
+}
+
+async fn parse_blob_batch_delete_body(
+    batch_body: Bytes,
+    boundary: String,
+    paths: &[Path],
+) -> Result<Vec<Result<Path>>> {
+    let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+
+    for field in parse_multipart_body_fields(batch_body, boundary.as_bytes())? {
+        let id = field
+            .headers
+            .get("content-id")
+            .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
+            .and_then(|v| v.parse::<usize>().ok());
+
+        // Parse part response headers
+        // Documentation mentions 5 headers and states that other standard HTTP headers
+        // may be provided, in order to not incurr in more complexity to support an arbitrary
+        // amount of headers we chose a conservative amount and error otherwise
+        // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
+        let mut headers = [httparse::EMPTY_HEADER; 48];
+        let mut part_response = httparse::Response::new(&mut headers);
+        match part_response.parse(&field.content) {
+            Ok(httparse::Status::Complete(_)) => {}
+            _ => return Err(invalid_response("unable to parse response").into()),
+        };
+
+        match (id, part_response.code) {
+            (Some(_id), Some(code)) if (200..300).contains(&code) => {}
+            (Some(id), Some(404)) => {
+                results[id] = Err(crate::Error::NotFound {
+                    path: paths[id].as_ref().to_string(),
+                    source: Error::DeleteFailed {
+                        path: paths[id].as_ref().to_string(),
+                        code: 404.to_string(),
+                        reason: part_response.reason.unwrap_or_default().to_string(),
+                    }
+                    .into(),
+                });
+            }
+            (Some(id), Some(code)) => {
+                results[id] = Err(Error::DeleteFailed {
+                    path: paths[id].as_ref().to_string(),
+                    code: code.to_string(),
+                    reason: part_response.reason.unwrap_or_default().to_string(),
+                }
+                .into());
+            }
+            (None, Some(code)) => {
+                return Err(Error::BulkDeleteRequestInvalidInput {
+                    code: code.to_string(),
+                    reason: part_response.reason.unwrap_or_default().to_string(),
+                }
+                .into())
+            }
+            _ => return Err(invalid_response("missing part response status code").into()),
+        }
+    }
+
+    Ok(results)
 }
 
 #[derive(Debug)]
@@ -298,23 +544,25 @@ impl AzureClient {
             PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
             PutMode::Update(v) => {
-                let etag = v.e_tag.as_ref().context(MissingETagSnafu)?;
+                let etag = v.e_tag.as_ref().ok_or(Error::MissingETag)?;
                 builder.header(&IF_MATCH, etag)
             }
         };
 
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?)
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
     pub(crate) async fn put_block(
         &self,
         path: &Path,
-        part_idx: usize,
+        _part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let content_id = format!("{part_idx:20}");
+        let part_idx = u128::from_be_bytes(rand::rng().random());
+        let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
         self.put_request(path, payload)
@@ -348,7 +596,8 @@ impl AzureClient {
             .send()
             .await?;
 
-        Ok(get_put_result(response.headers(), VERSION_HEADER).context(MetadataSnafu)?)
+        Ok(get_put_result(response.headers(), VERSION_HEADER)
+            .map_err(|source| Error::Metadata { source })?)
     }
 
     /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
@@ -373,11 +622,92 @@ impl AzureClient {
             .sensitive(sensitive)
             .send()
             .await
-            .context(DeleteRequestSnafu {
-                path: path.as_ref(),
+            .map_err(|source| {
+                let path = path.as_ref().into();
+                Error::DeleteRequest { source, path }
             })?;
 
         Ok(())
+    }
+
+    fn build_bulk_delete_body(
+        &self,
+        boundary: &str,
+        paths: &[Path],
+        credential: &Option<Arc<AzureCredential>>,
+    ) -> Vec<u8> {
+        let mut body_bytes = Vec::with_capacity(paths.len() * 2048);
+
+        for (idx, path) in paths.iter().enumerate() {
+            let url = self.config.path_url(path);
+
+            // Build subrequest with proper authorization
+            let request = self
+                .client
+                .request(Method::DELETE, url)
+                .header(CONTENT_LENGTH, HeaderValue::from(0))
+                // Each subrequest must be authorized individually [1] and we use
+                // the CredentialExt for this.
+                // [1]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#request-body
+                .with_azure_authorization(credential, &self.config.account)
+                .build()
+                .unwrap();
+
+            // Url for part requests must be relative and without base
+            let relative_url = self.config.service.make_relative(request.url()).unwrap();
+
+            serialize_part_delete_request(&mut body_bytes, boundary, idx, request, relative_url)
+        }
+
+        // Encode end marker
+        extend(&mut body_bytes, b"--");
+        extend(&mut body_bytes, boundary.as_bytes());
+        extend(&mut body_bytes, b"--");
+        extend(&mut body_bytes, b"\r\n");
+        body_bytes
+    }
+
+    pub(crate) async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let credential = self.get_credential().await?;
+
+        // https://www.ietf.org/rfc/rfc2046
+        let random_bytes = rand::random::<[u8; 16]>(); // 128 bits
+        let boundary = format!("batch_{}", BASE64_STANDARD_NO_PAD.encode(random_bytes));
+
+        let body_bytes = self.build_bulk_delete_body(&boundary, &paths, &credential);
+
+        // Send multipart request
+        let url = self.config.path_url(&Path::from("/"));
+        let batch_response = self
+            .client
+            .request(Method::POST, url)
+            .query(&[("restype", "container"), ("comp", "batch")])
+            .header(
+                CONTENT_TYPE,
+                HeaderValue::from_str(format!("multipart/mixed; boundary={}", boundary).as_str())
+                    .unwrap(),
+            )
+            .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))
+            .body(body_bytes)
+            .with_azure_authorization(&credential, &self.config.account)
+            .send_retry(&self.config.retry_config)
+            .await
+            .map_err(|source| Error::BulkDeleteRequest { source })?;
+
+        let boundary = parse_multipart_response_boundary(&batch_response)?;
+
+        let batch_body = batch_response
+            .bytes()
+            .await
+            .map_err(|source| Error::BulkDeleteRequestBody { source })?;
+
+        let results = parse_blob_batch_delete_body(batch_body, boundary, &paths).await?;
+
+        Ok(results)
     }
 
     /// Make an Azure Copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>
@@ -453,13 +783,13 @@ impl AzureClient {
             .idempotent(true)
             .send()
             .await
-            .context(DelegationKeyRequestSnafu)?
+            .map_err(|source| Error::DelegationKeyRequest { source })?
             .bytes()
             .await
-            .context(DelegationKeyResponseBodySnafu)?;
+            .map_err(|source| Error::DelegationKeyResponseBody { source })?;
 
-        let response: UserDelegationKey =
-            quick_xml::de::from_reader(response.reader()).context(DelegationKeyResponseSnafu)?;
+        let response: UserDelegationKey = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::DelegationKeyResponse { source })?;
 
         Ok(response)
     }
@@ -515,9 +845,11 @@ impl AzureClient {
             .sensitive(sensitive)
             .send()
             .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
+            .map_err(|source| {
+                let path = path.as_ref().into();
+                Error::GetRequest { source, path }
             })?;
+
         Ok(response)
     }
 }
@@ -573,8 +905,9 @@ impl GetClient for AzureClient {
             .sensitive(sensitive)
             .send()
             .await
-            .context(GetRequestSnafu {
-                path: path.as_ref(),
+            .map_err(|source| {
+                let path = path.as_ref().into();
+                Error::GetRequest { source, path }
             })?;
 
         match response.headers().get("x-ms-resource-type") {
@@ -592,7 +925,7 @@ impl GetClient for AzureClient {
 }
 
 #[async_trait]
-impl ListClient for AzureClient {
+impl ListClient for Arc<AzureClient> {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
     async fn list_request(
         &self,
@@ -635,13 +968,14 @@ impl ListClient for AzureClient {
             .sensitive(sensitive)
             .send()
             .await
-            .context(ListRequestSnafu)?
+            .map_err(|source| Error::ListRequest { source })?
             .bytes()
             .await
-            .context(ListResponseBodySnafu)?;
+            .map_err(|source| Error::ListResponseBody { source })?;
 
-        let mut response: ListResultInternal =
-            quick_xml::de::from_reader(response.reader()).context(InvalidListResponseSnafu)?;
+        let mut response: ListResultInternal = quick_xml::de::from_reader(response.reader())
+            .map_err(|source| Error::InvalidListResponse { source })?;
+
         let token = response.next_marker.take();
 
         Ok((to_list_result(response, prefix)?, token))
@@ -724,7 +1058,7 @@ impl TryFrom<Blob> for ObjectMeta {
         Ok(Self {
             location: Path::parse(value.name)?,
             last_modified: value.properties.last_modified,
-            size: value.properties.content_length as usize,
+            size: value.properties.content_length,
             e_tag: value.properties.e_tag,
             version: None, // For consistency with S3 and GCP which don't include this
         })
@@ -814,8 +1148,10 @@ pub(crate) struct UserDelegationKey {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use regex::bytes::Regex;
 
     use super::*;
+    use crate::StaticCredentialProvider;
 
     #[test]
     fn deserde_azure() {
@@ -1004,5 +1340,160 @@ mod tests {
 
         let _delegated_key_response_internal: UserDelegationKey =
             quick_xml::de::from_str(S).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_build_bulk_delete_body() {
+        let credential_provider = Arc::new(StaticCredentialProvider::new(
+            AzureCredential::BearerToken("static-token".to_string()),
+        ));
+
+        let config = AzureConfig {
+            account: "testaccount".to_string(),
+            container: "testcontainer".to_string(),
+            credentials: credential_provider,
+            service: "http://example.com".try_into().unwrap(),
+            retry_config: Default::default(),
+            is_emulator: false,
+            skip_signature: false,
+            disable_tagging: false,
+            client_options: Default::default(),
+        };
+
+        let client = AzureClient::new(config).unwrap();
+
+        let credential = client.get_credential().await.unwrap();
+        let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];
+
+        let boundary = "batch_statictestboundary".to_string();
+
+        let body_bytes = client.build_bulk_delete_body(&boundary, paths, &credential);
+
+        // Replace Date header value with a static date
+        let re = Regex::new("Date:[^\r]+").unwrap();
+        let body_bytes = re
+            .replace_all(&body_bytes, b"Date: Tue, 05 Nov 2024 15:01:15 GMT")
+            .to_vec();
+
+        let expected_body = b"--batch_statictestboundary\r
+Content-Type: application/http\r
+Content-Transfer-Encoding: binary\r
+Content-ID: 0\r
+\r
+DELETE /testcontainer/a HTTP/1.1\r
+Content-Length: 0\r
+Date: Tue, 05 Nov 2024 15:01:15 GMT\r
+X-Ms-Version: 2023-11-03\r
+Authorization: Bearer static-token\r
+\r
+\r
+--batch_statictestboundary\r
+Content-Type: application/http\r
+Content-Transfer-Encoding: binary\r
+Content-ID: 1\r
+\r
+DELETE /testcontainer/b HTTP/1.1\r
+Content-Length: 0\r
+Date: Tue, 05 Nov 2024 15:01:15 GMT\r
+X-Ms-Version: 2023-11-03\r
+Authorization: Bearer static-token\r
+\r
+\r
+--batch_statictestboundary\r
+Content-Type: application/http\r
+Content-Transfer-Encoding: binary\r
+Content-ID: 2\r
+\r
+DELETE /testcontainer/c HTTP/1.1\r
+Content-Length: 0\r
+Date: Tue, 05 Nov 2024 15:01:15 GMT\r
+X-Ms-Version: 2023-11-03\r
+Authorization: Bearer static-token\r
+\r
+\r
+--batch_statictestboundary--\r\n"
+            .to_vec();
+
+        assert_eq!(expected_body, body_bytes);
+    }
+
+    #[tokio::test]
+    async fn test_parse_blob_batch_delete_body() {
+        let response_body = b"--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed\r
+Content-Type: application/http\r
+Content-ID: 0\r
+\r
+HTTP/1.1 202 Accepted\r
+x-ms-delete-type-permanent: true\r
+x-ms-request-id: 778fdc83-801e-0000-62ff-0334671e284f\r
+x-ms-version: 2018-11-09\r
+\r
+--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed\r
+Content-Type: application/http\r
+Content-ID: 1\r
+\r
+HTTP/1.1 202 Accepted\r
+x-ms-delete-type-permanent: true\r
+x-ms-request-id: 778fdc83-801e-0000-62ff-0334671e2851\r
+x-ms-version: 2018-11-09\r
+\r
+--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed\r
+Content-Type: application/http\r
+Content-ID: 2\r
+\r
+HTTP/1.1 404 The specified blob does not exist.\r
+x-ms-error-code: BlobNotFound\r
+x-ms-request-id: 778fdc83-801e-0000-62ff-0334671e2852\r
+x-ms-version: 2018-11-09\r
+Content-Length: 216\r
+Content-Type: application/xml\r
+\r
+<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<Error><Code>BlobNotFound</Code><Message>The specified blob does not exist.
+RequestId:778fdc83-801e-0000-62ff-0334671e2852
+Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
+--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed--\r\n";
+
+        let response: reqwest::Response = http::Response::builder()
+            .status(202)
+            .header("Transfer-Encoding", "chunked")
+            .header(
+                "Content-Type",
+                "multipart/mixed; boundary=batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed",
+            )
+            .header("x-ms-request-id", "778fdc83-801e-0000-62ff-033467000000")
+            .header("x-ms-version", "2018-11-09")
+            .body(Bytes::from(response_body.as_slice()))
+            .unwrap()
+            .into();
+
+        let boundary = parse_multipart_response_boundary(&response).unwrap();
+        let body = response.bytes().await.unwrap();
+
+        let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];
+
+        let results = parse_blob_batch_delete_body(body, boundary, paths)
+            .await
+            .unwrap();
+
+        assert!(results[0].is_ok());
+        assert_eq!(&paths[0], results[0].as_ref().unwrap());
+
+        assert!(results[1].is_ok());
+        assert_eq!(&paths[1], results[1].as_ref().unwrap());
+
+        assert!(results[2].is_err());
+        let err = results[2].as_ref().unwrap_err();
+        let crate::Error::NotFound { source, .. } = err else {
+            unreachable!("must be not found")
+        };
+        let Some(Error::DeleteFailed { path, code, reason }) = source.downcast_ref::<Error>()
+        else {
+            unreachable!("must be client error")
+        };
+
+        assert_eq!(paths[2].as_ref(), path);
+        assert_eq!("404", code);
+        assert_eq!("The specified blob does not exist.", reason);
     }
 }

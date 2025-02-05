@@ -535,8 +535,10 @@ fn prepare_field_for_flight(
                 )
                 .with_metadata(field.metadata().clone())
             } else {
+                #[allow(deprecated)]
                 let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
 
+                #[allow(deprecated)]
                 Field::new_dict(
                     field.name(),
                     field.data_type().clone(),
@@ -583,7 +585,9 @@ fn prepare_schema_for_flight(
                     )
                     .with_metadata(field.metadata().clone())
                 } else {
+                    #[allow(deprecated)]
                     let dict_id = dictionary_tracker.set_dict_id(field.as_ref());
+                    #[allow(deprecated)]
                     Field::new_dict(
                         field.name(),
                         field.data_type().clone(),
@@ -650,10 +654,12 @@ struct FlightIpcEncoder {
 
 impl FlightIpcEncoder {
     fn new(options: IpcWriteOptions, error_on_replacement: bool) -> Self {
+        #[allow(deprecated)]
         let preserve_dict_id = options.preserve_dict_id();
         Self {
             options,
             data_gen: IpcDataGenerator::default(),
+            #[allow(deprecated)]
             dictionary_tracker: DictionaryTracker::new_with_preserve_dict_id(
                 error_on_replacement,
                 preserve_dict_id,
@@ -934,7 +940,7 @@ mod tests {
         let mut decoder = FlightDataDecoder::new(encoder);
         let expected_schema = Schema::new(vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )]);
 
@@ -1038,7 +1044,7 @@ mod tests {
             "struct",
             vec![Field::new_list(
                 "dict_list",
-                Field::new("item", DataType::Utf8, true),
+                Field::new_list_field(DataType::Utf8, true),
                 true,
             )],
             true,
@@ -1218,12 +1224,16 @@ mod tests {
 
         let hydrated_struct_fields = vec![Field::new_list(
             "dict_list",
-            Field::new("item", DataType::Utf8, true),
+            Field::new_list_field(DataType::Utf8, true),
             true,
         )];
 
         let hydrated_union_fields = vec![
-            Field::new_list("dict_list", Field::new("item", DataType::Utf8, true), true),
+            Field::new_list(
+                "dict_list",
+                Field::new_list_field(DataType::Utf8, true),
+                true,
+            ),
             Field::new_struct("struct", hydrated_struct_fields.clone(), true),
             Field::new("string", DataType::Utf8, true),
         ];
@@ -1537,6 +1547,7 @@ mod tests {
     async fn verify_flight_round_trip(mut batches: Vec<RecordBatch>) {
         let expected_schema = batches.first().unwrap().schema();
 
+        #[allow(deprecated)]
         let encoder = FlightDataEncoderBuilder::default()
             .with_options(IpcWriteOptions::default().with_preserve_dict_id(false))
             .with_dictionary_handling(DictionaryHandling::Resend)
@@ -1564,6 +1575,7 @@ mod tests {
             HashMap::from([("some_key".to_owned(), "some_value".to_owned())]),
         );
 
+        #[allow(deprecated)]
         let mut dictionary_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
 
         let got = prepare_schema_for_flight(&schema, &mut dictionary_tracker, false);
@@ -1582,12 +1594,30 @@ mod tests {
         hydrate_dictionaries(&batch, batch.schema()).expect("failed to optimize");
     }
 
-    pub fn make_flight_data(
+    fn make_flight_data(
         batch: &RecordBatch,
         options: &IpcWriteOptions,
     ) -> (Vec<FlightData>, FlightData) {
+        flight_data_from_arrow_batch(batch, options)
+    }
+
+    fn flight_data_from_arrow_batch(
+        batch: &RecordBatch,
+        options: &IpcWriteOptions,
+    ) -> (Vec<FlightData>, FlightData) {
+        let data_gen = IpcDataGenerator::default();
         #[allow(deprecated)]
-        crate::utils::flight_data_from_arrow_batch(batch, options)
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+
+        let (encoded_dictionaries, encoded_batch) = data_gen
+            .encoded_batch(batch, &mut dictionary_tracker, options)
+            .expect("DictionaryTracker configured above to not error on replacement");
+
+        let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
+        let flight_batch = encoded_batch.into();
+
+        (flight_dictionaries, flight_batch)
     }
 
     #[test]
@@ -1678,7 +1708,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 112).await;
+        verify_encoded_split(batch, 120).await;
     }
 
     #[tokio::test]
@@ -1689,7 +1719,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4304).await;
+        verify_encoded_split(batch, 4312).await;
     }
 
     #[tokio::test]
@@ -1725,7 +1755,7 @@ mod tests {
         // 5k over limit (which is 2x larger than limit of 5k)
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5800).await;
+        verify_encoded_split(batch, 5808).await;
     }
 
     #[tokio::test]
@@ -1741,7 +1771,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 48).await;
+        verify_encoded_split(batch, 56).await;
     }
 
     #[tokio::test]
@@ -1755,7 +1785,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3328).await;
+        verify_encoded_split(batch, 3336).await;
     }
 
     #[tokio::test]
@@ -1769,7 +1799,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5280).await;
+        verify_encoded_split(batch, 5288).await;
     }
 
     #[tokio::test]
@@ -1794,7 +1824,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4128).await;
+        verify_encoded_split(batch, 4136).await;
     }
 
     /// Return size, in memory of flight data
@@ -1803,7 +1833,7 @@ mod tests {
             .flight_descriptor
             .as_ref()
             .map(|descriptor| {
-                let path_len: usize = descriptor.path.iter().map(|p| p.as_bytes().len()).sum();
+                let path_len: usize = descriptor.path.iter().map(|p| p.len()).sum();
 
                 std::mem::size_of_val(descriptor) + descriptor.cmd.len() + path_len
             })

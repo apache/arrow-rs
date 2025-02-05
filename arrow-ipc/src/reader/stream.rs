@@ -24,7 +24,7 @@ use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary_impl, read_record_batch_impl};
+use crate::reader::{read_dictionary_impl, ArrayReader};
 use crate::{MessageHeader, CONTINUATION_MARKER};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -211,15 +211,15 @@ impl StreamDecoder {
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            let batch = read_record_batch_impl(
+                            let batch = ArrayReader::try_new(
                                 &body,
                                 batch,
                                 schema,
                                 &self.dictionaries,
-                                None,
                                 &version,
-                                self.require_alignment,
-                            )?;
+                            )?
+                            .with_require_alignment(self.require_alignment)
+                            .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
                         }
@@ -324,6 +324,7 @@ mod tests {
             "test1",
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
+                #[allow(deprecated)]
                 Arc::new(Field::new_dict(
                     "values".to_string(),
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -353,6 +354,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
+                #[allow(deprecated)]
                 IpcWriteOptions::default().with_preserve_dict_id(false),
             )
             .expect("Failed to create StreamWriter");

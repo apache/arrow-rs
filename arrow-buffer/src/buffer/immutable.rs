@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
+use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
@@ -28,8 +28,43 @@ use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
-/// Buffer represents a contiguous memory region that can be shared with other buffers and across
-/// thread boundaries.
+/// A contiguous memory region that can be shared with other buffers and across
+/// thread boundaries that stores Arrow data.
+///
+/// `Buffer`s can be sliced and cloned without copying the underlying data and can
+/// be created from memory allocated by non-Rust sources such as C/C++.
+///
+/// # Example: Create a `Buffer` from a `Vec` (without copying)
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let vec: Vec<u32> = vec![1, 2, 3];
+/// let buffer = Buffer::from(vec);
+/// ```
+///
+/// # Example: Convert a `Buffer` to a `Vec` (without copying)
+///
+/// Use [`Self::into_vec`] to convert a `Buffer` back into a `Vec` if there are
+/// no other references and the types are aligned correctly.
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let vec: Vec<u32> = vec![1, 2, 3];
+/// # let buffer = Buffer::from(vec);
+/// // convert the buffer back into a Vec of u32
+/// // note this will fail if the buffer is shared or not aligned correctly
+/// let vec: Vec<u32> = buffer.into_vec().unwrap();
+/// ```
+///
+/// # Example: Create a `Buffer` from a [`bytes::Bytes`] (without copying)
+///
+/// [`bytes::Bytes`] is a common type in the Rust ecosystem for shared memory
+/// regions. You can create a buffer from a `Bytes` instance using the `From`
+/// implementation, also without copying.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let bytes = bytes::Bytes::from("hello");
+/// let buffer = Buffer::from(bytes);
+///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
@@ -59,16 +94,15 @@ unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
-    /// Auxiliary method to create a new Buffer
-    #[inline]
+    /// Create a new Buffer from a (internal) `Bytes`
+    ///
+    /// NOTE despite the same name, `Bytes` is an internal struct in arrow-rs
+    /// and is different than [`bytes::Bytes`].
+    ///
+    /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
+    #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
     pub fn from_bytes(bytes: Bytes) -> Self {
-        let length = bytes.len();
-        let ptr = bytes.as_ptr();
-        Buffer {
-            data: Arc::new(bytes),
-            ptr,
-            length,
-        }
+        Self::from(bytes)
     }
 
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
@@ -99,28 +133,11 @@ impl Buffer {
         buffer.into()
     }
 
-    /// Creates a buffer from an existing aligned memory region (must already be byte-aligned), this
-    /// `Buffer` will free this piece of memory when dropped.
+    /// Creates a buffer from an existing memory region.
     ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(note = "Use Buffer::from_vec")]
-    pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
-        assert!(len <= capacity);
-        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
-        Buffer::build_with_arguments(ptr, len, Deallocation::Standard(layout))
-    }
-
-    /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
-    /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
+    /// Ownership of the memory is tracked via reference counting
+    /// and the memory will be freed using the `drop` method of
+    /// [crate::alloc::Allocation] when the reference count reaches zero.
     ///
     /// # Arguments
     ///
@@ -167,7 +184,42 @@ impl Buffer {
         self.data.capacity()
     }
 
-    /// Returns whether the buffer is empty.
+    /// Tries to shrink the capacity of the buffer as much as possible, freeing unused memory.
+    ///
+    /// If the buffer is shared, this is a no-op.
+    ///
+    /// If the memory was allocated with a custom allocator, this is a no-op.
+    ///
+    /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    ///
+    /// The memory region will be reallocated using `std::alloc::realloc`.
+    pub fn shrink_to_fit(&mut self) {
+        let offset = self.ptr_offset();
+        let is_empty = self.is_empty();
+        let desired_capacity = if is_empty {
+            0
+        } else {
+            // For realloc to work, we cannot free the elements before the offset
+            offset + self.len()
+        };
+        if desired_capacity < self.capacity() {
+            if let Some(bytes) = Arc::get_mut(&mut self.data) {
+                if bytes.try_realloc(desired_capacity).is_ok() {
+                    // Realloc complete - update our pointer into `bytes`:
+                    self.ptr = if is_empty {
+                        bytes.as_ptr()
+                    } else {
+                        // SAFETY: we kept all elements leading up to the offset
+                        unsafe { bytes.as_ptr().add(offset) }
+                    }
+                } else {
+                    // Failure to reallocate is fine; we just failed to free up memory.
+                }
+            }
+        }
+    }
+
+    /// Returns true if the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
@@ -183,7 +235,9 @@ impl Buffer {
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the
+    /// same memory region to be shared between buffers.
     ///
     /// # Panics
     ///
@@ -217,7 +271,10 @@ impl Buffer {
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
     /// with `length` bytes.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the same
+    /// memory region to be shared between buffers.
+    ///
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
@@ -278,14 +335,6 @@ impl Buffer {
         BitChunks::new(self.as_slice(), offset, len)
     }
 
-    /// Returns the number of 1-bits in this buffer.
-    #[deprecated(note = "use count_set_bits_offset instead")]
-    pub fn count_set_bits(&self) -> usize {
-        let len_in_bits = self.len() * 8;
-        // self.offset is already taken into consideration by the bit_chunks implementation
-        self.count_set_bits_offset(0, len_in_bits)
-    }
-
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
@@ -295,6 +344,8 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
+    ///
+    /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;
@@ -311,10 +362,16 @@ impl Buffer {
             })
     }
 
-    /// Returns `Vec` for mutating the buffer
+    /// Converts self into a `Vec`, if possible.
     ///
-    /// Returns `Err(self)` if this buffer does not have the same [`Layout`] as
-    /// the destination Vec or contains a non-zero offset
+    /// This can be used to reuse / mutate the underlying data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(self)` if
+    /// 1. this buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. contains a non-zero offset
+    /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
@@ -397,7 +454,29 @@ impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
     }
 }
 
-/// Creating a `Buffer` instance by storing the boolean values into the buffer
+/// Convert from internal `Bytes` (not [`bytes::Bytes`]) to `Buffer`
+impl From<Bytes> for Buffer {
+    #[inline]
+    fn from(bytes: Bytes) -> Self {
+        let length = bytes.len();
+        let ptr = bytes.as_ptr();
+        Self {
+            data: Arc::new(bytes),
+            ptr,
+            length,
+        }
+    }
+}
+
+/// Convert from [`bytes::Bytes`], not internal `Bytes` to `Buffer`
+impl From<bytes::Bytes> for Buffer {
+    fn from(bytes: bytes::Bytes) -> Self {
+        let bytes: Bytes = bytes.into();
+        Self::from(bytes)
+    }
+}
+
+/// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -430,7 +509,9 @@ impl<T: ArrowNativeType> From<BufferBuilder<T>> for Buffer {
 
 impl Buffer {
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length.
+    ///
     /// Prefer this to `collect` whenever possible, as it is ~60% faster.
+    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::buffer::Buffer;
@@ -560,6 +641,34 @@ mod tests {
         assert_eq!(0, buf4.len());
         assert!(buf4.is_empty());
         assert_eq!(buf2.slice_with_length(2, 1).as_slice(), &[10]);
+    }
+
+    #[test]
+    fn test_shrink_to_fit() {
+        let original = Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.capacity(), 64);
+
+        let slice = original.slice_with_length(2, 3);
+        drop(original); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(slice.as_slice(), &[2, 3, 4]);
+        assert_eq!(slice.capacity(), 64);
+
+        let mut shrunk = slice;
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.as_slice(), &[2, 3, 4]);
+        assert_eq!(shrunk.capacity(), 5); // shrink_to_fit is allowed to keep the elements before the offset
+
+        // Test that we can handle empty slices:
+        let empty_slice = shrunk.slice_with_length(1, 0);
+        drop(shrunk); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(empty_slice.as_slice(), &[]);
+        assert_eq!(empty_slice.capacity(), 5);
+
+        let mut shrunk_empty = empty_slice;
+        shrunk_empty.shrink_to_fit();
+        assert_eq!(shrunk_empty.as_slice(), &[]);
+        assert_eq!(shrunk_empty.capacity(), 0);
     }
 
     #[test]

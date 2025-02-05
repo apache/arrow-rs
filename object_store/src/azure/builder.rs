@@ -26,7 +26,6 @@ use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, ResultExt, Snafu};
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
@@ -45,48 +44,48 @@ const EMULATOR_ACCOUNT_KEY: &str =
 const MSI_ENDPOINT_ENV_KEY: &str = "IDENTITY_ENDPOINT";
 
 /// A specialized `Error` for Azure builder-related errors
-#[derive(Debug, Snafu)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[snafu(display("Unable parse source url. Url: {}, Error: {}", url, source))]
+    #[error("Unable parse source url. Url: {}, Error: {}", url, source)]
     UnableToParseUrl {
         source: url::ParseError,
         url: String,
     },
 
-    #[snafu(display(
+    #[error(
         "Unable parse emulator url {}={}, Error: {}",
         env_name,
         env_value,
         source
-    ))]
+    )]
     UnableToParseEmulatorUrl {
         env_name: String,
         env_value: String,
         source: url::ParseError,
     },
 
-    #[snafu(display("Account must be specified"))]
+    #[error("Account must be specified")]
     MissingAccount {},
 
-    #[snafu(display("Container name must be specified"))]
+    #[error("Container name must be specified")]
     MissingContainerName {},
 
-    #[snafu(display(
+    #[error(
         "Unknown url scheme cannot be parsed into storage location: {}",
         scheme
-    ))]
+    )]
     UnknownUrlScheme { scheme: String },
 
-    #[snafu(display("URL did not match any known pattern for scheme: {}", url))]
+    #[error("URL did not match any known pattern for scheme: {}", url)]
     UrlNotRecognised { url: String },
 
-    #[snafu(display("Failed parsing an SAS key"))]
+    #[error("Failed parsing an SAS key")]
     DecodeSasKey { source: std::str::Utf8Error },
 
-    #[snafu(display("Missing component in SAS query pair"))]
+    #[error("Missing component in SAS query pair")]
     MissingSasComponent {},
 
-    #[snafu(display("Configuration key: '{}' is not known.", key))]
+    #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
 }
 
@@ -240,6 +239,14 @@ pub enum AzureConfigKey {
     /// - `authority_id`
     AuthorityId,
 
+    /// Authority host used in oauth flows
+    ///
+    /// Supported keys:
+    /// - `azure_storage_authority_host`
+    /// - `azure_authority_host`
+    /// - `authority_host`
+    AuthorityHost,
+
     /// Shared access signature.
     ///
     /// The signature is expected to be percent-encoded, much like they are provided
@@ -383,6 +390,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::ClientId => "azure_storage_client_id",
             Self::ClientSecret => "azure_storage_client_secret",
             Self::AuthorityId => "azure_storage_tenant_id",
+            Self::AuthorityHost => "azure_storage_authority_host",
             Self::SasKey => "azure_storage_sas_key",
             Self::Token => "azure_storage_token",
             Self::UseEmulator => "azure_storage_use_emulator",
@@ -427,6 +435,9 @@ impl FromStr for AzureConfigKey {
             | "azure_authority_id"
             | "tenant_id"
             | "authority_id" => Ok(Self::AuthorityId),
+            "azure_storage_authority_host" | "azure_authority_host" | "authority_host" => {
+                Ok(Self::AuthorityHost)
+            }
             "azure_storage_sas_key" | "azure_storage_sas_token" | "sas_key" | "sas_token" => {
                 Ok(Self::SasKey)
             }
@@ -556,6 +567,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::ClientId => self.client_id = Some(value.into()),
             AzureConfigKey::ClientSecret => self.client_secret = Some(value.into()),
             AzureConfigKey::AuthorityId => self.tenant_id = Some(value.into()),
+            AzureConfigKey::AuthorityHost => self.authority_host = Some(value.into()),
             AzureConfigKey::SasKey => self.sas_key = Some(value.into()),
             AzureConfigKey::Token => self.bearer_token = Some(value.into()),
             AzureConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
@@ -602,6 +614,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::ClientId => self.client_id.clone(),
             AzureConfigKey::ClientSecret => self.client_secret.clone(),
             AzureConfigKey::AuthorityId => self.tenant_id.clone(),
+            AzureConfigKey::AuthorityHost => self.authority_host.clone(),
             AzureConfigKey::SasKey => self.sas_key.clone(),
             AzureConfigKey::Token => self.bearer_token.clone(),
             AzureConfigKey::UseEmulator => Some(self.use_emulator.to_string()),
@@ -628,11 +641,17 @@ impl MicrosoftAzureBuilder {
     /// This is a separate member function to allow fallible computation to
     /// be deferred until [`Self::build`] which in turn allows deriving [`Clone`]
     fn parse_url(&mut self, url: &str) -> Result<()> {
-        let parsed = Url::parse(url).context(UnableToParseUrlSnafu { url })?;
-        let host = parsed.host_str().context(UrlNotRecognisedSnafu { url })?;
+        let parsed = Url::parse(url).map_err(|source| {
+            let url = url.into();
+            Error::UnableToParseUrl { url, source }
+        })?;
+
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| Error::UrlNotRecognised { url: url.into() })?;
 
         let validate = |s: &str| match s.contains('.') {
-            true => Err(UrlNotRecognisedSnafu { url }.build()),
+            true => Err(Error::UrlNotRecognised { url: url.into() }),
             false => Ok(s.to_string()),
         };
 
@@ -651,7 +670,7 @@ impl MicrosoftAzureBuilder {
                     self.account_name = Some(validate(a)?);
                     self.use_fabric_endpoint = true.into();
                 } else {
-                    return Err(UrlNotRecognisedSnafu { url }.build().into());
+                    return Err(Error::UrlNotRecognised { url: url.into() }.into());
                 }
             }
             "https" => match host.split_once('.') {
@@ -675,9 +694,12 @@ impl MicrosoftAzureBuilder {
                     }
                     self.use_fabric_endpoint = true.into();
                 }
-                _ => return Err(UrlNotRecognisedSnafu { url }.build().into()),
+                _ => return Err(Error::UrlNotRecognised { url: url.into() }.into()),
             },
-            scheme => return Err(UnknownUrlSchemeSnafu { scheme }.build().into()),
+            scheme => {
+                let scheme = scheme.into();
+                return Err(Error::UnknownUrlScheme { scheme }.into());
+            }
         }
         Ok(())
     }
@@ -910,8 +932,10 @@ impl MicrosoftAzureBuilder {
                 },
             };
 
-            let url =
-                Url::parse(&account_url).context(UnableToParseUrlSnafu { url: account_url })?;
+            let url = Url::parse(&account_url).map_err(|source| {
+                let url = account_url.clone();
+                Error::UnableToParseUrl { url, source }
+            })?;
 
             let credential = if let Some(credential) = self.credentials {
                 credential
@@ -1016,10 +1040,13 @@ impl MicrosoftAzureBuilder {
 /// if present, otherwise falls back to default_url
 fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     let url = match std::env::var(env_name) {
-        Ok(env_value) => Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
-            env_name,
-            env_value,
-        })?,
+        Ok(env_value) => {
+            Url::parse(&env_value).map_err(|source| Error::UnableToParseEmulatorUrl {
+                env_name: env_name.into(),
+                env_value,
+                source,
+            })?
+        }
         Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
     };
     Ok(url)
@@ -1028,7 +1055,7 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
 fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
     let sas = percent_decode_str(sas)
         .decode_utf8()
-        .context(DecodeSasKeySnafu {})?;
+        .map_err(|source| Error::DecodeSasKey { source })?;
     let kv_str_pairs = sas
         .trim_start_matches('?')
         .split('&')

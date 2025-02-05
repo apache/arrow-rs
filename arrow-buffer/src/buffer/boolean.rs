@@ -25,6 +25,14 @@ use crate::{
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
+///
+/// `BooleanBuffer`s can be creating using [`BooleanBufferBuilder`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for representing null values in Arrow arrays
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
     buffer: Buffer,
@@ -52,8 +60,12 @@ impl BooleanBuffer {
     /// This method will panic if `buffer` is not large enough
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let total_len = offset.saturating_add(len);
-        let bit_len = buffer.len().saturating_mul(8);
-        assert!(total_len <= bit_len);
+        let buffer_len = buffer.len();
+        let bit_len = buffer_len.saturating_mul(8);
+        assert!(
+            total_len <= bit_len,
+            "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
+        );
         Self {
             buffer,
             offset,
@@ -96,17 +108,6 @@ impl BooleanBuffer {
         BitChunks::new(self.values(), self.offset, self.len)
     }
 
-    /// Returns `true` if the bit at index `i` is set
-    ///
-    /// # Panics
-    ///
-    /// Panics if `i >= self.len()`
-    #[inline]
-    #[deprecated(note = "use BooleanBuffer::value")]
-    pub fn is_set(&self, i: usize) -> bool {
-        self.value(i)
-    }
-
     /// Returns the offset of this [`BooleanBuffer`] in bits
     #[inline]
     pub fn offset(&self) -> usize {
@@ -123,6 +124,12 @@ impl BooleanBuffer {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
+        self.buffer.shrink_to_fit();
     }
 
     /// Returns the boolean value at index `i`.

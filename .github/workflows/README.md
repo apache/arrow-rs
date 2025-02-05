@@ -20,6 +20,6 @@
 The CI is structured so most tests are run in specific workflows:
 `arrow.yml` for `arrow`, `parquet.yml` for `parquet` and so on.
 
-The basic idea is to run all tests on pushes to master (to ensure we
-keep master green) but run only the individual workflows on PRs that
+The basic idea is to run all tests on pushes to main (to ensure we
+keep main green) but run only the individual workflows on PRs that
 change files that could affect them.
