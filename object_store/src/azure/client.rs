@@ -561,7 +561,7 @@ impl AzureClient {
         _part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let part_idx = u128::from_be_bytes(rand::thread_rng().gen());
+        let part_idx = u128::from_be_bytes(rand::rng().random());
         let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
@@ -1058,7 +1058,7 @@ impl TryFrom<Blob> for ObjectMeta {
         Ok(Self {
             location: Path::parse(value.name)?,
             last_modified: value.properties.last_modified,
-            size: value.properties.content_length as usize,
+            size: value.properties.content_length,
             e_tag: value.properties.e_tag,
             version: None, // For consistency with S3 and GCP which don't include this
         })

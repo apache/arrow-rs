@@ -266,8 +266,7 @@ where
     let array: PrimitiveArray<T> =
         if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
-        } else if input_scale < output_scale {
-            // the scale doesn't change, but precision may change and cause overflow
+        } else if input_scale <= output_scale {
             convert_to_bigger_or_equal_scale_decimal_same_type::<T>(
                 array,
                 input_precision,

@@ -182,6 +182,7 @@ impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
 }
 
 impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
+    #[inline]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         iter.into_iter().collect::<Vec<_>>().into()
     }

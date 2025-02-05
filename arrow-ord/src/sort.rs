@@ -785,12 +785,14 @@ impl LexicographicalComparator {
 mod tests {
     use super::*;
     use arrow_array::builder::{
-        FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
+        BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
+        PrimitiveRunBuilder,
     };
     use arrow_buffer::{i256, NullBuffer};
     use arrow_schema::Field;
     use half::f16;
     use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
     use rand::{Rng, RngCore, SeedableRng};
 
     fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
@@ -1538,6 +1540,384 @@ mod tests {
             }),
             Some(2),
             vec![0, 1],
+        );
+    }
+
+    /// Test sort boolean on each permutation of with/without limit and GenericListArray/FixedSizeListArray
+    ///
+    /// The input data must have the same length for all list items so that we can test FixedSizeListArray
+    ///
+    fn test_every_config_sort_boolean_list_arrays(
+        data: Vec<Option<Vec<Option<bool>>>>,
+        options: Option<SortOptions>,
+        expected_data: Vec<Option<Vec<Option<bool>>>>,
+    ) {
+        let first_length = data
+            .iter()
+            .find_map(|x| x.as_ref().map(|x| x.len()))
+            .unwrap_or(0);
+        let first_non_match_length = data
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.len()).unwrap_or(first_length))
+            .position(|x| x != first_length);
+
+        assert_eq!(
+            first_non_match_length, None,
+            "All list items should have the same length {first_length}, input data is invalid"
+        );
+
+        let first_non_match_length = expected_data
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.len()).unwrap_or(first_length))
+            .position(|x| x != first_length);
+
+        assert_eq!(
+            first_non_match_length, None,
+            "All list items should have the same length {first_length}, expected data is invalid"
+        );
+
+        let limit = expected_data.len().saturating_div(2);
+
+        for &with_limit in &[false, true] {
+            let (limit, expected_data) = if with_limit {
+                (
+                    Some(limit),
+                    expected_data.iter().take(limit).cloned().collect(),
+                )
+            } else {
+                (None, expected_data.clone())
+            };
+
+            for &fixed_length in &[None, Some(first_length as i32)] {
+                test_sort_boolean_list_arrays(
+                    data.clone(),
+                    options,
+                    limit,
+                    expected_data.clone(),
+                    fixed_length,
+                );
+            }
+        }
+    }
+
+    fn test_sort_boolean_list_arrays(
+        data: Vec<Option<Vec<Option<bool>>>>,
+        options: Option<SortOptions>,
+        limit: Option<usize>,
+        expected_data: Vec<Option<Vec<Option<bool>>>>,
+        fixed_length: Option<i32>,
+    ) {
+        fn build_fixed_boolean_list_array(
+            data: Vec<Option<Vec<Option<bool>>>>,
+            fixed_length: i32,
+        ) -> ArrayRef {
+            let mut builder = FixedSizeListBuilder::new(
+                BooleanBuilder::with_capacity(fixed_length as usize),
+                fixed_length,
+            );
+            for sublist in data {
+                match sublist {
+                    Some(sublist) => {
+                        builder.values().extend(sublist);
+                        builder.append(true);
+                    }
+                    None => {
+                        builder
+                            .values()
+                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                        builder.append(false);
+                    }
+                }
+            }
+            Arc::new(builder.finish()) as ArrayRef
+        }
+
+        fn build_generic_boolean_list_array<OffsetSize: OffsetSizeTrait>(
+            data: Vec<Option<Vec<Option<bool>>>>,
+        ) -> ArrayRef {
+            let mut builder = GenericListBuilder::<OffsetSize, _>::new(BooleanBuilder::new());
+            builder.extend(data);
+            Arc::new(builder.finish()) as ArrayRef
+        }
+
+        // for FixedSizedList
+        if let Some(length) = fixed_length {
+            let input = build_fixed_boolean_list_array(data.clone(), length);
+            let sorted = match limit {
+                Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+                _ => sort(&(input as ArrayRef), options).unwrap(),
+            };
+            let expected = build_fixed_boolean_list_array(expected_data.clone(), length);
+
+            assert_eq!(&sorted, &expected);
+        }
+
+        // for List
+        let input = build_generic_boolean_list_array::<i32>(data.clone());
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = build_generic_boolean_list_array::<i32>(expected_data.clone());
+
+        assert_eq!(&sorted, &expected);
+
+        // for LargeList
+        let input = build_generic_boolean_list_array::<i64>(data.clone());
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = build_generic_boolean_list_array::<i64>(expected_data.clone());
+
+        assert_eq!(&sorted, &expected);
+    }
+
+    #[test]
+    fn test_sort_list_of_booleans() {
+        // These are all the possible combinations of boolean values
+        // There are 3^3 + 1 = 28 possible combinations (3 values to permutate - [true, false, null] and 1 None value)
+        #[rustfmt::skip]
+        let mut cases = vec![
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        None]),
+            None,
+        ];
+
+        cases.shuffle(&mut StdRng::seed_from_u64(42));
+
+        // The order is false, true, null
+        #[rustfmt::skip]
+        let expected_descending_false_nulls_first_false = vec![
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        None]),
+            None,
+        ];
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            expected_descending_false_nulls_first_false,
+        );
+
+        // The order is null, false, true
+        #[rustfmt::skip]
+        let expected_descending_false_nulls_first_true = vec![
+            None,
+
+            Some(vec![None,        None,        None]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        Some(true)]),
+
+            Some(vec![None,        Some(false), None]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), Some(true)]),
+
+            Some(vec![None,        Some(true),  None]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  Some(true)]),
+
+            Some(vec![Some(false), None,        None]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        Some(true)]),
+
+            Some(vec![Some(false), Some(false), None]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+
+            Some(vec![Some(false), Some(true),  None]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+
+            Some(vec![Some(true),  None,        None]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        Some(true)]),
+
+            Some(vec![Some(true),  Some(false), None]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+
+            Some(vec![Some(true),  Some(true),  None]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+        ];
+
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            expected_descending_false_nulls_first_true,
+        );
+
+        // The order is true, false, null
+        #[rustfmt::skip]
+        let expected_descending_true_nulls_first_false = vec![
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        None]),
+
+            None,
+        ];
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            expected_descending_true_nulls_first_false,
+        );
+
+        // The order is null, true, false
+        #[rustfmt::skip]
+        let expected_descending_true_nulls_first_true = vec![
+            None,
+
+            Some(vec![None,        None,        None]),
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+
+            Some(vec![None,        Some(true),  None]),
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+
+            Some(vec![None,        Some(false), None]),
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+
+            Some(vec![Some(true),  None,        None]),
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+
+            Some(vec![Some(true),  Some(true),  None]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+
+            Some(vec![Some(true),  Some(false), None]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+
+            Some(vec![Some(false), None,        None]),
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+
+            Some(vec![Some(false), Some(true),  None]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+
+            Some(vec![Some(false), Some(false), None]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+        ];
+        // Testing with limit false and fixed_length None
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            expected_descending_true_nulls_first_true,
         );
     }
 
@@ -3901,7 +4281,7 @@ mod tests {
     fn test_partial_rand_sort() {
         let size = 1000u32;
         let mut rng = StdRng::seed_from_u64(42);
-        let mut before: Vec<u32> = (0..size).map(|_| rng.gen::<u32>()).collect();
+        let mut before: Vec<u32> = (0..size).map(|_| rng.random::<u32>()).collect();
         let mut d = before.clone();
         let last = (rng.next_u32() % size) as usize;
         d.sort_unstable();

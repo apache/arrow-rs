@@ -317,7 +317,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -926,7 +926,7 @@ mod tests {
     use bytes::Bytes;
     use half::f16;
     use num::PrimInt;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
@@ -1403,7 +1403,7 @@ mod tests {
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
         fn gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
-            thread_rng().fill_bytes(&mut v);
+            rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
         }
     }
@@ -2058,10 +2058,13 @@ mod tests {
         fn with_row_selections(self) -> Self {
             assert!(self.row_filter.is_none(), "Must set row selection first");
 
-            let mut rng = thread_rng();
-            let step = rng.gen_range(self.record_batch_size..self.num_rows);
-            let row_selections =
-                create_test_selection(step, self.num_row_groups * self.num_rows, rng.gen::<bool>());
+            let mut rng = rng();
+            let step = rng.random_range(self.record_batch_size..self.num_rows);
+            let row_selections = create_test_selection(
+                step,
+                self.num_row_groups * self.num_rows,
+                rng.random::<bool>(),
+            );
             Self {
                 row_selections: Some(row_selections),
                 ..self
@@ -2074,9 +2077,9 @@ mod tests {
                 None => self.num_row_groups * self.num_rows,
             };
 
-            let mut rng = thread_rng();
+            let mut rng = rng();
             Self {
-                row_filter: Some((0..row_count).map(|_| rng.gen_bool(0.9)).collect()),
+                row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                 ..self
             }
         }
@@ -2290,7 +2293,7 @@ mod tests {
         //according to null_percent generate def_levels
         let (repetition, def_levels) = match opts.null_percent.as_ref() {
             Some(null_percent) => {
-                let mut rng = thread_rng();
+                let mut rng = rng();
 
                 let def_levels: Vec<Vec<i16>> = (0..opts.num_row_groups)
                     .map(|_| {
@@ -4134,7 +4137,7 @@ mod tests {
 
     #[test]
     fn test_list_selection_fuzz() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
             Field::new_list(
@@ -4150,26 +4153,26 @@ mod tests {
         let mut list_a_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
 
         for _ in 0..2048 {
-            if rng.gen_bool(0.2) {
+            if rng.random_bool(0.2) {
                 list_a_builder.append(false);
                 continue;
             }
 
-            let list_a_len = rng.gen_range(0..10);
+            let list_a_len = rng.random_range(0..10);
             let list_b_builder = list_a_builder.values();
 
             for _ in 0..list_a_len {
-                if rng.gen_bool(0.2) {
+                if rng.random_bool(0.2) {
                     list_b_builder.append(false);
                     continue;
                 }
 
-                let list_b_len = rng.gen_range(0..10);
+                let list_b_len = rng.random_range(0..10);
                 let int_builder = list_b_builder.values();
                 for _ in 0..list_b_len {
-                    match rng.gen_bool(0.2) {
+                    match rng.random_bool(0.2) {
                         true => int_builder.append_null(),
-                        false => int_builder.append_value(rng.gen()),
+                        false => int_builder.append_value(rng.random()),
                     }
                 }
                 list_b_builder.append(true)

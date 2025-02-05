@@ -108,6 +108,7 @@ mod encoder;
 
 use std::{fmt::Debug, io::Write};
 
+use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
@@ -247,9 +248,25 @@ impl WriterBuilder {
     /// {"foo":null,"bar":null}
     /// ```
     ///
-    /// Default is to skip nulls (set to `false`).
+    /// Default is to skip nulls (set to `false`). If `struct_mode == ListOnly`,
+    /// nulls will be written explicitly regardless of this setting.
     pub fn with_explicit_nulls(mut self, explicit_nulls: bool) -> Self {
         self.0.explicit_nulls = explicit_nulls;
+        self
+    }
+
+    /// Returns if this writer is configured to write structs as JSON Objects or Arrays.
+    pub fn struct_mode(&self) -> StructMode {
+        self.0.struct_mode
+    }
+
+    /// Set the [`StructMode`] for the writer, which determines whether structs
+    /// are encoded to JSON as objects or lists. For more details refer to the
+    /// enum documentation. Default is to use `ObjectOnly`. If this is set to
+    /// `ListOnly`, nulls will be written explicitly regardless of the
+    /// `explicit_nulls` setting.
+    pub fn with_struct_mode(mut self, struct_mode: StructMode) -> Self {
+        self.0.struct_mode = struct_mode;
         self
     }
 
@@ -1952,5 +1969,71 @@ mod tests {
 {"decimal":56.78}
 "#,
         );
+    }
+
+    #[test]
+    fn write_structs_as_list() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("c11", DataType::Int32, true),
+                    Field::new(
+                        "c12",
+                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
+                        false,
+                    ),
+                ])),
+                false,
+            ),
+            Field::new("c2", DataType::Utf8, false),
+        ]);
+
+        let c1 = StructArray::from(vec![
+            (
+                Arc::new(Field::new("c11", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "c12",
+                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)].into()),
+                    false,
+                )),
+                Arc::new(StructArray::from(vec![(
+                    Arc::new(Field::new("c121", DataType::Utf8, false)),
+                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")])) as ArrayRef,
+                )])) as ArrayRef,
+            ),
+        ]);
+        let c2 = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+
+        let expected = r#"[[1,["e"]],"a"]
+[[null,["f"]],"b"]
+[[5,["g"]],"c"]
+"#;
+
+        let mut buf = Vec::new();
+        {
+            let builder = WriterBuilder::new()
+                .with_explicit_nulls(true)
+                .with_struct_mode(StructMode::ListOnly);
+            let mut writer = builder.build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+        assert_json_eq(&buf, expected);
+
+        let mut buf = Vec::new();
+        {
+            let builder = WriterBuilder::new()
+                .with_explicit_nulls(false)
+                .with_struct_mode(StructMode::ListOnly);
+            let mut writer = builder.build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+        assert_json_eq(&buf, expected);
     }
 }

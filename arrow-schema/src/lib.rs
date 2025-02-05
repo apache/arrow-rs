@@ -25,6 +25,7 @@ use std::fmt::Display;
 mod datatype_parse;
 mod error;
 pub use error::*;
+pub mod extension;
 mod field;
 pub use field::*;
 mod fields;

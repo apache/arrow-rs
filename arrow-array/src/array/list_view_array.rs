@@ -32,16 +32,81 @@ pub type ListViewArray = GenericListViewArray<i32>;
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i64`.
 pub type LargeListViewArray = GenericListViewArray<i64>;
 
+/// An array of [variable length lists], specifically in the [list-view layout].
 ///
-/// Different from [`crate::GenericListArray`] as it stores both an offset and length
-/// meaning that take / filter operations can be implemented without copying the underlying data.
+/// Differs from [`GenericListArray`] (which represents the [list layout]) in that
+/// the sizes of the child arrays are explicitly encoded in a separate buffer, instead
+/// of being derived from the difference between subsequent offsets in the offset buffer.
 ///
-/// [Variable-size List Layout: ListView Layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
+/// This allows the offsets (and subsequently child data) to be out of order. It also
+/// allows take / filter operations to be implemented without copying the underlying data.
+///
+/// # Representation
+///
+/// Given the same example array from [`GenericListArray`], it would be represented
+/// as such via a list-view layout array:
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │   │ 3 │     │ │ 1 │ │ A │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │      []     │  │ (3,0) │                   │ 1 │   │ 3 │   │ 0 │     │ │ 1 │ │ B │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (?,?) │                   │ 0 │   │ ? │   │ ? │     │ │ 1 │ │ C │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (4,1) │                   │ 1 │   │ 4 │   │ 1 │     │ │ ? │ │ ? │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (5,2) │                   │ 1 │   │ 5 │   │ 2 │     │ │ 1 │ │ D │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   └───┘   └───┘       ├───┤ ├───┤
+///                                                                         │ │ 0 │ │ ? │ │ 5  │
+///     Logical       Logical               │  Validity  Offsets  Sizes       ├───┤ ├───┤
+///      Values       Offset                   (nulls)                      │ │ 1 │ │ F │ │ 6  │
+///                   & Size                │                                 └───┘ └───┘
+///                                                                         │    Values   │    │
+///                 (offsets[i],            │   ListViewArray                   (Array)
+///                  sizes[i])                                              └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// Another way of representing the same array but taking advantage of the offsets being out of order:
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (2,3) │                   │ 1 │   │ 2 │   │ 3 │     │ │ 0 │ │ ? │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │      []     │  │ (0,0) │                   │ 1 │   │ 0 │   │ 0 │     │ │ 1 │ │ F │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (?,?) │                   │ 0 │   │ ? │   │ ? │     │ │ 1 │ │ A │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (5,1) │                   │ 1 │   │ 5 │   │ 1 │     │ │ 1 │ │ B │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (0,2) │                   │ 1 │   │ 0 │   │ 2 │     │ │ 1 │ │ C │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   └───┘   └───┘       ├───┤ ├───┤
+///                                                                         │ │ 1 │ │ D │ │ 5  │
+///     Logical       Logical               │  Validity  Offsets  Sizes       └───┘ └───┘
+///      Values       Offset                   (nulls)                      │    Values   │    │
+///                   & Size                │                                   (Array)  
+///                                                                         └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],            │   ListViewArray                          
+///                  sizes[i])                                                                 │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// [`GenericListArray`]: crate::array::GenericListArray
+/// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
+/// [list layout]: https://arrow.apache.org/docs/format/Columnar.html#list-layout
+/// [list-view layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
 #[derive(Clone)]
 pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     values: ArrayRef,
+    // Unlike GenericListArray, we do not use OffsetBuffer here as offsets are not
+    // guaranteed to be monotonically increasing.
     value_offsets: ScalarBuffer<OffsetSize>,
     value_sizes: ScalarBuffer<OffsetSize>,
 }
@@ -830,8 +895,8 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i32; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i32; 0]);
 
         let string = LargeListViewArray::from(
             ArrayData::builder(DataType::LargeListView(f))
@@ -841,8 +906,8 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(string.len(), 0);
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i64; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i64; 0]);
     }
 
     #[test]

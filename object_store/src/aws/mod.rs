@@ -571,6 +571,7 @@ mod tests {
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
         multipart_race_condition(&integration, true).await;
+        multipart_out_of_order(&integration).await;
         signing(&integration).await;
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;

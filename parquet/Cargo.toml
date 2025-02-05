@@ -69,7 +69,7 @@ paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 sysinfo = { version = "0.33.0", optional = true, default-features = false, features = ["system"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
-simdutf8 = { version = "0.1.5"}
+simdutf8 = { version = "0.1.5", optional = true, default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -83,7 +83,7 @@ zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.11.0", default-features = false, features = ["azure"] }
 
 # TODO: temporary to fix parquet wasm build
@@ -98,11 +98,13 @@ zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+# Enable support for arrow canonical extension types
+arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
 cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs
@@ -121,6 +123,8 @@ zstd = ["dep:zstd", "zstd-sys"]
 sysinfo = ["dep:sysinfo"]
 # Verify 32-bit CRC checksum when decoding parquet pages
 crc = ["dep:crc32fast"]
+# Enable SIMD UTF-8 validation
+simdutf8 = ["dep:simdutf8"]
 
 
 [[example]]
