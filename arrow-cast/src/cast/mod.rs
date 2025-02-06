@@ -10017,6 +10017,16 @@ mod tests {
             result.unwrap().as_primitive::<Decimal128Type>().value(0),
             520
         );
+
+        // Cast 0 of decimal(3, 0) type to decimal(2, 0)
+        assert_eq!(
+            &cast(
+                &create_decimal_array(vec![Some(0)], 3, 0).unwrap(),
+                &DataType::Decimal128(2, 0)
+            )
+            .unwrap(),
+            &(Arc::new(create_decimal_array(vec![Some(0)], 2, 0).unwrap()) as ArrayRef)
+        );
     }
 
     #[test]
