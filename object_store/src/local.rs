@@ -868,7 +868,27 @@ pub(crate) fn chunked_stream(
 }
 
 pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
-    let to_read = range.end - range.start;
+    let file_metadata = file.metadata().map_err(|e| Error::Metadata {
+        source: e.into(),
+        path: path.to_string_lossy().to_string(),
+    })?;
+
+    // If none of the range is satisfiable we should error, e.g. if the start offset is beyond the
+    // extents of the file
+    let file_len = file_metadata.len();
+    if range.start >= file_len {
+        return Err(Error::InvalidRange {
+            source: InvalidGetRange::StartTooLarge {
+                requested: range.start,
+                length: file_len,
+            },
+        }
+        .into());
+    }
+
+    // Don't read past end of file
+    let to_read = range.end.min(file_len) - range.start;
+
     file.seek(SeekFrom::Start(range.start)).map_err(|source| {
         let path = path.into();
         Error::Seek { source, path }
@@ -1128,6 +1148,44 @@ mod tests {
             .bytes()
             .await
             .unwrap();
+        assert_eq!(&*read_data, data);
+    }
+
+    #[tokio::test]
+    async fn range_request_start_beyond_end_of_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        integration
+            .get_range(&location, 100..200)
+            .await
+            .expect_err("Should error with start range beyond end of file");
+    }
+
+    #[tokio::test]
+    async fn range_request_beyond_end_of_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("some_file");
+
+        let data = Bytes::from("arbitrary data");
+
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        let read_data = integration.get_range(&location, 0..100).await.unwrap();
         assert_eq!(&*read_data, data);
     }
 
