@@ -9875,7 +9875,7 @@ mod tests {
     #[test]
     fn test_decimal_to_decimal_same_scale() {
         let array = vec![Some(520)];
-        let array = create_decimal_array(array, 4, 2).unwrap();
+        let array = create_decimal128_array(array, 4, 2).unwrap();
         let input_type = DataType::Decimal128(4, 2);
         let output_type = DataType::Decimal128(3, 2);
         assert!(can_cast_types(&input_type, &output_type));
@@ -9893,11 +9893,11 @@ mod tests {
         // Cast 0 of decimal(3, 0) type to decimal(2, 0)
         assert_eq!(
             &cast(
-                &create_decimal_array(vec![Some(0)], 3, 0).unwrap(),
+                &create_decimal128_array(vec![Some(0)], 3, 0).unwrap(),
                 &DataType::Decimal128(2, 0)
             )
             .unwrap(),
-            &(Arc::new(create_decimal_array(vec![Some(0)], 2, 0).unwrap()) as ArrayRef)
+            &(Arc::new(create_decimal128_array(vec![Some(0)], 2, 0).unwrap()) as ArrayRef)
         );
     }
 
