@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::codec::Nullability;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
 /// The metadata key used for storing the JSON encoded [`Schema`]
@@ -137,6 +137,8 @@ pub struct Record<'a> {
 }
 
 /// A field within a [`Record`]
+///
+/// **Modified** to preserve any `"default": null` even in out-of-spec union ordering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordField<'a> {
     #[serde(borrow)]
@@ -147,8 +149,24 @@ pub struct RecordField<'a> {
     pub aliases: Vec<&'a str>,
     #[serde(borrow)]
     pub r#type: Schema<'a>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "allow_out_of_spec_default"
+    )]
     pub default: Option<serde_json::Value>,
+}
+
+/// Custom parse logic that stores *any* default as raw JSON
+/// (including "null" for non-null-first unions).
+fn allow_out_of_spec_default<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer) {
+        Ok(v) => Ok(Some(v)),
+        Err(_) => Ok(None),
+    }
 }
 
 /// An enumeration
@@ -611,6 +629,158 @@ mod tests {
             assert_eq!(rec.fields[2].default, None);
         } else {
             panic!("Expected record schema");
+        }
+    }
+
+    #[test]
+    fn test_union_int_null_with_default_null() {
+        let json_schema = r#"
+    {
+        "type": "record",
+        "name": "ImpalaNullableRecord",
+        "fields": [
+            {"name": "i", "type": ["int","null"], "default": null}
+        ]
+    }
+    "#;
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
+        if let Schema::Complex(ComplexType::Record(rec)) = schema {
+            assert_eq!(rec.fields.len(), 1);
+            assert_eq!(rec.fields[0].name, "i");
+            assert_eq!(rec.fields[0].default, Some(json!(null)));
+            let field_codec =
+                AvroField::try_from(&Schema::Complex(ComplexType::Record(rec))).unwrap();
+            use arrow_schema::{DataType, Field, Fields};
+            assert_eq!(
+                field_codec.field(),
+                Field::new(
+                    "ImpalaNullableRecord",
+                    DataType::Struct(Fields::from(vec![Field::new("i", DataType::Int32, true),])),
+                    false
+                )
+            );
+        } else {
+            panic!("Expected record schema with union int|null, default null");
+        }
+    }
+
+    #[test]
+    fn test_union_impala_null_with_default_null() {
+        let json_schema = r#"
+        {
+            "type":"record","name":"topLevelRecord","fields":[
+                {"name":"id","type":["long","null"]},
+                {"name":"int_array","type":[{"type":"array","items":["int","null"]},"null"]},
+                {"name":"int_array_Array","type":[{"type":"array","items":[{"type":"array","items":["int","null"]},"null"]},"null"]},
+                {"name":"int_map","type":[{"type":"map","values":["int","null"]},"null"]},
+                {"name":"int_Map_Array","type":[{"type":"array","items":[{"type":"map","values":["int","null"]},"null"]},"null"]},
+                {
+                   "name":"nested_struct",
+                   "type":[
+                      {
+                         "type":"record",
+                         "name":"nested_struct",
+                         "namespace":"topLevelRecord",
+                         "fields":[
+                            {"name":"A","type":["int","null"]},
+                            {"name":"b","type":[{"type":"array","items":["int","null"]},"null"]},
+                            {
+                               "name":"C",
+                               "type":[
+                                  {
+                                     "type":"record",
+                                     "name":"C",
+                                     "namespace":"topLevelRecord.nested_struct",
+                                     "fields":[
+                                        {
+                                           "name":"d",
+                                           "type":[
+                                              {
+                                                 "type":"array",
+                                                 "items":[
+                                                    {
+                                                       "type":"array",
+                                                       "items":[
+                                                          {
+                                                             "type":"record",
+                                                             "name":"d",
+                                                             "namespace":"topLevelRecord.nested_struct.C",
+                                                             "fields":[
+                                                                {"name":"E","type":["int","null"]},
+                                                                {"name":"F","type":["string","null"]}
+                                                             ]
+                                                          },
+                                                          "null"
+                                                       ]
+                                                    },
+                                                    "null"
+                                                 ]
+                                              },
+                                              "null"
+                                           ]
+                                        }
+                                     ]
+                                  },
+                                  "null"
+                               ]
+                            },
+                            {
+                               "name":"g",
+                               "type":[
+                                  {
+                                     "type":"map",
+                                     "values":[
+                                        {
+                                           "type":"record",
+                                           "name":"g",
+                                           "namespace":"topLevelRecord.nested_struct",
+                                           "fields":[
+                                              {
+                                                 "name":"H",
+                                                 "type":[
+                                                    {
+                                                       "type":"record",
+                                                       "name":"H",
+                                                       "namespace":"topLevelRecord.nested_struct.g",
+                                                       "fields":[
+                                                          {
+                                                             "name":"i",
+                                                             "type":[
+                                                                {
+                                                                   "type":"array",
+                                                                   "items":["double","null"]
+                                                                },
+                                                                "null"
+                                                             ]
+                                                          }
+                                                       ]
+                                                    },
+                                                    "null"
+                                                 ]
+                                              }
+                                           ]
+                                        },
+                                        "null"
+                                     ]
+                                  },
+                                  "null"
+                               ]
+                            }
+                         ]
+                      },
+                      "null"
+                   ]
+                }
+            ]
+        }
+        "#;
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
+        if let Schema::Complex(ComplexType::Record(rec)) = &schema {
+            assert_eq!(rec.name, "topLevelRecord");
+            assert_eq!(rec.fields.len(), 6);
+            let _field_codec = AvroField::try_from(&schema).unwrap();
+        } else {
+            panic!("Expected top-level record schema");
         }
     }
 }

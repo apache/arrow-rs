@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::reader::vlq::read_varint;
 use arrow_schema::ArrowError;
 

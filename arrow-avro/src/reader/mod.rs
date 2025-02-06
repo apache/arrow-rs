@@ -81,8 +81,10 @@ mod test {
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
-    use arrow_array::*;
-    use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{
+        Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
+        Int64Array, ListArray, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+    };
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{DataType, Field, Fields, Schema};
@@ -1034,5 +1036,71 @@ mod test {
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
         let batch_small = read_file(&file, 3);
         assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+    }
+
+    #[test]
+    fn test_nullable_impala() {
+        let file = arrow_test_data("avro/nullable.impala.avro");
+        let batch1 = read_file(&file, 3);
+        let batch2 = read_file(&file, 8);
+        assert_eq!(batch1, batch2);
+        let batch = batch1;
+        assert_eq!(batch.num_rows(), 7);
+        let id_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("id column should be an Int64Array");
+        let expected_ids = [1, 2, 3, 4, 5, 6, 7];
+        for (i, &expected_id) in expected_ids.iter().enumerate() {
+            assert_eq!(
+                id_array.value(i),
+                expected_id,
+                "Mismatch in id at row {}",
+                i
+            );
+        }
+        let int_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("int_array column should be a ListArray");
+        {
+            let offsets = int_array.value_offsets();
+            let start = offsets[0] as usize;
+            let end = offsets[1] as usize;
+            let values = int_array
+                .values()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Values of int_array should be an Int32Array");
+            let row0: Vec<Option<i32>> = (start..end).map(|i| Some(values.value(i))).collect();
+            assert_eq!(
+                row0,
+                vec![Some(1), Some(2), Some(3)],
+                "Mismatch in int_array row 0"
+            );
+        }
+        let nested_struct = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("nested_struct column should be a StructArray");
+        let a_array = nested_struct
+            .column_by_name("A")
+            .expect("Field A should exist in nested_struct")
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("Field A should be an Int32Array");
+        assert_eq!(a_array.value(0), 1, "Mismatch in nested_struct.A at row 0");
+        assert!(
+            !a_array.is_valid(1),
+            "Expected null in nested_struct.A at row 1"
+        );
+        assert!(
+            !a_array.is_valid(3),
+            "Expected null in nested_struct.A at row 3"
+        );
+        assert_eq!(a_array.value(6), 7, "Mismatch in nested_struct.A at row 6");
     }
 }
