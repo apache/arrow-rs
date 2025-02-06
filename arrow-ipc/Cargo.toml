@@ -52,5 +52,5 @@ tempfile = "3.3"
 tokio = "1.43.0"
 
 [[bench]]
-name = "stream_writer"
+name = "ipc_writer"
 harness = false
