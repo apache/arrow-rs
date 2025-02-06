@@ -345,7 +345,10 @@ where
         .as_dictionary::<K>()
         .downcast_dict::<PrimitiveArray<D>>()
         .ok_or_else(|| {
-            ArrowError::ComputeError(format!("Internal Error: Cannot cast dict to {}Array", D::PREFIX))
+            ArrowError::ComputeError(format!(
+                "Internal Error: Cannot cast dict to {}Array",
+                D::PREFIX
+            ))
         })?;
     let value = dict.values().clone();
     // Set correct precision/scale
