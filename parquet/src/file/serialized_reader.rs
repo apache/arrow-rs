@@ -527,7 +527,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     }
 
     /// Creates a new serialized page reader with custom options.
-    /// Note: The first page in `page_locations` (if available) 
+    /// Note: The first page in `page_locations` (if available)
     /// must be the first data page to infer the dictionary page's location.
     pub fn new_with_properties(
         reader: Arc<R>,
@@ -576,7 +576,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     }
 
     /// Creates a new serialized page reader with custom options and dictionary page (if available).
-    /// This method does not require the first page in `page_locations` to be the first data page since 
+    /// This method does not require the first page in `page_locations` to be the first data page since
     /// `dictionary_page` is provided.
     pub fn new_with_properties_and_dictionary(
         reader: Arc<R>,
