@@ -527,6 +527,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     }
 
     /// Creates a new serialized page with custom options.
+    /// Note: The first page in `page_locations` (if available) 
+    /// must be the first data page to infer the dictionary page's location.
     pub fn new_with_properties(
         reader: Arc<R>,
         meta: &ColumnChunkMetaData,
@@ -534,10 +536,9 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
-        let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
 
-        let state = match page_locations {
+        match page_locations {
             Some(locations) => {
                 let dictionary_page = match locations.first() {
                     Some(dict_offset) if dict_offset.offset as u64 != start => Some(PageLocation {
@@ -548,17 +549,49 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                     _ => None,
                 };
 
-                SerializedPageReaderState::Pages {
-                    page_locations: locations.into(),
-                    dictionary_page,
+                Self::new_with_properties_and_dictionary(
+                    reader,
+                    meta,
                     total_rows,
-                }
+                    locations,
+                    dictionary_page,
+                    props,
+                )
             }
-            None => SerializedPageReaderState::Values {
-                offset: start as usize,
-                remaining_bytes: len as usize,
-                next_page_header: None,
-            },
+            None => {
+                let decompressor = create_codec(meta.compression(), props.codec_options())?;
+                let state = SerializedPageReaderState::Values {
+                    offset: start as usize,
+                    remaining_bytes: len as usize,
+                    next_page_header: None,
+                };
+                Ok(Self {
+                    reader,
+                    decompressor,
+                    state,
+                    physical_type: meta.column_type(),
+                })
+            }
+        }
+    }
+
+    /// Creates a new serialized page with custom options and dictionary page (if available).
+    /// This method does not require the first page in `page_locations` to be the first data page since 
+    /// `dictionary_page` is provided.
+    pub fn new_with_properties_and_dictionary(
+        reader: Arc<R>,
+        meta: &ColumnChunkMetaData,
+        total_rows: usize,
+        page_locations: Vec<PageLocation>,
+        dictionary_page: Option<PageLocation>,
+        props: ReaderPropertiesPtr,
+    ) -> Result<Self> {
+        let decompressor = create_codec(meta.compression(), props.codec_options())?;
+
+        let state = SerializedPageReaderState::Pages {
+            page_locations: page_locations.into(),
+            dictionary_page,
+            total_rows,
         };
 
         Ok(Self {
