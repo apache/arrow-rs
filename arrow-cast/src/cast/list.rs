@@ -88,15 +88,29 @@ where
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
     // The end position in values of the last incorrectly-sized list slice
     let mut last_pos = 0;
-    let mut null_first = false;
+
+    // Need to flag when previous vector(s) are empty/None to distinguish from 'All slices were correct length' cases.
+    let is_prev_empty = if array.offsets().len() < 2 {
+        false
+    } else {
+        let first_offset = array
+            .offsets()
+            .first()
+            .ok_or_else(|| ArrowError::ComputeError("Failed to get the first offset".into()))?
+            .as_usize();
+        let second_offset = array
+            .offsets()
+            .get(1)
+            .ok_or_else(|| ArrowError::ComputeError("Failed to get the second offset".into()))?
+            .as_usize();
+
+        first_offset == 0 && second_offset == 0
+    };
+
     for (idx, w) in array.offsets().windows(2).enumerate() {
         let start_pos = w[0].as_usize();
         let end_pos = w[1].as_usize();
         let len = end_pos - start_pos;
-
-        if start_pos == 0 && end_pos == 0 {
-            null_first = true;
-        }
 
         if len != size as usize {
             if cast_options.safe || array.is_null(idx) {
@@ -118,7 +132,7 @@ where
     }
 
     let values = match last_pos {
-        0 if !null_first => array.values().slice(0, cap), // All slices were the correct length
+        0 if !is_prev_empty => array.values().slice(0, cap), // All slices were the correct length
         _ => {
             if mutable.len() != cap {
                 // Remaining slices were all correct length
