@@ -2509,9 +2509,9 @@ mod tests {
     struct DecimalCastTestConfig<T: DecimalCast> {
         input_scale: i8,
         input_prec: u8,
+        input_repr: T,
         output_scale: i8,
         output_prec: u8,
-        input_repr: T,
         expected_output_repr: Result<T, String>,
     }
 
@@ -10017,6 +10017,174 @@ mod tests {
             r#"Cast error: Casting from Utf8 to Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) not supported"#,
             result.unwrap_err().to_string()
         );
+    }
+
+    #[test]
+    fn test_decimal128_to_decimal128_coverage() {
+        let test_cases = [
+            // increase precision, increase scale, infallible
+            DecimalCastTestConfig {
+                input_scale: 1,
+                input_prec: 5,
+                input_repr: 99999, // 9999.9
+                output_scale: 6,
+                output_prec: 10,
+                expected_output_repr: Ok(9999900000), // 9999.900000
+            },
+            // increase precision, increase scale, fallible, safe
+            DecimalCastTestConfig {
+                input_scale: 1,
+                input_prec: 5,
+                input_repr: 99, // 9999.9
+                output_scale: 6,
+                output_prec: 7,
+                expected_output_repr: Ok(9900000), // 9.900000
+            },
+            // increase precision, increase scale, fallible, unsafe
+            DecimalCastTestConfig {
+                input_scale: 1,
+                input_prec: 5,
+                input_repr: 99999, // 9999.9
+                output_scale: 6,
+                output_prec: 7,
+                expected_output_repr: Err("Invalid argument error: 9999900000 is too large to store in a Decimal128 of precision 7. Max is 9999999".to_string()) // max is 9.999999
+            },
+            // increase precision, decrease scale, always infallible
+            DecimalCastTestConfig {
+                input_scale: 3,
+                input_prec: 5,
+                input_repr: 99999, // 99.999
+                output_scale: 2,
+                output_prec: 10,
+                expected_output_repr: Ok(10000), // 100.00
+            },
+            // increase precision, decrease scale, no rouding
+            DecimalCastTestConfig {
+                input_scale: 3,
+                input_prec: 5,
+                input_repr: 99994, // 99.994
+                output_scale: 2,
+                output_prec: 10,
+                expected_output_repr: Ok(9999), // 99.99
+            },
+            // increase precision, don't change scale, always infallible
+            DecimalCastTestConfig {
+                input_scale: 3,
+                input_prec: 5,
+                input_repr: 99999, // 99.999
+                output_scale: 3,
+                output_prec: 10,
+                expected_output_repr: Ok(99999), // 99.999
+            },
+            // decrease precision, increase scale, safe
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 999999, // 9.99999
+                output_scale: 7,
+                output_prec: 8,
+                expected_output_repr: Ok(99999900), // 9.9999900
+            },
+            // decrease precision, increase scale, unsafe
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 9999999, // 99.99999
+                output_scale: 7,
+                output_prec: 8,
+                expected_output_repr: Err("Invalid argument error: 999999900 is too large to store in a Decimal128 of precision 8. Max is 99999999".to_string()) // max is 9.9999999
+            },
+            // decrease precision, decrease scale, safe, infallible
+            DecimalCastTestConfig {
+                input_scale: 4,
+                input_prec: 7,
+                input_repr: 9999999, // 999.9999
+                output_scale: 2,
+                output_prec: 6,
+                expected_output_repr: Ok(100000),
+            },
+            // decrease precision, decrease scale, safe, fallible
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 12345678, // 123.45678
+                output_scale: 3,
+                output_prec: 8,
+                expected_output_repr: Ok(123457), // 123.457
+            },
+            // decrease precision, decrease scale, unsafe
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 9999999, // 99.99999
+                output_scale: 3,
+                output_prec: 4,
+                expected_output_repr: Err("Invalid argument error: 100000 is too large to store in a Decimal128 of precision 4. Max is 9999".to_string()) // max is 9.999
+            },
+            // decrease precision, same scale, safe
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 999999, // 9.99999
+                output_scale: 5,
+                output_prec: 6,
+                expected_output_repr: Ok(999999), // 9.99999
+            },
+            // decrease precision, same scale, unsafe
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 10,
+                input_repr: 9999999, // 99.99999
+                output_scale: 5,
+                output_prec: 6,
+                expected_output_repr: Err("Invalid argument error: 9999999 is too large to store in a Decimal128 of precision 6. Max is 999999".to_string()) // max is 9.99999
+            },
+            // same precision, increase scale, safe
+            DecimalCastTestConfig {
+                input_scale: 4,
+                input_prec: 7,
+                input_repr: 12345, // 1.2345
+                output_scale: 6,
+                output_prec: 7,
+                expected_output_repr: Ok(1234500), // 1.234500
+            },
+            // same precision, increase scale, unsafe
+            DecimalCastTestConfig {
+                input_scale: 4,
+                input_prec: 7,
+                input_repr: 123456, // 12.3456
+                output_scale: 6,
+                output_prec: 7,
+                expected_output_repr: Err("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 7. Max is 9999999".to_string()) // max is 9.99999
+            },
+            // same precision, decrease scale, infallible
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 7,
+                input_repr: 1234567, // 12.34567
+                output_scale: 4,
+                output_prec: 7,
+                expected_output_repr: Ok(123457), // 12.3457
+            },
+            // same precision, same scale, infallible
+            DecimalCastTestConfig {
+                input_scale: 5,
+                input_prec: 7,
+                input_repr: 9999999, // 99.99999
+                output_scale: 5,
+                output_prec: 7,
+                expected_output_repr: Ok(9999999), // 99.99999
+            },
+        ];
+
+        for t in test_cases {
+            generate_decimal_cast_test_case!(
+                Decimal128,
+                Decimal128Array,
+                is_validate_decimal_precision,
+                t
+            );
+        }
     }
 
     #[test]
