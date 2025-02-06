@@ -17,7 +17,8 @@
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
 use arrow_array::{builder::StringBuilder, RecordBatch};
-use arrow_ipc::writer::StreamWriter;
+use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_ipc::CompressionType;
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::sync::Arc;
@@ -25,23 +26,44 @@ use std::sync::Arc;
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_ipc_stream_writer");
 
-    group.bench_function("StreamWriter/write_single_batch", |b| {
+
+    group.bench_function("StreamWriter/write_10", |b| {
         let batch = create_batch(8192, true);
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
         b.iter(move || {
             buffer.clear();
             let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
-            writer.write(&batch).unwrap();
+            for _ in 0..10 {
+                writer.write(&batch).unwrap();
+            }
             writer.finish().unwrap();
         })
     });
 
-    group.bench_function("StreamWriter/write_10_batches", |b| {
+    group.bench_function("StreamWriter/write_10/zstd", |b| {
         let batch = create_batch(8192, true);
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
         b.iter(move || {
             buffer.clear();
-            let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::ZSTD))
+                .unwrap();
+            let mut writer =
+                StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options)
+                    .unwrap();
+            for _ in 0..10 {
+                writer.write(&batch).unwrap();
+            }
+            writer.finish().unwrap();
+        })
+    });
+
+    group.bench_function("FileWriter/write_10", |b| {
+        let batch = create_batch(8192, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut writer = FileWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
             for _ in 0..10 {
                 writer.write(&batch).unwrap();
             }
