@@ -26,7 +26,6 @@ use std::sync::Arc;
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_ipc_stream_writer");
 
-
     group.bench_function("StreamWriter/write_10", |b| {
         let batch = create_batch(8192, true);
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
