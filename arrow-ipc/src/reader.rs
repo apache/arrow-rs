@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -65,6 +65,7 @@ fn read_buffer(
         (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
+
 impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
@@ -167,6 +168,7 @@ impl RecordBatchDecoder<'_> {
                     .add_child_data(run_ends.into_data())
                     .add_child_data(values.into_data())
                     .align_buffers(!self.require_alignment)
+                    .with_skip_validation(self.skip_validation)
                     .build()?;
 
                 Ok(make_array(array_data))
@@ -241,6 +243,7 @@ impl RecordBatchDecoder<'_> {
                     .len(length as usize)
                     .offset(0)
                     .align_buffers(!self.require_alignment)
+                    .with_skip_validation(self.skip_validation)
                     .build()?;
 
                 // no buffer increases
@@ -286,7 +289,10 @@ impl RecordBatchDecoder<'_> {
             t => unreachable!("Data type {:?} either unsupported or not primitive", t),
         };
 
-        let array_data = builder.align_buffers(!self.require_alignment).build()?;
+        let array_data = builder
+            .align_buffers(!self.require_alignment)
+            .with_skip_validation(self.skip_validation)
+            .build()?;
 
         Ok(make_array(array_data))
     }
@@ -318,7 +324,10 @@ impl RecordBatchDecoder<'_> {
             _ => unreachable!("Cannot create list or map array from {:?}", data_type),
         };
 
-        let array_data = builder.align_buffers(!self.require_alignment).build()?;
+        let array_data = builder
+            .align_buffers(!self.require_alignment)
+            .with_skip_validation(self.skip_validation)
+            .build()?;
 
         Ok(make_array(array_data))
     }
@@ -340,6 +349,7 @@ impl RecordBatchDecoder<'_> {
                 .add_child_data(value_array.into_data())
                 .null_bit_buffer(null_buffer)
                 .align_buffers(!self.require_alignment)
+                .with_skip_validation(self.skip_validation)
                 .build()?;
 
             Ok(make_array(array_data))
@@ -376,6 +386,18 @@ struct RecordBatchDecoder<'a> {
     /// Are buffers required to already be aligned? See
     /// [`RecordBatchDecoder::with_require_alignment`] for details
     require_alignment: bool,
+    /// Should validation be skipped when reading data?
+    ///
+    /// Defaults to false.
+    ///
+    /// If true [`ArrayData::validate`] is not called after reading
+    ///
+    /// # Safety
+    ///
+    /// This flag can only be set to true using `unsafe` APIs. However, once true
+    /// subsequent calls to `build()` may result in undefined behavior if the data
+    /// is not valid.
+    skip_validation: UnsafeFlag,
 }
 
 impl<'a> RecordBatchDecoder<'a> {
@@ -410,6 +432,7 @@ impl<'a> RecordBatchDecoder<'a> {
             buffers: buffers.iter(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -429,6 +452,21 @@ impl<'a> RecordBatchDecoder<'a> {
     /// if necessary.
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Set skip_validation (default: false)
+    ///
+    /// Note this is a pub(crate) API and can not be used outside of this crate
+    ///
+    /// If true, validation is skipped.
+    ///
+    /// # Safety
+    ///
+    /// Relies on `UnsafeFlag` to enforce safety -- can only be enabled via
+    /// unsafe APIs.
+    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+        self.skip_validation = skip_validation;
         self
     }
 
@@ -601,7 +639,16 @@ pub fn read_dictionary(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
-    read_dictionary_impl(buf, batch, schema, dictionaries_by_id, metadata, false)
+    let skip_validation = UnsafeFlag::new(); // do not skip valididation
+    read_dictionary_impl(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        false,
+        skip_validation,
+    )
 }
 
 fn read_dictionary_impl(
@@ -611,6 +658,7 @@ fn read_dictionary_impl(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -642,6 +690,7 @@ fn read_dictionary_impl(
                 metadata,
             )?
             .with_require_alignment(require_alignment)
+            .with_skip_validation(skip_validation)
             .read_record_batch()?;
 
             Some(record_batch.column(0).clone())
@@ -772,6 +821,7 @@ pub struct FileDecoder {
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 }
 
 impl FileDecoder {
@@ -783,6 +833,7 @@ impl FileDecoder {
             dictionaries: Default::default(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         }
     }
 
@@ -802,10 +853,25 @@ impl FileDecoder {
     /// If `require_alignment` is false (the default), this decoder will automatically allocate a
     /// new aligned buffer and copy over the data if any array data in the input `buf` is not
     /// properly aligned. (Properly aligned array data will remain zero-copy.)
-    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::build_aligned`] to construct
+    /// Under the hood it will use [`arrow_data::ArrayDataBuilder::align_buffers`] to construct
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies whether validation should be skipped when reading data (default to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust and are sure the data you are
+    /// reading is a valid Arrow IPC file, otherwise undefined behavior may
+    /// result.
+    ///
+    /// For example, some programs may wish to trust reading IPC files written
+    /// by the same process that created the files.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
         self
     }
 
@@ -834,6 +900,7 @@ impl FileDecoder {
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
+                    self.skip_validation,
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -1250,6 +1317,9 @@ pub struct StreamReader<R> {
 
     /// Optional projection
     projection: Option<(Vec<usize>, Schema)>,
+
+    /// Should the reader skip validation
+    skip_validation: UnsafeFlag,
 }
 
 impl<R> fmt::Debug for StreamReader<R> {
@@ -1329,6 +1399,7 @@ impl<R: Read> StreamReader<R> {
             finished: false,
             dictionaries_by_id,
             projection,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -1437,6 +1508,7 @@ impl<R: Read> StreamReader<R> {
                     &mut self.dictionaries_by_id,
                     &message.version(),
                     false,
+                    self.skip_validation,
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1461,6 +1533,21 @@ impl<R: Read> StreamReader<R> {
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
+    }
+
+    /// Specifies whether validation should be skipped when reading data (default to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust and are sure the data you are
+    /// reading is a valid Arrow IPC file, otherwise undefined behavior may
+    /// result.
+    ///
+    /// For example, some programs may wish to trust reading IPC files written
+    /// by the same process that created the files.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
+        self
     }
 }
 

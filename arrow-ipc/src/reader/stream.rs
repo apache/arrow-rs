@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
@@ -42,13 +43,15 @@ pub struct StreamDecoder {
     buf: MutableBuffer,
     /// Whether or not array data in input buffers are required to be aligned
     require_alignment: bool,
+    /// Should we skip validation when reading arrays?
+    skip_validation: UnsafeFlag,
 }
 
 #[derive(Debug)]
 enum DecoderState {
     /// Decoding the message header
     Header {
-        /// Temporary buffer
+        /// Temporaray buffer
         buf: [u8; 4],
         /// Number of bytes read into buf
         read: u8,
@@ -99,6 +102,21 @@ impl StreamDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies whether validation should be skipped when reading data (default to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust and are sure the data you are
+    /// reading is a valid Arrow IPC stream, otherwise undefined behavior may
+    /// result.
+    ///
+    /// For example, some programs may wish to trust reading IPC streams written
+    /// by the same process that created the files.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
         self
     }
 
@@ -219,6 +237,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_skip_validation(self.skip_validation)
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
@@ -235,6 +254,7 @@ impl StreamDecoder {
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
+                                self.skip_validation,
                             )?;
                             self.state = DecoderState::default();
                         }
