@@ -526,7 +526,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
     }
 
-    /// Creates a new serialized page with custom options.
+    /// Creates a new serialized page reader with custom options.
     /// Note: The first page in `page_locations` (if available) 
     /// must be the first data page to infer the dictionary page's location.
     pub fn new_with_properties(
@@ -575,7 +575,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         }
     }
 
-    /// Creates a new serialized page with custom options and dictionary page (if available).
+    /// Creates a new serialized page reader with custom options and dictionary page (if available).
     /// This method does not require the first page in `page_locations` to be the first data page since 
     /// `dictionary_page` is provided.
     pub fn new_with_properties_and_dictionary(
