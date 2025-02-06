@@ -10054,6 +10054,14 @@ mod tests {
                 input_repr: -99999,
                 expected_output_repr: Ok(-9999900000),
             },
+            DecimalCastTestConfig {
+                input_scale: 3,
+                input_prec: 5,
+                output_scale: 5,
+                output_prec: 6,
+                input_repr: -12345,
+                expected_output_repr: Err("Invalid argument error: -1234500 is too small to store in a Decimal128 of precision 6. Min is -999999".to_string())
+            },
         ];
 
         for t in test_cases {
@@ -10155,6 +10163,15 @@ mod tests {
                 output_prec: 10,
                 input_repr: i256::from_i128(-99999),
                 expected_output_repr: Ok(i256::from_i128(-9999900000)),
+            },
+            DecimalCastTestConfig {
+                input_scale: 4,
+                input_prec: 7,
+                output_scale: 3,
+                output_prec: 6,
+                input_repr: i256::from_i128(9999999),
+                expected_output_repr:
+                    Err("Invalid argument error: 1000000 is too large to store in a Decimal256 of precision 6. Max is 999999".to_string()),
             },
         ];
 
