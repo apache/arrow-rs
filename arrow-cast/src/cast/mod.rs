@@ -2051,13 +2051,13 @@ where
             base,
             cast_options,
         ),
-        Float32 => cast_floating_point_to_decimal::<_, D, _>(
+        Float32 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float32Type>(),
             *precision,
             *scale,
             cast_options,
         ),
-        Float64 => cast_floating_point_to_decimal::<_, D, _>(
+        Float64 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float64Type>(),
             *precision,
             *scale,
