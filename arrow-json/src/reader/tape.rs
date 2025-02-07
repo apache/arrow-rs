@@ -550,7 +550,8 @@ impl TapeDecoder {
         self.cur_row
     }
 
-    /// True if the decoder is part way through decoding a row. If so, calling [`finish`] would return an error.
+    /// True if the decoder is part way through decoding a row. If so, calling [`Self::finish`]
+    /// would return an error.
     pub fn has_partial_row(&self) -> bool {
         !self.stack.is_empty()
     }

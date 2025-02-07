@@ -625,17 +625,17 @@ impl Decoder {
         self.tape_decoder.num_buffered_rows()
     }
 
-    /// True if there are no records to flush, i.e. [`len`] is zero.
+    /// True if there are no records to flush, i.e. [`Self::len`] is zero.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Flushes the currently buffered data to a [`RecordBatch`]
     ///
-    /// Returns `Ok(None)` if no buffered data, i.e. [`is_empty`] is true.
+    /// Returns `Ok(None)` if no buffered data, i.e. [`Self::is_empty`] is true.
     ///
     /// Note: This will return an error if called part way through decoding a record,
-    /// i.e. [`has_partial_record`] is true.
+    /// i.e. [`Self::has_partial_record`] is true.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         let tape = self.tape_decoder.finish()?;
 
