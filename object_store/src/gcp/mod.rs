@@ -72,7 +72,7 @@ pub type GcpSigningCredentialProvider =
     Arc<dyn CredentialProvider<Credential = GcpSigningCredential>>;
 
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GoogleCloudStorage {
     client: Arc<GoogleCloudStorageClient>,
 }
