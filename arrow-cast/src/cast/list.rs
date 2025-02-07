@@ -93,16 +93,8 @@ where
     let is_prev_empty = if array.offsets().len() < 2 {
         false
     } else {
-        let first_offset = array
-            .offsets()
-            .first()
-            .ok_or_else(|| ArrowError::ComputeError("Failed to get the first offset".into()))?
-            .as_usize();
-        let second_offset = array
-            .offsets()
-            .get(1)
-            .ok_or_else(|| ArrowError::ComputeError("Failed to get the second offset".into()))?
-            .as_usize();
+        let first_offset = array.offsets()[0].as_usize();
+        let second_offset = array.offsets()[1].as_usize();
 
         first_offset == 0 && second_offset == 0
     };
