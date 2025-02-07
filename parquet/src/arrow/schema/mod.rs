@@ -622,6 +622,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
+        DataType::Decimal32(precision, scale) | DataType::Decimal64(precision, scale) |
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
@@ -2061,6 +2062,8 @@ mod tests {
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
+                Field::new("c42", DataType::Decimal32(5, 2), false),
+                Field::new("c43", DataType::Decimal64(18, 12), true),
             ],
             meta(&[("Key", "Value")]),
         );

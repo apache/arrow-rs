@@ -60,14 +60,14 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                     _ => 128, // Default bit width
                 };
 
-                if bit_width == 128 {
-                    Ok(DataType::Decimal128(precision, scale))
-                } else if bit_width == 256 {
-                    Ok(DataType::Decimal256(precision, scale))
-                } else {
-                    Err(ArrowError::ParseError(
+                match bit_width {
+                    32 => Ok(DataType::Decimal32(precision, scale)),
+                    64 => Ok(DataType::Decimal64(precision, scale)),
+                    128 => Ok(DataType::Decimal128(precision, scale)),
+                    256 => Ok(DataType::Decimal256(precision, scale)),
+                    _ => Err(ArrowError::ParseError(
                         "Decimal bit_width invalid".to_string(),
-                    ))
+                    )),
                 }
             }
             Some(s) if s == "floatingpoint" => match map.get("precision") {
@@ -337,6 +337,12 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
             TimeUnit::Nanosecond => "NANOSECOND",
         }}),
         DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
+        DataType::Decimal32(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 32})
+        }
+        DataType::Decimal64(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 64})
+        }
         DataType::Decimal128(precision, scale) => {
             json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
         }

@@ -829,6 +829,19 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = values.inner().typed_data::<i32>();
                     write_primitive(typed, array, levels)
                 }
+                ArrowDataType::Decimal32(_, _) => {
+                    let array = column
+                        .as_primitive::<Decimal32Type>()
+                        .unary::<_, Int32Type>(|v| v);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Decimal64(_, _) => {
+                    // use the int32 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal64Type>()
+                        .unary::<_, Int32Type>(|v| v as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
                     let array = column
@@ -897,6 +910,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
                     let array = values.inner().typed_data::<i64>();
                     write_primitive(typed, array, levels)
+                }
+                ArrowDataType::Decimal64(_, _) => {
+                    let array = column
+                        .as_primitive::<Decimal64Type>()
+                        .unary::<_, Int64Type>(|v| v);
+                    write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
@@ -986,6 +1005,14 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unwrap();
                     get_fsb_array_slice(array, indices)
                 }
+                ArrowDataType::Decimal32(_, _) => {
+                    let array = column.as_primitive::<Decimal32Type>();
+                    get_decimal_32_array_slice(array, indices)
+                }
+                ArrowDataType::Decimal64(_, _) => {
+                    let array = column.as_primitive::<Decimal64Type>();
+                    get_decimal_64_array_slice(array, indices)
+                }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
                     get_decimal_128_array_slice(array, indices)
@@ -1065,6 +1092,34 @@ fn get_interval_dt_array_slice(
         out[4..8].copy_from_slice(&value.days.to_le_bytes());
         out[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
         values.push(FixedLenByteArray::from(ByteArray::from(out.to_vec())));
+    }
+    values
+}
+
+fn get_decimal_32_array_slice(
+    array: &arrow_array::Decimal32Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(4 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
+fn get_decimal_64_array_slice(
+    array: &arrow_array::Decimal64Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(8 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
     values
 }

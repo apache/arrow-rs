@@ -712,6 +712,8 @@ fn make_decoder(
         DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
         DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
         DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
+        DataType::Decimal32(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal32Type>::new(p, s))),
+        DataType::Decimal64(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal64Type>::new(p, s))),
         DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
@@ -1177,6 +1179,8 @@ mod tests {
 
     #[test]
     fn test_decimals() {
+        test_decimal::<Decimal32Type>(DataType::Decimal32(8, 2));
+        test_decimal::<Decimal64Type>(DataType::Decimal64(10, 2));
         test_decimal::<Decimal128Type>(DataType::Decimal128(10, 2));
         test_decimal::<Decimal256Type>(DataType::Decimal256(10, 2));
     }
