@@ -377,7 +377,8 @@ pub(crate) fn read_page_header<T: Read>(
     Ok(page_header)
 }
 
-/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
+/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read.
+/// If the page header is encrypted [`CryptoContext`] must be provided.
 fn read_page_header_len<T: Read>(
     input: &mut T,
     #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
@@ -468,7 +469,6 @@ pub(crate) fn decode_page(
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_size = page_header.uncompressed_page_size as usize;
-
             let mut decompressed = Vec::with_capacity(uncompressed_size);
             let compressed = &buffer.as_ref()[offset..];
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
@@ -583,7 +583,7 @@ pub struct SerializedPageReader<R: ChunkReader> {
 
     state: SerializedPageReaderState,
 
-    /// Crypto context
+    /// Crypto context carrying objects required for decryption
     #[cfg(feature = "encryption")]
     crypto_context: Option<Arc<CryptoContext>>,
 }

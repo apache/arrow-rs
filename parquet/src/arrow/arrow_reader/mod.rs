@@ -380,6 +380,9 @@ impl ArrowReaderMetadata {
     /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
+    ///
+    /// If encryption is enabled and the file is encrypted, the
+    /// `file_decryption_properties` must be provided.
     pub fn load<T: ChunkReader>(
         reader: &T,
         options: ArrowReaderOptions,
@@ -855,7 +858,6 @@ impl ParquetRecordBatchReader {
     /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader and [`FileDecryptionProperties`]
     ///
     /// Note: this is needed when the parquet file is encrypted
-    // todo: add options or put file_decryption_properties into options
     #[cfg(feature = "encryption")]
     pub fn try_new_with_decryption<T: ChunkReader + 'static>(
         reader: T,

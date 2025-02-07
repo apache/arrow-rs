@@ -107,6 +107,7 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
+    /// If data is encrypted, the [`FileDecryptionProperties`] should be provided.
     fn get_metadata<'a>(
         &'a mut self,
         #[cfg(feature = "encryption")] file_decryption_properties: Option<
@@ -248,7 +249,8 @@ pub struct AsyncReader<T>(T);
 ///
 /// This builder  handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
-/// they wish to be read by the resulting stream
+/// they wish to be read by the resulting stream. If footer or columns are encrypted
+/// [`FileDecryptionProperties`] should be provided.
 ///
 /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
 ///
@@ -396,8 +398,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         .await
     }
 
-    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source
-    /// and [`ArrowReaderOptions`]
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source,
+    /// [`ArrowReaderOptions`] and [`FileDecryptionProperties`] if the data is encrypted.
     pub async fn new_with_options(
         mut input: T,
         options: ArrowReaderOptions,
@@ -1049,7 +1051,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 let metadata_decryptor =
                     file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
 
-                // todo: Do we need row_group_ordinal here?
                 let crypto_context = CryptoContext::new(
                     self.row_group_ordinal,
                     i,
@@ -1075,7 +1076,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
                     self.metadata.column(i),
