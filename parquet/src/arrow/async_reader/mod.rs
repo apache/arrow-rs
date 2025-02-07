@@ -68,6 +68,7 @@ use crate::encryption::decryption::FileDecryptionProperties;
 mod store;
 
 use crate::arrow::schema::ParquetField;
+use crate::encryption::decryption::CryptoContext;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -632,6 +633,8 @@ where
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
+            #[cfg(feature = "encryption")]
+            parquet_metadata: Some(self.metadata.clone()),
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -917,6 +920,8 @@ struct InMemoryRowGroup<'a> {
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
+    #[cfg(feature = "encryption")]
+    parquet_metadata: Option<Arc<ParquetMetaData>>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -1018,6 +1023,35 @@ impl RowGroups for InMemoryRowGroup<'_> {
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
+        let Some(parquet_metadata) = &self.parquet_metadata else {
+            todo!()
+        };
+
+        #[cfg(feature = "encryption")]
+        let crypto_context = if let Some(file_decryptor) = parquet_metadata.file_decryptor() {
+            let column_name = parquet_metadata.file_metadata().schema_descr().column(i);
+
+            if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
+                let data_decryptor =
+                    file_decryptor.get_column_data_decryptor(column_name.name().as_bytes());
+                let metadata_decryptor =
+                    file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
+
+                let crypto_context = CryptoContext::new(
+                    0,
+                    i,
+                    data_decryptor,
+                    metadata_decryptor,
+                    file_decryptor.file_aad().clone(),
+                );
+                Some(Arc::new(crypto_context))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
                 "Invalid column index {i}, column was not fetched"
@@ -1028,14 +1062,14 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-                // todo: provide crypto_context
+
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
                     self.metadata.column(i),
                     self.row_count,
                     page_locations,
                     #[cfg(feature = "encryption")]
-                    None,
+                    crypto_context,
                 )?);
 
                 Ok(Box::new(ColumnChunkIterator {
