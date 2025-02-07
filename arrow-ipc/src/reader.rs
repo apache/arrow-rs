@@ -1504,7 +1504,8 @@ mod tests {
 
     use super::*;
 
-    use crate::root_as_message;
+    use crate::convert::fb_to_schema;
+    use crate::{root_as_footer, root_as_message};
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::{NullBuffer, OffsetBuffer};
@@ -1762,6 +1763,35 @@ mod tests {
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let buf = write_ipc(rb);
         read_ipc(&buf).unwrap()
+    }
+
+    /// Return the first record batch read from the IPC File buffer
+    /// using the FileDecoder API
+    fn read_ipc_with_decoder(buf: Vec<u8>) -> Result<RecordBatch, ArrowError> {
+        let buffer = Buffer::from_vec(buf);
+        let trailer_start = buffer.len() - 10;
+        let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap())?;
+        let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid footer: {e}")))?;
+
+        let schema = fb_to_schema(footer.schema().unwrap());
+
+        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        // Read dictionaries
+        for block in footer.dictionaries().iter().flatten() {
+            let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+            let data = buffer.slice_with_length(block.offset() as _, block_len);
+            decoder.read_dictionary(block, &data)?
+        }
+
+        // Read record batch
+        let batches = footer.recordBatches().unwrap();
+        assert_eq!(batches.len(), 1); // Only wrote a single batch
+
+        let block = batches.get(0);
+        let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+        let data = buffer.slice_with_length(block.offset() as _, block_len);
+        Ok(decoder.read_record_batch(block, &data)?.unwrap())
     }
 
     /// Write the record batch to an in-memory buffer in IPC Stream format
@@ -2597,6 +2627,11 @@ mod tests {
     fn expect_ipc_validation_error(array: ArrayRef, expected_err: &str) {
         let rb = RecordBatch::try_from_iter([("a", array)]).unwrap();
 
+        // IPC Stream format
+        let buf = write_stream(&rb); // write is ok
+        let err = read_stream(&buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+
         // IPC File format
         let buf = write_ipc(&rb); // write is ok
         let err = read_ipc(&buf).unwrap_err();
@@ -2605,9 +2640,8 @@ mod tests {
         // TODO verify there is no error when validation is disabled
         // see https://github.com/apache/arrow-rs/issues/3287
 
-        // IPC Stream format
-        let buf = write_stream(&rb); // write is ok
-        let err = read_stream(&buf).unwrap_err();
+        // IPC Format with FileDecoder
+        let err = read_ipc_with_decoder(buf).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
     }
 }
