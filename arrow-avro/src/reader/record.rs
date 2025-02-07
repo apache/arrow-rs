@@ -26,6 +26,7 @@ use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
     Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
+use std::cmp::Ordering;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -424,7 +425,7 @@ impl Decoder {
                 let dict_vals = StringArray::from_iter_values(symbols.iter());
                 let i32arr = match nulls {
                     Some(nb) => {
-                        let buff = Buffer::from_slice_ref(&idxs);
+                        let buff = Buffer::from_slice_ref(&*idxs);
                         PrimitiveArray::<Int32Type>::try_new(
                             arrow_buffer::ScalarBuffer::from(buff),
                             Some(nb),
@@ -524,51 +525,58 @@ impl Decoder {
     }
 }
 
+type FlushResult = (Vec<Arc<dyn Array>>, Option<NullBuffer>);
+
 fn flush_record_children(
     mut kids: Vec<Arc<dyn Array>>,
     parent_nulls: Option<NullBuffer>,
-) -> Result<(Vec<Arc<dyn Array>>, Option<NullBuffer>), ArrowError> {
+) -> Result<FlushResult, ArrowError> {
     let max_len = kids.iter().map(|c| c.len()).max().unwrap_or(0);
+
     let fixed_parent_nulls = match parent_nulls {
         None => None,
         Some(nb) => {
             let old_len = nb.len();
-            if old_len == max_len {
-                Some(nb)
-            } else if old_len < max_len {
-                let mut b = NullBufferBuilder::new(max_len);
-                for i in 0..old_len {
-                    b.append(nb.is_valid(i));
+            match old_len.cmp(&max_len) {
+                Ordering::Equal => Some(nb),
+                Ordering::Less => {
+                    let mut b = NullBufferBuilder::new(max_len);
+                    for i in 0..old_len {
+                        b.append(nb.is_valid(i));
+                    }
+                    for _ in old_len..max_len {
+                        b.append(false);
+                    }
+                    b.finish()
                 }
-                for _ in 0..(max_len - old_len) {
-                    b.append(false);
+                Ordering::Greater => {
+                    let mut b = NullBufferBuilder::new(max_len);
+                    for i in 0..max_len {
+                        b.append(nb.is_valid(i));
+                    }
+                    b.finish()
                 }
-                b.finish()
-            } else {
-                // truncate
-                let mut b = NullBufferBuilder::new(max_len);
-                for i in 0..max_len {
-                    b.append(nb.is_valid(i));
-                }
-                b.finish()
             }
         }
     };
+
     let mut out = Vec::with_capacity(kids.len());
     for arr in kids {
         let cur_len = arr.len();
-        if cur_len == max_len {
-            out.push(arr);
-        } else if cur_len < max_len {
-            let to_add = max_len - cur_len;
-            let appended = append_nulls(&arr, to_add)?;
-            out.push(appended);
-        } else {
-            // slice
-            let sliced = arr.slice(0, max_len);
-            out.push(sliced);
+        match cur_len.cmp(&max_len) {
+            Ordering::Equal => out.push(arr),
+            Ordering::Less => {
+                let to_add = max_len - cur_len;
+                let appended = append_nulls(&arr, to_add)?;
+                out.push(appended);
+            }
+            Ordering::Greater => {
+                let sliced = arr.slice(0, max_len);
+                out.push(sliced);
+            }
         }
     }
+
     Ok((out, fixed_parent_nulls))
 }
 
@@ -578,16 +586,18 @@ fn flush_map_children(
 ) -> Result<(StringArray, Arc<dyn Array>), ArrowError> {
     let kl = key_arr.len();
     let vl = val_arr.len();
-    if kl == vl {
-        return Ok((key_arr.clone(), val_arr.clone()));
+    match kl.cmp(&vl) {
+        Ordering::Equal => Ok((key_arr.clone(), val_arr.clone())),
+        Ordering::Less => {
+            let truncated = val_arr.slice(0, kl);
+            Ok((key_arr.clone(), truncated))
+        }
+        Ordering::Greater => {
+            let to_add = kl - vl;
+            let appended = append_nulls(val_arr, to_add)?;
+            Ok((key_arr.clone(), appended))
+        }
     }
-    if kl < vl {
-        let truncated = val_arr.slice(0, kl);
-        return Ok((key_arr.clone(), truncated));
-    }
-    let to_add = kl - vl;
-    let appended = append_nulls(val_arr, to_add)?;
-    Ok((key_arr.clone(), appended))
 }
 
 /// Decode an Avro array in blocks until a 0 block_count signals end.
@@ -598,21 +608,23 @@ fn read_array_blocks(
     let mut total = 0usize;
     loop {
         let blk = buf.get_long()?;
-        if blk == 0 {
-            break;
-        } else if blk < 0 {
-            let cnt = (-blk) as usize;
-            let _sz = buf.get_long()?;
-            for _i in 0..cnt {
-                decode_item(buf)?;
+        match blk.cmp(&0) {
+            Ordering::Equal => break,
+            Ordering::Less => {
+                let cnt = (-blk) as usize;
+                let _sz = buf.get_long()?;
+                for _i in 0..cnt {
+                    decode_item(buf)?;
+                }
+                total += cnt;
             }
-            total += cnt;
-        } else {
-            let cnt = blk as usize;
-            for _i in 0..cnt {
-                decode_item(buf)?;
+            Ordering::Greater => {
+                let cnt = blk as usize;
+                for _i in 0..cnt {
+                    decode_item(buf)?;
+                }
+                total += cnt;
             }
-            total += cnt;
         }
     }
     Ok(total)
@@ -626,21 +638,23 @@ fn read_map_blocks(
     let mut total = 0usize;
     loop {
         let blk = buf.get_long()?;
-        if blk == 0 {
-            break;
-        } else if blk < 0 {
-            let cnt = (-blk) as usize;
-            let _sz = buf.get_long()?;
-            for _i in 0..cnt {
-                decode_entry(buf)?;
+        match blk.cmp(&0) {
+            Ordering::Equal => break,
+            Ordering::Less => {
+                let cnt = (-blk) as usize;
+                let _sz = buf.get_long()?;
+                for _i in 0..cnt {
+                    decode_entry(buf)?;
+                }
+                total += cnt;
             }
-            total += cnt;
-        } else {
-            let cnt = blk as usize;
-            for _i in 0..cnt {
-                decode_entry(buf)?;
+            Ordering::Greater => {
+                let cnt = blk as usize;
+                for _i in 0..cnt {
+                    decode_entry(buf)?;
+                }
+                total += cnt;
             }
-            total += cnt;
         }
     }
     Ok(total)
@@ -650,8 +664,7 @@ fn flush_primitive<T: ArrowPrimitiveType>(
     vals: &mut Vec<T::Native>,
     nb: Option<NullBuffer>,
 ) -> PrimitiveArray<T> {
-    let arr = PrimitiveArray::new(std::mem::replace(vals, Vec::new()).into(), nb);
-    arr
+    PrimitiveArray::new(std::mem::take(vals).into(), nb)
 }
 
 fn flush_offsets(ob: &mut OffsetBufferBuilder<i32>) -> OffsetBuffer<i32> {
@@ -715,15 +728,17 @@ fn sanitize_struct_child(
 ) -> Result<ArrayData, ArrowError> {
     let sanitized = sanitize_array_offsets(array)?;
     let sanitized_len = sanitized.len();
-    if sanitized_len == target_len {
-        Ok(sanitized.to_data())
-    } else if sanitized_len < target_len {
-        let to_add = target_len - sanitized_len;
-        let appended = append_nulls(&sanitized, to_add)?;
-        Ok(appended.to_data())
-    } else {
-        let sliced = sanitized.slice(0, target_len);
-        Ok(sliced.to_data())
+    match sanitized_len.cmp(&target_len) {
+        Ordering::Equal => Ok(sanitized.to_data()),
+        Ordering::Less => {
+            let to_add = target_len - sanitized_len;
+            let appended = append_nulls(&sanitized, to_add)?;
+            Ok(appended.to_data())
+        }
+        Ordering::Greater => {
+            let sliced = sanitized.slice(0, target_len);
+            Ok(sliced.to_data())
+        }
     }
 }
 
@@ -1224,7 +1239,7 @@ mod tests {
                 out.extend_from_slice(&encode_avro_int(1));
                 out
             }),
-            ("k2", { encode_union_branch(1) }),
+            ("k2", encode_union_branch(1)),
         ];
         data.extend_from_slice(&encode_map(&row1_map));
         data.extend_from_slice(&encode_union_branch(0));
@@ -1787,7 +1802,7 @@ mod tests {
         row1.extend_from_slice(&encode_avro_int(10));
         row1.extend_from_slice(&encode_avro_int(20));
         row1.extend_from_slice(&encode_avro_long(0));
-        let mut row2 = encode_avro_long(0);
+        let row2 = encode_avro_long(0);
         let mut cursor = AvroCursor::new(&row1);
         decoder.decode(&mut cursor).unwrap();
         let mut cursor2 = AvroCursor::new(&row2);
