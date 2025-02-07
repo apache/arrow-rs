@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 //! Read Avro data to Arrow
 
 use crate::reader::block::{Block, BlockDecoder};
@@ -93,14 +92,17 @@ mod test {
     use std::io::BufReader;
     use std::sync::Arc;
 
-    fn read_file(file: &str, batch_size: usize) -> RecordBatch {
+    /// Helper to read an Avro file into a `RecordBatch`.
+    ///
+    /// - `strict_mode`: if `true`, we reject unions of the form `[T,"null"]`.
+    fn read_file(file: &str, batch_size: usize, strict_mode: bool) -> RecordBatch {
         let file = File::open(file).unwrap();
         let mut reader = BufReader::new(file);
         let header = read_header(&mut reader).unwrap();
         let compression = header.compression().unwrap();
         let schema = header.schema().unwrap().unwrap();
         let root = AvroField::try_from(&schema).unwrap();
-        let mut decoder = RecordDecoder::try_new(root.data_type()).unwrap();
+        let mut decoder = RecordDecoder::try_new(root.data_type(), strict_mode).unwrap();
         for result in read_blocks(reader) {
             let block = result.unwrap();
             assert_eq!(block.sync, header.sync());
@@ -216,8 +218,9 @@ mod test {
         .unwrap();
         for file in files {
             let file = arrow_test_data(file);
-            assert_eq!(read_file(&file, 8), expected);
-            assert_eq!(read_file(&file, 3), expected);
+            // Pass `false` for strict_mode so we don't fail on out-of-spec unions
+            assert_eq!(read_file(&file, 8, false), expected);
+            assert_eq!(read_file(&file, 3, false), expected);
         }
     }
 
@@ -281,13 +284,13 @@ mod test {
         ])
         .unwrap();
         let file_path = arrow_test_data(file);
-        let batch_large = read_file(&file_path, 8);
+        let batch_large = read_file(&file_path, 8, false);
         assert_eq!(
             batch_large, expected,
             "Decoded RecordBatch does not match for file {}",
             file
         );
-        let batch_small = read_file(&file_path, 3);
+        let batch_small = read_file(&file_path, 3, false);
         assert_eq!(
             batch_small, expected,
             "Decoded RecordBatch (batch size 3) does not match for file {}",
@@ -333,13 +336,13 @@ mod test {
         ])
         .unwrap();
         let file_path = arrow_test_data(file);
-        let batch_large = read_file(&file_path, 8);
+        let batch_large = read_file(&file_path, 8, false);
         assert_eq!(
             batch_large, expected,
             "Decoded RecordBatch does not match for file {}",
             file
         );
-        let batch_small = read_file(&file_path, 3);
+        let batch_small = read_file(&file_path, 3, false);
         assert_eq!(
             batch_small, expected,
             "Decoded RecordBatch (batch size 3) does not match for file {}",
@@ -350,7 +353,7 @@ mod test {
     #[test]
     fn test_binary() {
         let file = arrow_test_data("avro/binary.avro");
-        let batch = read_file(&file, 8);
+        let batch = read_file(&file, 8, false);
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "foo",
             Arc::new(BinaryArray::from_iter_values(vec![
@@ -384,7 +387,7 @@ mod test {
         let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
         for (file, precision, scale) in files {
             let file_path = arrow_test_data(file);
-            let actual_batch = read_file(&file_path, 8);
+            let actual_batch = read_file(&file_path, 8, false);
             let expected_array = Decimal128Array::from_iter_values(decimal_values.clone())
                 .with_precision_and_scale(precision, scale)
                 .unwrap();
@@ -402,7 +405,7 @@ mod test {
                 "Decoded RecordBatch does not match the expected Decimal128 data for file {}",
                 file
             );
-            let actual_batch_small = read_file(&file_path, 3);
+            let actual_batch_small = read_file(&file_path, 3, false);
             assert_eq!(
                 actual_batch_small, expected_batch,
                 "Decoded RecordBatch does not match the expected Decimal128 data for file {} with batch size 3",
@@ -414,7 +417,7 @@ mod test {
     #[test]
     fn test_datapage_v2() {
         let file = arrow_test_data("avro/datapage_v2.snappy.avro");
-        let batch = read_file(&file, 8);
+        let batch = read_file(&file, 8, false);
         let a = StringArray::from(vec![
             Some("abc"),
             Some("abc"),
@@ -459,7 +462,7 @@ mod test {
     #[test]
     fn test_dict_pages_offset_zero() {
         let file = arrow_test_data("avro/dict-page-offset-zero.avro");
-        let batch = read_file(&file, 32);
+        let batch = read_file(&file, 32, false);
         let num_rows = batch.num_rows();
         let expected_field = Int32Array::from(vec![Some(1552); num_rows]);
         let expected = RecordBatch::try_from_iter_with_nullable([(
@@ -529,7 +532,7 @@ mod test {
             ("utf8_list", Arc::new(utf8_list) as Arc<dyn Array>, true),
         ])
         .unwrap();
-        let batch = read_file(&file, 8);
+        let batch = read_file(&file, 8, false);
         assert_eq!(batch, expected);
     }
 
@@ -596,9 +599,9 @@ mod test {
             ("b", Arc::new(b_expected) as Arc<dyn Array>, true),
         ])
         .unwrap();
-        let left = read_file(&file, 8);
+        let left = read_file(&file, 8, false);
         assert_eq!(left, expected, "Mismatch for batch size=8");
-        let left_small = read_file(&file, 3);
+        let left_small = read_file(&file, 3, false);
         assert_eq!(left_small, expected, "Mismatch for batch size=3");
     }
 
@@ -746,12 +749,12 @@ mod test {
         ])
         .unwrap();
         let file = arrow_test_data("avro/nested_records.avro");
-        let batch_large = read_file(&file, 8);
+        let batch_large = read_file(&file, 8, false);
         assert_eq!(
             batch_large, expected,
             "Decoded RecordBatch does not match expected data for nested records (batch size 8)"
         );
-        let batch_small = read_file(&file, 3);
+        let batch_small = read_file(&file, 3, false);
         assert_eq!(
             batch_small, expected,
             "Decoded RecordBatch does not match expected data for nested records (batch size 3)"
@@ -1032,17 +1035,17 @@ mod test {
             ("nested_Struct", Arc::new(nested_struct), true),
         ])
         .unwrap();
-        let batch_large = read_file(&file, 8);
+        let batch_large = read_file(&file, 8, false);
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
-        let batch_small = read_file(&file, 3);
+        let batch_small = read_file(&file, 3, false);
         assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
     }
 
     #[test]
     fn test_nullable_impala() {
         let file = arrow_test_data("avro/nullable.impala.avro");
-        let batch1 = read_file(&file, 3);
-        let batch2 = read_file(&file, 8);
+        let batch1 = read_file(&file, 3, false);
+        let batch2 = read_file(&file, 8, false);
         assert_eq!(batch1, batch2);
         let batch = batch1;
         assert_eq!(batch.num_rows(), 7);

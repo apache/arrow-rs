@@ -39,9 +39,12 @@ pub struct RecordDecoder {
 }
 
 impl RecordDecoder {
-    /// Create a new [`RecordDecoder`] from an [`AvroDataType`] expected to be a `Record`.
-    pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        match Decoder::try_new(data_type)? {
+    /// Create a new [`RecordDecoder`] from an [`AvroDataType`] that must be a `Record`.
+    ///
+    /// - `strict_mode`: if `true`, we will throw an error if we encounter
+    ///   a union of the form `[T, "null"]` (i.e. `Nullability::NullSecond`).
+    pub fn try_new(data_type: &AvroDataType, strict_mode: bool) -> Result<Self, ArrowError> {
+        match Decoder::try_new(data_type, strict_mode)? {
             Decoder::Record(fields, decoders) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: decoders,
@@ -134,7 +137,8 @@ enum Decoder {
 }
 
 impl Decoder {
-    fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+    fn try_new(data_type: &AvroDataType, strict_mode: bool) -> Result<Self, ArrowError> {
+        // 1) Create the "base" decoder for the underlying Avro codec
         let base = match &data_type.codec {
             Codec::Null => Self::Null(0),
             Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
@@ -154,7 +158,8 @@ impl Decoder {
                 let mut fields = Vec::with_capacity(avro_fields.len());
                 let mut children = Vec::with_capacity(avro_fields.len());
                 for f in avro_fields.iter() {
-                    let child = Self::try_new(f.data_type())?;
+                    // Recursively build a Decoder for each child
+                    let child = Self::try_new(f.data_type(), strict_mode)?;
                     fields.push(f.field());
                     children.push(child);
                 }
@@ -164,7 +169,7 @@ impl Decoder {
                 Self::Enum(Arc::clone(syms), Vec::with_capacity(DEFAULT_CAPACITY))
             }
             Codec::Array(child) => {
-                let child_dec = Self::try_new(child)?;
+                let child_dec = Self::try_new(child, strict_mode)?;
                 let item_field = child.field_with_name("item").with_nullable(true);
                 Self::List(
                     Arc::new(item_field),
@@ -182,7 +187,7 @@ impl Decoder {
                     ])),
                     false,
                 ));
-                let valdec = Self::try_new(child)?;
+                let valdec = Self::try_new(child, strict_mode)?;
                 Self::Map(
                     map_field,
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
@@ -208,21 +213,28 @@ impl Decoder {
             }
             Codec::Duration => Self::Interval(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
-
         let union_order = match data_type.nullability {
             None => None,
             Some(Nullability::NullFirst) => Some(UnionOrder::NullFirst),
-            Some(Nullability::NullSecond) => Some(UnionOrder::NullSecond),
+            Some(Nullability::NullSecond) => {
+                if strict_mode {
+                    return Err(ArrowError::ParseError(
+                        "Found Avro union of the form ['T','null'], which is disallowed in strict_mode mode"
+                            .to_string(),
+                    ));
+                }
+                Some(UnionOrder::NullSecond)
+            }
         };
-
-        match union_order {
-            Some(order) => Ok(Self::Nullable(
+        let decoder = match union_order {
+            Some(order) => Decoder::Nullable(
                 order,
                 NullBufferBuilder::new(DEFAULT_CAPACITY),
                 Box::new(base),
-            )),
-            None => Ok(base),
-        }
+            ),
+            None => base,
+        };
+        Ok(decoder)
     }
 
     fn append_null(&mut self) {
@@ -328,6 +340,7 @@ impl Decoder {
                         }
                     }
                     UnionOrder::NullSecond => {
+                        // In out-of-spec files: branch=0 => decode T, branch=1 => null
                         if branch == 0 {
                             nb.append(true);
                             child.decode(buf)?;
@@ -691,7 +704,7 @@ fn sanitize_offsets_vec(offsets: &[i32], child_len: i32) -> Vec<i32> {
     let mut new_offsets = Vec::with_capacity(offsets.len());
     let mut prev = 0;
     for &offset in offsets {
-        // Clamp each offset between the previous value and the child length.
+        // clamp each offset between the previous value and the child length
         let clamped = offset.clamp(prev, child_len);
         new_offsets.push(clamped);
         if clamped > prev {
@@ -1015,7 +1028,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
         data.extend_from_slice(&encode_union_branch(0));
         data.extend_from_slice(&encode_avro_long(1));
@@ -1051,7 +1064,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
 
         fn encode_int_or_null(opt_val: &Option<i32>) -> Vec<u8> {
@@ -1143,7 +1156,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
 
         fn encode_inner(vals: &[Option<i32>]) -> Vec<u8> {
@@ -1230,7 +1243,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
         data.extend_from_slice(&encode_union_branch(0));
         let row1_map = vec![
@@ -1295,7 +1308,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
         fn encode_map_int_null(entries: &[(&str, Option<i32>)]) -> Vec<u8> {
             let items: Vec<(&str, Vec<u8>)> = entries
@@ -1409,7 +1422,7 @@ mod tests {
     "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let mut record_decoder = RecordDecoder::try_new(avro_record.data_type(), false).unwrap();
         let mut data = Vec::new();
         data.extend_from_slice(&encode_union_branch(0));
         data.extend_from_slice(&encode_union_branch(0));
@@ -1467,7 +1480,7 @@ mod tests {
         "#;
         let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_record = AvroField::try_from(&schema).unwrap();
-        let record_decoder = RecordDecoder::try_new(avro_record.data_type()).unwrap();
+        let record_decoder = RecordDecoder::try_new(avro_record.data_type(), true).unwrap();
         let arrow_schema = record_decoder.schema();
         assert_eq!(arrow_schema.fields().len(), 1);
         let field = arrow_schema.field(0);
@@ -1478,7 +1491,7 @@ mod tests {
     #[test]
     fn test_fixed_decoding() {
         let dt = AvroDataType::from_codec(Codec::Fixed(4));
-        let mut dec = Decoder::try_new(&dt).unwrap();
+        let mut dec = Decoder::try_new(&dt, true).unwrap();
         let row1 = [0xDE, 0xAD, 0xBE, 0xEF];
         let row2 = [0x01, 0x23, 0x45, 0x67];
         let mut data = Vec::new();
@@ -1498,7 +1511,7 @@ mod tests {
     #[test]
     fn test_fixed_with_nulls() {
         let dt = AvroDataType::from_codec(Codec::Fixed(2));
-        let child = Decoder::try_new(&dt).unwrap();
+        let child = Decoder::try_new(&dt, true).unwrap();
         let mut dec = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1530,7 +1543,7 @@ mod tests {
     #[test]
     fn test_interval_decoding() {
         let dt = AvroDataType::from_codec(Codec::Duration);
-        let mut dec = Decoder::try_new(&dt).unwrap();
+        let mut dec = Decoder::try_new(&dt, true).unwrap();
         let row1 = [
             0x01, 0x00, 0x00, 0x00, // months=1
             0x02, 0x00, 0x00, 0x00, // days=2
@@ -1566,7 +1579,7 @@ mod tests {
     #[test]
     fn test_interval_decoding_with_nulls() {
         let dt = AvroDataType::from_codec(Codec::Duration);
-        let child = Decoder::try_new(&dt).unwrap();
+        let child = Decoder::try_new(&dt, true).unwrap();
         let mut dec = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1602,7 +1615,7 @@ mod tests {
     fn test_enum_decoding() {
         let symbols = Arc::new(["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()]);
         let enum_dt = AvroDataType::from_codec(Codec::Enum(symbols, Arc::new([])));
-        let mut decoder = Decoder::try_new(&enum_dt).unwrap();
+        let mut decoder = Decoder::try_new(&enum_dt, true).unwrap();
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(1));
         data.extend_from_slice(&encode_avro_int(0));
@@ -1632,7 +1645,7 @@ mod tests {
         // Union => [Enum(...), null]
         let symbols = ["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
         let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new(symbols), Arc::new([])));
-        let mut inner_decoder = Decoder::try_new(&enum_dt).unwrap();
+        let mut inner_decoder = Decoder::try_new(&enum_dt, true).unwrap();
         let mut nullable_decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1668,7 +1681,7 @@ mod tests {
     fn test_map_decoding_one_entry() {
         let value_type = AvroDataType::from_codec(Codec::String);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
-        let mut decoder = Decoder::try_new(&map_type).unwrap();
+        let mut decoder = Decoder::try_new(&map_type, true).unwrap();
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_long(1));
         data.extend_from_slice(&encode_avro_bytes(b"hello"));
@@ -1692,7 +1705,7 @@ mod tests {
     fn test_map_decoding_empty() {
         let value_type = AvroDataType::from_codec(Codec::String);
         let map_type = AvroDataType::from_codec(Codec::Map(Arc::new(value_type)));
-        let mut decoder = Decoder::try_new(&map_type).unwrap();
+        let mut decoder = Decoder::try_new(&map_type, true).unwrap();
         let data = encode_avro_long(0);
         decoder.decode(&mut AvroCursor::new(&data)).unwrap();
         let array = decoder.flush(None).unwrap();
@@ -1704,7 +1717,7 @@ mod tests {
     #[test]
     fn test_decimal_decoding_fixed128() {
         let dt = AvroDataType::from_codec(Codec::Decimal(5, Some(2), Some(16)));
-        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let mut decoder = Decoder::try_new(&dt, true).unwrap();
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x30, 0x39,
@@ -1729,7 +1742,7 @@ mod tests {
     #[test]
     fn test_decimal_decoding_bytes_with_nulls() {
         let dt = AvroDataType::from_codec(Codec::Decimal(4, Some(1), None));
-        let mut inner = Decoder::try_new(&dt).unwrap();
+        let mut inner = Decoder::try_new(&dt, true).unwrap();
         let mut decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1758,7 +1771,7 @@ mod tests {
     #[test]
     fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
         let dt = AvroDataType::from_codec(Codec::Decimal(6, Some(2), Some(16)));
-        let mut inner = Decoder::try_new(&dt).unwrap();
+        let mut inner = Decoder::try_new(&dt, true).unwrap();
         let mut decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1796,7 +1809,7 @@ mod tests {
     fn test_list_decoding() {
         let item_dt = AvroDataType::from_codec(Codec::Int32);
         let list_dt = AvroDataType::from_codec(Codec::Array(Arc::new(item_dt)));
-        let mut decoder = Decoder::try_new(&list_dt).unwrap();
+        let mut decoder = Decoder::try_new(&list_dt, true).unwrap();
         let mut row1 = Vec::new();
         row1.extend_from_slice(&encode_avro_long(2));
         row1.extend_from_slice(&encode_avro_int(10));
@@ -1823,7 +1836,7 @@ mod tests {
     fn test_list_decoding_with_negative_block_count() {
         let item_dt = AvroDataType::from_codec(Codec::Int32);
         let list_dt = AvroDataType::from_codec(Codec::Array(Arc::new(item_dt)));
-        let mut decoder = Decoder::try_new(&list_dt).unwrap();
+        let mut decoder = Decoder::try_new(&list_dt, true).unwrap();
         let mut data = encode_avro_long(-3);
         data.extend_from_slice(&encode_avro_long(12));
         data.extend_from_slice(&encode_avro_int(1));
