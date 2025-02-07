@@ -634,6 +634,8 @@ where
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
             #[cfg(feature = "encryption")]
+            row_group_ordinal: row_group_idx,
+            #[cfg(feature = "encryption")]
             parquet_metadata: Some(self.metadata.clone()),
         };
 
@@ -921,6 +923,8 @@ struct InMemoryRowGroup<'a> {
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
     #[cfg(feature = "encryption")]
+    row_group_ordinal: usize,
+    #[cfg(feature = "encryption")]
     parquet_metadata: Option<Arc<ParquetMetaData>>,
 }
 
@@ -1023,13 +1027,21 @@ impl RowGroups for InMemoryRowGroup<'_> {
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        let Some(parquet_metadata) = &self.parquet_metadata else {
-            todo!()
-        };
-
         #[cfg(feature = "encryption")]
-        let crypto_context = if let Some(file_decryptor) = parquet_metadata.file_decryptor() {
-            let column_name = parquet_metadata.file_metadata().schema_descr().column(i);
+        let crypto_context = if let Some(file_decryptor) = &self
+            .parquet_metadata
+            .clone()
+            .unwrap()
+            .file_decryptor()
+            .clone()
+        {
+            let column_name = &self
+                .parquet_metadata
+                .clone()
+                .unwrap()
+                .file_metadata()
+                .schema_descr()
+                .column(i);
 
             if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
                 let data_decryptor =
@@ -1037,8 +1049,9 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 let metadata_decryptor =
                     file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
 
+                // todo: Do we need row_group_ordinal here?
                 let crypto_context = CryptoContext::new(
-                    0,
+                    self.row_group_ordinal,
                     i,
                     data_decryptor,
                     metadata_decryptor,
@@ -2613,47 +2626,46 @@ mod tests {
             "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
         );
 
-        //todo
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+        });
 
-        // metadata.metadata.row_groups().iter().for_each(|rg| {
-        //     assert_eq!(rg.num_columns(), 8);
-        //     assert_eq!(rg.num_rows(), 50);
-        // });
-        //
-        // // Should be able to read unencrypted columns. Test reading one column.
-        // let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        // let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
-        // let record_reader = builder.with_projection(mask).build().unwrap();
-        //
-        // let mut row_count = 0;
-        // for batch in record_reader {
-        //     let batch = batch.unwrap();
-        //     row_count += batch.num_rows();
-        //
-        //     let time_col = batch
-        //         .column(0)
-        //         .as_primitive::<types::Time32MillisecondType>();
-        //     for (i, x) in time_col.iter().enumerate() {
-        //         assert_eq!(x.unwrap(), i as i32);
-        //     }
-        // }
-        //
-        // assert_eq!(row_count, file_metadata.num_rows() as usize);
-        //
-        // // Reading an encrypted column should fail
-        // let file = std::fs::File::open(&path).unwrap();
-        // let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        // let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
-        // let mut record_reader = builder.with_projection(mask).build().unwrap();
-        //
-        // match record_reader.next() {
-        //     Some(Err(ArrowError::ParquetError(s))) => {
-        //         assert!(s.contains("protocol error"));
-        //     }
-        //     _ => {
-        //         panic!("Expected ArrowError::ParquetError");
-        //     }
-        // };
+        // Should be able to read unencrypted columns. Test reading one column.
+        let builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
+        let record_reader = builder.with_projection(mask).build().unwrap();
+        let record_batches = record_reader.try_collect::<Vec<_>>().await.unwrap();
+
+        let mut row_count = 0;
+        for batch in record_batches {
+            let batch = batch;
+            row_count += batch.num_rows();
+
+            let time_col = batch
+                .column(0)
+                .as_primitive::<types::Time32MillisecondType>();
+            for (i, x) in time_col.iter().enumerate() {
+                assert_eq!(x.unwrap(), i as i32);
+            }
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+
+        // Reading an encrypted column should fail
+        let file = File::open(&path).await.unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
+        let mut record_reader = builder.with_projection(mask).build().unwrap();
+
+        match record_reader.next().await {
+            Some(Err(ParquetError::ArrowError(s))) => {
+                assert!(s.contains("protocol error"));
+            }
+            _ => {
+                panic!("Expected ArrowError::ParquetError");
+            }
+        };
     }
 
     #[tokio::test]
