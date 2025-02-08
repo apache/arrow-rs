@@ -95,10 +95,9 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
 /// ```rust
 /// use parquet::{
 ///     basic::{ConvertedType, Repetition, Type as PhysicalType},
-///     schema::types::Type,
+///     schema::{printer::print_schema, types::Type},
 /// };
 /// use std::sync::Arc;
-/// use parquet::schema::printer::print_schema;
 ///
 /// let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
 ///     .with_id(Some(42))
