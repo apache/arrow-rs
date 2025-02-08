@@ -454,18 +454,12 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
         crate::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
             let bit_width = fsb.bitWidth();
-            if bit_width == 128 {
-                DataType::Decimal128(
-                    fsb.precision().try_into().unwrap(),
-                    fsb.scale().try_into().unwrap(),
-                )
-            } else if bit_width == 256 {
-                DataType::Decimal256(
-                    fsb.precision().try_into().unwrap(),
-                    fsb.scale().try_into().unwrap(),
-                )
-            } else {
-                panic!("Unexpected decimal bit width {bit_width}")
+            let precision: u8 = fsb.precision().try_into().unwrap();
+            let scale: i8 = fsb.scale().try_into().unwrap();
+            match bit_width {
+                128 => DataType::Decimal128(precision, scale),
+                256 => DataType::Decimal256(precision, scale),
+                _ => panic!("Unexpected decimal bit width {bit_width}"),
             }
         }
         crate::Type::Union => {
