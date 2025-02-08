@@ -89,6 +89,58 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
 }
 
 /// Prints Parquet [`Type`] information.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::{
+///     basic::{ConvertedType, Repetition, Type as PhysicalType},
+///     schema::types::Type,
+/// };
+/// use std::sync::Arc;
+/// use parquet::schema::printer::print_schema;
+///
+/// let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
+///     .with_id(Some(42))
+///     .with_converted_type(ConvertedType::UTF8)
+///     .build()
+///     .unwrap();
+///
+/// let field_b = Type::primitive_type_builder("b", PhysicalType::INT32)
+///     .with_repetition(Repetition::REQUIRED)
+///     .build()
+///     .unwrap();
+///
+/// let field_d = Type::primitive_type_builder("d", PhysicalType::INT64)
+///     .with_id(Some(99))
+///     .build()
+///     .unwrap();
+///
+/// let field_c = Type::group_type_builder("c")
+///     .with_id(Some(43))
+///     .with_fields(vec![Arc::new(field_d)])
+///     .build()
+///     .unwrap();
+///
+/// let schema = Type::group_type_builder("schema")
+///     .with_fields(vec![Arc::new(field_a), Arc::new(field_b), Arc::new(field_c)])
+///     .build()
+///     .unwrap();
+///
+/// print_schema(&mut std::io::stdout(), &schema);
+/// ```
+///
+/// outputs
+///
+/// ```text
+/// message schema {
+///   OPTIONAL BYTE_ARRAY a [42] (UTF8);
+///   REQUIRED INT32 b;
+///   message c [43] {
+///     OPTIONAL INT64 d [99];
+///   }
+/// }
+/// ```
 #[allow(unused_must_use)]
 pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     // TODO: better if we can pass fmt::Write to Printer.
@@ -811,6 +863,53 @@ mod tests {
             }
             assert_eq!(&s, expected)
         });
+    }
+
+    #[test]
+    fn test_print_schema_documentation() {
+        let mut s = String::new();
+        {
+            let mut p = Printer::new(&mut s);
+            let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
+                .with_id(Some(42))
+                .with_converted_type(ConvertedType::UTF8)
+                .build()
+                .unwrap();
+
+            let field_b = Type::primitive_type_builder("b", PhysicalType::INT32)
+                .with_repetition(Repetition::REQUIRED)
+                .build()
+                .unwrap();
+
+            let field_d = Type::primitive_type_builder("d", PhysicalType::INT64)
+                .with_id(Some(99))
+                .build()
+                .unwrap();
+
+            let field_c = Type::group_type_builder("c")
+                .with_id(Some(43))
+                .with_fields(vec![Arc::new(field_d)])
+                .build()
+                .unwrap();
+
+            let schema = Type::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(field_a),
+                    Arc::new(field_b),
+                    Arc::new(field_c),
+                ])
+                .build()
+                .unwrap();
+            p.print(&schema);
+        }
+        let expected = "message schema {
+  OPTIONAL BYTE_ARRAY a [42] (UTF8);
+  REQUIRED INT32 b;
+  message c [43] {
+    OPTIONAL INT64 d [99];
+  }
+}";
+        assert_eq!(&mut s, expected);
     }
 
     #[test]
