@@ -80,9 +80,11 @@ mod test {
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, BinaryArray, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
-        Int64Array, ListArray, RecordBatch, StringArray, StructArray, TimestampMicrosecondArray,
+        Array, BinaryArray, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
+        Float32Array, Float64Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray,
+        StructArray, TimestampMicrosecondArray,
     };
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_data::ArrayDataBuilder;
@@ -218,7 +220,6 @@ mod test {
         .unwrap();
         for file in files {
             let file = arrow_test_data(file);
-            // Pass `false` for strict_mode so we don't fail on out-of-spec unions
             assert_eq!(read_file(&file, 8, false), expected);
             assert_eq!(read_file(&file, 3, false), expected);
         }
@@ -407,10 +408,10 @@ mod test {
             );
             let actual_batch_small = read_file(&file_path, 3, false);
             assert_eq!(
-                actual_batch_small, expected_batch,
-                "Decoded RecordBatch does not match the expected Decimal128 data for file {} with batch size 3",
-                file
-            );
+            actual_batch_small, expected_batch,
+            "Decoded RecordBatch does not match the expected Decimal128 data for file {} with batch size 3",
+            file
+        );
         }
     }
 
@@ -1199,5 +1200,96 @@ mod test {
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
         let batch_small = read_file(&file, 3, false);
         assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+    }
+
+    #[test]
+    fn test_simple() {
+        // Each entry: (filename, batch_size1, expected_batch, batch_size2)
+        let tests = [
+            ("avro/simple_enum.avro", 4, build_expected_enum(), 2),
+            ("avro/simple_fixed.avro", 2, build_expected_fixed(), 1),
+        ];
+
+        fn build_expected_enum() -> RecordBatch {
+            let keys_f1 = Int32Array::from(vec![0, 1, 2, 3]);
+            let vals_f1 = StringArray::from(vec!["a", "b", "c", "d"]);
+            let f1_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f1, Arc::new(vals_f1)).unwrap();
+            let keys_f2 = Int32Array::from(vec![2, 3, 0, 1]);
+            let vals_f2 = StringArray::from(vec!["e", "f", "g", "h"]);
+            let f2_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f2, Arc::new(vals_f2)).unwrap();
+            let keys_f3 = Int32Array::from(vec![Some(1), Some(2), None, Some(0)]);
+            let vals_f3 = StringArray::from(vec!["i", "j", "k"]);
+            let f3_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f3, Arc::new(vals_f3)).unwrap();
+            let dict_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            let expected_schema = Arc::new(Schema::new(vec![
+                Field::new("f1", dict_type.clone(), false),
+                Field::new("f2", dict_type.clone(), false),
+                Field::new("f3", dict_type.clone(), true),
+            ]));
+            RecordBatch::try_new(
+                expected_schema,
+                vec![
+                    Arc::new(f1_dict) as Arc<dyn Array>,
+                    Arc::new(f2_dict) as Arc<dyn Array>,
+                    Arc::new(f3_dict) as Arc<dyn Array>,
+                ],
+            )
+            .unwrap()
+        }
+
+        fn build_expected_fixed() -> RecordBatch {
+            let f1 =
+                FixedSizeBinaryArray::try_from_iter(vec![b"abcde", b"12345"].into_iter()).unwrap();
+            let f2 =
+                FixedSizeBinaryArray::try_from_iter(vec![b"fghijklmno", b"1234567890"].into_iter())
+                    .unwrap();
+            let f3 = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                vec![Some(b"ABCDEF" as &[u8]), None].into_iter(),
+                6,
+            )
+            .unwrap();
+            let expected_schema = Arc::new(Schema::new(vec![
+                Field::new("f1", DataType::FixedSizeBinary(5), false),
+                Field::new("f2", DataType::FixedSizeBinary(10), false),
+                Field::new("f3", DataType::FixedSizeBinary(6), true),
+            ]));
+            RecordBatch::try_new(
+                expected_schema,
+                vec![
+                    Arc::new(f1) as Arc<dyn Array>,
+                    Arc::new(f2) as Arc<dyn Array>,
+                    Arc::new(f3) as Arc<dyn Array>,
+                ],
+            )
+            .unwrap()
+        }
+        for (file_name, batch_size, expected, alt_batch_size) in tests {
+            let file = arrow_test_data(file_name);
+            let actual = read_file(&file, batch_size, false);
+            assert_eq!(actual, expected);
+            let actual2 = read_file(&file, alt_batch_size, false);
+            assert_eq!(actual2, expected);
+        }
+    }
+
+    #[test]
+    fn test_single_nan() {
+        let file = crate::test_util::arrow_test_data("avro/single_nan.avro");
+        let actual = read_file(&file, 1, false);
+        use arrow_array::Float64Array;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "mycol",
+            DataType::Float64,
+            true,
+        )]));
+        let col = Float64Array::from(vec![None as Option<f64>]);
+        let expected = RecordBatch::try_new(schema, vec![Arc::new(col)]).unwrap();
+        assert_eq!(actual, expected);
+        let actual2 = read_file(&file, 2, false);
+        assert_eq!(actual2, expected);
     }
 }

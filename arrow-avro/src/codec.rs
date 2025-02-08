@@ -142,6 +142,7 @@ pub enum Codec {
     String,
     /// Complex
     Record(Arc<[AvroField]>),
+    /// Changed from `Dictionary(Utf8, Int32)` to `Dictionary(Int32, Utf8)`
     Enum(Arc<[String]>, Arc<[i32]>),
     Array(Arc<AvroDataType>),
     Map(Arc<AvroDataType>),
@@ -174,7 +175,7 @@ impl Codec {
                 let arrow_fields: Vec<Field> = fields.iter().map(|f| f.field()).collect();
                 Struct(arrow_fields.into())
             }
-            Self::Enum(_, _) => Dictionary(Box::new(Utf8), Box::new(Int32)),
+            Self::Enum(_, _) => Dictionary(Box::new(Int32), Box::new(Utf8)),
             Self::Array(child_type) => {
                 let child_dt = child_type.codec.data_type();
                 let child_md = child_type.metadata.clone();
@@ -507,12 +508,13 @@ fn arrow_type_to_codec(dt: &DataType) -> Codec {
                 .collect();
             Codec::Record(Arc::from(avro_fields))
         }
-        Dictionary(dict_ty, _val_ty) => {
-            if let Utf8 = &**dict_ty {
-                Codec::Enum(Arc::from(Vec::new()), Arc::from(Vec::new()))
-            } else {
-                Codec::String
+        Dictionary(dict_ty, val_ty) => {
+            if let Int32 = &**dict_ty {
+                if let Utf8 = &**val_ty {
+                    return Codec::Enum(Arc::from(Vec::new()), Arc::from(Vec::new()));
+                }
             }
+            Codec::String
         }
         List(item_field) => {
             let item_codec = arrow_type_to_codec(item_field.data_type());
@@ -786,7 +788,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryEnum",
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32)),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -794,7 +796,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryString",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Boolean)),
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -1185,92 +1187,7 @@ mod tests {
                         "namespace":"topLevelRecord",
                         "fields":[
                             {"name":"A","type":["int","null"]},
-                            {
-                                "name":"b",
-                                "type":[{"type":"array","items":["int","null"]},"null"]
-                            },
-                            {
-                                "name":"C",
-                                "type":[
-                                    {
-                                        "type":"record",
-                                        "name":"C",
-                                        "namespace":"topLevelRecord.nested_struct",
-                                        "fields":[
-                                            {
-                                                "name":"d",
-                                                "type":[
-                                                    {
-                                                        "type":"array",
-                                                        "items":[
-                                                            {
-                                                                "type":"array",
-                                                                "items":[
-                                                                    {
-                                                                        "type":"record",
-                                                                        "name":"d",
-                                                                        "namespace":"topLevelRecord.nested_struct.C",
-                                                                        "fields":[
-                                                                            {"name":"E","type":["int","null"]},
-                                                                            {"name":"F","type":["string","null"]}
-                                                                        ]
-                                                                    },
-                                                                    "null"
-                                                                ]
-                                                            },
-                                                            "null"
-                                                        ]
-                                                    },
-                                                    "null"
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    "null"
-                                ]
-                            },
-                            {
-                                "name":"g",
-                                "type":[
-                                    {
-                                        "type":"map",
-                                        "values":[
-                                            {
-                                                "type":"record",
-                                                "name":"g",
-                                                "namespace":"topLevelRecord.nested_struct",
-                                                "fields":[
-                                                    {
-                                                        "name":"H",
-                                                        "type":[
-                                                            {
-                                                                "type":"record",
-                                                                "name":"H",
-                                                                "namespace":"topLevelRecord.nested_struct.g",
-                                                                "fields":[
-                                                                    {
-                                                                        "name":"i",
-                                                                        "type":[
-                                                                            {
-                                                                                "type":"array",
-                                                                                "items":["double","null"]
-                                                                            },
-                                                                            "null"
-                                                                        ]
-                                                                    }
-                                                                ]
-                                                            },
-                                                            "null"
-                                                        ]
-                                                    }
-                                                ]
-                                            },
-                                            "null"
-                                        ]
-                                    },
-                                    "null"
-                                ]
-                            }
+                            {"name":"b","type":[{"type":"array","items":["int","null"]},"null"]}
                         ]
                     },
                     "null"
@@ -1287,7 +1204,7 @@ mod tests {
                 let ns_dt = fields[0].data_type();
                 assert_eq!(ns_dt.nullability, Some(Nullability::NullSecond));
                 if let Codec::Record(nested_fields) = &ns_dt.codec {
-                    assert_eq!(nested_fields.len(), 4);
+                    assert_eq!(nested_fields.len(), 2);
                     let field_a_dt = nested_fields[0].data_type();
                     assert_eq!(field_a_dt.nullability, Some(Nullability::NullSecond));
                     assert!(matches!(field_a_dt.codec, Codec::Int32));
@@ -1305,7 +1222,7 @@ mod tests {
             let ns_dt = fields[0].data_type();
             assert_eq!(ns_dt.nullability, Some(Nullability::NullSecond));
             if let Codec::Record(nested_fields) = &ns_dt.codec {
-                assert_eq!(nested_fields.len(), 4);
+                assert_eq!(nested_fields.len(), 2);
                 let field_a_dt = nested_fields[0].data_type();
                 assert_eq!(field_a_dt.nullability, Some(Nullability::NullSecond));
                 assert!(matches!(field_a_dt.codec, Codec::Int32));
