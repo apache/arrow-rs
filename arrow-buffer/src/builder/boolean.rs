@@ -94,6 +94,7 @@ impl BooleanBufferBuilder {
     /// let b = BooleanBufferBuilder::new(0);
     /// assert_eq!(0, b.capacity());
     /// // Creating space for 1 bit results in 64 bytes (space for 512 bits)
+    /// // (64 is the minimum allocation size for 64 bit architectures)
     /// let mut b = BooleanBufferBuilder::new(1);
     /// assert_eq!(512, b.capacity());
     /// // 1000 bits requires 128 bytes (space for 1024 bits)
