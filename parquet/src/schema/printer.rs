@@ -89,6 +89,57 @@ pub fn print_file_metadata(out: &mut dyn io::Write, file_metadata: &FileMetaData
 }
 
 /// Prints Parquet [`Type`] information.
+///
+/// # Example
+///
+/// ```rust
+/// use parquet::{
+///     basic::{ConvertedType, Repetition, Type as PhysicalType},
+///     schema::{printer::print_schema, types::Type},
+/// };
+/// use std::sync::Arc;
+///
+/// let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
+///     .with_id(Some(42))
+///     .with_converted_type(ConvertedType::UTF8)
+///     .build()
+///     .unwrap();
+///
+/// let field_b = Type::primitive_type_builder("b", PhysicalType::INT32)
+///     .with_repetition(Repetition::REQUIRED)
+///     .build()
+///     .unwrap();
+///
+/// let field_d = Type::primitive_type_builder("d", PhysicalType::INT64)
+///     .with_id(Some(99))
+///     .build()
+///     .unwrap();
+///
+/// let field_c = Type::group_type_builder("c")
+///     .with_id(Some(43))
+///     .with_fields(vec![Arc::new(field_d)])
+///     .build()
+///     .unwrap();
+///
+/// let schema = Type::group_type_builder("schema")
+///     .with_fields(vec![Arc::new(field_a), Arc::new(field_b), Arc::new(field_c)])
+///     .build()
+///     .unwrap();
+///
+/// print_schema(&mut std::io::stdout(), &schema);
+/// ```
+///
+/// outputs
+///
+/// ```text
+/// message schema {
+///   OPTIONAL BYTE_ARRAY a [42] (UTF8);
+///   REQUIRED INT32 b;
+///   message c [43] {
+///     OPTIONAL INT64 d [99];
+///   }
+/// }
+/// ```
 #[allow(unused_must_use)]
 pub fn print_schema(out: &mut dyn io::Write, tp: &Type) {
     // TODO: better if we can pass fmt::Write to Printer.
@@ -321,6 +372,16 @@ impl Printer<'_> {
                     }
                     _ => format!("{physical_type}"),
                 };
+                write!(
+                    self.output,
+                    "{} {} {}",
+                    basic_info.repetition(),
+                    phys_type_str,
+                    basic_info.name()
+                );
+                if basic_info.has_id() {
+                    write!(self.output, " [{}]", basic_info.id());
+                }
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
                 let logical_type_str = print_logical_and_converted(
@@ -329,23 +390,10 @@ impl Printer<'_> {
                     precision,
                     scale,
                 );
-                if logical_type_str.is_empty() {
-                    write!(
-                        self.output,
-                        "{} {} {};",
-                        basic_info.repetition(),
-                        phys_type_str,
-                        basic_info.name()
-                    );
+                if !logical_type_str.is_empty() {
+                    write!(self.output, " ({});", logical_type_str);
                 } else {
-                    write!(
-                        self.output,
-                        "{} {} {} ({});",
-                        basic_info.repetition(),
-                        phys_type_str,
-                        basic_info.name(),
-                        logical_type_str
-                    );
+                    write!(self.output, ";");
                 }
             }
             Type::GroupType {
@@ -353,8 +401,15 @@ impl Printer<'_> {
                 ref fields,
             } => {
                 if basic_info.has_repetition() {
-                    let r = basic_info.repetition();
-                    write!(self.output, "{} group {} ", r, basic_info.name());
+                    write!(
+                        self.output,
+                        "{} group {} ",
+                        basic_info.repetition(),
+                        basic_info.name()
+                    );
+                    if basic_info.has_id() {
+                        write!(self.output, "[{}] ", basic_info.id());
+                    }
                     let logical_str = print_logical_and_converted(
                         basic_info.logical_type().as_ref(),
                         basic_info.converted_type(),
@@ -364,10 +419,13 @@ impl Printer<'_> {
                     if !logical_str.is_empty() {
                         write!(self.output, "({logical_str}) ");
                     }
-                    writeln!(self.output, "{{");
                 } else {
-                    writeln!(self.output, "message {} {{", basic_info.name());
+                    write!(self.output, "message {} ", basic_info.name());
+                    if basic_info.has_id() {
+                        write!(self.output, "[{}] ", basic_info.id());
+                    }
                 }
+                writeln!(self.output, "{{");
 
                 self.indent += INDENT_WIDTH;
                 for c in fields {
@@ -405,28 +463,61 @@ mod tests {
 
     #[test]
     fn test_print_primitive_type() {
-        let mut s = String::new();
-        {
-            let mut p = Printer::new(&mut s);
-            let field = Type::primitive_type_builder("field", PhysicalType::INT32)
-                .with_repetition(Repetition::REQUIRED)
-                .with_converted_type(ConvertedType::INT_32)
-                .build()
-                .unwrap();
-            p.print(&field);
-        }
-        assert_eq!(&mut s, "REQUIRED INT32 field (INT_32);");
+        let types_and_strings = vec![
+            (
+                Type::primitive_type_builder("field", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .with_converted_type(ConvertedType::INT_32)
+                    .build()
+                    .unwrap(),
+                "REQUIRED INT32 field (INT_32);",
+            ),
+            (
+                Type::primitive_type_builder("field", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .with_converted_type(ConvertedType::INT_32)
+                    .with_id(Some(42))
+                    .build()
+                    .unwrap(),
+                "REQUIRED INT32 field [42] (INT_32);",
+            ),
+            (
+                Type::primitive_type_builder("field", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()
+                    .unwrap(),
+                "REQUIRED INT32 field;",
+            ),
+            (
+                Type::primitive_type_builder("field", PhysicalType::INT32)
+                    .with_repetition(Repetition::REQUIRED)
+                    .with_id(Some(42))
+                    .build()
+                    .unwrap(),
+                "REQUIRED INT32 field [42];",
+            ),
+        ];
+        types_and_strings.into_iter().for_each(|(field, expected)| {
+            let mut s = String::new();
+            {
+                let mut p = Printer::new(&mut s);
+                p.print(&field);
+            }
+            assert_eq!(&s, expected)
+        });
     }
 
     #[inline]
     fn build_primitive_type(
         name: &str,
+        id: Option<i32>,
         physical_type: PhysicalType,
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         repetition: Repetition,
     ) -> Result<Type> {
         Type::primitive_type_builder(name, physical_type)
+            .with_id(id)
             .with_repetition(repetition)
             .with_logical_type(logical_type)
             .with_converted_type(converted_type)
@@ -439,6 +530,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT32,
                     Some(LogicalType::Integer {
                         bit_width: 32,
@@ -453,6 +545,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT32,
                     Some(LogicalType::Integer {
                         bit_width: 8,
@@ -467,6 +560,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT32,
                     Some(LogicalType::Integer {
                         bit_width: 16,
@@ -481,6 +575,22 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    Some(42),
+                    PhysicalType::INT32,
+                    Some(LogicalType::Integer {
+                        bit_width: 16,
+                        is_signed: true,
+                    }),
+                    ConvertedType::INT_16,
+                    Repetition::REPEATED,
+                )
+                .unwrap(),
+                "REPEATED INT32 field [42] (INTEGER(16,true));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
                     PhysicalType::INT64,
                     None,
                     ConvertedType::NONE,
@@ -492,6 +602,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::FLOAT,
                     None,
                     ConvertedType::NONE,
@@ -503,6 +614,7 @@ mod tests {
             (
                 build_primitive_type(
                     "booleans",
+                    None,
                     PhysicalType::BOOLEAN,
                     None,
                     ConvertedType::NONE,
@@ -513,7 +625,20 @@ mod tests {
             ),
             (
                 build_primitive_type(
+                    "booleans",
+                    Some(42),
+                    PhysicalType::BOOLEAN,
+                    None,
+                    ConvertedType::NONE,
+                    Repetition::OPTIONAL,
+                )
+                .unwrap(),
+                "OPTIONAL BOOLEAN booleans [42];",
+            ),
+            (
+                build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT64,
                     Some(LogicalType::Timestamp {
                         is_adjusted_to_u_t_c: true,
@@ -528,6 +653,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT32,
                     Some(LogicalType::Date),
                     ConvertedType::NONE,
@@ -539,6 +665,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::INT32,
                     Some(LogicalType::Time {
                         unit: TimeUnit::MILLIS(Default::default()),
@@ -553,6 +680,22 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    Some(42),
+                    PhysicalType::INT32,
+                    Some(LogicalType::Time {
+                        unit: TimeUnit::MILLIS(Default::default()),
+                        is_adjusted_to_u_t_c: false,
+                    }),
+                    ConvertedType::TIME_MILLIS,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED INT32 field [42] (TIME(MILLIS,false));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
                     PhysicalType::BYTE_ARRAY,
                     None,
                     ConvertedType::NONE,
@@ -564,6 +707,19 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    Some(42),
+                    PhysicalType::BYTE_ARRAY,
+                    None,
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field [42];",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
                     PhysicalType::BYTE_ARRAY,
                     None,
                     ConvertedType::UTF8,
@@ -575,6 +731,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Json),
                     ConvertedType::JSON,
@@ -586,6 +743,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Bson),
                     ConvertedType::BSON,
@@ -597,6 +755,7 @@ mod tests {
             (
                 build_primitive_type(
                     "field",
+                    None,
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::String),
                     ConvertedType::NONE,
@@ -604,6 +763,18 @@ mod tests {
                 )
                 .unwrap(),
                 "REQUIRED BYTE_ARRAY field (STRING);",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    Some(42),
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::String),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field [42] (STRING);",
             ),
         ];
 
@@ -694,7 +865,104 @@ mod tests {
     }
 
     #[test]
+    fn test_print_schema_documentation() {
+        let mut s = String::new();
+        {
+            let mut p = Printer::new(&mut s);
+            let field_a = Type::primitive_type_builder("a", PhysicalType::BYTE_ARRAY)
+                .with_id(Some(42))
+                .with_converted_type(ConvertedType::UTF8)
+                .build()
+                .unwrap();
+
+            let field_b = Type::primitive_type_builder("b", PhysicalType::INT32)
+                .with_repetition(Repetition::REQUIRED)
+                .build()
+                .unwrap();
+
+            let field_d = Type::primitive_type_builder("d", PhysicalType::INT64)
+                .with_id(Some(99))
+                .build()
+                .unwrap();
+
+            let field_c = Type::group_type_builder("c")
+                .with_id(Some(43))
+                .with_fields(vec![Arc::new(field_d)])
+                .build()
+                .unwrap();
+
+            let schema = Type::group_type_builder("schema")
+                .with_fields(vec![
+                    Arc::new(field_a),
+                    Arc::new(field_b),
+                    Arc::new(field_c),
+                ])
+                .build()
+                .unwrap();
+            p.print(&schema);
+        }
+        let expected = "message schema {
+  OPTIONAL BYTE_ARRAY a [42] (UTF8);
+  REQUIRED INT32 b;
+  message c [43] {
+    OPTIONAL INT64 d [99];
+  }
+}";
+        assert_eq!(&mut s, expected);
+    }
+
+    #[test]
     fn test_print_group_type() {
+        let mut s = String::new();
+        {
+            let mut p = Printer::new(&mut s);
+            let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
+                .with_repetition(Repetition::REQUIRED)
+                .with_converted_type(ConvertedType::INT_32)
+                .build();
+            let f2 = Type::primitive_type_builder("f2", PhysicalType::BYTE_ARRAY)
+                .with_converted_type(ConvertedType::UTF8)
+                .build();
+            let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
+                .with_logical_type(Some(LogicalType::String))
+                .build();
+            let f4 = Type::primitive_type_builder("f4", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                .with_repetition(Repetition::REPEATED)
+                .with_converted_type(ConvertedType::INTERVAL)
+                .with_length(12)
+                .build();
+
+            let struct_fields = vec![
+                Arc::new(f1.unwrap()),
+                Arc::new(f2.unwrap()),
+                Arc::new(f3.unwrap()),
+            ];
+            let field = Type::group_type_builder("field")
+                .with_repetition(Repetition::OPTIONAL)
+                .with_fields(struct_fields)
+                .build()
+                .unwrap();
+
+            let fields = vec![Arc::new(field), Arc::new(f4.unwrap())];
+            let message = Type::group_type_builder("schema")
+                .with_fields(fields)
+                .build()
+                .unwrap();
+            p.print(&message);
+        }
+        let expected = "message schema {
+  OPTIONAL group field {
+    REQUIRED INT32 f1 (INT_32);
+    OPTIONAL BYTE_ARRAY f2 (UTF8);
+    OPTIONAL BYTE_ARRAY f3 (STRING);
+  }
+  REPEATED FIXED_LEN_BYTE_ARRAY (12) f4 (INTERVAL);
+}";
+        assert_eq!(&mut s, expected);
+    }
+
+    #[test]
+    fn test_print_group_type_with_ids() {
         let mut s = String::new();
         {
             let mut p = Printer::new(&mut s);
@@ -738,13 +1006,13 @@ mod tests {
                 .unwrap();
             p.print(&message);
         }
-        let expected = "message schema {
-  OPTIONAL group field {
-    REQUIRED INT32 f1 (INT_32);
-    OPTIONAL BYTE_ARRAY f2 (UTF8);
-    OPTIONAL BYTE_ARRAY f3 (STRING);
+        let expected = "message schema [2] {
+  OPTIONAL group field [1] {
+    REQUIRED INT32 f1 [0] (INT_32);
+    OPTIONAL BYTE_ARRAY f2 [1] (UTF8);
+    OPTIONAL BYTE_ARRAY f3 [1] (STRING);
   }
-  REPEATED FIXED_LEN_BYTE_ARRAY (12) f4 (INTERVAL);
+  REPEATED FIXED_LEN_BYTE_ARRAY (12) f4 [2] (INTERVAL);
 }";
         assert_eq!(&mut s, expected);
     }
