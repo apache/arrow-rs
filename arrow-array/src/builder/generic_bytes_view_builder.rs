@@ -397,7 +397,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Return the allocated size of this builder in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
         let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
-        let null = self.null_buffer_builder.allocated_size();
+        let null = self.null_buffer_builder.allocated_size() / 8;
         let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
         let in_progress = self.in_progress.capacity();
         let tracker = match &self.string_tracker {
