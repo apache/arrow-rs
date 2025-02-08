@@ -256,6 +256,8 @@ fn build_extend(array: &ArrayData) -> Extend {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
+        DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
@@ -302,6 +304,8 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
+        DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
@@ -455,7 +459,9 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Decimal128(_, _)
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean

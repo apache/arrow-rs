@@ -25,13 +25,16 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{
-    is_validate_decimal256_precision, is_validate_decimal_precision, validate_decimal256_precision,
-    validate_decimal_precision,
+    is_validate_decimal256_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal_precision, validate_decimal256_precision,
+    validate_decimal32_precision, validate_decimal64_precision, validate_decimal_precision,
 };
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
     ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_DEFAULT_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -1156,6 +1159,8 @@ mod decimal {
     use super::*;
 
     pub trait DecimalTypeSealed {}
+    impl DecimalTypeSealed for Decimal32Type {}
+    impl DecimalTypeSealed for Decimal64Type {}
     impl DecimalTypeSealed for Decimal128Type {}
     impl DecimalTypeSealed for Decimal256Type {}
 }
@@ -1163,10 +1168,12 @@ mod decimal {
 /// A trait over the decimal types, used by [`PrimitiveArray`] to provide a generic
 /// implementation across the various decimal types
 ///
-/// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
-/// and [`Decimal256Array`] respectively
+/// Implemented by [`Decimal32Type`], [`Decimal64Type`], [`Decimal128Type`] and [`Decimal256Type`]
+/// for [`Decimal32Array`], [`Decimal64Array`], [`Decimal128Array`] and [`Decimal256Array`] respectively
 ///
 /// [`PrimitiveArray`]: crate::array::PrimitiveArray
+/// [`Decimal32Array`]: crate::array::Decimal32Array
+/// [`Decimal64Array`]: crate::array::Decimal64Array
 /// [`Decimal128Array`]: crate::array::Decimal128Array
 /// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
@@ -1183,7 +1190,7 @@ pub trait DecimalType:
     /// Default values for [`DataType`]
     const DEFAULT_TYPE: DataType;
 
-    /// "Decimal128" or "Decimal256", for use in error messages
+    /// "Decimal32", "Decimal64", "Decimal128" or "Decimal256", for use in error messages
     const PREFIX: &'static str;
 
     /// Formats the decimal value with the provided precision and scale
@@ -1235,6 +1242,74 @@ pub fn validate_decimal_precision_and_scale<T: DecimalType>(
 
     Ok(())
 }
+
+/// The decimal type for a Decimal32Array
+#[derive(Debug)]
+pub struct Decimal32Type {}
+
+impl DecimalType for Decimal32Type {
+    const BYTE_LENGTH: usize = 4;
+    const MAX_PRECISION: u8 = DECIMAL32_MAX_PRECISION;
+    const MAX_SCALE: i8 = DECIMAL32_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal32;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal32(DECIMAL32_MAX_PRECISION, DECIMAL32_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal32";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
+    }
+
+    fn validate_decimal_precision(num: i32, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal32_precision(num, precision)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal32_precision(value, precision)
+    }
+}
+
+impl ArrowPrimitiveType for Decimal32Type {
+    type Native = i32;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+impl primitive::PrimitiveTypeSealed for Decimal32Type {}
+
+/// The decimal type for a Decimal64Array
+#[derive(Debug)]
+pub struct Decimal64Type {}
+
+impl DecimalType for Decimal64Type {
+    const BYTE_LENGTH: usize = 8;
+    const MAX_PRECISION: u8 = DECIMAL64_MAX_PRECISION;
+    const MAX_SCALE: i8 = DECIMAL64_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal64;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal64(DECIMAL64_MAX_PRECISION, DECIMAL64_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal64";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
+    }
+
+    fn validate_decimal_precision(num: i64, precision: u8) -> Result<(), ArrowError> {
+        validate_decimal64_precision(num, precision)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal64_precision(value, precision)
+    }
+}
+
+impl ArrowPrimitiveType for Decimal64Type {
+    type Native = i64;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+impl primitive::PrimitiveTypeSealed for Decimal64Type {}
 
 /// The decimal type for a Decimal128Array
 #[derive(Debug)]

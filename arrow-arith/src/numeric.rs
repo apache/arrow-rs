@@ -111,6 +111,20 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         Float16 => neg_wrapping!(Float16Type, array),
         Float32 => neg_wrapping!(Float32Type, array),
         Float64 => neg_wrapping!(Float64Type, array),
+        Decimal32(p, s) => {
+            let a = array
+                .as_primitive::<Decimal32Type>()
+                .try_unary::<_, Decimal32Type, _>(|x| x.neg_checked())?;
+
+            Ok(Arc::new(a.with_precision_and_scale(*p, *s)?))
+        }
+        Decimal64(p, s) => {
+            let a = array
+                .as_primitive::<Decimal64Type>()
+                .try_unary::<_, Decimal64Type, _>(|x| x.neg_checked())?;
+
+            Ok(Arc::new(a.with_precision_and_scale(*p, *s)?))
+        }
         Decimal128(p, s) => {
             let a = array
                 .as_primitive::<Decimal128Type>()
@@ -234,6 +248,8 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Interval(MonthDayNano), Interval(MonthDayNano)) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
         (Date32, _) => date_op::<Date32Type>(op, l, l_scalar, r, r_scalar),
         (Date64, _) => date_op::<Date64Type>(op, l, l_scalar, r, r_scalar),
+        (Decimal32(_, _), Decimal32(_, _)) => decimal_op::<Decimal32Type>(op, l, l_scalar, r, r_scalar),
+        (Decimal64(_, _), Decimal64(_, _)) => decimal_op::<Decimal64Type>(op, l, l_scalar, r, r_scalar),
         (Decimal128(_, _), Decimal128(_, _)) => decimal_op::<Decimal128Type>(op, l, l_scalar, r, r_scalar),
         (Decimal256(_, _), Decimal256(_, _)) => decimal_op::<Decimal256Type>(op, l, l_scalar, r, r_scalar),
         (l_t, r_t) => match (l_t, r_t) {
@@ -734,6 +750,8 @@ fn decimal_op<T: DecimalType>(
     let r = r.as_primitive::<T>();
 
     let (p1, s1, p2, s2) = match (l.data_type(), r.data_type()) {
+        (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => (p1, s1, p2, s2),
+        (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => (p1, s1, p2, s2),
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => (p1, s1, p2, s2),
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => (p1, s1, p2, s2),
         _ => unreachable!(),
@@ -920,6 +938,28 @@ mod tests {
         assert_eq!(
             err,
             "Arithmetic overflow: Overflow happened on: - -9223372036854775808"
+        );
+
+        let a = Decimal32Array::from(vec![1, 3, -44, 2, 4])
+            .with_precision_and_scale(9, 6)
+            .unwrap();
+
+        let r = neg(&a).unwrap();
+        assert_eq!(r.data_type(), a.data_type());
+        assert_eq!(
+            r.as_primitive::<Decimal32Type>().values(),
+            &[-1, -3, 44, -2, -4]
+        );
+
+        let a = Decimal64Array::from(vec![1, 3, -44, 2, 4])
+            .with_precision_and_scale(9, 6)
+            .unwrap();
+
+        let r = neg(&a).unwrap();
+        assert_eq!(r.data_type(), a.data_type());
+        assert_eq!(
+            r.as_primitive::<Decimal64Type>().values(),
+            &[-1, -3, 44, -2, -4]
         );
 
         let a = Decimal128Array::from(vec![1, 3, -44, 2, 4])

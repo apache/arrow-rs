@@ -410,6 +410,44 @@ pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 /// A [`PrimitiveArray`] of elapsed durations in nanoseconds
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
+/// A [`PrimitiveArray`] of 32-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal32Array;
+/// // Create from Vec<Option<i32>>
+/// let arr = Decimal32Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i32>
+/// let arr = Decimal32Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Decimal32Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
+pub type Decimal32Array = PrimitiveArray<Decimal32Type>;
+
+/// A [`PrimitiveArray`] of 64-bit fixed point decimals
+///
+/// # Examples
+///
+/// Construction
+///
+/// ```
+/// # use arrow_array::Decimal64Array;
+/// // Create from Vec<Option<i64>>
+/// let arr = Decimal64Array::from(vec![Some(1), None, Some(2)]);
+/// // Create from Vec<i64>
+/// let arr = Decimal64Array::from(vec![1, 2, 3]);
+/// // Create iter/collect
+/// let arr: Decimal64Array = std::iter::repeat(42).take(10).collect();
+/// ```
+///
+/// See [`PrimitiveArray`] for more information and examples
+pub type Decimal64Array = PrimitiveArray<Decimal64Type>;
+
 /// A [`PrimitiveArray`] of 128-bit fixed point decimals
 ///
 /// # Examples
@@ -418,7 +456,7 @@ pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 ///
 /// ```
 /// # use arrow_array::Decimal128Array;
-/// // Create from Vec<Option<i18>>
+/// // Create from Vec<Option<i128>>
 /// let arr = Decimal128Array::from(vec![Some(1), None, Some(2)]);
 /// // Create from Vec<i128>
 /// let arr = Decimal128Array::from(vec![1, 2, 3]);
@@ -672,6 +710,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             DataType::Timestamp(t1, _) => {
                 matches!(data_type, DataType::Timestamp(t2, _) if &t1 == t2)
             }
+            DataType::Decimal32(_, _) => matches!(data_type, DataType::Decimal32(_, _)),
+            DataType::Decimal64(_, _) => matches!(data_type, DataType::Decimal64(_, _)),
             DataType::Decimal128(_, _) => matches!(data_type, DataType::Decimal128(_, _)),
             DataType::Decimal256(_, _) => matches!(data_type, DataType::Decimal256(_, _)),
             _ => T::DATA_TYPE.eq(data_type),
@@ -1353,6 +1393,8 @@ def_from_for_primitive!(UInt64Type, u64);
 def_from_for_primitive!(Float16Type, f16);
 def_from_for_primitive!(Float32Type, f32);
 def_from_for_primitive!(Float64Type, f64);
+def_from_for_primitive!(Decimal32Type, i32);
+def_from_for_primitive!(Decimal64Type, i64);
 def_from_for_primitive!(Decimal128Type, i128);
 def_from_for_primitive!(Decimal256Type, i256);
 
@@ -1465,6 +1507,8 @@ def_numeric_from_vec!(UInt64Type);
 def_numeric_from_vec!(Float16Type);
 def_numeric_from_vec!(Float32Type);
 def_numeric_from_vec!(Float64Type);
+def_numeric_from_vec!(Decimal32Type);
+def_numeric_from_vec!(Decimal64Type);
 def_numeric_from_vec!(Decimal128Type);
 def_numeric_from_vec!(Decimal256Type);
 
@@ -1573,6 +1617,26 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns the decimal precision of this array
     pub fn precision(&self) -> u8 {
         match T::BYTE_LENGTH {
+            4 => {
+                if let DataType::Decimal32(p, _) = self.data_type() {
+                    *p
+                } else {
+                    unreachable!(
+                        "Decimal32Array datatype is not DataType::Decimal32 but {}",
+                        self.data_type()
+                    )
+                }
+            }
+            8 => {
+                if let DataType::Decimal64(p, _) = self.data_type() {
+                    *p
+                } else {
+                    unreachable!(
+                        "Decimal64Array datatype is not DataType::Decimal64 but {}",
+                        self.data_type()
+                    )
+                }
+            }
             16 => {
                 if let DataType::Decimal128(p, _) = self.data_type() {
                     *p
@@ -1600,6 +1664,26 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns the decimal scale of this array
     pub fn scale(&self) -> i8 {
         match T::BYTE_LENGTH {
+            4 => {
+                if let DataType::Decimal32(_, s) = self.data_type() {
+                    *s
+                } else {
+                    unreachable!(
+                        "Decimal32Array datatype is not DataType::Decimal32 but {}",
+                        self.data_type()
+                    )
+                }
+            }
+            8 => {
+                if let DataType::Decimal64(_, s) = self.data_type() {
+                    *s
+                } else {
+                    unreachable!(
+                        "Decimal64Array datatype is not DataType::Decimal64 but {}",
+                        self.data_type()
+                    )
+                }
+            }
             16 => {
                 if let DataType::Decimal128(_, s) = self.data_type() {
                     *s
@@ -1628,7 +1712,9 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Decimal128Builder, Decimal256Builder};
+    use crate::builder::{
+        Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
+    };
     use crate::cast::downcast_array;
     use crate::BooleanArray;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
@@ -2239,6 +2325,42 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal32() {
+        let values: Vec<_> = vec![0, 1, -1, i32::MIN, i32::MAX];
+        let array: PrimitiveArray<Decimal32Type> =
+            PrimitiveArray::from_iter(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array: PrimitiveArray<Decimal32Type> =
+            PrimitiveArray::from_iter_values(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal32Type>::from(values.clone());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal32Type>::from(array.to_data());
+        assert_eq!(array.values(), &values);
+    }
+
+    #[test]
+    fn test_decimal64() {
+        let values: Vec<_> = vec![0, 1, -1, i64::MIN, i64::MAX];
+        let array: PrimitiveArray<Decimal64Type> =
+            PrimitiveArray::from_iter(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array: PrimitiveArray<Decimal64Type> =
+            PrimitiveArray::from_iter_values(values.iter().copied());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal64Type>::from(values.clone());
+        assert_eq!(array.values(), &values);
+
+        let array = PrimitiveArray::<Decimal64Type>::from(array.to_data());
+        assert_eq!(array.values(), &values);
+    }
+
+    #[test]
     fn test_decimal128() {
         let values: Vec<_> = vec![0, 1, -1, i128::MIN, i128::MAX];
         let array: PrimitiveArray<Decimal128Type> =
@@ -2506,6 +2628,74 @@ mod tests {
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
         assert_eq!(101_i128, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal64_iter() {
+        let mut builder = Decimal64Builder::with_capacity(30);
+        let decimal1 = 12345;
+        builder.append_value(decimal1);
+
+        builder.append_null();
+
+        let decimal2 = 56789;
+        builder.append_value(decimal2);
+
+        let array: Decimal64Array = builder.finish().with_precision_and_scale(18, 4).unwrap();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
+    }
+
+    #[test]
+    fn test_from_iter_decimal64array() {
+        let value1 = 12345;
+        let value2 = 56789;
+
+        let mut array: Decimal64Array =
+            vec![Some(value1), None, Some(value2)].into_iter().collect();
+        array = array.with_precision_and_scale(18, 4).unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal64(18, 4));
+        assert_eq!(value1, array.value(0));
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert_eq!(value2, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal32_iter() {
+        let mut builder = Decimal32Builder::with_capacity(30);
+        let decimal1 = 12345;
+        builder.append_value(decimal1);
+
+        builder.append_null();
+
+        let decimal2 = 56789;
+        builder.append_value(decimal2);
+
+        let array: Decimal32Array = builder.finish().with_precision_and_scale(9, 2).unwrap();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
+    }
+
+    #[test]
+    fn test_from_iter_decimal32array() {
+        let value1 = 12345;
+        let value2 = 56789;
+
+        let mut array: Decimal32Array =
+            vec![Some(value1), None, Some(value2)].into_iter().collect();
+        array = array.with_precision_and_scale(9, 2).unwrap();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal32(9, 2));
+        assert_eq!(value1, array.value(0));
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert_eq!(value2, array.value(2));
         assert!(!array.is_null(2));
     }
 
