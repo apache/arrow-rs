@@ -1106,4 +1106,98 @@ mod test {
         );
         assert_eq!(a_array.value(6), 7, "Mismatch in nested_struct.A at row 6");
     }
+
+    #[test]
+    fn test_nulls_snappy() {
+        let file = arrow_test_data("avro/nulls.snappy.avro");
+        let batch_large = read_file(&file, 8, false);
+        use arrow_array::{Int32Array, StructArray};
+        use arrow_buffer::Buffer;
+        use arrow_data::ArrayDataBuilder;
+        use arrow_schema::{DataType, Field, Fields};
+        let b_c_int = Int32Array::from(vec![None; 8]);
+        let b_c_int_data = b_c_int.into_data();
+        let b_struct_field = Field::new("b_c_int", DataType::Int32, true);
+        let b_struct_type = DataType::Struct(Fields::from(vec![b_struct_field]));
+        let struct_validity = Buffer::from_iter((0..8).map(|_| true));
+        let b_struct_data = ArrayDataBuilder::new(b_struct_type)
+            .len(8)
+            .null_bit_buffer(Some(struct_validity))
+            .child_data(vec![b_c_int_data])
+            .build()
+            .unwrap();
+        let b_struct_array = StructArray::from(b_struct_data);
+        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([(
+            "b_struct",
+            Arc::new(b_struct_array) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
+        let batch_small = read_file(&file, 3, false);
+        assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+    }
+
+    #[test]
+    fn test_repeated_no_annotation() {
+        let file = arrow_test_data("avro/repeated_no_annotation.avro");
+        let batch_large = read_file(&file, 8, false);
+        use arrow_array::{Int32Array, Int64Array, ListArray, StringArray, StructArray};
+        use arrow_buffer::Buffer;
+        use arrow_data::ArrayDataBuilder;
+        use arrow_schema::{DataType, Field, Fields};
+        let id_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let number_array = Int64Array::from(vec![
+            Some(5555555555),
+            Some(1111111111),
+            Some(1111111111),
+            Some(2222222222),
+            Some(3333333333),
+        ]);
+        let kind_array =
+            StringArray::from(vec![None, Some("home"), Some("home"), None, Some("mobile")]);
+        let phone_fields = Fields::from(vec![
+            Field::new("number", DataType::Int64, true),
+            Field::new("kind", DataType::Utf8, true),
+        ]);
+        let phone_struct_data = ArrayDataBuilder::new(DataType::Struct(phone_fields))
+            .len(5) // 5 phone entries total
+            .child_data(vec![number_array.into_data(), kind_array.into_data()])
+            .build()
+            .unwrap();
+        let phone_struct_array = StructArray::from(phone_struct_data);
+        let phone_list_offsets = Buffer::from_slice_ref([0, 0, 0, 0, 1, 2, 5]);
+        let phone_list_validity = Buffer::from_iter([false, false, true, true, true, true]);
+        let phone_item_field = Field::new("item", phone_struct_array.data_type().clone(), true);
+        let phone_list_data = ArrayDataBuilder::new(DataType::List(Arc::new(phone_item_field)))
+            .len(6)
+            .add_buffer(phone_list_offsets)
+            .null_bit_buffer(Some(phone_list_validity))
+            .child_data(vec![phone_struct_array.into_data()])
+            .build()
+            .unwrap();
+        let phone_list_array = ListArray::from(phone_list_data);
+        let phone_numbers_validity = Buffer::from_iter([false, false, true, true, true, true]);
+        let phone_numbers_field = Field::new("phone", phone_list_array.data_type().clone(), true);
+        let phone_numbers_struct_data =
+            ArrayDataBuilder::new(DataType::Struct(Fields::from(vec![phone_numbers_field])))
+                .len(6)
+                .null_bit_buffer(Some(phone_numbers_validity))
+                .child_data(vec![phone_list_array.into_data()])
+                .build()
+                .unwrap();
+        let phone_numbers_struct_array = StructArray::from(phone_numbers_struct_data);
+        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([
+            ("id", Arc::new(id_array) as _, true),
+            (
+                "phoneNumbers",
+                Arc::new(phone_numbers_struct_array) as _,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
+        let batch_small = read_file(&file, 3, false);
+        assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+    }
 }
