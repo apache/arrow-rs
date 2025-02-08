@@ -2450,17 +2450,10 @@ mod tests {
                     .build_unchecked(),
             )
         };
-
-        let batch = RecordBatch::try_new(schema.clone(), vec![invalid_struct_arr]).unwrap();
-
-        let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, schema.as_ref()).unwrap();
-        writer.write(&batch).unwrap();
-        writer.finish().unwrap();
-
-        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
-        let err = reader.next().unwrap().unwrap_err();
-        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+        expect_ipc_validation_error(
+            Arc::new(invalid_struct_arr),
+            "Invalid argument error: Incorrect array length for StructArray field \"b\", expected 4 got 3",
+        );
     }
 
     #[test]
