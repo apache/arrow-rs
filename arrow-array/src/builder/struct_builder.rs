@@ -296,6 +296,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                         value_builder,
                         capacity,
                     )
+                    .with_keys_field(fields[0].clone())
                     .with_values_field(fields[1].clone()),
                 )
             }
