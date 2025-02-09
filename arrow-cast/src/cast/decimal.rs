@@ -76,56 +76,9 @@ where
     }
 }
 
-pub(crate) fn convert_to_smaller_scale_decimal_same_type<T>(
-    array: &PrimitiveArray<T>,
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
-    cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let delta_scale = input_scale - output_scale;
-    // if the reudction of the input number through scaling (dividing) is greater
-    // than a possible precision loss (plus potential increase via rounding) every input number will fit into the output type
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
-
-    if is_infallible_cast {
-        let div = T::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked(delta_scale as u32)?;
-
-        let half = div.div_wrapping(T::Native::from_usize(2).unwrap());
-        let half_neg = half.neg_wrapping();
-        let f = |x: T::Native| {
-            // div is >= 10 and so this cannot overflow
-            let d = x.div_wrapping(div);
-            let r = x.mod_wrapping(div);
-
-            // Round result
-            match x >= T::Native::ZERO {
-                true if r >= half => d.add_wrapping(T::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(T::Native::ONE),
-                _ => d,
-            }
-        };
-        Ok(array.unary(f))
-    } else {
-        convert_to_smaller_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )
-    }
-}
-
 pub(crate) fn convert_to_smaller_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -138,9 +91,15 @@ where
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let delta_scale = input_scale - output_scale;
+    // if the reduction of the input number through scaling (dividing) is greater
+    // than a possible precision loss (plus potential increase via rounding) every input number will fit into the output type
+    // Example:
+    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+
     let div = I::Native::from_decimal(10_i128)
         .unwrap()
-        .pow_checked((input_scale - output_scale) as u32)?;
+        .pow_checked(delta_scale as u32)?;
 
     let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
     let half_neg = half.neg_wrapping();
@@ -159,7 +118,11 @@ where
         O::Native::from_decimal(adjusted)
     };
 
-    Ok(if cast_options.safe {
+    Ok(if is_infallible_cast {
+        let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
+                                              // to fit into the target type
+        array.unary(g)
+    } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
@@ -169,42 +132,9 @@ where
     })
 }
 
-pub(crate) fn convert_to_bigger_or_equal_scale_decimal_same_type<T>(
-    array: &PrimitiveArray<T>,
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
-    cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let delta_scale = output_scale - input_scale;
-    // if the gain in precision (digits) is greater than the multiplication due to scaling
-    // every number will fit into the output type
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
-
-    if is_infallible_cast {
-        let mul = T::Native::from_decimal(10_i128)
-            .unwrap()
-            .pow_checked(delta_scale as u32)?;
-        let f = |x: T::Native| x.mul_wrapping(mul);
-        Ok(array.unary(f))
-    } else {
-        convert_to_bigger_or_equal_scale_decimal::<T, T>(
-            array,
-            input_scale,
-            output_precision,
-            output_scale,
-            cast_options,
-        )
-    }
-}
-
 pub(crate) fn convert_to_bigger_or_equal_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -217,13 +147,20 @@ where
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    let delta_scale = output_scale - input_scale;
+    // if the gain in precision (digits) is greater than the multiplication due to scaling
+    // every number will fit into the output type
     let mul = O::Native::from_decimal(10_i128)
         .unwrap()
-        .pow_checked((output_scale - input_scale) as u32)?;
+        .pow_checked(delta_scale as u32)?;
 
+    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
-    Ok(if cast_options.safe {
+    Ok(if is_infallible_cast {
+        let f = |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul);
+        array.unary(f)
+    } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
@@ -250,7 +187,7 @@ where
         if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
         } else if input_scale <= output_scale {
-            convert_to_bigger_or_equal_scale_decimal_same_type::<T>(
+            convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_precision,
                 input_scale,
@@ -260,7 +197,7 @@ where
             )?
         } else {
             // input_scale > output_scale
-            convert_to_smaller_scale_decimal_same_type::<T>(
+            convert_to_smaller_scale_decimal::<T, T>(
                 array,
                 input_precision,
                 input_scale,
@@ -279,6 +216,7 @@ where
 // Support two different types of decimal cast operations
 pub(crate) fn cast_decimal_to_decimal<I, O>(
     array: &PrimitiveArray<I>,
+    input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
@@ -293,6 +231,7 @@ where
     let array: PrimitiveArray<O> = if input_scale > output_scale {
         convert_to_smaller_scale_decimal::<I, O>(
             array,
+            input_precision,
             input_scale,
             output_precision,
             output_scale,
@@ -301,6 +240,7 @@ where
     } else {
         convert_to_bigger_or_equal_scale_decimal::<I, O>(
             array,
+            input_precision,
             input_scale,
             output_precision,
             output_scale,
