@@ -510,9 +510,6 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
-                                if *bits != "128" && *bits != "256" {
-                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
-                                }
                                 let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
@@ -523,10 +520,10 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                if *bits == "128" {
-                                    DataType::Decimal128(parsed_precision, parsed_scale)
-                                } else {
-                                    DataType::Decimal256(parsed_precision, parsed_scale)
+                                match *bits {
+                                    "128" => DataType::Decimal128(parsed_precision, parsed_scale),
+                                    "256" => DataType::Decimal256(parsed_precision, parsed_scale),
+                                    _ => return Err(ArrowError::CDataInterface("Only 128- and 256- bit wide decimals are supported in the Rust implementation".to_string())),
                                 }
                             }
                             _ => {
