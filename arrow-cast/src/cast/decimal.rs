@@ -100,6 +100,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
+    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = input_scale - output_scale;
     // if the reduction of the input number through scaling (dividing) is greater
@@ -163,6 +164,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
+    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = output_scale - input_scale;
     let mul = O::Native::from_decimal(10_i128)
