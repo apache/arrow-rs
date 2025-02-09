@@ -33,6 +33,7 @@ use std::sync::Arc;
 const DEFAULT_CAPACITY: usize = 1024;
 
 /// A decoder that converts Avro-encoded data into an Arrow [`RecordBatch`].
+#[derive(Debug)]
 pub struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
@@ -138,7 +139,6 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType, strict_mode: bool) -> Result<Self, ArrowError> {
-        // 1) Create the "base" decoder for the underlying Avro codec
         let base = match &data_type.codec {
             Codec::Null => Self::Null(0),
             Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
@@ -541,11 +541,10 @@ impl Decoder {
 type FlushResult = (Vec<Arc<dyn Array>>, Option<NullBuffer>);
 
 fn flush_record_children(
-    mut kids: Vec<Arc<dyn Array>>,
+    mut children: Vec<Arc<dyn Array>>,
     parent_nulls: Option<NullBuffer>,
 ) -> Result<FlushResult, ArrowError> {
-    let max_len = kids.iter().map(|c| c.len()).max().unwrap_or(0);
-
+    let max_len = children.iter().map(|c| c.len()).max().unwrap_or(0);
     let fixed_parent_nulls = match parent_nulls {
         None => None,
         Some(nb) => {
@@ -572,9 +571,8 @@ fn flush_record_children(
             }
         }
     };
-
-    let mut out = Vec::with_capacity(kids.len());
-    for arr in kids {
+    let mut out = Vec::with_capacity(children.len());
+    for arr in children {
         let cur_len = arr.len();
         match cur_len.cmp(&max_len) {
             Ordering::Equal => out.push(arr),
@@ -690,7 +688,6 @@ fn flush_values<T>(vec: &mut Vec<T>) -> Vec<T> {
 
 fn append_nulls(arr: &Arc<dyn Array>, count: usize) -> Result<Arc<dyn Array>, ArrowError> {
     use arrow_data::transform::MutableArrayData;
-
     let d = arr.to_data();
     let mut mad = MutableArrayData::new(vec![&d], false, 0);
     mad.extend(0, 0, arr.len());

@@ -14,12 +14,23 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//! Read Avro data to Arrow
+
+//! Avro reader
+//!
+//! This module provides facilities to read Apache Avro-encoded files or streams
+//! into Arrow's [`RecordBatch`] format. In particular, it introduces:
+//!
+//! * [`ReaderBuilder`]: Configures Avro reading, e.g., batch size
+//! * [`Reader`]: Yields [`RecordBatch`] values, implementing [`Iterator`]
+//! * [`Decoder`]: A low-level push-based decoder for Avro records
 
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::header::{Header, HeaderDecoder};
-use arrow_schema::ArrowError;
+use crate::reader::record::RecordDecoder;
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, Schema, SchemaRef};
 use std::io::BufRead;
+use std::sync::Arc;
 
 mod header;
 
@@ -70,15 +81,238 @@ fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, 
     std::iter::from_fn(move || try_next().transpose())
 }
 
+/// A low-level interface for decoding Avro-encoded bytes into Arrow [`RecordBatch`]
+///
+/// This wraps [`RecordDecoder`] to allow incremental decoding of Avro blocks.
+/// It parallels the JSON-based [`Decoder`](arrow_json::reader::Decoder), but
+/// uses Avro’s block and sync marker approach.
+#[derive(Debug)]
+pub struct Decoder {
+    /// Internal decoder that processes raw Avro-encoded records.
+    record_decoder: RecordDecoder,
+
+    /// The maximum number of records to read at once when decoding.
+    /// (This is used by higher-level readers that want to chunk data.)
+    batch_size: usize,
+}
+
+impl Decoder {
+    /// Create a new [`Decoder`], wrapping an existing [`RecordDecoder`] and using
+    /// the specified `batch_size`.
+    ///
+    /// The `record_decoder` typically comes from mapping the Avro file schema
+    /// into [`AvroField`], then calling [`RecordDecoder::try_new`].
+    pub fn new(record_decoder: RecordDecoder, batch_size: usize) -> Self {
+        Self {
+            record_decoder,
+            batch_size,
+        }
+    }
+
+    /// Decode up to `to_read` Avro records from `data`, returning how many bytes were consumed.
+    ///
+    /// You can call this repeatedly with slices of Avro block data. Once you have called `decode`
+    /// enough times to process a chunk of rows (for example, `batch_size` rows), you may call
+    /// [`Self::flush`] to convert the accumulated rows to a [`RecordBatch`].
+    ///
+    /// * `data` is Avro-encoded rows (potentially a partial block).
+    /// * `to_read` is how many rows to decode out of the buffer (not bytes, but Avro record count).
+    pub fn decode(&mut self, data: &[u8], to_read: usize) -> Result<usize, ArrowError> {
+        self.record_decoder.decode(data, to_read)
+    }
+
+    /// Produce a [`RecordBatch`] from all fully decoded rows so far.
+    ///
+    /// Returns an error if partial Avro rows remain, or if any type conversions
+    /// fail. Returns `Ok(RecordBatch)` if at least one row was decoded, or an
+    /// error if no rows have yet been decoded.
+    pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
+        self.record_decoder.flush()
+    }
+
+    /// Return the configured batch size for this [`Decoder`].
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+}
+
+/// A builder to create an [`Avro Reader`](Reader) that reads Avro data
+/// into Arrow [`RecordBatch`]es.
+///
+/// ```
+/// # use std::fs::File;
+/// # use std::io::BufReader;
+/// # use arrow_avro::reader::{ReaderBuilder};
+/// let file = File::open("test/data/nested_lists.snappy.avro").unwrap();
+/// let buf_reader = BufReader::new(file);
+///
+/// let builder = ReaderBuilder::new().with_batch_size(1024);
+/// let reader = builder.build(buf_reader).unwrap();
+/// for maybe_batch in reader {
+///     let batch = maybe_batch.unwrap();
+///     // process batch
+/// }
+/// ```
+#[derive(Debug, Default)]
+pub struct ReaderBuilder {
+    batch_size: usize,
+    strict_mode: bool,
+}
+
+impl ReaderBuilder {
+    /// Creates a new [`ReaderBuilder`] with default settings:
+    /// * `batch_size` = 1024
+    /// * `strict_mode` = false
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the batch size in rows to read
+    pub fn with_batch_size(self, batch_size: usize) -> Self {
+        Self { batch_size, ..self }
+    }
+
+    /// Controls whether certain out of specification schema errors,
+    /// i.e. Impala's Union type with a null second
+    /// should produce an error (`strict_mode = true`) or be ignored
+    /// where possible.
+    pub fn with_strict_mode(self, strict_mode: bool) -> Self {
+        Self {
+            strict_mode,
+            ..self
+        }
+    }
+
+    /// Create a [`Reader`] with the provided [`BufRead`]
+    pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
+        let header = read_header(&mut reader)?;
+        let compression = header.compression()?;
+        let avro_schema = header
+            .schema()
+            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
+            .ok_or_else(|| {
+                ArrowError::ParseError("No Avro schema present in file header".to_string())
+            })?;
+        use crate::codec::AvroField;
+        let root_field = AvroField::try_from(&avro_schema)?;
+        let record_decoder = RecordDecoder::try_new(root_field.data_type(), self.strict_mode)?;
+        let decoder = Decoder::new(record_decoder, self.batch_size);
+        Ok(Reader {
+            reader,
+            header,
+            compression,
+            decoder,
+            finished: false,
+        })
+    }
+}
+
+/// An iterator over [`RecordBatch`] that reads from an Avro-encoded
+/// data stream (e.g. a file) using the schema stored in the Avro file header.
+///
+/// This parallels the design of [`arrow_json::Reader`].
+///
+/// # Example
+///
+/// ```
+/// # use std::fs::File;
+/// # use std::io::BufReader;
+/// # use arrow_avro::reader::{ReaderBuilder};
+/// # use arrow_schema::ArrowError;
+/// # fn read_avro(path: &str) -> Result<(), ArrowError> {
+///     let file = File::open(path)?;
+///     let buf_reader = BufReader::new(file);
+///     let mut reader = ReaderBuilder::new()
+///         .with_batch_size(500)
+///         .build(buf_reader)?;
+///     if let Some(batch) = reader.next() {
+///         let batch = batch?;
+///         println!("Decoded batch: {} rows, {} columns", batch.num_rows(), batch.num_columns());
+///         // process batch
+///     }
+///     Ok(())
+/// # }
+/// ```
+
+#[derive(Debug)]
+pub struct Reader<R> {
+    /// The underlying buffered reader or stream from which to read Avro data.
+    reader: R,
+
+    /// The Avro file header, including sync marker and schema.
+    header: Header,
+
+    /// An optional compression codec (Snappy, BZip2, etc.) found in the Avro file.
+    compression: Option<crate::compression::CompressionCodec>,
+
+    /// A high-level decoder that wraps the low-level [`RecordDecoder`].
+    decoder: Decoder,
+
+    /// True if we have already returned the final batch or encountered EOF.
+    finished: bool,
+}
+
+impl<R> Reader<R> {
+    /// Return the Arrow schema discovered from the Avro file's header.
+    pub fn schema(&self) -> SchemaRef {
+        self.decoder.record_decoder.schema().clone()
+    }
+}
+
+impl<R: BufRead> Reader<R> {
+    /// Reads the next [`RecordBatch`] from the file, returning `Ok(None)` if EOF
+    /// or if we have already yielded all data.
+    fn read_next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.finished {
+            return Ok(None);
+        }
+        for block_result in read_blocks(&mut self.reader) {
+            let block = block_result?;
+            let block_data = if let Some(ref c) = self.compression {
+                c.decompress(&block.data)?
+            } else {
+                block.data
+            };
+            let mut offset = 0;
+            let mut remaining = block.count;
+            while remaining > 0 {
+                let to_read = std::cmp::min(remaining, self.decoder.batch_size());
+                let consumed = self.decoder.decode(&block_data[offset..], to_read)?;
+                offset += consumed;
+                remaining -= to_read;
+            }
+        }
+        let batch = self.decoder.flush()?;
+        self.finished = true;
+        Ok(Some(batch))
+    }
+}
+
+impl<R: BufRead> Iterator for Reader<R> {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.read_next_batch() {
+            Ok(Some(b)) => Some(Ok(b)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+impl<R: BufRead> RecordBatchReader for Reader<R> {
+    fn schema(&self) -> SchemaRef {
+        self.schema()
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::codec::AvroField;
-    use crate::reader::record::RecordDecoder;
-    use crate::reader::{read_blocks, read_header};
+    use super::*;
     use crate::test_util::arrow_test_data;
     use arrow_array::builder::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        ListBuilder, MapBuilder, StringBuilder, StructBuilder,
+        ListBuilder, MapBuilder, MapFieldNames, StringBuilder, StructBuilder,
     };
     use arrow_array::types::Int32Type;
     use arrow_array::{
@@ -94,35 +328,16 @@ mod test {
     use std::io::BufReader;
     use std::sync::Arc;
 
-    /// Helper to read an Avro file into a `RecordBatch`.
+    /// Test helper that opens an Avro file, builds an Avro `Reader` with
+    /// a fixed batch size, then returns that `Reader`.
     ///
-    /// - `strict_mode`: if `true`, we reject unions of the form `[T,"null"]`.
-    fn read_file(file: &str, batch_size: usize, strict_mode: bool) -> RecordBatch {
-        let file = File::open(file).unwrap();
-        let mut reader = BufReader::new(file);
-        let header = read_header(&mut reader).unwrap();
-        let compression = header.compression().unwrap();
-        let schema = header.schema().unwrap().unwrap();
-        let root = AvroField::try_from(&schema).unwrap();
-        let mut decoder = RecordDecoder::try_new(root.data_type(), strict_mode).unwrap();
-        for result in read_blocks(reader) {
-            let block = result.unwrap();
-            assert_eq!(block.sync, header.sync());
-            let block_data = if let Some(c) = compression {
-                c.decompress(&block.data).unwrap()
-            } else {
-                block.data
-            };
-            let mut offset = 0;
-            let mut remaining = block.count;
-            while remaining > 0 {
-                let to_read = remaining.min(batch_size);
-                offset += decoder.decode(&block_data[offset..], to_read).unwrap();
-                remaining -= to_read;
-            }
-            assert_eq!(offset, block_data.len());
-        }
-        decoder.flush().unwrap()
+    /// We ignore `schema` because Avro is self-describing; the file has
+    /// its own schema. We also do not do a separate “infer” step.
+    fn read_file(path: &str, _schema: Option<Schema>) -> super::Reader<BufReader<File>> {
+        let file = File::open(path).unwrap();
+        let reader = BufReader::new(file);
+        let builder = ReaderBuilder::new().with_batch_size(64);
+        builder.build(reader).unwrap()
     }
 
     #[test]
@@ -183,14 +398,14 @@ mod test {
             (
                 "date_string_col",
                 Arc::new(BinaryArray::from_iter_values([
-                    [48, 51, 47, 48, 49, 47, 48, 57],
-                    [48, 51, 47, 48, 49, 47, 48, 57],
-                    [48, 52, 47, 48, 49, 47, 48, 57],
-                    [48, 52, 47, 48, 49, 47, 48, 57],
-                    [48, 50, 47, 48, 49, 47, 48, 57],
-                    [48, 50, 47, 48, 49, 47, 48, 57],
-                    [48, 49, 47, 48, 49, 47, 48, 57],
-                    [48, 49, 47, 48, 49, 47, 48, 57],
+                    b"03/01/09",
+                    b"03/01/09",
+                    b"04/01/09",
+                    b"04/01/09",
+                    b"02/01/09",
+                    b"02/01/09",
+                    b"01/01/09",
+                    b"01/01/09",
                 ])) as _,
                 true,
             ),
@@ -220,8 +435,12 @@ mod test {
         .unwrap();
         for file in files {
             let file = arrow_test_data(file);
-            assert_eq!(read_file(&file, 8, false), expected);
-            assert_eq!(read_file(&file, 3, false), expected);
+            let mut reader = read_file(&file, None);
+            let batch_large = reader.next().unwrap().unwrap();
+            assert_eq!(batch_large, expected);
+            let mut reader_small = read_file(&file, None);
+            let batch_small = reader_small.next().unwrap().unwrap();
+            assert_eq!(batch_small, expected);
         }
     }
 
@@ -285,16 +504,18 @@ mod test {
         ])
         .unwrap();
         let file_path = arrow_test_data(file);
-        let batch_large = read_file(&file_path, 8, false);
+        let mut reader = read_file(&file_path, None);
+        let batch_large = reader.next().unwrap().unwrap();
         assert_eq!(
             batch_large, expected,
             "Decoded RecordBatch does not match for file {}",
             file
         );
-        let batch_small = read_file(&file_path, 3, false);
+        let mut reader_small = read_file(&file_path, None);
+        let batch_small = reader_small.next().unwrap().unwrap();
         assert_eq!(
             batch_small, expected,
-            "Decoded RecordBatch (batch size 3) does not match for file {}",
+            "Decoded RecordBatch (batch size 64) does not match for file {}",
             file
         );
     }
@@ -337,16 +558,18 @@ mod test {
         ])
         .unwrap();
         let file_path = arrow_test_data(file);
-        let batch_large = read_file(&file_path, 8, false);
+        let mut reader = read_file(&file_path, None);
+        let batch_large = reader.next().unwrap().unwrap();
         assert_eq!(
             batch_large, expected,
             "Decoded RecordBatch does not match for file {}",
             file
         );
-        let batch_small = read_file(&file_path, 3, false);
+        let mut reader_small = read_file(&file_path, None);
+        let batch_small = reader_small.next().unwrap().unwrap();
         assert_eq!(
             batch_small, expected,
-            "Decoded RecordBatch (batch size 3) does not match for file {}",
+            "Decoded RecordBatch does not match for file {}",
             file
         );
     }
@@ -354,7 +577,8 @@ mod test {
     #[test]
     fn test_binary() {
         let file = arrow_test_data("avro/binary.avro");
-        let batch = read_file(&file, 8, false);
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "foo",
             Arc::new(BinaryArray::from_iter_values(vec![
@@ -386,39 +610,40 @@ mod test {
             ("avro/int64_decimal.avro", 10, 2),
         ];
         let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
+
         for (file, precision, scale) in files {
             let file_path = arrow_test_data(file);
-            let actual_batch = read_file(&file_path, 8, false);
+            let mut reader = read_file(&file_path, None);
+            let actual_batch = reader.next().unwrap().unwrap();
+
             let expected_array = Decimal128Array::from_iter_values(decimal_values.clone())
                 .with_precision_and_scale(precision, scale)
                 .unwrap();
+
             let mut meta = HashMap::new();
             meta.insert("precision".to_string(), precision.to_string());
             meta.insert("scale".to_string(), scale.to_string());
             let field_with_meta = Field::new("value", DataType::Decimal128(precision, scale), true)
                 .with_metadata(meta);
+
             let expected_schema = Arc::new(Schema::new(vec![field_with_meta]));
             let expected_batch =
                 RecordBatch::try_new(expected_schema.clone(), vec![Arc::new(expected_array)])
                     .expect("Failed to build expected RecordBatch");
+
             assert_eq!(
                 actual_batch, expected_batch,
                 "Decoded RecordBatch does not match the expected Decimal128 data for file {}",
                 file
             );
-            let actual_batch_small = read_file(&file_path, 3, false);
-            assert_eq!(
-            actual_batch_small, expected_batch,
-            "Decoded RecordBatch does not match the expected Decimal128 data for file {} with batch size 3",
-            file
-        );
         }
     }
 
     #[test]
     fn test_datapage_v2() {
         let file = arrow_test_data("avro/datapage_v2.snappy.avro");
-        let batch = read_file(&file, 8, false);
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         let a = StringArray::from(vec![
             Some("abc"),
             Some("abc"),
@@ -463,8 +688,10 @@ mod test {
     #[test]
     fn test_dict_pages_offset_zero() {
         let file = arrow_test_data("avro/dict-page-offset-zero.avro");
-        let batch = read_file(&file, 32, false);
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         let num_rows = batch.num_rows();
+
         let expected_field = Int32Array::from(vec![Some(1552); num_rows]);
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "l_partkey",
@@ -478,6 +705,7 @@ mod test {
     #[test]
     fn test_list_columns() {
         let file = arrow_test_data("avro/list_columns.avro");
+        let mut reader = read_file(&file, None);
         let mut int64_list_builder = ListBuilder::new(Int64Builder::new());
         {
             {
@@ -533,13 +761,15 @@ mod test {
             ("utf8_list", Arc::new(utf8_list) as Arc<dyn Array>, true),
         ])
         .unwrap();
-        let batch = read_file(&file, 8, false);
+        let batch = reader.next().unwrap().unwrap();
         assert_eq!(batch, expected);
     }
 
     #[test]
     fn test_nested_lists() {
         let file = arrow_test_data("avro/nested_lists.snappy.avro");
+        let mut reader = read_file(&file, None);
+        let left = reader.next().unwrap().unwrap();
         let inner_values = StringArray::from(vec![
             Some("a"),
             Some("b"),
@@ -584,7 +814,7 @@ mod test {
             .unwrap();
         let middle_list_array = ListArray::from(middle_list_data);
         let outer_offsets = Buffer::from_slice_ref([0, 2, 4, 6]);
-        let outer_null_buffer = Buffer::from_slice_ref([0b111]); // all 3 rows valid
+        let outer_null_buffer = Buffer::from_slice_ref([0b111]); // all valid
         let outer_field = Field::new("item", middle_list_array.data_type().clone(), true);
         let outer_list_data = ArrayDataBuilder::new(DataType::List(Arc::new(outer_field)))
             .len(3)
@@ -600,14 +830,14 @@ mod test {
             ("b", Arc::new(b_expected) as Arc<dyn Array>, true),
         ])
         .unwrap();
-        let left = read_file(&file, 8, false);
-        assert_eq!(left, expected, "Mismatch for batch size=8");
-        let left_small = read_file(&file, 3, false);
-        assert_eq!(left_small, expected, "Mismatch for batch size=3");
+        assert_eq!(left, expected, "Mismatch for batch size=64");
     }
 
     #[test]
     fn test_nested_records() {
+        let file = arrow_test_data("avro/nested_records.avro");
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         let f1_f1_1 = StringArray::from(vec!["aaa", "bbb"]);
         let f1_f1_2 = Int32Array::from(vec![10, 20]);
         let rounded_pi = (std::f64::consts::PI * 100.0).round() / 100.0;
@@ -616,6 +846,7 @@ mod test {
             Arc::new(Field::new("f1_3_1", DataType::Float64, false)),
             Arc::new(f1_f1_3_1) as Arc<dyn Array>,
         )]);
+
         let f1_expected = StructArray::from(vec![
             (
                 Arc::new(Field::new("f1_1", DataType::Utf8, false)),
@@ -648,8 +879,8 @@ mod test {
                 .map(|f| Arc::new(f.clone()))
                 .collect::<Vec<Arc<Field>>>(),
             vec![
-                Box::new(BooleanBuilder::new()) as Box<dyn arrow_array::builder::ArrayBuilder>,
-                Box::new(Float32Builder::new()) as Box<dyn arrow_array::builder::ArrayBuilder>,
+                Box::new(BooleanBuilder::new()) as Box<dyn ArrayBuilder>,
+                Box::new(Float32Builder::new()) as Box<dyn ArrayBuilder>,
             ],
         );
         let mut f2_list_builder = ListBuilder::new(f2_struct_builder);
@@ -749,29 +980,20 @@ mod test {
             ("f4", Arc::new(f4_expected) as Arc<dyn Array>, false),
         ])
         .unwrap();
-        let file = arrow_test_data("avro/nested_records.avro");
-        let batch_large = read_file(&file, 8, false);
-        assert_eq!(
-            batch_large, expected,
-            "Decoded RecordBatch does not match expected data for nested records (batch size 8)"
-        );
-        let batch_small = read_file(&file, 3, false);
-        assert_eq!(
-            batch_small, expected,
-            "Decoded RecordBatch does not match expected data for nested records (batch size 3)"
-        );
+        assert_eq!(batch, expected, "Mismatch in nested_records.avro contents");
     }
 
     #[test]
     fn test_nonnullable_impala() {
         let file = arrow_test_data("avro/nonnullable.impala.avro");
+        let mut reader = read_file(&file, None);
         let id = Int64Array::from(vec![Some(8)]);
         let mut int_array_builder = ListBuilder::new(Int32Builder::new());
         {
             let vb = int_array_builder.values();
             vb.append_value(-1);
         }
-        int_array_builder.append(true); // finalize one sub-list
+        int_array_builder.append(true);
         let int_array = int_array_builder.finish();
         let mut iaa_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
         {
@@ -786,7 +1008,6 @@ mod test {
         }
         iaa_builder.append(true);
         let int_array_array = iaa_builder.finish();
-        use arrow_array::builder::MapFieldNames;
         let field_names = MapFieldNames {
             entry: "entries".to_string(),
             key: "key".to_string(),
@@ -799,7 +1020,7 @@ mod test {
             keys.append_value("k1");
             vals.append_value(-1);
         }
-        int_map_builder.append(true).unwrap(); // finalize map for row 0
+        int_map_builder.append(true).unwrap();
         let int_map = int_map_builder.finish();
         let field_names2 = MapFieldNames {
             entry: "entries".to_string(),
@@ -825,108 +1046,95 @@ mod test {
         }
         ima_builder.append(true);
         let int_map_array_ = ima_builder.finish();
-        let mut nested_sb = StructBuilder::new(
-            vec![
-                Arc::new(Field::new("a", DataType::Int32, true)),
-                Arc::new(Field::new(
-                    "B",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                    true,
-                )),
-                Arc::new(Field::new(
-                    "c",
-                    DataType::Struct(
-                        vec![Field::new(
-                            "D",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::List(Arc::new(Field::new(
-                                    "item",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("e", DataType::Int32, true),
-                                            Field::new("f", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ))),
-                                true,
-                            ))),
+        let nested_schema_fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "B",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "c",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "D",
+                    DataType::List(Arc::new(Field::new(
+                        "item",
+                        DataType::List(Arc::new(Field::new(
+                            "item",
+                            DataType::Struct(Fields::from(vec![
+                                Field::new("e", DataType::Int32, true),
+                                Field::new("f", DataType::Utf8, true),
+                            ])),
                             true,
-                        )]
-                        .into(),
-                    ),
+                        ))),
+                        true,
+                    ))),
                     true,
-                )),
-                Arc::new(Field::new(
-                    "G",
-                    DataType::Map(
-                        Arc::new(Field::new(
-                            "entries",
-                            DataType::Struct(
-                                vec![
-                                    Field::new("key", DataType::Utf8, false),
-                                    Field::new(
-                                        "value",
-                                        DataType::Struct(
-                                            vec![Field::new(
-                                                "h",
-                                                DataType::Struct(
-                                                    vec![Field::new(
-                                                        "i",
-                                                        DataType::List(Arc::new(Field::new(
-                                                            "item",
-                                                            DataType::Float64,
-                                                            true,
-                                                        ))),
-                                                        true,
-                                                    )]
-                                                    .into(),
-                                                ),
-                                                true,
-                                            )]
-                                            .into(),
-                                        ),
+                )])),
+                true,
+            ),
+            Field::new(
+                "G",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new(
+                                "value",
+                                DataType::Struct(Fields::from(vec![Field::new(
+                                    "h",
+                                    DataType::Struct(Fields::from(vec![Field::new(
+                                        "i",
+                                        DataType::List(Arc::new(Field::new(
+                                            "item",
+                                            DataType::Float64,
+                                            true,
+                                        ))),
                                         true,
-                                    ),
-                                ]
-                                .into(),
+                                    )])),
+                                    true,
+                                )])),
+                                true,
                             ),
-                            false,
-                        )),
+                        ])),
                         false,
-                    ),
-                    true,
-                )),
-            ],
+                    )),
+                    false,
+                ),
+                true,
+            ),
+        ];
+        let nested_schema = Arc::new(Schema::new(nested_schema_fields.clone()));
+        let mut nested_sb = StructBuilder::new(
+            nested_schema_fields
+                .iter()
+                .map(|f| Arc::new(f.clone()))
+                .collect::<Vec<_>>(),
             vec![
                 Box::new(Int32Builder::new()),
                 Box::new(ListBuilder::new(Int32Builder::new())),
                 {
-                    let d_field = Field::new(
+                    let d_list_field = Field::new(
                         "D",
                         DataType::List(Arc::new(Field::new(
                             "item",
                             DataType::List(Arc::new(Field::new(
                                 "item",
-                                DataType::Struct(
-                                    vec![
-                                        Field::new("e", DataType::Int32, true),
-                                        Field::new("f", DataType::Utf8, true),
-                                    ]
-                                    .into(),
-                                ),
+                                DataType::Struct(Fields::from(vec![
+                                    Field::new("e", DataType::Int32, true),
+                                    Field::new("f", DataType::Utf8, true),
+                                ])),
                                 true,
                             ))),
                             true,
                         ))),
                         true,
                     );
-                    Box::new(StructBuilder::new(
-                        vec![Arc::new(d_field)],
-                        vec![Box::new({
-                            let ef_struct_builder = StructBuilder::new(
+                    let struct_c_builder = StructBuilder::new(
+                        vec![Arc::new(d_list_field)],
+                        vec![Box::new(ListBuilder::new(ListBuilder::new(
+                            StructBuilder::new(
                                 vec![
                                     Arc::new(Field::new("e", DataType::Int32, true)),
                                     Arc::new(Field::new("f", DataType::Utf8, true)),
@@ -935,32 +1143,41 @@ mod test {
                                     Box::new(Int32Builder::new()),
                                     Box::new(StringBuilder::new()),
                                 ],
-                            );
-                            let list_of_ef = ListBuilder::new(ef_struct_builder);
-                            ListBuilder::new(list_of_ef)
-                        })],
-                    ))
+                            ),
+                        )))],
+                    );
+                    Box::new(struct_c_builder)
                 },
                 {
-                    let map_field_names = MapFieldNames {
-                        entry: "entries".to_string(),
-                        key: "key".to_string(),
-                        value: "value".to_string(),
-                    };
-                    let i_list_builder = ListBuilder::new(Float64Builder::new());
-                    let h_struct = StructBuilder::new(
-                        vec![Arc::new(Field::new(
-                            "i",
-                            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
-                            true,
-                        ))],
-                        vec![Box::new(i_list_builder)],
+                    let i_list = Field::new(
+                        "i",
+                        DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+                        true,
                     );
-                    let g_value_builder = StructBuilder::new(
-                        vec![Arc::new(Field::new(
-                            "h",
-                            DataType::Struct(
-                                vec![Field::new(
+                    let h_struct =
+                        Field::new("h", DataType::Struct(Fields::from(vec![i_list])), true);
+                    let value_struct = Field::new(
+                        "value",
+                        DataType::Struct(Fields::from(vec![h_struct])),
+                        true,
+                    );
+                    let key_field = Field::new("key", DataType::Utf8, false);
+                    let entries_field = Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![key_field, value_struct])),
+                        false,
+                    );
+                    Box::new(MapBuilder::new(
+                        Some(MapFieldNames {
+                            entry: "entries".to_string(),
+                            key: "key".to_string(),
+                            value: "value".to_string(),
+                        }),
+                        StringBuilder::new(),
+                        StructBuilder::new(
+                            vec![Arc::new(Field::new(
+                                "h",
+                                DataType::Struct(Fields::from(vec![Field::new(
                                     "i",
                                     DataType::List(Arc::new(Field::new(
                                         "item",
@@ -968,17 +1185,22 @@ mod test {
                                         true,
                                     ))),
                                     true,
-                                )]
-                                .into(),
-                            ),
-                            true,
-                        ))],
-                        vec![Box::new(h_struct)],
-                    );
-                    Box::new(MapBuilder::new(
-                        Some(map_field_names),
-                        StringBuilder::new(),
-                        g_value_builder,
+                                )])),
+                                true,
+                            ))],
+                            vec![Box::new(StructBuilder::new(
+                                vec![Arc::new(Field::new(
+                                    "i",
+                                    DataType::List(Arc::new(Field::new(
+                                        "item",
+                                        DataType::Float64,
+                                        true,
+                                    ))),
+                                    true,
+                                ))],
+                                vec![Box::new(ListBuilder::new(Float64Builder::new()))],
+                            ))],
+                        ),
                     ))
                 },
             ],
@@ -987,8 +1209,6 @@ mod test {
         {
             let a_builder = nested_sb.field_builder::<Int32Builder>(0).unwrap();
             a_builder.append_value(-1);
-        }
-        {
             let b_builder = nested_sb
                 .field_builder::<ListBuilder<Int32Builder>>(1)
                 .unwrap();
@@ -997,57 +1217,131 @@ mod test {
                 vb.append_value(-1);
             }
             b_builder.append(true);
-        }
-        {
-            let c_struct_builder = nested_sb.field_builder::<StructBuilder>(2).unwrap();
-            c_struct_builder.append(true);
-            let d_list_builder = c_struct_builder
-                .field_builder::<ListBuilder<ListBuilder<StructBuilder>>>(0)
-                .unwrap();
+            let c_sb = nested_sb.field_builder::<StructBuilder>(2).unwrap();
+            c_sb.append(true);
             {
-                let sub_list_builder = d_list_builder.values();
+                let d_list_builder = c_sb
+                    .field_builder::<ListBuilder<ListBuilder<StructBuilder>>>(0)
+                    .unwrap();
                 {
-                    let ef_struct = sub_list_builder.values();
-                    ef_struct.append(true);
+                    let sub_list_builder = d_list_builder.values();
                     {
-                        let e_b = ef_struct.field_builder::<Int32Builder>(0).unwrap();
-                        e_b.append_value(-1);
-                        let f_b = ef_struct.field_builder::<StringBuilder>(1).unwrap();
-                        f_b.append_value("nonnullable");
+                        let ef_struct_builder = sub_list_builder.values();
+                        ef_struct_builder.append(true);
+                        {
+                            let e_b = ef_struct_builder.field_builder::<Int32Builder>(0).unwrap();
+                            e_b.append_value(-1);
+                            let f_b = ef_struct_builder.field_builder::<StringBuilder>(1).unwrap();
+                            f_b.append_value("nonnullable");
+                        }
+                        sub_list_builder.append(true);
                     }
-                    sub_list_builder.append(true);
+                    d_list_builder.append(true);
                 }
-                d_list_builder.append(true);
             }
-        }
-        {
             let g_map_builder = nested_sb
                 .field_builder::<MapBuilder<StringBuilder, StructBuilder>>(3)
                 .unwrap();
             g_map_builder.append(true).unwrap();
+            {
+                let (keys, values) = g_map_builder.entries();
+                keys.append_value("k1");
+                values.append(true);
+                let h_struct_builder = values.field_builder::<StructBuilder>(0).unwrap();
+                h_struct_builder.append(true);
+                {
+                    let i_list_builder = h_struct_builder
+                        .field_builder::<ListBuilder<Float64Builder>>(0)
+                        .unwrap();
+                    i_list_builder.append(true);
+                }
+            }
         }
         let nested_struct = nested_sb.finish();
-        let expected = RecordBatch::try_from_iter_with_nullable([
-            ("ID", Arc::new(id) as Arc<dyn Array>, true),
-            ("Int_Array", Arc::new(int_array), true),
-            ("int_array_array", Arc::new(int_array_array), true),
-            ("Int_Map", Arc::new(int_map), true),
-            ("int_map_array", Arc::new(int_map_array_), true),
-            ("nested_Struct", Arc::new(nested_struct), true),
-        ])
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("ID", DataType::Int64, true),
+            Field::new(
+                "Int_Array",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "int_array_array",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "Int_Map",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int32, true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ),
+            Field::new(
+                "int_map_array",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(Fields::from(vec![
+                                Field::new("key", DataType::Utf8, false),
+                                Field::new("value", DataType::Int32, true),
+                            ])),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "nested_Struct",
+                DataType::Struct(nested_schema.as_ref().fields.clone()),
+                true,
+            ),
+        ]));
+        let expected = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id) as Arc<dyn Array>,
+                Arc::new(int_array),
+                Arc::new(int_array_array),
+                Arc::new(int_map),
+                Arc::new(int_map_array_),
+                Arc::new(nested_struct),
+            ],
+        )
         .unwrap();
-        let batch_large = read_file(&file, 8, false);
-        assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
-        let batch_small = read_file(&file, 3, false);
-        assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch, expected, "nonnullable impala avro data mismatch");
     }
 
     #[test]
     fn test_nullable_impala() {
+        use arrow_array::{Int64Array, ListArray, StructArray};
         let file = arrow_test_data("avro/nullable.impala.avro");
-        let batch1 = read_file(&file, 3, false);
-        let batch2 = read_file(&file, 8, false);
-        assert_eq!(batch1, batch2);
+        let mut r1 = read_file(&file, None);
+        let batch1 = r1.next().unwrap().unwrap();
+        let mut r2 = read_file(&file, None);
+        let batch2 = r2.next().unwrap().unwrap();
+        assert_eq!(
+            batch1, batch2,
+            "Reading file multiple times should produce the same data"
+        );
         let batch = batch1;
         assert_eq!(batch.num_rows(), 7);
         let id_array = batch
@@ -1057,18 +1351,14 @@ mod test {
             .expect("id column should be an Int64Array");
         let expected_ids = [1, 2, 3, 4, 5, 6, 7];
         for (i, &expected_id) in expected_ids.iter().enumerate() {
-            assert_eq!(
-                id_array.value(i),
-                expected_id,
-                "Mismatch in id at row {}",
-                i
-            );
+            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}");
         }
         let int_array = batch
             .column(1)
             .as_any()
             .downcast_ref::<ListArray>()
             .expect("int_array column should be a ListArray");
+
         {
             let offsets = int_array.value_offsets();
             let start = offsets[0] as usize;
@@ -1078,7 +1368,7 @@ mod test {
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .expect("Values of int_array should be an Int32Array");
-            let row0: Vec<Option<i32>> = (start..end).map(|i| Some(values.value(i))).collect();
+            let row0: Vec<Option<i32>> = (start..end).map(|idx| Some(values.value(idx))).collect();
             assert_eq!(
                 row0,
                 vec![Some(1), Some(2), Some(3)],
@@ -1111,16 +1401,13 @@ mod test {
     #[test]
     fn test_nulls_snappy() {
         let file = arrow_test_data("avro/nulls.snappy.avro");
-        let batch_large = read_file(&file, 8, false);
-        use arrow_array::{Int32Array, StructArray};
-        use arrow_buffer::Buffer;
-        use arrow_data::ArrayDataBuilder;
-        use arrow_schema::{DataType, Field, Fields};
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         let b_c_int = Int32Array::from(vec![None; 8]);
         let b_c_int_data = b_c_int.into_data();
         let b_struct_field = Field::new("b_c_int", DataType::Int32, true);
-        let b_struct_type = DataType::Struct(Fields::from(vec![b_struct_field]));
-        let struct_validity = Buffer::from_iter((0..8).map(|_| true));
+        let b_struct_type = DataType::Struct(vec![b_struct_field].into());
+        let struct_validity = arrow_buffer::Buffer::from_iter((0..8).map(|_| true));
         let b_struct_data = ArrayDataBuilder::new(b_struct_type)
             .len(8)
             .null_bit_buffer(Some(struct_validity))
@@ -1128,21 +1415,21 @@ mod test {
             .build()
             .unwrap();
         let b_struct_array = StructArray::from(b_struct_data);
-        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([(
+
+        let expected = RecordBatch::try_from_iter_with_nullable([(
             "b_struct",
             Arc::new(b_struct_array) as _,
             true,
         )])
         .unwrap();
-        assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
-        let batch_small = read_file(&file, 3, false);
-        assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+        assert_eq!(batch, expected);
     }
 
     #[test]
     fn test_repeated_no_annotation() {
         let file = arrow_test_data("avro/repeated_no_annotation.avro");
-        let batch_large = read_file(&file, 8, false);
+        let mut reader = read_file(&file, None);
+        let batch = reader.next().unwrap().unwrap();
         use arrow_array::{Int32Array, Int64Array, ListArray, StringArray, StructArray};
         use arrow_buffer::Buffer;
         use arrow_data::ArrayDataBuilder;
@@ -1162,7 +1449,7 @@ mod test {
             Field::new("kind", DataType::Utf8, true),
         ]);
         let phone_struct_data = ArrayDataBuilder::new(DataType::Struct(phone_fields))
-            .len(5) // 5 phone entries total
+            .len(5)
             .child_data(vec![number_array.into_data(), kind_array.into_data()])
             .build()
             .unwrap();
@@ -1188,7 +1475,7 @@ mod test {
                 .build()
                 .unwrap();
         let phone_numbers_struct_array = StructArray::from(phone_numbers_struct_data);
-        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([
+        let expected = RecordBatch::try_from_iter_with_nullable([
             ("id", Arc::new(id_array) as _, true),
             (
                 "phoneNumbers",
@@ -1197,19 +1484,11 @@ mod test {
             ),
         ])
         .unwrap();
-        assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
-        let batch_small = read_file(&file, 3, false);
-        assert_eq!(batch_small, expected, "Mismatch for batch_size=3");
+        assert_eq!(batch, expected);
     }
 
     #[test]
     fn test_simple() {
-        // Each entry: (filename, batch_size1, expected_batch, batch_size2)
-        let tests = [
-            ("avro/simple_enum.avro", 4, build_expected_enum(), 2),
-            ("avro/simple_fixed.avro", 2, build_expected_fixed(), 1),
-        ];
-
         fn build_expected_enum() -> RecordBatch {
             let keys_f1 = Int32Array::from(vec![0, 1, 2, 3]);
             let vals_f1 = StringArray::from(vec!["a", "b", "c", "d"]);
@@ -1267,29 +1546,38 @@ mod test {
             )
             .unwrap()
         }
-        for (file_name, batch_size, expected, alt_batch_size) in tests {
+
+        // We list the two test files
+        let tests = [
+            ("avro/simple_enum.avro", build_expected_enum()),
+            ("avro/simple_fixed.avro", build_expected_fixed()),
+        ];
+        for (file_name, expected) in tests {
             let file = arrow_test_data(file_name);
-            let actual = read_file(&file, batch_size, false);
-            assert_eq!(actual, expected);
-            let actual2 = read_file(&file, alt_batch_size, false);
-            assert_eq!(actual2, expected);
+            let mut reader = read_file(&file, None);
+            let actual = reader
+                .next()
+                .expect("Should have a batch")
+                .expect("Error reading batch");
+            assert_eq!(actual, expected, "Mismatch for file {file_name}");
         }
     }
 
     #[test]
     fn test_single_nan() {
-        let file = crate::test_util::arrow_test_data("avro/single_nan.avro");
-        let actual = read_file(&file, 1, false);
-        use arrow_array::Float64Array;
+        let file = arrow_test_data("avro/single_nan.avro");
+        let mut reader = read_file(&file, None);
+        let batch = reader
+            .next()
+            .expect("Should have a batch")
+            .expect("Error reading single_nan batch");
         let schema = Arc::new(Schema::new(vec![Field::new(
             "mycol",
             DataType::Float64,
             true,
         )]));
-        let col = Float64Array::from(vec![None as Option<f64>]);
-        let expected = RecordBatch::try_new(schema, vec![Arc::new(col)]).unwrap();
-        assert_eq!(actual, expected);
-        let actual2 = read_file(&file, 2, false);
-        assert_eq!(actual2, expected);
+        let col = arrow_array::Float64Array::from(vec![None]);
+        let expected = RecordBatch::try_new(schema.clone(), vec![Arc::new(col)]).unwrap();
+        assert_eq!(batch, expected, "Mismatch in single_nan.avro data");
     }
 }

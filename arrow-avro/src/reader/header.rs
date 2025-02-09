@@ -376,7 +376,7 @@ mod test {
             sync: [0; 16],
         };
         let schema = header.schema().unwrap().unwrap();
-        if let crate::schema::Schema::Complex(crate::schema::ComplexType::Record(record)) = schema {
+        if let Schema::Complex(crate::schema::ComplexType::Record(record)) = schema {
             assert_eq!(record.fields.len(), 1);
             assert_eq!(record.fields[0].default, Some(serde_json::json!(10)));
         } else {

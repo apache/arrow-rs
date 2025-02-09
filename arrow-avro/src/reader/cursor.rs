@@ -136,3 +136,213 @@ impl<'a> AvroCursor<'a> {
         Ok(ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::ArrowError;
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        let mut bytes = vec![];
+        let mut chars = hex.chars().collect::<Vec<_>>();
+        if chars.len() % 2 != 0 {
+            chars.insert(0, '0');
+        }
+        for chunk in chars.chunks(2) {
+            let s = format!("{}{}", chunk[0], chunk[1]);
+            bytes.push(u8::from_str_radix(&s, 16).unwrap());
+        }
+        bytes
+    }
+
+    #[test]
+    fn test_new_and_position() {
+        let data = [1, 2, 3, 4];
+        let cursor = AvroCursor::new(&data);
+        assert_eq!(cursor.position(), 0);
+    }
+
+    #[test]
+    fn test_get_u8_ok() {
+        let data = [0x12, 0x34, 0x56];
+        let mut cursor = AvroCursor::new(&data);
+        assert_eq!(cursor.get_u8().unwrap(), 0x12);
+        assert_eq!(cursor.position(), 1);
+        assert_eq!(cursor.get_u8().unwrap(), 0x34);
+        assert_eq!(cursor.position(), 2);
+        assert_eq!(cursor.get_u8().unwrap(), 0x56);
+        assert_eq!(cursor.position(), 3);
+    }
+
+    #[test]
+    fn test_get_u8_eof() {
+        let data = [];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_u8();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF"))
+        );
+    }
+
+    #[test]
+    fn test_get_bool_ok() {
+        let data = [0x00, 0x01, 0xFF];
+        let mut cursor = AvroCursor::new(&data);
+        assert!(!cursor.get_bool().unwrap()); // 0x00 -> false
+        assert!(cursor.get_bool().unwrap()); // 0x01 -> true
+        assert!(cursor.get_bool().unwrap()); // 0xFF -> true (non-zero)
+    }
+
+    #[test]
+    fn test_get_bool_eof() {
+        let data = [];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_bool();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF"))
+        );
+    }
+
+    #[test]
+    fn test_read_vlq_ok() {
+        let data = [0x80, 0x01, 0x05];
+        let mut cursor = AvroCursor::new(&data);
+        let val1 = cursor.read_vlq().unwrap();
+        assert_eq!(val1, 128);
+        let val2 = cursor.read_vlq().unwrap();
+        assert_eq!(val2, 5);
+    }
+
+    #[test]
+    fn test_read_vlq_bad_varint() {
+        let data = [0x80];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.read_vlq();
+        assert!(matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("bad varint")));
+    }
+
+    #[test]
+    fn test_get_int_ok() {
+        let data = [0x04, 0x03]; // encodes +2, -2
+        let mut cursor = AvroCursor::new(&data);
+        assert_eq!(cursor.get_int().unwrap(), 2);
+        assert_eq!(cursor.get_int().unwrap(), -2);
+    }
+
+    #[test]
+    fn test_get_int_overflow() {
+        let data = [0x80, 0x80, 0x80, 0x80, 0x10];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_int();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("varint overflow"))
+        );
+    }
+
+    #[test]
+    fn test_get_long_ok() {
+        let data = [0x04, 0x03, 0xAC, 0x02];
+        let mut cursor = AvroCursor::new(&data);
+        assert_eq!(cursor.get_long().unwrap(), 2);
+        assert_eq!(cursor.get_long().unwrap(), -2);
+        assert_eq!(cursor.get_long().unwrap(), 150);
+    }
+
+    #[test]
+    fn test_get_long_eof() {
+        let data = [0x80];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_long();
+        assert!(matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("bad varint")));
+    }
+
+    #[test]
+    fn test_get_bytes_ok() {
+        let data = [0x06, 0xAA, 0xBB, 0xCC, 0x05, 0x01];
+        let mut cursor = AvroCursor::new(&data);
+        let bytes = cursor.get_bytes().unwrap();
+        assert_eq!(bytes, [0xAA, 0xBB, 0xCC]);
+        assert_eq!(cursor.position(), 4);
+    }
+
+    #[test]
+    fn test_get_bytes_overflow() {
+        let data = [0xAC, 0x02, 0x01, 0x02, 0x03];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_bytes();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF reading bytes"))
+        );
+    }
+
+    #[test]
+    fn test_get_bytes_negative_length() {
+        let data = [0x01];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_bytes();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("offset overflow"))
+        );
+    }
+
+    #[test]
+    fn test_get_float_ok() {
+        let data = [0x00, 0x00, 0x80, 0x3F, 0x01];
+        let mut cursor = AvroCursor::new(&data);
+        let val = cursor.get_float().unwrap();
+        assert!((val - 1.0).abs() < f32::EPSILON);
+        assert_eq!(cursor.position(), 4);
+    }
+
+    #[test]
+    fn test_get_float_eof() {
+        let data = [0x00, 0x00, 0x80];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_float();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF reading float"))
+        );
+    }
+
+    #[test]
+    fn test_get_double_ok() {
+        let data = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, 0x99];
+        let mut cursor = AvroCursor::new(&data);
+        let val = cursor.get_double().unwrap();
+        assert!((val - 1.0).abs() < f64::EPSILON);
+        assert_eq!(cursor.position(), 8);
+    }
+
+    #[test]
+    fn test_get_double_eof() {
+        let data = [0x00, 0x00, 0x00, 0x00]; // only 4 bytes
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_double();
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF reading double"))
+        );
+    }
+
+    #[test]
+    fn test_get_fixed_ok() {
+        let data = [0x11, 0x22, 0x33, 0x44];
+        let mut cursor = AvroCursor::new(&data);
+        let val = cursor.get_fixed(2).unwrap();
+        assert_eq!(val, [0x11, 0x22]);
+        assert_eq!(cursor.position(), 2);
+
+        let val = cursor.get_fixed(2).unwrap();
+        assert_eq!(val, [0x33, 0x44]);
+        assert_eq!(cursor.position(), 4);
+    }
+
+    #[test]
+    fn test_get_fixed_eof() {
+        let data = [0x11, 0x22];
+        let mut cursor = AvroCursor::new(&data);
+        let result = cursor.get_fixed(3);
+        assert!(
+            matches!(result, Err(ArrowError::ParseError(msg)) if msg.contains("Unexpected EOF reading fixed"))
+        );
+    }
+}

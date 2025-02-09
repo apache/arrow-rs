@@ -620,14 +620,14 @@ mod tests {
         assert_eq!(actual_str, expected_str, "Codec debug output mismatch");
         let arrow_field = avro_field.field();
         assert_eq!(arrow_field.name(), "long_col");
-        assert_eq!(arrow_field.data_type(), &DataType::Int64);
+        assert_eq!(arrow_field.data_type(), &Int64);
         assert!(!arrow_field.is_nullable());
     }
 
     #[test]
     fn test_avro_field_with_default() {
         let field_codec = AvroDataType::from_codec(Codec::Int32);
-        let default_value = serde_json::json!(123);
+        let default_value = json!(123);
         let avro_field = AvroField {
             name: "int_col".to_string(),
             data_type: field_codec.clone(),
@@ -653,67 +653,67 @@ mod tests {
 
     #[test]
     fn test_arrow_field_to_avro_field() {
-        let arrow_field = Field::new("Null", DataType::Null, true);
+        let arrow_field = Field::new("Null", Null, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Null));
 
-        let arrow_field = Field::new("Boolean", DataType::Boolean, true);
+        let arrow_field = Field::new("Boolean", Boolean, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Boolean));
 
-        let arrow_field = Field::new("Int32", DataType::Int32, true);
+        let arrow_field = Field::new("Int32", Int32, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Int32));
 
-        let arrow_field = Field::new("Int64", DataType::Int64, true);
+        let arrow_field = Field::new("Int64", Int64, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Int64));
 
-        let arrow_field = Field::new("Float32", DataType::Float32, true);
+        let arrow_field = Field::new("Float32", Float32, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Float32));
 
-        let arrow_field = Field::new("Float64", DataType::Float64, true);
+        let arrow_field = Field::new("Float64", Float64, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Float64));
 
-        let arrow_field = Field::new("Binary", DataType::Binary, true);
+        let arrow_field = Field::new("Binary", Binary, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Binary));
 
-        let arrow_field = Field::new("Utf8", DataType::Utf8, true);
+        let arrow_field = Field::new("Utf8", Utf8, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::String));
 
-        let arrow_field = Field::new("Decimal128", DataType::Decimal128(1, 2), true);
+        let arrow_field = Field::new("Decimal128", Decimal128(1, 2), true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(
             avro_field.data_type().codec,
             Codec::Decimal(1, Some(2), Some(16))
         ));
 
-        let arrow_field = Field::new("Decimal256", DataType::Decimal256(1, 2), true);
+        let arrow_field = Field::new("Decimal256", Decimal256(1, 2), true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(
             avro_field.data_type().codec,
             Codec::Decimal(1, Some(2), Some(32))
         ));
 
-        let arrow_field = Field::new("Date32", DataType::Date32, true);
+        let arrow_field = Field::new("Date32", Date32, true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Date32));
 
-        let arrow_field = Field::new("Time32", DataType::Time32(TimeUnit::Millisecond), false);
+        let arrow_field = Field::new("Time32", Time32(TimeUnit::Millisecond), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::TimeMillis));
 
-        let arrow_field = Field::new("Time32", DataType::Time64(TimeUnit::Microsecond), false);
+        let arrow_field = Field::new("Time32", Time64(TimeUnit::Microsecond), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::TimeMicros));
 
         let arrow_field = Field::new(
             "utc_ts_ms",
-            DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
+            Timestamp(TimeUnit::Millisecond, Some(Arc::from("UTC"))),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -724,7 +724,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "utc_ts_us",
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -733,42 +733,30 @@ mod tests {
             Codec::TimestampMicros(true)
         ));
 
-        let arrow_field = Field::new(
-            "local_ts_ms",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        );
+        let arrow_field = Field::new("local_ts_ms", Timestamp(TimeUnit::Millisecond, None), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(
             avro_field.data_type().codec,
             Codec::TimestampMillis(false)
         ));
 
-        let arrow_field = Field::new(
-            "local_ts_us",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            false,
-        );
+        let arrow_field = Field::new("local_ts_us", Timestamp(TimeUnit::Microsecond, None), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(
             avro_field.data_type().codec,
             Codec::TimestampMicros(false)
         ));
 
-        let arrow_field = Field::new(
-            "Interval",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            false,
-        );
+        let arrow_field = Field::new("Interval", Interval(IntervalUnit::MonthDayNano), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::Duration));
 
         let arrow_field = Field::new(
             "Struct",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("a", DataType::Boolean, false),
-                    Field::new("b", DataType::Float64, false),
+                    Field::new("a", Boolean, false),
+                    Field::new("b", Float64, false),
                 ]
                 .into(),
             ),
@@ -788,7 +776,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryEnum",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -796,7 +784,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryString",
-            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean)),
+            Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -804,11 +792,7 @@ mod tests {
 
         // Array with nullable items
         let field = Field::new("Utf8", DataType::Utf8, true);
-        let arrow_field = Field::new(
-            "Array with nullable items",
-            DataType::List(Arc::new(field)),
-            true,
-        );
+        let arrow_field = Field::new("Array with nullable items", List(Arc::new(field)), true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         if let Codec::Array(avro_data_type) = &avro_field.data_type().codec {
             assert_eq!(avro_data_type.nullability, Some(Nullability::NullFirst));
@@ -835,10 +819,10 @@ mod tests {
 
         let entries_field = Field::new(
             "entries",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, true),
+                    Field::new("key", Utf8, false),
+                    Field::new("value", Utf8, true),
                 ]
                 .into(),
             ),
@@ -846,7 +830,7 @@ mod tests {
         );
         let arrow_field = Field::new(
             "Map with nullable items",
-            DataType::Map(Arc::new(entries_field), true),
+            Map(Arc::new(entries_field), true),
             true,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -860,10 +844,10 @@ mod tests {
 
         let arrow_field = Field::new(
             "Utf8",
-            DataType::Struct(
+            Struct(
                 vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
+                    Field::new("key", Utf8, false),
+                    Field::new("value", Utf8, false),
                 ]
                 .into(),
             ),
@@ -871,7 +855,7 @@ mod tests {
         );
         let arrow_field = Field::new(
             "Map with non-nullable items",
-            DataType::Map(Arc::new(arrow_field), false),
+            Map(Arc::new(arrow_field), false),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -882,7 +866,7 @@ mod tests {
         } else {
             panic!("Expected Codec::Map");
         }
-        let arrow_field = Field::new("FixedSizeBinary", DataType::FixedSizeBinary(8), false);
+        let arrow_field = Field::new("FixedSizeBinary", FixedSizeBinary(8), false);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         let codec = &avro_field.data_type().codec;
         assert!(matches!(codec, Codec::Fixed(8)));
@@ -890,9 +874,10 @@ mod tests {
 
     #[test]
     fn test_arrow_field_to_avro_field_meta_namespace() {
-        let arrow_field = Field::new("test_meta", DataType::Utf8, true).with_metadata(
-            HashMap::from([("namespace".to_string(), "arrow_meta_ns".to_string())]),
-        );
+        let arrow_field = Field::new("test_meta", Utf8, true).with_metadata(HashMap::from([(
+            "namespace".to_string(),
+            "arrow_meta_ns".to_string(),
+        )]));
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert_eq!(avro_field.name(), "test_meta");
         let actual_str = format!("{:?}", avro_field.data_type().codec);
@@ -918,7 +903,7 @@ mod tests {
             ]
         }
         "#;
-        let schema: crate::schema::Schema = serde_json::from_str(json_schema).unwrap();
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_field = AvroField::try_from(&schema).unwrap();
         match &avro_field.data_type().codec {
             Codec::Record(fields) => {
@@ -955,7 +940,7 @@ mod tests {
             ]
         }
         "#;
-        let schema: crate::schema::Schema = serde_json::from_str(json_schema).unwrap();
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_field = AvroField::try_from(&schema).unwrap();
         match &avro_field.data_type().codec {
             Codec::Record(fields) => {
@@ -1015,7 +1000,7 @@ mod tests {
             ]
         }
         "#;
-        let schema: crate::schema::Schema = serde_json::from_str(json_schema).unwrap();
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_field = AvroField::try_from(&schema).unwrap();
         match &avro_field.data_type().codec {
             Codec::Record(fields) => {
@@ -1070,7 +1055,7 @@ mod tests {
             ]
         }
         "#;
-        let schema: crate::schema::Schema = serde_json::from_str(json_schema).unwrap();
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
 
         let avro_field = AvroField::try_from(&schema).unwrap();
         match &avro_field.data_type().codec {
@@ -1131,7 +1116,7 @@ mod tests {
             ]
         }
         "#;
-        let schema: crate::schema::Schema = serde_json::from_str(json_schema).unwrap();
+        let schema: Schema = serde_json::from_str(json_schema).unwrap();
         let avro_field = AvroField::try_from(&schema).unwrap();
         match &avro_field.data_type().codec {
             Codec::Record(fields) => {
