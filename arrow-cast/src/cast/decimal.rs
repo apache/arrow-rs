@@ -103,8 +103,15 @@ where
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = input_scale - output_scale;
     // if the reduction of the input number through scaling (dividing) is greater
-    // than a possible precision loss (plus potential increase via rounding) every input number will fit into the output type
-    // Example:
+    // than a possible precision loss (plus potential increase via rounding)
+    // every input number will fit into the output type
+    // Example: If we are starting with any number of precision 5 [xxxxx],
+    // then and decrease the scale by 3 will have the following effect on the representation:
+    // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
+    // The rounding may add an additional digit, so the cast to be infallible,
+    // the output type needs to have at least 3 digits of precision.
+    // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
+    // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
 
     let div = I::Native::from_decimal(10_i128)
@@ -158,12 +165,16 @@ where
 {
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = output_scale - input_scale;
-    // if the gain in precision (digits) is greater than the multiplication due to scaling
-    // every number will fit into the output type
     let mul = O::Native::from_decimal(10_i128)
         .unwrap()
         .pow_checked(delta_scale as u32)?;
 
+    // if the gain in precision (digits) is greater than the multiplication due to scaling
+    // every number will fit into the output type
+    // Example: If we are starting with any number of precision 5 [xxxxx],
+    // then an increase of scale by 3 will have the following effect on the representation:
+    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+    // needs to provide at least 8 digits precision
     let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
