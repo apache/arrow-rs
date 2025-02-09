@@ -117,18 +117,21 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// By default, a nullable field is created with the name `keys`
     ///
-    /// This function panics if the given field is nullable as map keys are not
-    /// allowed to be null
+    /// Returns an error if the given field is nullable.
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `K`
-    pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Self {
+    pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Result<Self, ArrowError> {
         let field: FieldRef = field.into();
-        assert!(!field.is_nullable(), "Key field must not be nullable");
-        Self {
+        if field.is_nullable() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Key field must not be nullable: {field:?}"
+            )));
+        }
+        Ok(Self {
             key_field: Some(field),
             ..self
-        }
+        })
     }
 
     /// Override the field passed to [`MapBuilder::new`]
@@ -409,7 +412,8 @@ mod tests {
             Field::new("keys", DataType::Int32, false).with_metadata(key_metadata.clone()),
         );
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(key_field.clone());
+            .with_keys_field(key_field.clone())
+            .unwrap();
         builder.keys().append_value(1);
         builder.values().append_value(2);
         builder.append(true).unwrap();
@@ -439,9 +443,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Key field must not be nullable")]
     fn test_with_nullable_keys_field() {
-        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+        let result = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
             .with_keys_field(Arc::new(Field::new("keys", DataType::Int32, true)));
+
+        assert!(result.is_err());
     }
 }
