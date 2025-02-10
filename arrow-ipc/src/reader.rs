@@ -2514,6 +2514,28 @@ mod tests {
     }
 
     #[test]
+    fn test_validation_of_invalid_primitive_array() {
+        // Int32Array with not enough nulls
+        let array = unsafe {
+            let nulls = NullBuffer::from(&[true, false, true, false]);
+
+            let buffer = ScalarBuffer::<i32>::from_iter(0..8000);
+            let data = ArrayDataBuilder::new(DataType::Int32)
+                .len(8000)
+                .add_buffer(buffer.into())
+                .nulls(Some(nulls)) // too few nulls
+                .build_unchecked();
+
+            Int32Array::from(data)
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Nulls do not match",
+        );
+    }
+
+    #[test]
     fn test_validation_of_invalid_list_array() {
         // ListArray with invalid offsets
         let array = unsafe {
