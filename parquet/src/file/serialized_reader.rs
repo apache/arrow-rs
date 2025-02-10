@@ -23,10 +23,7 @@ use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::{
-    decryption::{read_and_decrypt, CryptoContext},
-    modules::ModuleType,
-};
+use crate::encryption::decryption::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -351,13 +348,7 @@ pub(crate) fn read_page_header<T: Read>(
     #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
         let data_decryptor = crypto_context.data_decryptor();
-
-        let module_type = if crypto_context.dictionary_page {
-            ModuleType::DictionaryPageHeader
-        } else {
-            ModuleType::DataPageHeader
-        };
-        let aad = crypto_context.create_page_aad(module_type)?;
+        let aad = crypto_context.create_page_aad(true)?;
 
         let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
 
@@ -439,12 +430,7 @@ pub(crate) fn decode_page(
     #[cfg(feature = "encryption")]
     let buffer: Bytes = if let Some(crypto_context) = crypto_context {
         let decryptor = crypto_context.data_decryptor();
-        let module_type = if crypto_context.dictionary_page {
-            ModuleType::DictionaryPage
-        } else {
-            ModuleType::DataPage
-        };
-        let aad = crypto_context.create_page_aad(module_type)?;
+        let aad = crypto_context.create_page_aad(false)?;
         let decrypted = decryptor.decrypt(buffer.as_ref(), &aad)?;
         Bytes::from(decrypted)
     } else {

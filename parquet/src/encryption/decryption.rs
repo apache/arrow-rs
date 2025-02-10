@@ -83,8 +83,22 @@ impl CryptoContext {
 
     pub(crate) fn create_page_aad(
         &self,
-        module_type: ModuleType,
-    ) -> crate::errors::Result<Vec<u8>> {
+        is_header: bool,
+    ) -> Result<Vec<u8>> {
+        let module_type = if self.dictionary_page {
+            if is_header {
+                ModuleType::DictionaryPageHeader
+            } else {
+                ModuleType::DictionaryPage
+            }
+        } else {
+            if is_header {
+                ModuleType::DataPageHeader
+            } else {
+                ModuleType::DataPage
+            }
+        };
+
         create_module_aad(
             self.file_aad(),
             module_type,

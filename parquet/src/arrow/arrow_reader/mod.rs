@@ -397,9 +397,6 @@ impl ArrowReaderMetadata {
     /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
-    ///
-    /// If encryption is enabled and the file is encrypted, the
-    /// `file_decryption_properties` must be provided.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
         #[cfg(feature = "encryption")]
