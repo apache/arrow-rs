@@ -33,6 +33,8 @@ use crate::column::{
     writer::{get_column_writer, ColumnWriter},
 };
 use crate::data_type::DataType;
+use crate::encryption::ciphers::RingGcmBlockEncryptor;
+use crate::encryption::encryption::FileEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -523,6 +525,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         ) -> Result<C>,
     {
         self.assert_previous_writer_closed()?;
+        let file_encryption_properties = self.props.file_encryption_properties();
+        let file_encryptor =
+            FileEncryptor::new(file_encryption_properties.unwrap().clone(), vec![], vec![]);
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();

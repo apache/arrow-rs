@@ -1535,6 +1535,8 @@ mod tests {
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    #[cfg(feature = "encryption")]
+    use crate::encryption::encryption::FileEncryptionProperties;
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
@@ -3377,6 +3379,31 @@ mod tests {
             stats.max_value,
             Some([128, 128, 128, 128, 128, 128, 128, 129].to_vec())
         );
+    }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_encryption_writer() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file: File = tempfile::tempfile().unwrap();
+
+        let builder = WriterProperties::builder();
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        let props = Arc::new(
+            builder
+                .with_file_encryption_properties(file_encryption_properties)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
     }
 
     #[test]

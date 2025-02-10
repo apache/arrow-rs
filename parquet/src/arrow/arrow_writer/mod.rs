@@ -1127,7 +1127,9 @@ mod tests {
 
     use std::fs::File;
 
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_reader::{
+        ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    };
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
@@ -1141,6 +1143,8 @@ mod tests {
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
+    use crate::encryption::decryption::FileDecryptionProperties;
+    use crate::encryption::encryption::FileEncryptionProperties;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
     use crate::file::page_index::index_reader::read_offset_indexes;
@@ -3546,8 +3550,14 @@ mod tests {
         let file = tempfile::tempfile().unwrap();
 
         // todo: add encryption
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
         let props = WriterProperties::builder()
             .set_max_row_group_size(200)
+            .with_file_encryption_properties(file_encryption_properties)
             .build();
 
         let mut writer =
@@ -3560,8 +3570,19 @@ mod tests {
 
         writer.close().unwrap();
 
-        // todo: try_new_with_decryption
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let footer_key = "0123456789012345".as_bytes();
+        let column_key = "1234567890123450".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("int".as_bytes().to_vec(), column_key.to_vec())
+            .build()
+            .unwrap();
+
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+
+        // todo: remove with_file_decryption_properties from things that are not ArrowReaderOptions
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
         assert_eq!(&row_group_sizes(builder.metadata()), &[200, 200, 50]);
 
         let batches = builder
