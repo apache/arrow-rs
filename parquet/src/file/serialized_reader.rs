@@ -443,8 +443,7 @@ pub(crate) fn decode_page(
     }
 
     #[cfg(feature = "encryption")]
-    let buffer: Bytes = if crypto_context.is_some() {
-        let crypto_context = crypto_context.as_ref().unwrap();
+    let buffer: Bytes = if let Some(crypto_context) = crypto_context {
         let decryptor = crypto_context.data_decryptor();
         let module_type = if crypto_context.dictionary_page {
             ModuleType::DictionaryPage

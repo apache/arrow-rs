@@ -227,9 +227,8 @@ impl ArrowReaderMetadata {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
             let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
 
-            if use_encryption {
-                reader = reader.with_decryption_properties(file_decryption_properties);
-            }
+            #[cfg(feature = "encryption")]
+            reader = reader.with_decryption_properties(file_decryption_properties);
 
             reader.load_page_index(input).await?;
             metadata = Arc::new(reader.finish()?)
