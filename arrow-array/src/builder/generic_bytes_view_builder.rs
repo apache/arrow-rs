@@ -404,10 +404,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
             None => 0,
         };
-        println!(
-            "views: {}, null: {}, buffer: {}, in_progress: {}, tracker: {}",
-            views, null, buffer_size, in_progress, tracker
-        );
         buffer_size + in_progress + tracker + views + null
     }
 }
