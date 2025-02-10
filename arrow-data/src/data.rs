@@ -1929,7 +1929,7 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
-    /// Note: This is shorthand for `self.with_skip_validation(true).build()`
+    /// Note: This is shorthand for `self.skip_validation(true).build().unwrap()`
     ///
     /// # Safety
     ///
