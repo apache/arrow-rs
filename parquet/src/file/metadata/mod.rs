@@ -99,7 +99,7 @@ use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decryption::FileDecryptor,
-    modules::{create_page_aad, ModuleType},
+    modules::{create_module_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
 pub(crate) use crate::file::metadata::memory::HeapSize;
@@ -673,7 +673,7 @@ impl RowGroupMetaData {
                     }
                 };
 
-                let column_aad = create_page_aad(
+                let column_aad = create_module_aad(
                     decryptor.file_aad(),
                     ModuleType::ColumnMetaData,
                     rg.ordinal.unwrap() as usize,

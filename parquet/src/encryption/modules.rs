@@ -31,23 +31,7 @@ pub fn create_footer_aad(file_aad: &[u8]) -> crate::errors::Result<Vec<u8>> {
     create_module_aad(file_aad, ModuleType::Footer, 0, 0, None)
 }
 
-pub(crate) fn create_page_aad(
-    file_aad: &[u8],
-    module_type: ModuleType,
-    row_group_ordinal: usize,
-    column_ordinal: usize,
-    page_ordinal: Option<usize>,
-) -> crate::errors::Result<Vec<u8>> {
-    create_module_aad(
-        file_aad,
-        module_type,
-        row_group_ordinal,
-        column_ordinal,
-        page_ordinal,
-    )
-}
-
-fn create_module_aad(
+pub(crate) fn create_module_aad(
     file_aad: &[u8],
     module_type: ModuleType,
     row_group_ordinal: usize,

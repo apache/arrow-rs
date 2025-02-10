@@ -25,7 +25,7 @@ use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decryption::{read_and_decrypt, CryptoContext},
-    modules::{create_page_aad, ModuleType},
+    modules::ModuleType,
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
@@ -357,13 +357,7 @@ pub(crate) fn read_page_header<T: Read>(
         } else {
             ModuleType::DataPageHeader
         };
-        let aad = create_page_aad(
-            crypto_context.file_aad(),
-            module_type,
-            crypto_context.row_group_ordinal,
-            crypto_context.column_ordinal,
-            crypto_context.page_ordinal,
-        )?;
+        let aad = crypto_context.create_page_aad(module_type)?;
 
         let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
 
@@ -450,13 +444,7 @@ pub(crate) fn decode_page(
         } else {
             ModuleType::DataPage
         };
-        let aad = create_page_aad(
-            crypto_context.file_aad(),
-            module_type,
-            crypto_context.row_group_ordinal,
-            crypto_context.column_ordinal,
-            crypto_context.page_ordinal,
-        )?;
+        let aad = crypto_context.create_page_aad(module_type)?;
         let decrypted = decryptor.decrypt(buffer.as_ref(), &aad)?;
         Bytes::from(decrypted)
     } else {

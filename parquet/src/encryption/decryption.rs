@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
+use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::Result;
 use std::collections::HashMap;
 use std::io::Read;
@@ -78,6 +79,19 @@ impl CryptoContext {
             metadata_decryptor: self.metadata_decryptor.clone(),
             file_aad: self.file_aad.clone(),
         }
+    }
+
+    pub(crate) fn create_page_aad(
+        &self,
+        module_type: ModuleType,
+    ) -> crate::errors::Result<Vec<u8>> {
+        create_module_aad(
+            self.file_aad(),
+            module_type,
+            self.row_group_ordinal,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
     }
 
     pub fn for_dictionary_page(&self) -> Self {
