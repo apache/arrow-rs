@@ -68,6 +68,7 @@ use crate::encryption::decryption::FileDecryptionProperties;
 mod store;
 
 use crate::arrow::schema::ParquetField;
+#[cfg(feature = "encryption")]
 use crate::encryption::decryption::CryptoContext;
 #[cfg(feature = "object_store")]
 pub use store::*;
@@ -201,16 +202,13 @@ impl ArrowReaderMetadata {
     pub async fn load_async<T: AsyncFileReader>(
         input: &mut T,
         options: ArrowReaderOptions,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &FileDecryptionProperties,
-        >,
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
         let mut metadata = input
             .get_metadata(
                 #[cfg(feature = "encryption")]
-                file_decryption_properties,
+                options.file_decryption_properties.as_ref(),
             )
             .await?;
 
@@ -222,7 +220,10 @@ impl ArrowReaderMetadata {
             let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
 
             #[cfg(feature = "encryption")]
-            reader = reader.with_decryption_properties(file_decryption_properties);
+            {
+                reader =
+                    reader.with_decryption_properties(options.file_decryption_properties.as_ref());
+            }
 
             reader.load_page_index(input).await?;
             metadata = Arc::new(reader.finish()?)
@@ -382,31 +383,13 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # }
     /// ```
     pub async fn new(input: T) -> Result<Self> {
-        Self::new_with_options(
-            input,
-            Default::default(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
+        Self::new_with_options(input, Default::default()).await
     }
 
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source,
     /// [`ArrowReaderOptions`] and [`FileDecryptionProperties`] if the data is encrypted.
-    pub async fn new_with_options(
-        mut input: T,
-        options: ArrowReaderOptions,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &FileDecryptionProperties,
-        >,
-    ) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load_async(
-            &mut input,
-            options,
-            #[cfg(feature = "encryption")]
-            file_decryption_properties,
-        )
-        .await?;
+    pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
         Ok(Self::new_with_metadata(input, metadata))
     }
 
@@ -439,7 +422,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // open file with parquet data
     /// let mut file = tokio::fs::File::from_std(file);
     /// // load metadata once
-    /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default(), #[cfg(feature = "encryption")] None).await.unwrap();
+    /// let meta = ArrowReaderMetadata::load_async(&mut file, Default::default()).await.unwrap();
     /// // create two readers, a and b, from the same underlying file
     /// // without reading the metadata again
     /// let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
@@ -1023,39 +1006,35 @@ impl RowGroups for InMemoryRowGroup<'_> {
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
-        let crypto_context = if let Some(file_decryptor) = &self
-            .parquet_metadata
-            .clone()
-            .file_decryptor()
-            .clone()
-        {
-            let column_name = &self
-                .parquet_metadata
-                .clone()
-                .file_metadata()
-                .schema_descr()
-                .column(i);
+        let crypto_context =
+            if let Some(file_decryptor) = &self.parquet_metadata.clone().file_decryptor().clone() {
+                let column_name = &self
+                    .parquet_metadata
+                    .clone()
+                    .file_metadata()
+                    .schema_descr()
+                    .column(i);
 
-            if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
-                let data_decryptor =
-                    file_decryptor.get_column_data_decryptor(column_name.name().as_bytes());
-                let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
+                if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
+                    let data_decryptor =
+                        file_decryptor.get_column_data_decryptor(column_name.name().as_bytes());
+                    let metadata_decryptor =
+                        file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
 
-                let crypto_context = CryptoContext::new(
-                    self.row_group_ordinal,
-                    i,
-                    data_decryptor,
-                    metadata_decryptor,
-                    file_decryptor.file_aad().clone(),
-                );
-                Some(Arc::new(crypto_context))
+                    let crypto_context = CryptoContext::new(
+                        self.row_group_ordinal,
+                        i,
+                        data_decryptor,
+                        metadata_decryptor,
+                        file_decryptor.file_aad().clone(),
+                    );
+                    Some(Arc::new(crypto_context))
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -1347,14 +1326,9 @@ mod tests {
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            async_reader,
-            options,
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+            .await
+            .unwrap();
 
         // The builder should have page and offset indexes loaded now
         let metadata_with_index = builder.metadata();
@@ -1466,14 +1440,9 @@ mod tests {
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            async_reader,
-            options,
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+            .await
+            .unwrap();
 
         let selection = RowSelection::from(vec![
             RowSelector::skip(21),   // Skip first page
@@ -1554,14 +1523,9 @@ mod tests {
             };
 
             let options = ArrowReaderOptions::new().with_page_index(true);
-            let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-                async_reader,
-                options,
-                #[cfg(feature = "encryption")]
-                None,
-            )
-            .await
-            .unwrap();
+            let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+                .await
+                .unwrap();
 
             let col_idx: usize = rand.gen_range(0..13);
             let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
@@ -1630,14 +1594,9 @@ mod tests {
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
-            async_reader,
-            options,
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+            .await
+            .unwrap();
 
         let col_idx: usize = rand.gen_range(0..13);
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
@@ -1869,19 +1828,14 @@ mod tests {
         let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
 
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
-            async_reader,
-            options,
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap()
-        .with_projection(mask.clone())
-        .with_batch_size(1024)
-        .with_row_filter(filter)
-        .build()
-        .unwrap();
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+            .await
+            .unwrap()
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
 
         let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
 
@@ -2266,8 +2220,6 @@ mod tests {
             let mut reader = ParquetRecordBatchStreamBuilder::new_with_options(
                 tokio::fs::File::from_std(file.try_clone().unwrap()),
                 ArrowReaderOptions::new().with_page_index(true),
-                #[cfg(feature = "encryption")]
-                None,
             )
             .await
             .unwrap();
@@ -2481,22 +2433,15 @@ mod tests {
         file: &mut File,
         decryption_properties: FileDecryptionProperties,
     ) {
-        let decryption_properties = Some(decryption_properties);
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-        let metadata = ArrowReaderMetadata::load_async(
-            file,
-            Default::default(),
-            decryption_properties.as_ref(),
-        )
-        .await
-        .unwrap();
-        let arrow_reader_metadata = ArrowReaderMetadata::load_async(
-            file,
-            Default::default(),
-            decryption_properties.as_ref(),
-        )
-        .await
-        .unwrap();
+        let metadata = ArrowReaderMetadata::load_async(file, options.clone())
+            .await
+            .unwrap();
+        let arrow_reader_metadata = ArrowReaderMetadata::load_async(file, options)
+            .await
+            .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
@@ -2600,14 +2545,9 @@ mod tests {
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
         let mut file = File::open(&path).await.unwrap();
 
-        let metadata = ArrowReaderMetadata::load_async(
-            &mut file,
-            Default::default(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .await
-        .unwrap();
+        let metadata = ArrowReaderMetadata::load_async(&mut file, Default::default())
+            .await
+            .unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         assert_eq!(file_metadata.num_rows(), 50);
@@ -2711,13 +2651,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let decryption_properties = Some(decryption_properties);
-        let metadata = ArrowReaderMetadata::load_async(
-            &mut file,
-            Default::default(),
-            decryption_properties.as_ref(),
-        )
-        .await;
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+        let metadata = ArrowReaderMetadata::load_async(&mut file, options).await;
 
         match metadata {
             Err(ParquetError::NYI(s)) => {

@@ -31,7 +31,6 @@ rust-version = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 # See https://github.com/briansmith/ring/issues/918#issuecomment-2077788925
-[target.'cfg(feature = "encryption")'.dependencies]
 ring = { version = "0.17", default-features = false, features = ["wasm32_unknown_unknown_js", "std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

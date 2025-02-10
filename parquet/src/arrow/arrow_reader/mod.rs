@@ -253,6 +253,9 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
+    /// If encryption is enabled, the file decryption properties can be provided
+    #[cfg(feature = "encryption")]
+    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ArrowReaderOptions {
@@ -343,6 +346,20 @@ impl ArrowReaderOptions {
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
     }
+
+    /// Provide the file decryption properties to use when reading encrypted parquet files.
+    ///
+    /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) -> Self {
+        Self {
+            file_decryption_properties: Some(file_decryption_properties),
+            ..self
+        }
+    }
 }
 
 /// The metadata necessary to construct a [`ArrowReaderBuilder`]
@@ -383,17 +400,11 @@ impl ArrowReaderMetadata {
     ///
     /// If encryption is enabled and the file is encrypted, the
     /// `file_decryption_properties` must be provided.
-    pub fn load<T: ChunkReader>(
-        reader: &T,
-        options: ArrowReaderOptions,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &FileDecryptionProperties,
-        >,
-    ) -> Result<Self> {
+    pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
         #[cfg(feature = "encryption")]
         let metadata = metadata
-            .with_decryption_properties(file_decryption_properties)
+            .with_decryption_properties(options.file_decryption_properties.as_ref())
             .parse_and_finish(reader)?;
         #[cfg(not(feature = "encryption"))]
         let metadata = metadata.parse_and_finish(reader)?;
@@ -542,23 +553,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(
-            &reader,
-            options,
-            #[cfg(feature = "encryption")]
-            None,
-        )?;
+        let metadata = ArrowReaderMetadata::load(&reader, options)?;
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
     /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`] and [`FileDecryptionProperties`]
     #[cfg(feature = "encryption")]
-    pub fn try_new_with_decryption(
-        reader: T,
-        options: ArrowReaderOptions,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
-    ) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(&reader, options, file_decryption_properties)?;
+    pub fn try_new_with_decryption(reader: T, options: ArrowReaderOptions) -> Result<Self> {
+        let metadata = ArrowReaderMetadata::load(&reader, options)?;
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
@@ -592,7 +594,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
     /// #
-    /// let metadata = ArrowReaderMetadata::load(&file, Default::default(), None).unwrap();
+    /// let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
     /// let mut a = ParquetRecordBatchReaderBuilder::new_with_metadata(file.clone(), metadata.clone()).build().unwrap();
     /// let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata).build().unwrap();
     ///
@@ -864,13 +866,11 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<Self> {
-        ParquetRecordBatchReaderBuilder::try_new_with_decryption(
-            reader,
-            Default::default(),
-            file_decryption_properties,
-        )?
-        .with_batch_size(batch_size)
-        .build()
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(file_decryption_properties.cloned().unwrap());
+        ParquetRecordBatchReaderBuilder::try_new_with_decryption(reader, options)?
+            .with_batch_size(batch_size)
+            .build()
     }
 
     /// Create a new [`ParquetRecordBatchReader`] from the provided [`RowGroups`]
@@ -1904,13 +1904,7 @@ mod tests {
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
         let file = File::open(&path).unwrap();
 
-        let metadata = ArrowReaderMetadata::load(
-            &file,
-            Default::default(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         assert_eq!(file_metadata.num_rows(), 50);
@@ -2013,9 +2007,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let decryption_properties = Some(decryption_properties);
-        let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref());
+        let options =
+            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+        let metadata = ArrowReaderMetadata::load(&file, options);
 
         match metadata {
             Err(crate::errors::ParquetError::NYI(s)) => {
@@ -2032,17 +2026,15 @@ mod tests {
         file: File,
         decryption_properties: FileDecryptionProperties,
     ) {
-        let decryption_properties = Some(decryption_properties);
-
-        let metadata =
-            ArrowReaderMetadata::load(&file, Default::default(), decryption_properties.as_ref())
-                .unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
         let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
             file,
             128,
-            decryption_properties.as_ref(),
+            Some(&decryption_properties),
         )
         .unwrap();
 
