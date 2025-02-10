@@ -59,17 +59,31 @@ impl BooleanBuffer {
     ///
     /// This method will panic if `buffer` is not large enough
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
+        Self::try_new(buffer, offset, len).unwrap()
+    }
+
+    /// Create a  a new [`BooleanBuffer`] from a [`Buffer`], an `offset` and `length` in bits
+    ///
+    /// # Returns
+    /// * `Ok(Self)` if the buffer is large enough
+    /// * `Err(String)` if the buffer is not large enough with an appropriate message
+    ///
+    /// Note the `arrow-buffer` crate does not depend on `arrow-schema` and thus
+    /// does not have access to `ArrowError`, hence the use of a `String` for the error type.
+    pub fn try_new(buffer: Buffer, offset: usize, len: usize) -> Result<Self, String> {
         let total_len = offset.saturating_add(len);
         let buffer_len = buffer.len();
         let bit_len = buffer_len.saturating_mul(8);
-        assert!(
-            total_len <= bit_len,
-            "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
-        );
-        Self {
-            buffer,
-            offset,
-            len,
+        if total_len > bit_len {
+            Err(format!(
+                "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
+            ))
+        } else {
+            Ok(Self {
+                buffer,
+                offset,
+                len,
+            })
         }
     }
 

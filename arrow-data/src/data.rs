@@ -1961,19 +1961,11 @@ impl ArrayDataBuilder {
             skip_validation,
         } = self;
 
-        let nulls = nulls
-            .or_else(|| {
-                let buffer = null_bit_buffer?;
-                let buffer = BooleanBuffer::new(buffer, offset, len);
-                Some(match null_count {
-                    Some(n) => {
-                        // SAFETY: call to `data.validate_data()` below validates the null buffer is valid
-                        unsafe { NullBuffer::new_unchecked(buffer, n) }
-                    }
-                    None => NullBuffer::new(buffer),
-                })
-            })
-            .filter(|b| b.null_count() != 0);
+        // SAFETY: call to `data.validate_data()` below validates the null buffer is valid
+        let nulls = unsafe {
+            make_nulls(len, null_count, null_bit_buffer, nulls, offset)?
+                .filter(|b| b.null_count() != 0)
+        };
 
         let mut data = ArrayData {
             data_type,
@@ -2038,6 +2030,35 @@ impl ArrayDataBuilder {
         self.skip_validation.set(skip_validation);
         self
     }
+}
+
+/// Create an appropriate `NullBuffer` from the builder's fields
+///
+/// Safety:
+///
+/// The caller must ensure that the null buffer is valid by calling
+/// `data.validate_data()` after this function
+unsafe fn make_nulls(
+    len: usize,
+    null_count: Option<usize>,
+    null_bit_buffer: Option<Buffer>,
+    nulls: Option<NullBuffer>,
+    offset: usize,
+) -> Result<Option<NullBuffer>, ArrowError> {
+    if let Some(nulls) = nulls {
+        return Ok(Some(nulls));
+    }
+    let Some(buffer) = null_bit_buffer else {
+        return Ok(None);
+    };
+    let buffer =
+        BooleanBuffer::try_new(buffer, offset, len).map_err(ArrowError::InvalidArgumentError)?;
+    let null_buffer = if let Some(n) = null_count {
+        NullBuffer::new_unchecked(buffer, n)
+    } else {
+        NullBuffer::new(buffer)
+    };
+    Ok(Some(null_buffer))
 }
 
 impl From<ArrayData> for ArrayDataBuilder {
