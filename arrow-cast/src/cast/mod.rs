@@ -4234,6 +4234,10 @@ mod tests {
         let array = Arc::new(StringArray::from(vec![
             Some("+10999-12-31"),
             Some("-0010-02-28"),
+            Some("0010-02-28"),
+            Some("0000-01-01"),
+            Some("-0000-01-01"),
+            Some("-0001-01-01"),
         ])) as ArrayRef;
         let to_type = DataType::Date32;
         let options = CastOptions {
@@ -4242,8 +4246,13 @@ mod tests {
         };
         let b = cast_with_options(&array, &to_type, &options).unwrap();
         let c = b.as_primitive::<Date32Type>();
-        assert_eq!(3298139, c.value(0));
-        assert_eq!(-723122, c.value(1));
+        assert_eq!(3298139, c.value(0)); // 10999-12-31
+        assert_eq!(-723122, c.value(1)); // -0010-02-28
+        assert_eq!(-715817, c.value(2)); // 0010-02-28
+        assert_eq!(c.value(3), c.value(4)); // Expect 0000-01-01 and -0000-01-01 to be parsed the same
+        assert_eq!(-719528, c.value(3)); // 0000-01-01
+        assert_eq!(-719528, c.value(4)); // -0000-01-01
+        assert_eq!(-719893, c.value(5)); // -0001-01-01
     }
 
     #[test]
