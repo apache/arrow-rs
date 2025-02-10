@@ -31,7 +31,8 @@ rust-version = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
 # See https://github.com/briansmith/ring/issues/918#issuecomment-2077788925
-ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+[target.'cfg(feature = "encryption")'.dependencies]
+ring = { version = "0.17", default-features = false, features = ["wasm32_unknown_unknown_js", "std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -101,7 +102,7 @@ zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8", "encryption"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs

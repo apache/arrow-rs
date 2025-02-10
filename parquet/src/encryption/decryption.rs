@@ -116,14 +116,6 @@ impl FileDecryptionProperties {
     pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new(footer_key)
     }
-
-    pub fn has_column_keys(&self) -> bool {
-        self.column_keys.is_some()
-    }
-
-    pub fn aad_prefix(&self) -> Option<Vec<u8>> {
-        self.aad_prefix.clone()
-    }
 }
 
 pub struct DecryptionPropertiesBuilder {
@@ -154,9 +146,9 @@ impl DecryptionPropertiesBuilder {
         self
     }
 
-    pub fn with_column_key(mut self, key: Vec<u8>, value: Vec<u8>) -> Self {
+    pub fn with_column_key(mut self, column_name: Vec<u8>, decryption_key: Vec<u8>) -> Self {
         let mut column_keys = self.column_keys.unwrap_or_default();
-        column_keys.insert(key, value);
+        column_keys.insert(column_name, decryption_key);
         self.column_keys = Some(column_keys);
         self
     }

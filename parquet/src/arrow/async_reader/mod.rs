@@ -214,12 +214,6 @@ impl ArrowReaderMetadata {
             )
             .await?;
 
-        #[cfg(feature = "encryption")]
-        let use_encryption = file_decryption_properties.is_some();
-
-        #[cfg(not(feature = "encryption"))]
-        let use_encryption = false;
-
         if options.page_index
             && metadata.column_index().is_none()
             && metadata.offset_index().is_none()
@@ -637,7 +631,7 @@ where
             #[cfg(feature = "encryption")]
             row_group_ordinal: row_group_idx,
             #[cfg(feature = "encryption")]
-            parquet_metadata: Some(self.metadata.clone()),
+            parquet_metadata: self.metadata.clone(),
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -926,7 +920,7 @@ struct InMemoryRowGroup<'a> {
     #[cfg(feature = "encryption")]
     row_group_ordinal: usize,
     #[cfg(feature = "encryption")]
-    parquet_metadata: Option<Arc<ParquetMetaData>>,
+    parquet_metadata: Arc<ParquetMetaData>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -1032,14 +1026,12 @@ impl RowGroups for InMemoryRowGroup<'_> {
         let crypto_context = if let Some(file_decryptor) = &self
             .parquet_metadata
             .clone()
-            .unwrap()
             .file_decryptor()
             .clone()
         {
             let column_name = &self
                 .parquet_metadata
                 .clone()
-                .unwrap()
                 .file_metadata()
                 .schema_descr()
                 .column(i);
