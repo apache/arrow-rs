@@ -742,7 +742,7 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 #[allow(dead_code)] // no longer used but is part of our public API
 #[deprecated(
     since = "54.1.0",
-    note = "Use MIN_DECIMAL_FOR_EACH_PRECISION (note indexes are different)"
+    note = "Use MIN_DECIMAL128_FOR_EACH_PRECISION (note indexes are different)"
 )]
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
