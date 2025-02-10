@@ -81,22 +81,27 @@ impl CryptoContext {
         }
     }
 
-    pub(crate) fn create_page_aad(
-        &self,
-        is_header: bool,
-    ) -> Result<Vec<u8>> {
+    pub(crate) fn create_page_header_aad(&self) -> Result<Vec<u8>> {
         let module_type = if self.dictionary_page {
-            if is_header {
-                ModuleType::DictionaryPageHeader
-            } else {
-                ModuleType::DictionaryPage
-            }
+            ModuleType::DictionaryPageHeader
         } else {
-            if is_header {
-                ModuleType::DataPageHeader
-            } else {
-                ModuleType::DataPage
-            }
+            ModuleType::DataPageHeader
+        };
+
+        create_module_aad(
+            self.file_aad(),
+            module_type,
+            self.row_group_ordinal,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
+    }
+
+    pub(crate) fn create_page_aad(&self) -> Result<Vec<u8>> {
+        let module_type = if self.dictionary_page {
+            ModuleType::DictionaryPage
+        } else {
+            ModuleType::DataPage
         };
 
         create_module_aad(

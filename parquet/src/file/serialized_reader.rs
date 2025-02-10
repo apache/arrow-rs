@@ -348,7 +348,7 @@ pub(crate) fn read_page_header<T: Read>(
     #[cfg(feature = "encryption")]
     if let Some(crypto_context) = crypto_context {
         let data_decryptor = crypto_context.data_decryptor();
-        let aad = crypto_context.create_page_aad(true)?;
+        let aad = crypto_context.create_page_header_aad()?;
 
         let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
 
@@ -430,7 +430,7 @@ pub(crate) fn decode_page(
     #[cfg(feature = "encryption")]
     let buffer: Bytes = if let Some(crypto_context) = crypto_context {
         let decryptor = crypto_context.data_decryptor();
-        let aad = crypto_context.create_page_aad(false)?;
+        let aad = crypto_context.create_page_aad()?;
         let decrypted = decryptor.decrypt(buffer.as_ref(), &aad)?;
         Bytes::from(decrypted)
     } else {
