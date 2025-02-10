@@ -2531,7 +2531,7 @@ mod tests {
 
         expect_ipc_validation_error(
             Arc::new(array),
-            "Invalid argument error: buffer not large enough (offset: 0, len: 8000, buffer_len: 1)",
+            "Invalid argument error: Nulls do not match",
         );
     }
 
