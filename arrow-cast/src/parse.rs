@@ -596,6 +596,10 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
     // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
+    //
+    // According to ISO 8601, years have:
+    //  Four digits or more for the year. Years in the range 0000 to 9999 will be pre-padded by 
+    //  zero to ensure four digits. Years outside that range will have a prefixed positive or negative symbol.
     if string.starts_with('+') || string.starts_with('-') {
         // Skip the sign and look for the hyphen that terminates the year digits.
         // According to ISO 8601 the unsigned part must be at least 4 digits.
