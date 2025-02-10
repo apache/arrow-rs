@@ -4256,6 +4256,22 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_invalid_string_with_large_date_to_date32() {
+        // Large dates need to be prefixed with a + or - sign, otherwise they are not parsed correctly
+        let array = Arc::new(StringArray::from(vec![Some("10999-12-31")])) as ArrayRef;
+        let to_type = DataType::Date32;
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Cannot cast string '10999-12-31' to value of Date32 type"
+        );
+    }
+
+    #[test]
     fn test_cast_string_format_yyyymmdd_to_date32() {
         let a0 = Arc::new(StringViewArray::from(vec![
             Some("2020-12-25"),
