@@ -404,6 +404,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             Some((ht, _)) => ht.capacity() * std::mem::size_of::<usize>(),
             None => 0,
         };
+        println!(
+            "views: {}, null: {}, buffer: {}, in_progress: {}, tracker: {}",
+            views, null, buffer_size, in_progress, tracker
+        );
         buffer_size + in_progress + tracker + views + null
     }
 }
@@ -729,5 +733,17 @@ mod tests {
             exp_builder.completed.last().unwrap().capacity(),
             MAX_BLOCK_SIZE as usize
         );
+    }
+
+    #[test]
+    fn test_string_view_size() {
+        let mut builder = StringViewBuilder::new();
+        assert_eq!(builder.allocated_size(), 16384);
+
+        builder.append_value("hello");
+        assert_eq!(builder.allocated_size(), 16384);
+
+        builder.append_null();
+        assert_eq!(builder.allocated_size(), 16384 + 128);
     }
 }
