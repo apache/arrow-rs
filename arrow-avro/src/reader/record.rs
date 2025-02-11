@@ -27,7 +27,6 @@ use arrow_schema::{
     Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use std::cmp::Ordering;
-use std::io::Read;
 use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 1024;
@@ -340,7 +339,6 @@ impl Decoder {
                         }
                     }
                     UnionOrder::NullSecond => {
-                        // In out-of-spec files: branch=0 => decode T, branch=1 => null
                         if branch == 0 {
                             nb.append(true);
                             child.decode(buf)?;
@@ -541,7 +539,7 @@ impl Decoder {
 type FlushResult = (Vec<Arc<dyn Array>>, Option<NullBuffer>);
 
 fn flush_record_children(
-    mut children: Vec<Arc<dyn Array>>,
+    children: Vec<Arc<dyn Array>>,
     parent_nulls: Option<NullBuffer>,
 ) -> Result<FlushResult, ArrowError> {
     let max_len = children.iter().map(|c| c.len()).max().unwrap_or(0);
@@ -1082,7 +1080,7 @@ mod tests {
         let row2_values = vec![None, Some(1), Some(2), None, Some(3), None];
         data.extend_from_slice(&encode_array(&row2_values, encode_int_or_null));
         data.extend_from_slice(&encode_union_branch(0));
-        data.extend_from_slice(&encode_avro_long(0)); // block_count=0 => end immediately
+        data.extend_from_slice(&encode_avro_long(0));
         data.extend_from_slice(&encode_union_branch(1));
         record_decoder.decode(&data, 4).unwrap();
         let batch = record_decoder.flush().unwrap();
@@ -1639,10 +1637,9 @@ mod tests {
 
     #[test]
     fn test_enum_decoding_with_nulls() {
-        // Union => [Enum(...), null]
         let symbols = ["RED".to_string(), "GREEN".to_string(), "BLUE".to_string()];
         let enum_dt = AvroDataType::from_codec(Codec::Enum(Arc::new(symbols), Arc::new([])));
-        let mut inner_decoder = Decoder::try_new(&enum_dt, true).unwrap();
+        let inner_decoder = Decoder::try_new(&enum_dt, true).unwrap();
         let mut nullable_decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1667,7 +1664,6 @@ mod tests {
         assert!(dict_arr.is_valid(0));
         assert!(!dict_arr.is_valid(1));
         assert!(dict_arr.is_valid(2));
-        let keys = dict_arr.keys();
         let dict_values = dict_arr.values().as_string::<i32>();
         assert_eq!(dict_values.value(0), "RED");
         assert_eq!(dict_values.value(1), "GREEN");
@@ -1739,7 +1735,7 @@ mod tests {
     #[test]
     fn test_decimal_decoding_bytes_with_nulls() {
         let dt = AvroDataType::from_codec(Codec::Decimal(4, Some(1), None));
-        let mut inner = Decoder::try_new(&dt, true).unwrap();
+        let inner = Decoder::try_new(&dt, true).unwrap();
         let mut decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
@@ -1768,7 +1764,7 @@ mod tests {
     #[test]
     fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
         let dt = AvroDataType::from_codec(Codec::Decimal(6, Some(2), Some(16)));
-        let mut inner = Decoder::try_new(&dt, true).unwrap();
+        let inner = Decoder::try_new(&dt, true).unwrap();
         let mut decoder = Decoder::Nullable(
             UnionOrder::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),

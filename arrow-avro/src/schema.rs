@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::Nullability;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
@@ -226,24 +225,6 @@ pub struct Fixed<'a> {
     pub size: usize,
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
-}
-
-/// An Avro data type (not an Avro schema)
-#[derive(Debug, Clone)]
-pub struct AvroDataType {
-    pub nullability: Option<Nullability>,
-    pub metadata: HashMap<String, String>,
-    pub codec: crate::codec::Codec,
-}
-
-impl AvroDataType {
-    /// Returns an Arrow [`Field`] with the given name,
-    /// respecting this type’s `nullability` (instead of forcing `true`).
-    pub fn field_with_name(&self, name: &str) -> arrow_schema::Field {
-        let d = self.codec.data_type();
-        let is_nullable = self.nullability.is_some();
-        arrow_schema::Field::new(name, d, is_nullable).with_metadata(self.metadata.clone())
-    }
 }
 
 #[cfg(test)]

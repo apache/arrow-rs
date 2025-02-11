@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::schema::{ComplexType, PrimitiveType, Schema, TypeName};
-use arrow_array::Array;
 use arrow_schema::DataType::*;
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -142,7 +141,6 @@ pub enum Codec {
     String,
     /// Complex
     Record(Arc<[AvroField]>),
-    /// Changed from `Dictionary(Utf8, Int32)` to `Dictionary(Int32, Utf8)`
     Enum(Arc<[String]>, Arc<[i32]>),
     Array(Arc<AvroDataType>),
     Map(Arc<AvroDataType>),
@@ -476,97 +474,97 @@ fn make_data_type<'a>(
     }
 }
 
-pub fn arrow_field_to_avro_field(field: &Field) -> AvroField {
-    let codec = arrow_type_to_codec(field.data_type());
-    let top_null = field.is_nullable().then_some(Nullability::NullFirst);
-    let data_type = AvroDataType {
-        nullability: top_null,
-        metadata: field.metadata().clone(),
-        codec,
-    };
-    AvroField {
-        name: field.name().to_string(),
-        data_type,
-        default: None,
-    }
-}
-
-fn arrow_type_to_codec(dt: &DataType) -> Codec {
-    match dt {
-        Null => Codec::Null,
-        Boolean => Codec::Boolean,
-        Int8 | Int16 | Int32 => Codec::Int32,
-        Int64 => Codec::Int64,
-        Float32 => Codec::Float32,
-        Float64 => Codec::Float64,
-        Binary | LargeBinary => Codec::Binary,
-        Utf8 => Codec::String,
-        Struct(fields) => {
-            let avro_fields: Vec<AvroField> = fields
-                .iter()
-                .map(|fref| arrow_field_to_avro_field(fref.as_ref()))
-                .collect();
-            Codec::Record(Arc::from(avro_fields))
-        }
-        Dictionary(dict_ty, val_ty) => {
-            if let Int32 = &**dict_ty {
-                if let Utf8 = &**val_ty {
-                    return Codec::Enum(Arc::from(Vec::new()), Arc::from(Vec::new()));
-                }
-            }
-            Codec::String
-        }
-        List(item_field) => {
-            let item_codec = arrow_type_to_codec(item_field.data_type());
-            let child_nullability = item_field.is_nullable().then_some(Nullability::NullFirst);
-            let child_dt = AvroDataType {
-                codec: item_codec,
-                nullability: child_nullability,
-                metadata: item_field.metadata().clone(),
-            };
-            Codec::Array(Arc::new(child_dt))
-        }
-        Map(entries_field, _keys_sorted) => {
-            if let Struct(struct_fields) = entries_field.data_type() {
-                let val_field = &struct_fields[1];
-                let val_codec = arrow_type_to_codec(val_field.data_type());
-                let val_nullability = val_field.is_nullable().then_some(Nullability::NullFirst);
-                let val_dt = AvroDataType {
-                    codec: val_codec,
-                    nullability: val_nullability,
-                    metadata: val_field.metadata().clone(),
-                };
-                Codec::Map(Arc::new(val_dt))
-            } else {
-                Codec::Map(Arc::new(AvroDataType::from_codec(Codec::String)))
-            }
-        }
-        FixedSizeBinary(n) => Codec::Fixed(*n),
-        Decimal128(p, s) => Codec::Decimal(*p as usize, Some(*s as usize), Some(16)),
-        Decimal256(p, s) => Codec::Decimal(*p as usize, Some(*s as usize), Some(32)),
-        Date32 => Codec::Date32,
-        Time32(TimeUnit::Millisecond) => Codec::TimeMillis,
-        Time64(TimeUnit::Microsecond) => Codec::TimeMicros,
-        Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
-            Codec::TimestampMillis(true)
-        }
-        Timestamp(TimeUnit::Millisecond, None) => Codec::TimestampMillis(false),
-        Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC" => {
-            Codec::TimestampMicros(true)
-        }
-        Timestamp(TimeUnit::Microsecond, None) => Codec::TimestampMicros(false),
-        Interval(IntervalUnit::MonthDayNano) => Codec::Duration,
-        _ => Codec::String,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
+    use arrow_schema::{Field, IntervalUnit, TimeUnit};
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    pub fn arrow_field_to_avro_field(field: &Field) -> AvroField {
+        let codec = arrow_type_to_codec(field.data_type());
+        let top_null = field.is_nullable().then_some(Nullability::NullFirst);
+        let data_type = AvroDataType {
+            nullability: top_null,
+            metadata: field.metadata().clone(),
+            codec,
+        };
+        AvroField {
+            name: field.name().to_string(),
+            data_type,
+            default: None,
+        }
+    }
+
+    fn arrow_type_to_codec(dt: &DataType) -> Codec {
+        match dt {
+            Null => Codec::Null,
+            Boolean => Codec::Boolean,
+            Int8 | Int16 | Int32 => Codec::Int32,
+            Int64 => Codec::Int64,
+            Float32 => Codec::Float32,
+            Float64 => Codec::Float64,
+            Binary | LargeBinary => Codec::Binary,
+            Utf8 => Codec::String,
+            Struct(fields) => {
+                let avro_fields: Vec<AvroField> = fields
+                    .iter()
+                    .map(|fref| arrow_field_to_avro_field(fref.as_ref()))
+                    .collect();
+                Codec::Record(Arc::from(avro_fields))
+            }
+            Dictionary(dict_ty, val_ty) => {
+                if let Int32 = &**dict_ty {
+                    if let Utf8 = &**val_ty {
+                        return Codec::Enum(Arc::from(Vec::new()), Arc::from(Vec::new()));
+                    }
+                }
+                Codec::String
+            }
+            List(item_field) => {
+                let item_codec = arrow_type_to_codec(item_field.data_type());
+                let child_nullability = item_field.is_nullable().then_some(Nullability::NullFirst);
+                let child_dt = AvroDataType {
+                    codec: item_codec,
+                    nullability: child_nullability,
+                    metadata: item_field.metadata().clone(),
+                };
+                Codec::Array(Arc::new(child_dt))
+            }
+            Map(entries_field, _keys_sorted) => {
+                if let Struct(struct_fields) = entries_field.data_type() {
+                    let val_field = &struct_fields[1];
+                    let val_codec = arrow_type_to_codec(val_field.data_type());
+                    let val_nullability = val_field.is_nullable().then_some(Nullability::NullFirst);
+                    let val_dt = AvroDataType {
+                        codec: val_codec,
+                        nullability: val_nullability,
+                        metadata: val_field.metadata().clone(),
+                    };
+                    Codec::Map(Arc::new(val_dt))
+                } else {
+                    Codec::Map(Arc::new(AvroDataType::from_codec(Codec::String)))
+                }
+            }
+            FixedSizeBinary(n) => Codec::Fixed(*n),
+            Decimal128(p, s) => Codec::Decimal(*p as usize, Some(*s as usize), Some(16)),
+            Decimal256(p, s) => Codec::Decimal(*p as usize, Some(*s as usize), Some(32)),
+            Date32 => Codec::Date32,
+            Time32(TimeUnit::Millisecond) => Codec::TimeMillis,
+            Time64(TimeUnit::Microsecond) => Codec::TimeMicros,
+            Timestamp(TimeUnit::Millisecond, Some(tz)) if tz.as_ref() == "UTC" => {
+                Codec::TimestampMillis(true)
+            }
+            Timestamp(TimeUnit::Millisecond, None) => Codec::TimestampMillis(false),
+            Timestamp(TimeUnit::Microsecond, Some(tz)) if tz.as_ref() == "UTC" => {
+                Codec::TimestampMicros(true)
+            }
+            Timestamp(TimeUnit::Microsecond, None) => Codec::TimestampMicros(false),
+            Interval(IntervalUnit::MonthDayNano) => Codec::Duration,
+            _ => Codec::String,
+        }
+    }
 
     #[test]
     fn test_skip_avro_default_null_in_metadata() {
@@ -646,7 +644,7 @@ mod tests {
         let codec = Codec::Fixed(12);
         let dt = codec.data_type();
         match dt {
-            DataType::FixedSizeBinary(n) => assert_eq!(n, 12),
+            FixedSizeBinary(n) => assert_eq!(n, 12),
             _ => panic!("Expected FixedSizeBinary(12)"),
         }
     }
@@ -776,7 +774,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryEnum",
-            Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            Dictionary(Box::new(Int32), Box::new(Utf8)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -784,14 +782,13 @@ mod tests {
 
         let arrow_field = Field::new(
             "DictionaryString",
-            Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Boolean)),
+            Dictionary(Box::new(Utf8), Box::new(Boolean)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         assert!(matches!(avro_field.data_type().codec, Codec::String));
 
-        // Array with nullable items
-        let field = Field::new("Utf8", DataType::Utf8, true);
+        let field = Field::new("Utf8", Utf8, true);
         let arrow_field = Field::new("Array with nullable items", List(Arc::new(field)), true);
         let avro_field = arrow_field_to_avro_field(&arrow_field);
         if let Codec::Array(avro_data_type) = &avro_field.data_type().codec {
@@ -802,10 +799,10 @@ mod tests {
             panic!("Expected Codec::Array");
         }
 
-        let field = Field::new("Utf8", DataType::Utf8, false);
+        let field = Field::new("Utf8", Utf8, false);
         let arrow_field = Field::new(
             "Array with non-nullable items",
-            DataType::List(Arc::new(field)),
+            List(Arc::new(field)),
             false,
         );
         let avro_field = arrow_field_to_avro_field(&arrow_field);
@@ -910,7 +907,6 @@ mod tests {
                 assert_eq!(fields.len(), 1);
                 assert_eq!(fields[0].name(), "f0");
                 let child_dt = fields[0].data_type();
-                // "long" + "null" => NullSecond
                 assert_eq!(child_dt.nullability, Some(Nullability::NullSecond));
                 assert!(matches!(child_dt.codec, Codec::Int64));
             }

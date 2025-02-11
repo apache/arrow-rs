@@ -20,7 +20,6 @@ use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::{Schema, SCHEMA_METADATA_KEY};
 use arrow_schema::ArrowError;
-use std::io::BufRead;
 
 #[derive(Debug)]
 enum HeaderDecoderState {

@@ -77,7 +77,6 @@ impl BlockDecoder {
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
     pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
         let max_read = buf.len();
-
         while !buf.is_empty() {
             match self.state {
                 BlockDecoderState::Count => {
@@ -108,18 +107,15 @@ impl BlockDecoder {
                     buf = &buf[to_read..];
                     self.bytes_remaining -= to_read;
                     if self.bytes_remaining == 0 {
-                        self.bytes_remaining = 16; // Prepare to read the sync marker
+                        self.bytes_remaining = 16;
                         self.state = BlockDecoderState::Sync;
                     }
                 }
                 BlockDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-
-                    // Fill sync bytes from left to right
                     let start = 16 - self.bytes_remaining;
                     let end = start + to_decode;
                     self.in_progress.sync[start..end].copy_from_slice(&buf[..to_decode]);
-
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
@@ -131,7 +127,6 @@ impl BlockDecoder {
                 }
             }
         }
-
         Ok(max_read)
     }
 
@@ -139,7 +134,6 @@ impl BlockDecoder {
     pub fn flush(&mut self) -> Option<Block> {
         match self.state {
             BlockDecoderState::Finished => {
-                // Reset to decode the next block
                 self.state = BlockDecoderState::Count;
                 Some(std::mem::take(&mut self.in_progress))
             }
@@ -184,25 +178,20 @@ mod tests {
     #[test]
     fn test_single_block_full_buffer() {
         let mut decoder = BlockDecoder::default();
-
         let count_encoded = encode_vlq(10);
         let size_encoded = encode_vlq(4);
         let data = vec![1u8, 2, 3, 4];
         let sync_marker = vec![0xAB; 16];
-
         let mut input = Vec::new();
         input.extend_from_slice(&count_encoded);
         input.extend_from_slice(&size_encoded);
         input.extend_from_slice(&data);
         input.extend_from_slice(&sync_marker);
-
         let read = decoder.decode(&input).unwrap();
         assert_eq!(read, input.len());
-
         let block = decoder.flush().expect("Should produce a finished block");
         assert_eq!(block.count, 10);
         assert_eq!(block.data, data);
-
         let expected_sync: [u8; 16] = <[u8; 16]>::try_from(&sync_marker[..16]).unwrap();
         assert_eq!(block.sync, expected_sync);
     }
@@ -210,38 +199,30 @@ mod tests {
     #[test]
     fn test_single_block_partial_buffer() {
         let mut decoder = BlockDecoder::default();
-
         let count_encoded = encode_vlq(2);
         let size_encoded = encode_vlq(3);
         let data = vec![10u8, 20, 30];
         let sync_marker = vec![0xCD; 16];
-
         let mut input = Vec::new();
         input.extend_from_slice(&count_encoded);
         input.extend_from_slice(&size_encoded);
         input.extend_from_slice(&data);
         input.extend_from_slice(&sync_marker);
-
         // Split into 3 parts
         let part1 = &input[0..1];
         let part2 = &input[1..2];
         let part3 = &input[2..];
-
         let read = decoder.decode(part1).unwrap();
         assert_eq!(read, 1);
         assert!(decoder.flush().is_none());
-
         let read = decoder.decode(part2).unwrap();
         assert_eq!(read, 1);
         assert!(decoder.flush().is_none());
-
         let read = decoder.decode(part3).unwrap();
         assert_eq!(read, part3.len());
-
         let block = decoder.flush().expect("Should produce a finished block");
         assert_eq!(block.count, 2);
         assert_eq!(block.data, data);
-
         let expected_sync: [u8; 16] = <[u8; 16]>::try_from(&sync_marker[..16]).unwrap();
         assert_eq!(block.sync, expected_sync);
     }
@@ -249,47 +230,36 @@ mod tests {
     #[test]
     fn test_multiple_blocks_in_one_buffer() {
         let mut decoder = BlockDecoder::default();
-
         // Block1
         let block1_count = encode_vlq(1);
         let block1_size = encode_vlq(2);
         let block1_data = vec![0x01, 0x02];
         let block1_sync = vec![0xAA; 16];
-
         // Block2
         let block2_count = encode_vlq(3);
         let block2_size = encode_vlq(1);
         let block2_data = vec![0x99];
         let block2_sync = vec![0xBB; 16];
-
         let mut input = Vec::new();
         input.extend_from_slice(&block1_count);
         input.extend_from_slice(&block1_size);
         input.extend_from_slice(&block1_data);
         input.extend_from_slice(&block1_sync);
-
         input.extend_from_slice(&block2_count);
         input.extend_from_slice(&block2_size);
         input.extend_from_slice(&block2_data);
         input.extend_from_slice(&block2_sync);
-
-        // Decode once
         let read1 = decoder.decode(&input).unwrap();
-
         let block1 = decoder.flush().expect("First block should be complete");
         assert_eq!(block1.count, 1);
         assert_eq!(block1.data, block1_data);
-
         let expected_sync1: [u8; 16] = <[u8; 16]>::try_from(&block1_sync[..16]).unwrap();
         assert_eq!(block1.sync, expected_sync1);
-
-        // Decode remainder for block2
         let remainder = &input[read1..];
         decoder.decode(remainder).unwrap();
         let block2 = decoder.flush().expect("Second block should be complete");
         assert_eq!(block2.count, 3);
         assert_eq!(block2.data, block2_data);
-
         let expected_sync2: [u8; 16] = <[u8; 16]>::try_from(&block2_sync[..16]).unwrap();
         assert_eq!(block2.sync, expected_sync2);
     }
@@ -297,14 +267,11 @@ mod tests {
     #[test]
     fn test_negative_count_should_error() {
         let mut decoder = BlockDecoder::default();
-
         let bad_count = encode_vlq(-1);
         let size = encode_vlq(5);
-
         let mut input = Vec::new();
         input.extend_from_slice(&bad_count);
         input.extend_from_slice(&size);
-
         let err = decoder.decode(&input).unwrap_err();
         match err {
             ArrowError::ParseError(msg) => {
@@ -320,14 +287,11 @@ mod tests {
     #[test]
     fn test_negative_size_should_error() {
         let mut decoder = BlockDecoder::default();
-
         let count = encode_vlq(5);
         let bad_size = encode_vlq(-10);
-
         let mut input = Vec::new();
         input.extend_from_slice(&count);
         input.extend_from_slice(&bad_size);
-
         let err = decoder.decode(&input).unwrap_err();
         match err {
             ArrowError::ParseError(msg) => {
@@ -343,36 +307,26 @@ mod tests {
     #[test]
     fn test_partial_sync_across_multiple_calls() {
         let mut decoder = BlockDecoder::default();
-
-        // count=1, size=2, data=[0x01,0x02], sync=[0xCC;16]
         let count_encoded = encode_vlq(1);
         let size_encoded = encode_vlq(2);
         let data = vec![0x01, 0x02];
         let sync_marker = vec![0xCC; 16];
-
         let mut input = Vec::new();
         input.extend_from_slice(&count_encoded);
         input.extend_from_slice(&size_encoded);
         input.extend_from_slice(&data);
         input.extend_from_slice(&sync_marker);
-
-        // We'll feed all but the last 4 sync bytes first
         let split_point = input.len() - 4;
         let part1 = &input[..split_point];
         let part2 = &input[split_point..];
-
         let read1 = decoder.decode(part1).unwrap();
         assert_eq!(read1, part1.len());
-        // Not finished yet
         assert!(decoder.flush().is_none());
-
         let read2 = decoder.decode(part2).unwrap();
         assert_eq!(read2, part2.len());
-
         let block = decoder.flush().expect("Block should be complete now");
         assert_eq!(block.count, 1);
         assert_eq!(block.data, data);
-
         let expected_sync: [u8; 16] = <[u8; 16]>::try_from(&sync_marker[..16]).unwrap();
         assert_eq!(block.sync, expected_sync, "Should match [0xCC; 16]");
     }
@@ -380,31 +334,22 @@ mod tests {
     #[test]
     fn test_already_finished_state() {
         let mut decoder = BlockDecoder::default();
-
-        // count=2, size=1, data=[0xAB], sync=[0xFF;16]
         let count_encoded = encode_vlq(2);
         let size_encoded = encode_vlq(1);
         let data = vec![0xAB];
         let sync_marker = vec![0xFF; 16];
-
         let mut input = Vec::new();
         input.extend_from_slice(&count_encoded);
         input.extend_from_slice(&size_encoded);
         input.extend_from_slice(&data);
         input.extend_from_slice(&sync_marker);
-
         let read = decoder.decode(&input).unwrap();
         assert_eq!(read, input.len());
-
-        // Now we should have a block
         let block = decoder.flush().expect("Should have a block");
         assert_eq!(block.count, 2);
         assert_eq!(block.data, data);
-
         let expected_sync: [u8; 16] = <[u8; 16]>::try_from(&sync_marker[..16]).unwrap();
         assert_eq!(block.sync, expected_sync);
-
-        // Attempt to decode again with empty
         let read2 = decoder.decode(&[]).unwrap();
         assert_eq!(read2, 0);
         assert!(decoder.flush().is_none());

@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use crate::reader::vlq::read_varint;
 use arrow_schema::ArrowError;
 
@@ -141,19 +140,6 @@ impl<'a> AvroCursor<'a> {
 mod tests {
     use super::*;
     use arrow_schema::ArrowError;
-
-    fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        let mut bytes = vec![];
-        let mut chars = hex.chars().collect::<Vec<_>>();
-        if chars.len() % 2 != 0 {
-            chars.insert(0, '0');
-        }
-        for chunk in chars.chunks(2) {
-            let s = format!("{}{}", chunk[0], chunk[1]);
-            bytes.push(u8::from_str_radix(&s, 16).unwrap());
-        }
-        bytes
-    }
 
     #[test]
     fn test_new_and_position() {
