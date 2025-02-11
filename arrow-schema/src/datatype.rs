@@ -1180,14 +1180,11 @@ mod tests {
     #[test]
     fn test_display_list_with_metadata() {
         let mut field = Field::new_list_field(DataType::Int32, true);
-        let metadata = HashMap::from([
-            ("foo1".to_string(), "value1".to_string()),
-            ("foo2".to_string(), "value2".to_string()),
-        ]);
+        let metadata = HashMap::from([("foo1".to_string(), "value1".to_string())]);
         field.set_metadata(metadata);
         let list_data_type = DataType::List(Arc::new(field));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(Int32;N, field = 'item', metadata = {\"foo2\": \"value2\", \"foo1\": \"value1\"})";
+        let expected_string = "List(Int32;N, field = 'item', metadata = {\"foo1\": \"value1\"})";
 
         assert_eq!(list_data_type_string, expected_string);
     }
