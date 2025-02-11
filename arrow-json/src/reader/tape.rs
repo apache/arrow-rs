@@ -545,6 +545,17 @@ impl TapeDecoder {
         Ok(())
     }
 
+    /// The number of buffered rows, including the partially decoded row (if any).
+    pub fn num_buffered_rows(&self) -> usize {
+        self.cur_row
+    }
+
+    /// True if the decoder is part way through decoding a row. If so, calling [`Self::finish`]
+    /// would return an error.
+    pub fn has_partial_row(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
     /// Finishes the current [`Tape`]
     pub fn finish(&self) -> Result<Tape<'_>, ArrowError> {
         if let Some(b) = self.stack.last() {
@@ -726,8 +737,12 @@ mod tests {
         "#;
         let mut decoder = TapeDecoder::new(16, 2);
         decoder.decode(a.as_bytes()).unwrap();
+        assert!(!decoder.has_partial_row());
+        assert_eq!(decoder.num_buffered_rows(), 7);
 
         let finished = decoder.finish().unwrap();
+        assert!(!decoder.has_partial_row());
+        assert_eq!(decoder.num_buffered_rows(), 7); // didn't call clear() yet
         assert_eq!(
             finished.elements,
             &[
@@ -820,7 +835,11 @@ mod tests {
                 0, 5, 10, 13, 14, 17, 19, 22, 25, 28, 29, 30, 31, 32, 32, 32, 33, 34, 35, 41, 47,
                 52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77
             ]
-        )
+        );
+
+        decoder.clear();
+        assert!(!decoder.has_partial_row());
+        assert_eq!(decoder.num_buffered_rows(), 0);
     }
 
     #[test]
@@ -874,6 +893,8 @@ mod tests {
         // Test truncation
         let mut decoder = TapeDecoder::new(16, 2);
         decoder.decode(b"{\"he").unwrap();
+        assert!(decoder.has_partial_row());
+        assert_eq!(decoder.num_buffered_rows(), 1);
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading string");
 
