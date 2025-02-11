@@ -122,10 +122,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `K`
     pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Self {
-        let field: FieldRef = field.into();
-        assert!(!field.is_nullable(), "Keys field must not be nullable");
         Self {
-            key_field: Some(field),
+            key_field: Some(field.into()),
             ..self
         }
     }
@@ -214,7 +212,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         );
 
         let keys_field = match &self.key_field {
-            Some(f) => f.clone(),
+            Some(f) => {
+                assert!(!f.is_nullable(), "Keys field must not be nullable");
+                f.clone()
+            }
             None => Arc::new(Field::new(
                 self.field_names.key.as_str(),
                 keys_arr.data_type().clone(),
@@ -440,7 +441,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "Keys field must not be nullable")]
     fn test_with_nullable_keys_field() {
-        MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
             .with_keys_field(Arc::new(Field::new("keys", DataType::Int32, true)));
+
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+
+        builder.finish();
     }
 }
