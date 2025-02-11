@@ -117,10 +117,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// By default, a nullable field is created with the name `keys`
     ///
-    /// Panics if the given field is nullable as map keys are not allowed to be null
-    ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
-    /// field's data type does not match that of `K`
+    /// field's data type does not match that of `K` or the field is nullable
     pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Self {
         Self {
             key_field: Some(field.into()),
