@@ -297,7 +297,6 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                         capacity,
                     )
                     .with_keys_field(fields[0].clone())
-                    .expect("Illegal key field")
                     .with_values_field(fields[1].clone()),
                 )
             }

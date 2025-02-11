@@ -121,17 +121,13 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `K`
-    pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Result<Self, ArrowError> {
+    pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Self {
         let field: FieldRef = field.into();
-        if field.is_nullable() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Key field must not be nullable: {field:?}"
-            )));
-        }
-        Ok(Self {
+        assert!(!field.is_nullable(), "Keys field must not be nullable");
+        Self {
             key_field: Some(field),
             ..self
-        })
+        }
     }
 
     /// Override the field passed to [`MapBuilder::new`]
@@ -412,8 +408,7 @@ mod tests {
             Field::new("keys", DataType::Int32, false).with_metadata(key_metadata.clone()),
         );
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(key_field.clone())
-            .unwrap();
+            .with_keys_field(key_field.clone());
         builder.keys().append_value(1);
         builder.values().append_value(2);
         builder.append(true).unwrap();
@@ -443,10 +438,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Keys field must not be nullable")]
     fn test_with_nullable_keys_field() {
-        let result = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+        MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
             .with_keys_field(Arc::new(Field::new("keys", DataType::Int32, true)));
-
-        assert!(result.is_err());
     }
 }
