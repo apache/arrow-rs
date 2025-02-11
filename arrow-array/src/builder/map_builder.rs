@@ -117,7 +117,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     ///
     /// By default, a nullable field is created with the name `keys`
     ///
-    /// Returns an error if the given field is nullable.
+    /// Panics if the given field is nullable as map keys are not allowed to be null
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `K`
