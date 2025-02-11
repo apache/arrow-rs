@@ -25,6 +25,8 @@ pub(crate) trait DecimalCast: Sized {
     fn to_i256(self) -> Option<i256>;
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
+
+    fn from_f64(n: f64) -> Option<Self>;
 }
 
 impl DecimalCast for i128 {
@@ -37,6 +39,10 @@ impl DecimalCast for i128 {
     }
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i128()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i128()
     }
 }
@@ -52,6 +58,10 @@ impl DecimalCast for i256 {
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
         n.to_i256()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
+        i256::from_f64(n)
     }
 }
 
@@ -167,8 +177,7 @@ where
     let array: PrimitiveArray<T> =
         if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
-        } else if input_scale < output_scale {
-            // the scale doesn't change, but precision may change and cause overflow
+        } else if input_scale <= output_scale {
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
@@ -464,7 +473,7 @@ where
     Ok(Arc::new(result))
 }
 
-pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
+pub(crate) fn cast_floating_point_to_decimal<T: ArrowPrimitiveType, D>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: i8,
@@ -472,78 +481,33 @@ pub(crate) fn cast_floating_point_to_decimal128<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
         array
-            .unary_opt::<_, Decimal128Type>(|v| {
-                (mul * v.as_())
-                    .round()
-                    .to_i128()
-                    .filter(|v| Decimal128Type::is_valid_decimal_precision(*v, precision))
+            .unary_opt::<_, D>(|v| {
+                D::Native::from_f64((mul * v.as_()).round())
+                    .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
         array
-            .try_unary::<_, Decimal128Type, _>(|v| {
-                (mul * v.as_())
-                    .round()
-                    .to_i128()
+            .try_unary::<_, D, _>(|v| {
+                D::Native::from_f64((mul * v.as_()).round())
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            Decimal128Type::PREFIX,
+                            D::PREFIX,
                             precision,
                             scale,
                             v
                         ))
                     })
-                    .and_then(|v| {
-                        Decimal128Type::validate_decimal_precision(v, precision).map(|_| v)
-                    })
-            })?
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
-    }
-}
-
-pub(crate) fn cast_floating_point_to_decimal256<T: ArrowPrimitiveType>(
-    array: &PrimitiveArray<T>,
-    precision: u8,
-    scale: i8,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
-{
-    let mul = 10_f64.powi(scale as i32);
-
-    if cast_options.safe {
-        array
-            .unary_opt::<_, Decimal256Type>(|v| {
-                i256::from_f64((v.as_() * mul).round())
-                    .filter(|v| Decimal256Type::is_valid_decimal_precision(*v, precision))
-            })
-            .with_precision_and_scale(precision, scale)
-            .map(|a| Arc::new(a) as ArrayRef)
-    } else {
-        array
-            .try_unary::<_, Decimal256Type, _>(|v| {
-                i256::from_f64((v.as_() * mul).round())
-                    .ok_or_else(|| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            Decimal256Type::PREFIX,
-                            precision,
-                            scale,
-                            v
-                        ))
-                    })
-                    .and_then(|v| {
-                        Decimal256Type::validate_decimal_precision(v, precision).map(|_| v)
-                    })
+                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)

@@ -66,7 +66,7 @@ pub struct ListPrefix {
 #[serde(rename_all = "PascalCase")]
 pub struct ListContents {
     pub key: String,
-    pub size: usize,
+    pub size: u64,
     pub last_modified: DateTime<Utc>,
     #[serde(rename = "ETag")]
     pub e_tag: Option<String>,

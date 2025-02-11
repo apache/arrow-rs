@@ -47,4 +47,17 @@ default = []
 lz4 = ["lz4_flex"]
 
 [dev-dependencies]
+criterion = "0.5.1"
 tempfile = "3.3"
+tokio = "1.43.0"
+# used in benches
+memmap2 = "0.9.3"
+bytes = "1.9"
+
+[[bench]]
+name = "ipc_writer"
+harness = false
+
+[[bench]]
+name = "ipc_reader"
+harness = false

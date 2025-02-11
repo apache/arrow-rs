@@ -314,6 +314,7 @@ mod tests {
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
         multipart_race_condition(&integration, false).await;
+        multipart_out_of_order(&integration).await;
         signing(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;

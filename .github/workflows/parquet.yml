@@ -97,6 +97,8 @@ jobs:
         run: cargo check -p parquet --no-default-features
       - name: Check compilation --no-default-features --features arrow
         run: cargo check -p parquet --no-default-features --features arrow
+      - name: Check compilation --no-default-features --features simdutf8
+        run: cargo check -p parquet --no-default-features --features simdutf8
       - name: Check compilation --no-default-features --all-features
         run: cargo check -p parquet --all-features
       - name: Check compilation --all-targets

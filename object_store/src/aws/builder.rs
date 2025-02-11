@@ -427,7 +427,11 @@ impl AmazonS3Builder {
 
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
-    /// Variables extracted from environment:
+    /// All environment variables starting with `AWS_` will be evaluated. Names must
+    /// match acceptable input to [`AmazonS3ConfigKey::from_str`]. Only upper-case environment
+    /// variables are accepted.
+    ///
+    /// Some examples of variables extracted from environment:
     /// * `AWS_ACCESS_KEY_ID` -> access_key_id
     /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
     /// * `AWS_DEFAULT_REGION` -> region
@@ -435,6 +439,7 @@ impl AmazonS3Builder {
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
+    /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;

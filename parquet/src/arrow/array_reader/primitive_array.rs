@@ -270,6 +270,59 @@ where
 
                 Arc::new(array) as ArrayRef
             }
+            ArrowType::Dictionary(_, value_type) => match value_type.as_ref() {
+                ArrowType::Decimal128(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i as i128)
+                            as Decimal128Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(|i| i as i128)
+                            as Decimal128Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                ArrowType::Decimal256(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(i256::from)
+                            as Decimal256Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(i256::from)
+                            as Decimal256Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                _ => arrow_cast::cast(&array, target_type)?,
+            },
             _ => arrow_cast::cast(&array, target_type)?,
         };
 
@@ -308,7 +361,7 @@ mod tests {
     use arrow_array::{Array, Date32Array, PrimitiveArray};
 
     use arrow::datatypes::DataType::{Date32, Decimal128};
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::collections::VecDeque;
 
     #[allow(clippy::too_many_arguments)]

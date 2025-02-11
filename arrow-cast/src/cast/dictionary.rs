@@ -214,50 +214,20 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         UInt16 => pack_numeric_to_dictionary::<K, UInt16Type>(array, dict_value_type, cast_options),
         UInt32 => pack_numeric_to_dictionary::<K, UInt32Type>(array, dict_value_type, cast_options),
         UInt64 => pack_numeric_to_dictionary::<K, UInt64Type>(array, dict_value_type, cast_options),
-        Decimal128(p, s) => {
-            let dict = pack_numeric_to_dictionary::<K, Decimal128Type>(
-                array,
-                dict_value_type,
-                cast_options,
-            )?;
-            let dict = dict
-                .as_dictionary::<K>()
-                .downcast_dict::<Decimal128Array>()
-                .ok_or_else(|| {
-                    ArrowError::ComputeError(
-                        "Internal Error: Cannot cast dict to Decimal128Array".to_string(),
-                    )
-                })?;
-            let value = dict.values().clone();
-            // Set correct precision/scale
-            let value = value.with_precision_and_scale(p, s)?;
-            Ok(Arc::new(DictionaryArray::<K>::try_new(
-                dict.keys().clone(),
-                Arc::new(value),
-            )?))
-        }
-        Decimal256(p, s) => {
-            let dict = pack_numeric_to_dictionary::<K, Decimal256Type>(
-                array,
-                dict_value_type,
-                cast_options,
-            )?;
-            let dict = dict
-                .as_dictionary::<K>()
-                .downcast_dict::<Decimal256Array>()
-                .ok_or_else(|| {
-                    ArrowError::ComputeError(
-                        "Internal Error: Cannot cast dict to Decimal256Array".to_string(),
-                    )
-                })?;
-            let value = dict.values().clone();
-            // Set correct precision/scale
-            let value = value.with_precision_and_scale(p, s)?;
-            Ok(Arc::new(DictionaryArray::<K>::try_new(
-                dict.keys().clone(),
-                Arc::new(value),
-            )?))
-        }
+        Decimal128(p, s) => pack_decimal_to_dictionary::<K, Decimal128Type>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
+        Decimal256(p, s) => pack_decimal_to_dictionary::<K, Decimal256Type>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
         Float16 => {
             pack_numeric_to_dictionary::<K, Float16Type>(array, dict_value_type, cast_options)
         }
@@ -357,6 +327,36 @@ where
         }
     }
     Ok(Arc::new(b.finish()))
+}
+
+pub(crate) fn pack_decimal_to_dictionary<K, D>(
+    array: &dyn Array,
+    dict_value_type: &DataType,
+    precision: u8,
+    scale: i8,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+    D: DecimalType + ArrowPrimitiveType,
+{
+    let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
+    let dict = dict
+        .as_dictionary::<K>()
+        .downcast_dict::<PrimitiveArray<D>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!(
+                "Internal Error: Cannot cast dict to {}Array",
+                D::PREFIX
+            ))
+        })?;
+    let value = dict.values().clone();
+    // Set correct precision/scale
+    let value = value.with_precision_and_scale(precision, scale)?;
+    Ok(Arc::new(DictionaryArray::<K>::try_new(
+        dict.keys().clone(),
+        Arc::new(value),
+    )?))
 }
 
 pub(crate) fn string_view_to_dictionary<K, O: OffsetSizeTrait>(

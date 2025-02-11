@@ -19,6 +19,12 @@ use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for building [`BooleanBuffer`]s for representing nulls
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
@@ -26,7 +32,11 @@ pub struct BooleanBufferBuilder {
 }
 
 impl BooleanBufferBuilder {
-    /// Creates a new `BooleanBufferBuilder`
+    /// Creates a new `BooleanBufferBuilder` with sufficient space for
+    /// `capacity` bits (not bytes).
+    ///
+    /// The capacity is rounded up to the nearest multiple of 8 for the
+    /// allocation.
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
@@ -73,7 +83,24 @@ impl BooleanBufferBuilder {
         self.len == 0
     }
 
-    /// Returns the capacity of the buffer
+    /// Returns the capacity of the buffer, in bits (not bytes)
+    ///
+    /// Note this
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::builder::BooleanBufferBuilder;
+    /// // empty requires 0 bytes
+    /// let b = BooleanBufferBuilder::new(0);
+    /// assert_eq!(0, b.capacity());
+    /// // Creating space for 1 bit results in 64 bytes (space for 512 bits)
+    /// // (64 is the minimum allocation size for 64 bit architectures)
+    /// let mut b = BooleanBufferBuilder::new(1);
+    /// assert_eq!(512, b.capacity());
+    /// // 1000 bits requires 128 bytes (space for 1024 bits)
+    /// b.append_n(1000, true);
+    /// assert_eq!(1024, b.capacity());
+    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.capacity() * 8
@@ -389,7 +416,7 @@ mod tests {
 
         let mut buffer = BooleanBufferBuilder::new(12);
         let mut all_bools = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let src_len = 32;
         let (src, compacted_src) = {

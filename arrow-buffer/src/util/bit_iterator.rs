@@ -93,6 +93,8 @@ impl DoubleEndedIterator for BitIterator<'_> {
 /// Returns `(usize, usize)` each representing an interval where the corresponding
 /// bits in the provides mask are set
 ///
+/// the first value is the start of the range (inclusive) and the second value is the end of the range (exclusive)
+///
 #[derive(Debug)]
 pub struct BitSliceIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
