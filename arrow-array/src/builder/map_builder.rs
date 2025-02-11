@@ -448,4 +448,17 @@ mod tests {
 
         builder.finish();
     }
+
+    #[test]
+    #[should_panic(expected = "Incorrect datatype")]
+    fn test_keys_field_type_mismatch() {
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+            .with_keys_field(Arc::new(Field::new("keys", DataType::Utf8, false)));
+
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+
+        builder.finish();
+    }
 }
