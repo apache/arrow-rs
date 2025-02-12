@@ -115,7 +115,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Override the field passed to [`MapBuilder::new`]
     ///
-    /// By default, a nullable field is created with the name `keys`
+    /// By default, a non-nullable field is created with the name `keys`
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `K` or the field is nullable
