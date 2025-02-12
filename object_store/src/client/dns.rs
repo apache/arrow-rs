@@ -15,45 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::str::FromStr;
+use std::net::ToSocketAddrs;
 
-use hyper_util::client::legacy::connect::dns::{
-    GaiResolver as HyperGaiResolver, Name as HyperName,
-};
 use rand::prelude::SliceRandom;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use tower_service::Service;
+use tokio::task::JoinSet;
 
 type DynErr = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug)]
-pub(crate) struct ShuffleResolver(HyperGaiResolver);
-
-impl Default for ShuffleResolver {
-    fn default() -> Self {
-        Self(HyperGaiResolver::new())
-    }
-}
+pub(crate) struct ShuffleResolver;
 
 impl Resolve for ShuffleResolver {
     fn resolve(&self, name: Name) -> Resolving {
-        let inner = self.0.clone();
-
         Box::pin(async move {
-            let mut inner = inner;
+            // use `JoinSet` to propagate cancelation
+            let mut tasks = JoinSet::new();
+            tasks.spawn_blocking(move || {
+                let it = (name.as_str(), 0).to_socket_addrs()?;
+                let mut addrs = it.collect::<Vec<_>>();
 
-            // convert name reqwest -> hyper
-            let name = HyperName::from_str(name.as_str()).map_err(|err| Box::new(err) as DynErr)?;
+                addrs.shuffle(&mut rand::rng());
 
-            let mut addr = inner
-                .call(name)
+                Ok(Box::new(addrs.into_iter()) as Addrs)
+            });
+
+            tasks
+                .join_next()
                 .await
+                .expect("spawned on task")
                 .map_err(|err| Box::new(err) as DynErr)?
-                .collect::<Vec<_>>();
-
-            addr.shuffle(&mut rand::rng());
-
-            Ok(Box::new(addr.into_iter()) as Addrs)
         })
     }
 }

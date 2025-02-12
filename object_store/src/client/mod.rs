@@ -690,7 +690,7 @@ impl ClientOptions {
         builder = builder.no_gzip();
 
         if self.randomize_addresses.get()? {
-            builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver::default()));
+            builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
         }
 
         builder
