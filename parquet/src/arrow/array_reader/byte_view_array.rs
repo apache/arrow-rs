@@ -329,7 +329,7 @@ impl ByteViewArrayDecoderPlain {
 
         let to_read = len.min(self.max_remaining_values);
 
-        let buf: &[u8] = self.buf.as_ref();
+        let buf = self.buf.as_ref();
         let mut read = 0;
         output.views.reserve(to_read);
 
@@ -405,7 +405,7 @@ impl ByteViewArrayDecoderPlain {
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
-        let buf: &[u8] = self.buf.as_ref();
+        let buf = self.buf.as_ref();
 
         while self.offset < self.buf.len() && skip != to_skip {
             if self.offset + 4 > buf.len() {

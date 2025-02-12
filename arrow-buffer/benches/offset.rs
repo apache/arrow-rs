@@ -24,7 +24,7 @@ const SIZE: usize = 1024;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
-    let lengths: Vec<usize> = black_box((0..SIZE).map(|_| rng.random_range(0..40)).collect());
+    let lengths: Vec<usize> = black_box((0..SIZE).map(|_| rng.gen_range(0..40)).collect());
 
     c.bench_function("OffsetBuffer::from_lengths", |b| {
         b.iter(|| OffsetBuffer::<i32>::from_lengths(lengths.iter().copied()));

@@ -840,7 +840,7 @@ impl ToPrimitive for i256 {
 mod tests {
     use super::*;
     use num::Signed;
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1091,16 +1091,16 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_i256_fuzz() {
-        let mut rng = rng();
+        let mut rng = thread_rng();
 
         for _ in 0..1000 {
             let mut l = [0_u8; 32];
-            let len = rng.random_range(0..32);
-            l.iter_mut().take(len).for_each(|x| *x = rng.random());
+            let len = rng.gen_range(0..32);
+            l.iter_mut().take(len).for_each(|x| *x = rng.gen());
 
             let mut r = [0_u8; 32];
-            let len = rng.random_range(0..32);
-            r.iter_mut().take(len).for_each(|x| *x = rng.random());
+            let len = rng.gen_range(0..32);
+            r.iter_mut().take(len).for_each(|x| *x = rng.gen());
 
             test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
         }

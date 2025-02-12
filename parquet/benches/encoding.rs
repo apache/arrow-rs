@@ -86,12 +86,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut d128s = Vec::new();
     for _ in 0..n {
         f16s.push(FixedLenByteArray::from(
-            f16::from_f32(rng.random::<f32>()).to_le_bytes().to_vec(),
+            f16::from_f32(rng.gen::<f32>()).to_le_bytes().to_vec(),
         ));
-        f32s.push(rng.random::<f32>());
-        f64s.push(rng.random::<f64>());
+        f32s.push(rng.gen::<f32>());
+        f64s.push(rng.gen::<f64>());
         d128s.push(FixedLenByteArray::from(
-            rng.random::<i128>().to_be_bytes().to_vec(),
+            rng.gen::<i128>().to_be_bytes().to_vec(),
         ));
     }
 

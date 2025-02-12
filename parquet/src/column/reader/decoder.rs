@@ -484,7 +484,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
 mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
-    use rand::{prelude::*, rng};
+    use rand::prelude::*;
 
     #[test]
     fn test_skip_padding() {
@@ -509,9 +509,9 @@ mod tests {
     #[test]
     fn test_skip_rep_levels() {
         for _ in 0..10 {
-            let mut rng = rng();
+            let mut rng = thread_rng();
             let total_len = 10000_usize;
-            let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.random_range(0..5)).collect();
+            let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.gen_range(0..5)).collect();
             encoded[0] = 0;
             let mut encoder = RleEncoder::new(3, 1024);
             for v in &encoded {
@@ -526,8 +526,8 @@ mod tests {
             let mut remaining_records = total_records;
             let mut remaining_levels = encoded.len();
             loop {
-                let skip = rng.random_bool(0.5);
-                let records = rng.random_range(1..=remaining_records.min(5));
+                let skip = rng.gen_bool(0.5);
+                let records = rng.gen_range(1..=remaining_records.min(5));
                 let (records_read, levels_read) = if skip {
                     decoder.skip_rep_levels(records, remaining_levels).unwrap()
                 } else {
