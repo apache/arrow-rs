@@ -361,7 +361,7 @@ mod tests {
     use arrow_array::{Array, Date32Array, PrimitiveArray};
 
     use arrow::datatypes::DataType::{Date32, Decimal128};
-    use rand::distr::uniform::SampleUniform;
+    use rand::distributions::uniform::SampleUniform;
     use std::collections::VecDeque;
 
     #[allow(clippy::too_many_arguments)]

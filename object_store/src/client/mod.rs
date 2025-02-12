@@ -19,6 +19,8 @@
 
 pub(crate) mod backoff;
 
+mod dns;
+
 #[cfg(test)]
 pub(crate) mod mock_server;
 
@@ -110,6 +112,10 @@ pub enum ClientConfigKey {
     ProxyCaCertificate,
     /// List of hosts that bypass proxy
     ProxyExcludes,
+    /// Randomize order addresses that the DNS resolution yields.
+    ///
+    /// This will spread the connections accross more servers.
+    RandomizeAddresses,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -137,6 +143,7 @@ impl AsRef<str> for ClientConfigKey {
             Self::ProxyUrl => "proxy_url",
             Self::ProxyCaCertificate => "proxy_ca_certificate",
             Self::ProxyExcludes => "proxy_excludes",
+            Self::RandomizeAddresses => "randomize_addresses",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -163,6 +170,7 @@ impl FromStr for ClientConfigKey {
             "proxy_url" => Ok(Self::ProxyUrl),
             "proxy_ca_certificate" => Ok(Self::ProxyCaCertificate),
             "proxy_excludes" => Ok(Self::ProxyExcludes),
+            "randomize_addresses" => Ok(Self::RandomizeAddresses),
             "timeout" => Ok(Self::Timeout),
             "user_agent" => Ok(Self::UserAgent),
             _ => Err(super::Error::UnknownConfigurationKey {
@@ -245,6 +253,7 @@ pub struct ClientOptions {
     http2_max_frame_size: Option<ConfigValue<u32>>,
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
+    randomize_addresses: ConfigValue<bool>,
 }
 
 impl Default for ClientOptions {
@@ -280,6 +289,7 @@ impl Default for ClientOptions {
             // https://github.com/apache/arrow-rs/issues/5194
             http1_only: true.into(),
             http2_only: Default::default(),
+            randomize_addresses: true.into(),
         }
     }
 }
@@ -322,6 +332,9 @@ impl ClientOptions {
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
             ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate = Some(value.into()),
             ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
+            ClientConfigKey::RandomizeAddresses => {
+                self.randomize_addresses.parse(value);
+            }
             ClientConfigKey::Timeout => self.timeout = Some(ConfigValue::Deferred(value.into())),
             ClientConfigKey::UserAgent => {
                 self.user_agent = Some(ConfigValue::Deferred(value.into()))
@@ -358,6 +371,7 @@ impl ClientOptions {
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
             ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
             ClientConfigKey::ProxyExcludes => self.proxy_excludes.clone(),
+            ClientConfigKey::RandomizeAddresses => Some(self.randomize_addresses.to_string()),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -674,6 +688,10 @@ impl ClientOptions {
         // Reqwest will remove the `Content-Length` header if it is configured to
         // transparently decompress the body via the non-default `gzip` feature.
         builder = builder.no_gzip();
+
+        if self.randomize_addresses.get()? {
+            builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
+        }
 
         builder
             .https_only(!self.allow_http.get()?)

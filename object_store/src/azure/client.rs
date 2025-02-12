@@ -561,7 +561,7 @@ impl AzureClient {
         _part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let part_idx = u128::from_be_bytes(rand::rng().random());
+        let part_idx = u128::from_be_bytes(rand::thread_rng().gen());
         let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 

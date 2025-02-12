@@ -61,7 +61,7 @@ fn create_mixed(len: usize) -> RecordBatch {
 
 fn create_nulls(len: usize) -> NullBuffer {
     let mut rng = seedable_rng();
-    BooleanBuffer::from_iter((0..len).map(|_| rng.random_bool(0.2))).into()
+    BooleanBuffer::from_iter((0..len).map(|_| rng.gen_bool(0.2))).into()
 }
 
 fn create_offsets(len: usize) -> (usize, OffsetBuffer<i32>) {
@@ -70,7 +70,7 @@ fn create_offsets(len: usize) -> (usize, OffsetBuffer<i32>) {
     let mut offsets = Vec::with_capacity(len + 1);
     offsets.push(0);
     for _ in 0..len {
-        let len = rng.random_range(0..10);
+        let len = rng.gen_range(0..10);
         offsets.push(last_offset + len);
         last_offset += len;
     }
