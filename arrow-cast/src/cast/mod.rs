@@ -4230,6 +4230,48 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_with_large_date_to_date32() {
+        let array = Arc::new(StringArray::from(vec![
+            Some("+10999-12-31"),
+            Some("-0010-02-28"),
+            Some("0010-02-28"),
+            Some("0000-01-01"),
+            Some("-0000-01-01"),
+            Some("-0001-01-01"),
+        ])) as ArrayRef;
+        let to_type = DataType::Date32;
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<Date32Type>();
+        assert_eq!(3298139, c.value(0)); // 10999-12-31
+        assert_eq!(-723122, c.value(1)); // -0010-02-28
+        assert_eq!(-715817, c.value(2)); // 0010-02-28
+        assert_eq!(c.value(3), c.value(4)); // Expect 0000-01-01 and -0000-01-01 to be parsed the same
+        assert_eq!(-719528, c.value(3)); // 0000-01-01
+        assert_eq!(-719528, c.value(4)); // -0000-01-01
+        assert_eq!(-719893, c.value(5)); // -0001-01-01
+    }
+
+    #[test]
+    fn test_cast_invalid_string_with_large_date_to_date32() {
+        // Large dates need to be prefixed with a + or - sign, otherwise they are not parsed correctly
+        let array = Arc::new(StringArray::from(vec![Some("10999-12-31")])) as ArrayRef;
+        let to_type = DataType::Date32;
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let err = cast_with_options(&array, &to_type, &options).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Cannot cast string '10999-12-31' to value of Date32 type"
+        );
+    }
+
+    #[test]
     fn test_cast_string_format_yyyymmdd_to_date32() {
         let a0 = Arc::new(StringViewArray::from(vec![
             Some("2020-12-25"),
