@@ -26,15 +26,13 @@
 **Implemented enhancements:**
 
 - Casting from Utf8View to Dict\(k, Utf8View\) [\#7114](https://github.com/apache/arrow-rs/issues/7114)
-- object\_store: GCSObjectStore should derive Clone [\#7113](https://github.com/apache/arrow-rs/issues/7113)
-- Support creating map arrays with key metadata [\#7100](https://github.com/apache/arrow-rs/issues/7100)
+- Support creating map arrays with key metadata [\#7100](https://github.com/apache/arrow-rs/issues/7100) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[parquet\] Print Parquet BasicTypeInfo id when present [\#7081](https://github.com/apache/arrow-rs/issues/7081) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Add arrow-ipc benchmarks for the IPC reader and writer [\#6968](https://github.com/apache/arrow-rs/issues/6968) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- NullBufferBuilder::allocated\_size Returns Size in Bits [\#7121](https://github.com/apache/arrow-rs/issues/7121)
-- Support casting strings to Date32 that contain large dates [\#7073](https://github.com/apache/arrow-rs/issues/7073)
+- NullBufferBuilder::allocated\_size Returns Size in Bits [\#7121](https://github.com/apache/arrow-rs/issues/7121) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Regression in 54.0.0\]. Decimal cast to smaller precision gives invalid \(off-by-one\) result in some cases [\#7069](https://github.com/apache/arrow-rs/issues/7069) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Minor: Fix deprecated note to point to the correct const [\#7067](https://github.com/apache/arrow-rs/issues/7067) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - incorrect error message for reading definition levels [\#7056](https://github.com/apache/arrow-rs/issues/7056) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
