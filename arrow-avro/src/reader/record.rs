@@ -21,7 +21,6 @@ use arrow_array::builder::{Decimal128Builder, Decimal256Builder, PrimitiveBuilde
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
-use arrow_data::ArrayData;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
     Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
@@ -74,21 +73,16 @@ impl RecordDecoder {
         Ok(cursor.position())
     }
 
-    /// Flush into a [`RecordBatch`].
+    /// Flush into a [`RecordBatch`],
     ///
-    /// - Flush each `Decoder` => `Arc<dyn Array>`
-    /// - Sanitize offsets in each final array => `sanitize_array_offsets(...)`
+    /// We collect arrays from each `Decoder` and build a new [`RecordBatch`].
     pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let arrays = self
             .fields
             .iter_mut()
             .map(|d| d.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
-        let sanitized_cols = arrays
-            .into_iter()
-            .map(sanitize_array_offsets)
-            .collect::<Result<Vec<_>, _>>()?;
-        RecordBatch::try_new(self.schema.clone(), sanitized_cols)
+        RecordBatch::try_new(self.schema.clone(), arrays)
     }
 }
 
@@ -218,7 +212,7 @@ impl Decoder {
             Some(Nullability::NullSecond) => {
                 if strict_mode {
                     return Err(ArrowError::ParseError(
-                        "Found Avro union of the form ['T','null'], which is disallowed in strict_mode mode"
+                        "Found Avro union of the form ['T','null'], which is disallowed in strict_mode"
                             .to_string(),
                     ));
                 }
@@ -428,8 +422,27 @@ impl Decoder {
                 for c in children {
                     child_arrays.push(c.flush(None)?);
                 }
-                let (fixed, final_nulls) = flush_record_children(child_arrays, nulls)?;
-                let sarr = StructArray::new(fields.clone(), fixed, final_nulls);
+                let first_len = match child_arrays.first() {
+                    Some(a) => a.len(),
+                    None => 0,
+                };
+                for (i, arr) in child_arrays.iter().enumerate() {
+                    if arr.len() != first_len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Inconsistent struct child length for field #{i}. Expected {first_len}, got {}",
+                            arr.len()
+                        )));
+                    }
+                }
+                if let Some(n) = &nulls {
+                    if n.len() != first_len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Struct null buffer length {} != struct fields length {first_len}",
+                            n.len()
+                        )));
+                    }
+                }
+                let sarr = StructArray::new(fields.clone(), child_arrays, nulls);
                 Ok(Arc::new(sarr) as Arc<dyn Array>)
             }
             Self::Enum(symbols, idxs) => {
@@ -451,6 +464,15 @@ impl Decoder {
             Self::List(item_field, off, child) => {
                 let c = child.flush(None)?;
                 let offsets = flush_offsets(off);
+                let final_len = offsets.len() - 1;
+                if let Some(n) = &nulls {
+                    if n.len() != final_len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "List array null buffer length {} != final list length {final_len}",
+                            n.len()
+                        )));
+                    }
+                }
                 let larr = ListArray::new(item_field.clone(), offsets, c, nulls);
                 Ok(Arc::new(larr) as Arc<dyn Array>)
             }
@@ -460,17 +482,28 @@ impl Decoder {
                 let kd = flush_values(kdata).into();
                 let val_arr = valdec.flush(None)?;
                 let key_arr = StringArray::new(koff, kd, None);
-                let (fixed_keys, fixed_vals) = flush_map_children(&key_arr, &val_arr)?;
+                if key_arr.len() != val_arr.len() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Map keys length ({}) != map values length ({})",
+                        key_arr.len(),
+                        val_arr.len()
+                    )));
+                }
+                let final_len = moff.len() - 1;
+                if let Some(n) = &nulls {
+                    if n.len() != final_len {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Map array null buffer length {} != final map length {final_len}",
+                            n.len()
+                        )));
+                    }
+                }
                 let entries_struct = StructArray::new(
                     Fields::from(vec![
                         Arc::new(ArrowField::new("key", DataType::Utf8, false)),
-                        Arc::new(ArrowField::new(
-                            "value",
-                            fixed_vals.data_type().clone(),
-                            true,
-                        )),
+                        Arc::new(ArrowField::new("value", val_arr.data_type().clone(), true)),
                     ]),
-                    vec![Arc::new(fixed_keys), fixed_vals],
+                    vec![Arc::new(key_arr), val_arr],
                     None,
                 );
                 let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
@@ -536,113 +569,24 @@ impl Decoder {
     }
 }
 
-type FlushResult = (Vec<Arc<dyn Array>>, Option<NullBuffer>);
-
-fn flush_record_children(
-    children: Vec<Arc<dyn Array>>,
-    parent_nulls: Option<NullBuffer>,
-) -> Result<FlushResult, ArrowError> {
-    let max_len = children.iter().map(|c| c.len()).max().unwrap_or(0);
-    let fixed_parent_nulls = match parent_nulls {
-        None => None,
-        Some(nb) => {
-            let old_len = nb.len();
-            match old_len.cmp(&max_len) {
-                Ordering::Equal => Some(nb),
-                Ordering::Less => {
-                    let mut b = NullBufferBuilder::new(max_len);
-                    for i in 0..old_len {
-                        b.append(nb.is_valid(i));
-                    }
-                    for _ in old_len..max_len {
-                        b.append(false);
-                    }
-                    b.finish()
-                }
-                Ordering::Greater => {
-                    let mut b = NullBufferBuilder::new(max_len);
-                    for i in 0..max_len {
-                        b.append(nb.is_valid(i));
-                    }
-                    b.finish()
-                }
-            }
-        }
-    };
-    let mut out = Vec::with_capacity(children.len());
-    for arr in children {
-        let cur_len = arr.len();
-        match cur_len.cmp(&max_len) {
-            Ordering::Equal => out.push(arr),
-            Ordering::Less => {
-                let to_add = max_len - cur_len;
-                let appended = append_nulls(&arr, to_add)?;
-                out.push(appended);
-            }
-            Ordering::Greater => {
-                let sliced = arr.slice(0, max_len);
-                out.push(sliced);
-            }
-        }
-    }
-
-    Ok((out, fixed_parent_nulls))
-}
-
-fn flush_map_children(
-    key_arr: &StringArray,
-    val_arr: &Arc<dyn Array>,
-) -> Result<(StringArray, Arc<dyn Array>), ArrowError> {
-    let kl = key_arr.len();
-    let vl = val_arr.len();
-    match kl.cmp(&vl) {
-        Ordering::Equal => Ok((key_arr.clone(), val_arr.clone())),
-        Ordering::Less => {
-            let truncated = val_arr.slice(0, kl);
-            Ok((key_arr.clone(), truncated))
-        }
-        Ordering::Greater => {
-            let to_add = kl - vl;
-            let appended = append_nulls(val_arr, to_add)?;
-            Ok((key_arr.clone(), appended))
-        }
-    }
-}
-
-/// Decode an Avro array in blocks until a 0 block_count signals end.
 fn read_array_blocks(
     buf: &mut AvroCursor,
-    mut decode_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+    decode_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
-    let mut total = 0usize;
-    loop {
-        let blk = buf.get_long()?;
-        match blk.cmp(&0) {
-            Ordering::Equal => break,
-            Ordering::Less => {
-                let cnt = (-blk) as usize;
-                let _sz = buf.get_long()?;
-                for _i in 0..cnt {
-                    decode_item(buf)?;
-                }
-                total += cnt;
-            }
-            Ordering::Greater => {
-                let cnt = blk as usize;
-                for _i in 0..cnt {
-                    decode_item(buf)?;
-                }
-                total += cnt;
-            }
-        }
-    }
-    Ok(total)
+    read_blockwise_items(buf, true, decode_item)
 }
 
-/// Decode an Avro map in blocks until 0 block_count signals end.
 fn read_map_blocks(
     buf: &mut AvroCursor,
-    mut decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+    decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+) -> Result<usize, ArrowError> {
+    read_blockwise_items(buf, true, decode_entry)
+}
+
+fn read_blockwise_items(
+    buf: &mut AvroCursor,
+    read_size_after_negative: bool,
+    mut decode_fn: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
     let mut total = 0usize;
     loop {
@@ -651,16 +595,18 @@ fn read_map_blocks(
             Ordering::Equal => break,
             Ordering::Less => {
                 let cnt = (-blk) as usize;
-                let _sz = buf.get_long()?;
-                for _i in 0..cnt {
-                    decode_entry(buf)?;
+                if read_size_after_negative {
+                    let _size_in_bytes = buf.get_long()?;
+                }
+                for _ in 0..cnt {
+                    decode_fn(buf)?;
                 }
                 total += cnt;
             }
             Ordering::Greater => {
                 let cnt = blk as usize;
                 for _i in 0..cnt {
-                    decode_entry(buf)?;
+                    decode_fn(buf)?;
                 }
                 total += cnt;
             }
@@ -682,122 +628,6 @@ fn flush_offsets(ob: &mut OffsetBufferBuilder<i32>) -> OffsetBuffer<i32> {
 
 fn flush_values<T>(vec: &mut Vec<T>) -> Vec<T> {
     std::mem::replace(vec, Vec::with_capacity(DEFAULT_CAPACITY))
-}
-
-fn append_nulls(arr: &Arc<dyn Array>, count: usize) -> Result<Arc<dyn Array>, ArrowError> {
-    use arrow_data::transform::MutableArrayData;
-    let d = arr.to_data();
-    let mut mad = MutableArrayData::new(vec![&d], false, 0);
-    mad.extend(0, 0, arr.len());
-    mad.extend_nulls(count);
-    let out = mad.freeze();
-    let arr2 = make_array(out);
-    sanitize_array_offsets(arr2)
-}
-
-fn sanitize_offsets_vec(offsets: &[i32], child_len: i32) -> Vec<i32> {
-    let mut new_offsets = Vec::with_capacity(offsets.len());
-    let mut prev = 0;
-    for &offset in offsets {
-        // clamp each offset between the previous value and the child length
-        let clamped = offset.clamp(prev, child_len);
-        new_offsets.push(clamped);
-        if clamped > prev {
-            prev = clamped;
-        }
-    }
-    new_offsets
-}
-
-fn sanitize_offsets_array(
-    original_data: &ArrayData,
-    child: Arc<dyn Array>,
-    offsets: &[i32],
-) -> Result<ArrayData, ArrowError> {
-    let child_san = sanitize_array_offsets(child)?;
-    let child_len = child_san.len() as i32;
-    let new_offsets = sanitize_offsets_vec(offsets, child_len);
-    let final_len = new_offsets.len() - 1;
-    let mut new_data = original_data.clone();
-    let mut bufs = new_data.buffers().to_vec();
-    bufs[0] = Buffer::from_slice_ref(&new_offsets);
-    new_data = new_data
-        .into_builder()
-        .len(final_len)
-        .buffers(bufs)
-        .child_data(vec![child_san.to_data()])
-        .build()?;
-    Ok(new_data)
-}
-
-fn sanitize_struct_child(
-    array: Arc<dyn Array>,
-    target_len: usize,
-) -> Result<ArrayData, ArrowError> {
-    let sanitized = sanitize_array_offsets(array)?;
-    let sanitized_len = sanitized.len();
-    match sanitized_len.cmp(&target_len) {
-        Ordering::Equal => Ok(sanitized.to_data()),
-        Ordering::Less => {
-            let to_add = target_len - sanitized_len;
-            let appended = append_nulls(&sanitized, to_add)?;
-            Ok(appended.to_data())
-        }
-        Ordering::Greater => {
-            let sliced = sanitized.slice(0, target_len);
-            Ok(sliced.to_data())
-        }
-    }
-}
-
-/// Recursively sanitizes the offsets for arrays of List, Map, and Struct types.
-fn sanitize_array_offsets(array: Arc<dyn Array>) -> Result<Arc<dyn Array>, ArrowError> {
-    match array.data_type() {
-        DataType::List(_item) => {
-            let list_arr = array
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| ArrowError::ParseError("Downcast to ListArray".into()))?;
-            let child = Arc::new(list_arr.values().clone()) as Arc<dyn Array>;
-            let new_data =
-                sanitize_offsets_array(&list_arr.to_data(), child, list_arr.value_offsets())?;
-            Ok(make_array(new_data))
-        }
-        DataType::Map(_field, _keys_sorted) => {
-            let map_arr = array
-                .as_any()
-                .downcast_ref::<MapArray>()
-                .ok_or_else(|| ArrowError::ParseError("Downcast to MapArray".into()))?;
-            let child = Arc::new(map_arr.entries().clone()) as Arc<dyn Array>;
-            let new_data =
-                sanitize_offsets_array(&map_arr.to_data(), child, map_arr.value_offsets())?;
-            Ok(make_array(new_data))
-        }
-        DataType::Struct(_fs) => {
-            let struct_arr = array
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| ArrowError::ParseError("Downcast to StructArray".into()))?;
-            let length = struct_arr.len();
-
-            let new_child_data = struct_arr
-                .columns()
-                .iter()
-                .map(|col| {
-                    let col_arc = Arc::new(col.clone()) as Arc<dyn Array>;
-                    sanitize_struct_child(col_arc, length)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let new_data = struct_arr
-                .to_data()
-                .clone()
-                .into_builder()
-                .child_data(new_child_data)
-                .build()?;
-            Ok(make_array(new_data))
-        }
-        _ => Ok(array),
-    }
 }
 
 /// A builder for Avro decimal, either 128-bit or 256-bit.

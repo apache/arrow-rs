@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{ComplexType, PrimitiveType, Schema, TypeName};
+use crate::schema::{Attributes, ComplexType, PrimitiveType, Schema, TypeName};
 use arrow_schema::DataType::*;
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -43,7 +43,7 @@ pub enum Nullability {
 #[derive(Debug, Clone)]
 pub struct AvroDataType {
     pub nullability: Option<Nullability>,
-    pub metadata: HashMap<String, String>,
+    pub metadata: Arc<HashMap<String, String>>,
     pub codec: Codec,
 }
 
@@ -57,7 +57,7 @@ impl AvroDataType {
         AvroDataType {
             codec,
             nullability,
-            metadata,
+            metadata: Arc::new(metadata),
         }
     }
 
@@ -69,7 +69,8 @@ impl AvroDataType {
     /// Returns an arrow [`Field`] with the given name, applying `nullability` if present.
     pub fn field_with_name(&self, name: &str) -> Field {
         let is_nullable = self.nullability.is_some();
-        Field::new(name, self.codec.data_type(), is_nullable).with_metadata(self.metadata.clone())
+        let metadata = Arc::try_unwrap(self.metadata.clone()).unwrap_or_else(|arc| (*arc).clone());
+        Field::new(name, self.codec.data_type(), is_nullable).with_metadata(metadata)
     }
 }
 
@@ -176,14 +177,16 @@ impl Codec {
             Self::Enum(_, _) => Dictionary(Box::new(Int32), Box::new(Utf8)),
             Self::Array(child_type) => {
                 let child_dt = child_type.codec.data_type();
-                let child_md = child_type.metadata.clone();
+                let child_md = Arc::try_unwrap(child_type.metadata.clone())
+                    .unwrap_or_else(|arc| (*arc).clone());
                 let child_field = Field::new(Field::LIST_FIELD_DEFAULT_NAME, child_dt, true)
                     .with_metadata(child_md);
                 List(Arc::new(child_field))
             }
             Self::Map(value_type) => {
                 let val_dt = value_type.codec.data_type();
-                let val_md = value_type.metadata.clone();
+                let val_md = Arc::try_unwrap(value_type.metadata.clone())
+                    .unwrap_or_else(|arc| (*arc).clone());
                 let val_field = Field::new("value", val_dt, true).with_metadata(val_md);
                 Map(
                     Arc::new(Field::new(
@@ -272,6 +275,32 @@ impl<'a> Resolver<'a> {
     }
 }
 
+fn parse_decimal_attributes(
+    attributes: &Attributes,
+    fallback_size: Option<usize>,
+    precision_required: bool,
+) -> Result<(usize, usize, Option<usize>), ArrowError> {
+    let precision = attributes
+        .additional
+        .get("precision")
+        .and_then(|v| v.as_u64())
+        .or(if precision_required { None } else { Some(10) })
+        .ok_or_else(|| ArrowError::ParseError("Decimal requires precision".to_string()))?
+        as usize;
+    let scale = attributes
+        .additional
+        .get("scale")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let size = attributes
+        .additional
+        .get("size")
+        .and_then(|v| v.as_u64())
+        .map(|s| s as usize)
+        .or(fallback_size);
+    Ok((precision, scale, size))
+}
+
 /// Parses a [`AvroDataType`] from the provided [`Schema`], plus optional `namespace`.
 fn make_data_type<'a>(
     schema: &Schema<'a>,
@@ -281,30 +310,35 @@ fn make_data_type<'a>(
     match schema {
         Schema::TypeName(TypeName::Primitive(p)) => Ok(AvroDataType {
             nullability: None,
-            metadata: Default::default(),
+            metadata: Arc::new(Default::default()),
             codec: (*p).into(),
         }),
         Schema::TypeName(TypeName::Ref(name)) => resolver.resolve(name, namespace),
         Schema::Union(u) => {
-            let null_idx = u
+            let null_count = u
                 .iter()
-                .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
-            match (u.len() == 2, null_idx) {
-                (true, Some(0)) => {
-                    let mut dt = make_data_type(&u[1], namespace, resolver)?;
-                    dt.nullability = Some(Nullability::NullFirst);
-                    Ok(dt)
-                }
-                (true, Some(1)) => {
-                    let mut dt = make_data_type(&u[0], namespace, resolver)?;
-                    dt.nullability = Some(Nullability::NullSecond);
-                    Ok(dt)
-                }
-                _ => Err(ArrowError::NotYetImplemented(format!(
+                .filter(|x| *x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)))
+                .count();
+            if null_count == 1 && u.len() == 2 {
+                let null_idx = u
+                    .iter()
+                    .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)))
+                    .unwrap();
+                let other_idx = if null_idx == 0 { 1 } else { 0 };
+                let mut dt = make_data_type(&u[other_idx], namespace, resolver)?;
+                dt.nullability = if null_idx == 0 {
+                    Some(Nullability::NullFirst)
+                } else {
+                    Some(Nullability::NullSecond)
+                };
+                Ok(dt)
+            } else {
+                Err(ArrowError::NotYetImplemented(format!(
                     "Union of {u:?} not currently supported"
-                ))),
+                )))
             }
         }
+
         Schema::Complex(c) => match c {
             ComplexType::Record(r) => {
                 let ns = r.namespace.or(namespace);
@@ -322,7 +356,7 @@ fn make_data_type<'a>(
                     .collect::<Result<Vec<AvroField>, ArrowError>>()?;
                 let rec = AvroDataType {
                     nullability: None,
-                    metadata: r.attributes.field_metadata(),
+                    metadata: Arc::new(r.attributes.field_metadata()),
                     codec: Codec::Record(Arc::from(fields)),
                 };
                 resolver.register(r.name, ns, rec.clone());
@@ -331,7 +365,7 @@ fn make_data_type<'a>(
             ComplexType::Enum(e) => {
                 let en = AvroDataType {
                     nullability: None,
-                    metadata: e.attributes.field_metadata(),
+                    metadata: Arc::new(e.attributes.field_metadata()),
                     codec: Codec::Enum(
                         Arc::from(e.symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
                         Arc::from(vec![]),
@@ -344,7 +378,7 @@ fn make_data_type<'a>(
                 let child = make_data_type(&a.items, namespace, resolver)?;
                 Ok(AvroDataType {
                     nullability: None,
-                    metadata: a.attributes.field_metadata(),
+                    metadata: Arc::new(a.attributes.field_metadata()),
                     codec: Codec::Array(Arc::new(child)),
                 })
             }
@@ -352,42 +386,26 @@ fn make_data_type<'a>(
                 let val = make_data_type(&m.values, namespace, resolver)?;
                 Ok(AvroDataType {
                     nullability: None,
-                    metadata: m.attributes.field_metadata(),
+                    metadata: Arc::new(m.attributes.field_metadata()),
                     codec: Codec::Map(Arc::new(val)),
                 })
             }
             ComplexType::Fixed(fx) => {
                 let size = fx.size as i32;
                 if let Some("decimal") = fx.attributes.logical_type {
-                    let precision = fx
-                        .attributes
-                        .additional
-                        .get("precision")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ArrowError::ParseError("Decimal requires precision".to_string())
-                        })?;
-                    let scale = fx
-                        .attributes
-                        .additional
-                        .get("scale")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
+                    let (precision, scale, _) =
+                        parse_decimal_attributes(&fx.attributes, Some(size as usize), true)?;
                     let dec = AvroDataType {
                         nullability: None,
-                        metadata: fx.attributes.field_metadata(),
-                        codec: Codec::Decimal(
-                            precision as usize,
-                            Some(scale as usize),
-                            Some(size as usize),
-                        ),
+                        metadata: Arc::new(fx.attributes.field_metadata()),
+                        codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
                     };
                     resolver.register(fx.name, namespace, dec.clone());
                     Ok(dec)
                 } else {
                     let fixed_dt = AvroDataType {
                         nullability: None,
-                        metadata: fx.attributes.field_metadata(),
+                        metadata: Arc::new(fx.attributes.field_metadata()),
                         codec: Codec::Fixed(size),
                     };
                     resolver.register(fx.name, namespace, fixed_dt.clone());
@@ -395,43 +413,20 @@ fn make_data_type<'a>(
                 }
             }
         },
+
         Schema::Type(t) => {
             let mut dt = make_data_type(&Schema::TypeName(t.r#type.clone()), namespace, resolver)?;
             match (t.attributes.logical_type, &mut dt.codec) {
                 (Some("decimal"), Codec::Fixed(sz)) => {
-                    let prec = t
-                        .attributes
-                        .additional
-                        .get("precision")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(10) as usize;
-                    let sc = t
-                        .attributes
-                        .additional
-                        .get("scale")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize;
-                    *sz = t
-                        .attributes
-                        .additional
-                        .get("size")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(*sz as u64) as i32;
+                    let (prec, sc, size_opt) =
+                        parse_decimal_attributes(&t.attributes, Some(*sz as usize), false)?;
+                    if let Some(sz_actual) = size_opt {
+                        *sz = sz_actual as i32;
+                    }
                     dt.codec = Codec::Decimal(prec, Some(sc), Some(*sz as usize));
                 }
                 (Some("decimal"), Codec::Binary) => {
-                    let prec = t
-                        .attributes
-                        .additional
-                        .get("precision")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(10) as usize;
-                    let sc = t
-                        .attributes
-                        .additional
-                        .get("scale")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as usize;
+                    let (prec, sc, _) = parse_decimal_attributes(&t.attributes, None, false)?;
                     dt.codec = Codec::Decimal(prec, Some(sc), None);
                 }
                 (Some("uuid"), Codec::String) => {
@@ -462,12 +457,18 @@ fn make_data_type<'a>(
                     dt.codec = Codec::Duration;
                 }
                 (Some(other), _) => {
-                    dt.metadata.insert("logicalType".into(), other.into());
+                    if !dt.metadata.contains_key("logicalType") {
+                        let mut arc_map = (*dt.metadata).clone();
+                        arc_map.insert("logicalType".into(), other.into());
+                        dt.metadata = Arc::new(arc_map);
+                    }
                 }
                 (None, _) => {}
             }
             for (k, v) in &t.attributes.additional {
-                dt.metadata.insert(k.to_string(), v.to_string());
+                let mut arc_map = (*dt.metadata).clone();
+                arc_map.insert(k.to_string(), v.to_string());
+                dt.metadata = Arc::new(arc_map);
             }
             Ok(dt)
         }
@@ -487,7 +488,7 @@ mod tests {
         let top_null = field.is_nullable().then_some(Nullability::NullFirst);
         let data_type = AvroDataType {
             nullability: top_null,
-            metadata: field.metadata().clone(),
+            metadata: Arc::new(field.metadata().clone()),
             codec,
         };
         AvroField {
@@ -528,7 +529,7 @@ mod tests {
                 let child_dt = AvroDataType {
                     codec: item_codec,
                     nullability: child_nullability,
-                    metadata: item_field.metadata().clone(),
+                    metadata: Arc::new(item_field.metadata().clone()),
                 };
                 Codec::Array(Arc::new(child_dt))
             }
@@ -540,7 +541,7 @@ mod tests {
                     let val_dt = AvroDataType {
                         codec: val_codec,
                         nullability: val_nullability,
-                        metadata: val_field.metadata().clone(),
+                        metadata: Arc::new(val_field.metadata().clone()),
                     };
                     Codec::Map(Arc::new(val_dt))
                 } else {
@@ -913,7 +914,7 @@ mod tests {
             _ => panic!("Expected a record with a single [long,null] field"),
         }
         let mut resolver = Resolver::default();
-        let top_dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let top_dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &top_dt.codec {
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name(), "f0");
@@ -954,7 +955,7 @@ mod tests {
             _ => panic!("Expected a record with a single union array field"),
         }
         let mut resolver = Resolver::default();
-        let top_dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let top_dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &top_dt.codec {
             assert_eq!(fields.len(), 1);
             let arr_dt = fields[0].data_type();
@@ -1019,7 +1020,7 @@ mod tests {
             _ => panic!("Expected a record with a single nested union array field"),
         }
         let mut resolver = Resolver::default();
-        let top_dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let top_dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &top_dt.codec {
             assert_eq!(fields.len(), 1);
             let outer_dt = fields[0].data_type();
@@ -1070,7 +1071,7 @@ mod tests {
             _ => panic!("Expected a record with a single union map field"),
         }
         let mut resolver = Resolver::default();
-        let top_dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let top_dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &top_dt.codec {
             assert_eq!(fields.len(), 1);
             let map_dt = fields[0].data_type();
@@ -1135,7 +1136,7 @@ mod tests {
             _ => panic!("Expected a record with a single union array-of-map field"),
         }
         let mut resolver = Resolver::default();
-        let top_dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let top_dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &top_dt.codec {
             assert_eq!(fields.len(), 1);
             let outer_dt = fields[0].data_type();
@@ -1196,7 +1197,7 @@ mod tests {
             _ => panic!("Expected top-level record with a single union-based nested_struct"),
         }
         let mut resolver = Resolver::default();
-        let dt = make_data_type(&schema, None, &mut resolver).unwrap();
+        let dt = super::make_data_type(&schema, None, &mut resolver).unwrap();
         if let Codec::Record(fields) = &dt.codec {
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name(), "nested_struct");
