@@ -29,7 +29,7 @@ mod compression;
 
 mod codec;
 
-pub use reader::{Decoder, Reader, ReaderBuilder};
+pub use self::reader::{Decoder, Reader, ReaderBuilder};
 
 #[cfg(test)]
 mod test_util {
