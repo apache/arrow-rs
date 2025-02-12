@@ -30,5 +30,8 @@ pub use arrow_cast::pretty;
 pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_util;
+/// Public re-export rand crate as it appears in the public API
+#[cfg(feature = "test_utils")]
+pub use rand;
 
 pub use arrow_cast::display;

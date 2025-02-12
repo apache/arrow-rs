@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use rand::{
+use crate::util::rand::{
     distr::uniform::{SampleRange, SampleUniform},
     Rng,
 };
