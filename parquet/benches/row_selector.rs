@@ -31,9 +31,9 @@ use rand::Rng;
 ///
 /// * A `BooleanArray` instance with randomly selected rows based on the provided ratio.
 fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> BooleanArray {
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     let bools: Vec<bool> = (0..total_rows)
-        .map(|_| rng.random_bool(selection_ratio))
+        .map(|_| rng.gen_bool(selection_ratio))
         .collect();
     BooleanArray::from(bools)
 }

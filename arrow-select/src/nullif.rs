@@ -120,7 +120,7 @@ mod tests {
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_nullif_int_array() {
@@ -497,13 +497,11 @@ mod tests {
 
     #[test]
     fn nullif_fuzz() {
-        let mut rng = rng();
+        let mut rng = thread_rng();
 
         let arrays = [
             Int32Array::from(vec![0; 128]),
-            (0..128)
-                .map(|_| rng.random_bool(0.5).then_some(0))
-                .collect(),
+            (0..128).map(|_| rng.gen_bool(0.5).then_some(0)).collect(),
         ];
 
         for a in arrays {
@@ -513,11 +511,11 @@ mod tests {
                 let a = a.slice(a_offset, a_length);
 
                 for i in 1..65 {
-                    let b_start_offset = rng.random_range(0..i);
-                    let b_end_offset = rng.random_range(0..i);
+                    let b_start_offset = rng.gen_range(0..i);
+                    let b_end_offset = rng.gen_range(0..i);
 
                     let b: BooleanArray = (0..a_length + b_start_offset + b_end_offset)
-                        .map(|_| rng.random_bool(0.5).then(|| rng.random_bool(0.5)))
+                        .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
                         .collect();
                     let b = b.slice(b_start_offset, a_length);
 
