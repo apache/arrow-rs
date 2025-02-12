@@ -1433,9 +1433,9 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::uniform::SampleUniform;
-    use rand::distributions::{Distribution, Standard};
-    use rand::{thread_rng, Rng};
+    use rand::distr::uniform::SampleUniform;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::{rng, Rng};
 
     use arrow_array::builder::*;
     use arrow_array::types::*;
@@ -2193,11 +2193,11 @@ mod tests {
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
-        Standard: Distribution<K::Native>,
+        StandardUniform: Distribution<K::Native>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
-            .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
             .collect()
     }
 
@@ -2205,12 +2205,12 @@ mod tests {
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(0..100);
-                    let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(0..100);
+                    let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
                     String::from_utf8(bytes).unwrap()
                 })
             })
@@ -2218,12 +2218,12 @@ mod tests {
     }
 
     fn generate_string_view(len: usize, valid_percent: f64) -> StringViewArray {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(0..100);
-                    let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(0..100);
+                    let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
                     String::from_utf8(bytes).unwrap()
                 })
             })
@@ -2231,12 +2231,12 @@ mod tests {
     }
 
     fn generate_byte_view(len: usize, valid_percent: f64) -> BinaryViewArray {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(0..100);
-                    let bytes: Vec<_> = (0..len).map(|_| rng.gen_range(0..128)).collect();
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(0..100);
+                    let bytes: Vec<_> = (0..len).map(|_| rng.random_range(0..128)).collect();
                     bytes
                 })
             })
@@ -2252,13 +2252,13 @@ mod tests {
         K: ArrowDictionaryKeyType,
         K::Native: SampleUniform,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let min_key = K::Native::from_usize(0).unwrap();
         let max_key = K::Native::from_usize(values.len()).unwrap();
         let keys: PrimitiveArray<K> = (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent)
-                    .then(|| rng.gen_range(min_key..max_key))
+                rng.random_bool(valid_percent)
+                    .then(|| rng.random_range(min_key..max_key))
             })
             .collect();
 
@@ -2277,15 +2277,15 @@ mod tests {
     }
 
     fn generate_fixed_size_binary(len: usize, valid_percent: f64) -> FixedSizeBinaryArray {
-        let mut rng = thread_rng();
-        let width = rng.gen_range(0..20);
+        let mut rng = rng();
+        let width = rng.random_range(0..20);
         let mut builder = FixedSizeBinaryBuilder::new(width);
 
         let mut b = vec![0; width as usize];
         for _ in 0..len {
-            match rng.gen_bool(valid_percent) {
+            match rng.random_bool(valid_percent) {
                 true => {
-                    b.iter_mut().for_each(|x| *x = rng.gen());
+                    b.iter_mut().for_each(|x| *x = rng.random());
                     builder.append_value(&b).unwrap();
                 }
                 false => builder.append_null(),
@@ -2296,8 +2296,8 @@ mod tests {
     }
 
     fn generate_struct(len: usize, valid_percent: f64) -> StructArray {
-        let mut rng = thread_rng();
-        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let mut rng = rng();
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let a = generate_primitive_array::<Int32Type>(len, valid_percent);
         let b = generate_strings::<i32>(len, valid_percent);
         let fields = Fields::from(vec![
@@ -2312,18 +2312,18 @@ mod tests {
     where
         F: FnOnce(usize) -> ArrayRef,
     {
-        let mut rng = thread_rng();
-        let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.gen_range(0..10)));
+        let mut rng = rng();
+        let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let values_len = offsets.last().unwrap().to_usize().unwrap();
         let values = values(values_len);
-        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.gen_bool(valid_percent)));
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
     fn generate_column(len: usize) -> ArrayRef {
-        let mut rng = thread_rng();
-        match rng.gen_range(0..16) {
+        let mut rng = rng();
+        match rng.random_range(0..16) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2333,14 +2333,14 @@ mod tests {
             6 => Arc::new(generate_strings::<i32>(len, 0.8)),
             7 => Arc::new(generate_dictionary::<Int64Type>(
                 // Cannot test dictionaries containing null values because of #2687
-                Arc::new(generate_strings::<i32>(rng.gen_range(1..len), 1.0)),
+                Arc::new(generate_strings::<i32>(rng.random_range(1..len), 1.0)),
                 len,
                 0.8,
             )),
             8 => Arc::new(generate_dictionary::<Int64Type>(
                 // Cannot test dictionaries containing null values because of #2687
                 Arc::new(generate_primitive_array::<Int64Type>(
-                    rng.gen_range(1..len),
+                    rng.random_range(1..len),
                     1.0,
                 )),
                 len,
@@ -2390,15 +2390,15 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
         for _ in 0..100 {
-            let mut rng = thread_rng();
-            let num_columns = rng.gen_range(1..5);
-            let len = rng.gen_range(5..100);
+            let mut rng = rng();
+            let num_columns = rng.random_range(1..5);
+            let len = rng.random_range(5..100);
             let arrays: Vec<_> = (0..num_columns).map(|_| generate_column(len)).collect();
 
             let options: Vec<_> = (0..num_columns)
                 .map(|_| SortOptions {
-                    descending: rng.gen_bool(0.5),
-                    nulls_first: rng.gen_bool(0.5),
+                    descending: rng.random_bool(0.5),
+                    nulls_first: rng.random_bool(0.5),
                 })
                 .collect();
 

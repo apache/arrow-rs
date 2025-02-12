@@ -1528,7 +1528,7 @@ mod tests {
         schema::parser::parse_message_type,
     };
     use core::str;
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{fs::File, sync::Arc};
 
     use crate::column::{
