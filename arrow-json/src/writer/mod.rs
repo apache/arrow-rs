@@ -437,6 +437,7 @@ where
 #[cfg(test)]
 mod tests {
     use core::str;
+    use std::collections::HashMap;
     use std::fs::{read_to_string, File};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
@@ -2126,16 +2127,12 @@ mod tests {
                         DataType::Null => None,
                         DataType::Int32 => Some(UnionValue::Int32(
                             buffers[type_id as usize]
-                                .as_any()
-                                .downcast_ref::<Int32Array>()
-                                .unwrap()
+                                .as_primitive::<Int32Type>()
                                 .value(idx),
                         )),
                         DataType::Utf8 => Some(UnionValue::String(
                             buffers[type_id as usize]
-                                .as_any()
-                                .downcast_ref::<StringArray>()
-                                .unwrap()
+                                .as_string::<i32>()
                                 .value(idx)
                                 .to_string(),
                         )),
@@ -2329,7 +2326,7 @@ mod tests {
             ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
                 match array.data_type() {
                     DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+                        let array = array.as_binary::<i32>();
                         let encoder = IntArrayBinaryEncoder { array };
                         Ok(Some(Box::new(encoder)))
                     }
@@ -2367,6 +2364,128 @@ mod tests {
             {"bytes": [97], "float": 1.0},
             {"float": 2.3},
             {"bytes": [98]},
+        ]);
+
+        assert_eq!(json_value, expected);
+    }
+
+    #[test]
+    fn test_encoder_factory_customize_dictionary() {
+        // Test that we can customize the encoding of T even when it shows up as Dictionary<_, T>.
+
+        // No particular reason to choose this example.
+        // Just trying to add some variety to the test cases and demonstrate use cases of the encoder factory.
+        struct PaddedInt32Encoder<'a> {
+            array: Int32Array,
+            nulls: Option<&'a NullBuffer>,
+        }
+
+        impl<'a> Encoder for PaddedInt32Encoder<'a> {
+            fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+                let value = self.array.value(idx);
+                write!(out, "\"{value:0>8}\"").unwrap();
+            }
+
+            fn has_nulls(&self) -> bool {
+                self.array.is_nullable()
+            }
+
+            fn is_null(&self, idx: usize) -> bool {
+                self.nulls
+                    .map(|nulls| nulls.is_null(idx))
+                    .unwrap_or_default()
+            }
+        }
+
+        #[derive(Debug)]
+        struct CustomEncoderFactory;
+
+        impl EncoderFactory for CustomEncoderFactory {
+            fn make_default_encoder<'a>(
+                &self,
+                field: &FieldRef,
+                array: &'a dyn Array,
+                _options: &EncoderOptions,
+            ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
+                // The point here is:
+                // 1. You can use information from Field to determine how to do the encoding.
+                // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
+                //    and thus the data type of `field` may not match the data type of `array`.
+                let padded = field
+                    .metadata()
+                    .get("padded")
+                    .map(|v| v == "true")
+                    .unwrap_or_default();
+                match (array.data_type(), padded) {
+                    (DataType::Int32, true) => {
+                        let array = array.as_primitive::<Int32Type>();
+                        let nulls = array.nulls();
+                        let encoder = PaddedInt32Encoder {
+                            array: array.clone(),
+                            nulls,
+                        };
+                        Ok(Some(Box::new(encoder)))
+                    }
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let to_json = |batch| {
+            let mut buf = Vec::new();
+            let mut writer = WriterBuilder::new()
+                .with_encoder_factory(Arc::new(CustomEncoderFactory))
+                .build::<_, JsonArray>(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+            writer.finish().unwrap();
+            serde_json::from_slice::<Value>(&buf).unwrap()
+        };
+
+        // Control case: no dictionary wrapping works as expected.
+        let array = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let field = Arc::new(Field::new("int", DataType::Int32, true).with_metadata(
+            HashMap::from_iter(vec![("padded".to_string(), "true".to_string())]),
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![field.clone()])),
+            vec![Arc::new(array)],
+        )
+        .unwrap();
+
+        let json_value = to_json(&batch);
+
+        let expected = json!([
+            {"int": "00000001"},
+            {},
+            {"int": "00000002"},
+        ]);
+
+        assert_eq!(json_value, expected);
+
+        // Now make a dictionary batch
+        let mut array_builder = PrimitiveDictionaryBuilder::<UInt16Type, Int32Type>::new();
+        array_builder.append_value(1);
+        array_builder.append_null();
+        array_builder.append_value(1);
+        let array = array_builder.finish();
+        let field = Field::new(
+            "int",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Int32)),
+            true,
+        )
+        .with_metadata(HashMap::from_iter(vec![(
+            "padded".to_string(),
+            "true".to_string(),
+        )]));
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![Arc::new(array)])
+            .unwrap();
+
+        let json_value = to_json(&batch);
+
+        let expected = json!([
+            {"int": "00000001"},
+            {},
+            {"int": "00000001"},
         ]);
 
         assert_eq!(json_value, expected);
