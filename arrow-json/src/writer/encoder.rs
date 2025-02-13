@@ -46,7 +46,7 @@ pub struct EncoderOptions {
 pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
     /// Make an encoder that if returned runs before all of the default encoders.
     /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
-    /// 
+    ///
     /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
     /// will be called again for the keys and values of the dictionary, at which point the field type will still be the outer dictionary type but the
     /// array will have a different type.
@@ -78,7 +78,7 @@ pub trait Encoder {
 }
 
 /// Creates an encoder for the given array and field.
-/// 
+///
 /// This first calls the EncoderFactory if one is provided, and then falls back to the default encoders.
 pub fn make_encoder<'a>(
     field: &'a FieldRef,
