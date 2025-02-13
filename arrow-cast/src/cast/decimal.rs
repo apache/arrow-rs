@@ -183,6 +183,7 @@ where
     Ok(if is_infallible_cast {
         // make sure we don't perform calculations that don't make sense w/o validation
         validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
+        // unwrapping is safe since the result is guaranteed to fit into the target type
         let f = |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul);
         array.unary(f)
     } else if cast_options.safe {
