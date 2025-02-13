@@ -2397,7 +2397,7 @@ mod tests {
         output_prec: u8,
         output_scale: i8,
         expected_output_repr: Result<i128, String>, // the error variant can contain a string
-                                                    // template where the "{}" will be replaced
+                                                    // template where the "{}" will be
                                                     // replaced with the decimal type name
                                                     // (e.g. Decimal128)
     }
