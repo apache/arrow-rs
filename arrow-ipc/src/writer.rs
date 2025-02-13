@@ -987,14 +987,15 @@ impl<W: Write> FileWriter<W> {
             &write_options,
         );
 
-        let (meta, data) = write_message(&mut writer, written_len, encoded_message, &write_options)?;
+        let (meta, data) =
+            write_message(&mut writer, written_len, encoded_message, &write_options)?;
 
         // The schema message has no body
         debug_assert_eq!(data, 0);
 
         // written bytes = padded_magic + schema
         written_len += meta;
-        
+
         Ok(Self {
             writer,
             written_len,
@@ -1220,7 +1221,7 @@ impl<W: Write> StreamWriter<W> {
             &write_options,
         );
         let (meta, data) = write_message(&mut writer, 0, encoded_message, &write_options)?;
-        
+
         // The schema message has no body
         debug_assert_eq!(data, 0);
 
@@ -2957,7 +2958,8 @@ mod tests {
             writer.finish().unwrap();
 
             let mut out: Vec<u8> = writer.into_inner().unwrap();
-            let stream_reader = StreamReader::try_new(Cursor::new(&mut out[IPC_ALIGNMENT..]), None).unwrap();
+            let stream_reader =
+                StreamReader::try_new(Cursor::new(&mut out[IPC_ALIGNMENT..]), None).unwrap();
 
             assert_eq!(stream_reader.schema().as_ref(), &schema);
 
