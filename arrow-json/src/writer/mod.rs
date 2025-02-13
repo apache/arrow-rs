@@ -112,8 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-use encoder::{make_encoder, EncoderOptions};
-pub use encoder::{Encoder, EncoderFactory};
+pub use encoder::{Encoder, EncoderFactory, EncoderOptions, make_encoder};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -366,7 +365,11 @@ where
             batch.schema().fields().iter().cloned().collect::<Vec<_>>(),
             false,
         ));
+
         let mut encoder = make_encoder(&field, &array, &self.options)?;
+        for idx in 0..array.len() {
+            assert!(!encoder.is_null(idx), "root cannot be nullable");
+        }
 
         for idx in 0..batch.num_rows() {
             self.format.start_row(&mut buffer, is_first_row)?;

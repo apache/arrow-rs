@@ -28,10 +28,14 @@ use half::f16;
 use lexical_core::FormattedSize;
 use serde::Serializer;
 
+/// Configuration options for the JSON encoder.
 #[derive(Debug, Clone, Default)]
 pub struct EncoderOptions {
+    /// Whether to include nulls in the output or elide them.
     pub explicit_nulls: bool,
+    /// Whether to encode structs as JSON objects or JSON arrays of their values.
     pub struct_mode: StructMode,
+    /// An optional hook for customizing encoding behavior.
     pub encoder_factory: Option<Arc<dyn EncoderFactory>>,
 }
 
@@ -39,14 +43,19 @@ pub struct EncoderOptions {
 ///
 /// This allows overriding the default encoders for specific data types,
 /// or adding new encoders for custom data types.
-pub trait EncoderFactory: std::fmt::Debug {
+pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
     /// Make an encoder that if returned runs before all of the default encoders.
     /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
+    /// 
+    /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
+    /// will be called again for the keys and values of the dictionary, at which point the field type will still be the outer dictionary type but the
+    /// array will have a different type.
+    /// For example, `field`` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
     fn make_default_encoder<'a>(
         &self,
-        _field: &FieldRef,
+        _field: &'a FieldRef,
         _array: &'a dyn Array,
-        _options: &EncoderOptions,
+        _options: &'a EncoderOptions,
     ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
         Ok(None)
     }
@@ -68,22 +77,13 @@ pub trait Encoder {
     fn has_nulls(&self) -> bool;
 }
 
+/// Creates an encoder for the given array and field.
+/// 
+/// This first calls the EncoderFactory if one is provided, and then falls back to the default encoders.
 pub fn make_encoder<'a>(
     field: &'a FieldRef,
     array: &'a dyn Array,
-    options: &EncoderOptions,
-) -> Result<Box<dyn Encoder + 'a>, ArrowError> {
-    let encoder = make_encoder_impl(field, array, options)?;
-    for idx in 0..array.len() {
-        assert!(!encoder.is_null(idx), "root cannot be nullable");
-    }
-    Ok(encoder)
-}
-
-fn make_encoder_impl<'a>(
-    field: &'a FieldRef,
-    array: &'a dyn Array,
-    options: &EncoderOptions,
+    options: &'a EncoderOptions,
 ) -> Result<Box<dyn Encoder + 'a>, ArrowError> {
     macro_rules! primitive_helper {
         ($t:ty) => {{
@@ -162,7 +162,7 @@ fn make_encoder_impl<'a>(
         DataType::Struct(fields) => {
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
-                let encoder = make_encoder_impl(field, array, options)?;
+                let encoder = make_encoder(field, array, options)?;
                 Ok(FieldEncoder{
                     field: field.clone(),
                     encoder,
@@ -436,10 +436,10 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
     fn try_new(
         field: &'a FieldRef,
         array: &'a GenericListArray<O>,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
             offsets: array.offsets().clone(),
             encoder,
@@ -484,10 +484,10 @@ impl<'a> FixedSizeListEncoder<'a> {
     fn try_new(
         field: &'a FieldRef,
         array: &'a FixedSizeListArray,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
             encoder,
             value_length: array.value_length().as_usize(),
@@ -533,10 +533,10 @@ impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
     fn try_new(
         field: &'a FieldRef,
         array: &'a DictionaryArray<K>,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let nulls = array.logical_nulls();
-        let encoder = make_encoder_impl(field, array.values().as_ref(), options)?;
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
 
         Ok(Self {
             keys: array.keys().values().clone(),
@@ -635,7 +635,7 @@ impl<'a> MapEncoder<'a> {
     fn try_new(
         field: &'a FieldRef,
         array: &'a MapArray,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
         let values = array.values();
         let keys = array.keys();
@@ -648,8 +648,8 @@ impl<'a> MapEncoder<'a> {
             )));
         }
 
-        let keys = make_encoder_impl(field, keys, options)?;
-        let values = make_encoder_impl(field, values, options)?;
+        let keys = make_encoder(field, keys, options)?;
+        let values = make_encoder(field, values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
         if keys.has_nulls() {
