@@ -100,7 +100,6 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = input_scale - output_scale;
     // if the reduction of the input number through scaling (dividing) is greater
@@ -137,6 +136,8 @@ where
     };
 
     Ok(if is_infallible_cast {
+        // make sure we don't perform calculations that don't make sense w/o validation
+        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
                                               // to fit into the target type
         array.unary(g)
@@ -164,7 +165,6 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = output_scale - input_scale;
     let mul = O::Native::from_decimal(10_i128)
@@ -181,6 +181,8 @@ where
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
     Ok(if is_infallible_cast {
+        // make sure we don't perform calculations that don't make sense w/o validation
+        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         let f = |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul);
         array.unary(f)
     } else if cast_options.safe {
