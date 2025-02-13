@@ -9948,7 +9948,7 @@ mod tests {
                 input_repr: 99999, // 9999.9
                 output_prec: 7,
                 output_scale: 6,
-                expected_output_repr: Err(r"Invalid argument error: 9999900000 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.999999
+                expected_output_repr: Err("Invalid argument error: 9999900000 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.999999
             },
             // increase precision, decrease scale, always infallible
             DecimalCastTestConfig {
@@ -9993,7 +9993,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 8,
                 output_scale: 7,
-                expected_output_repr: Err(r"Invalid argument error: 999999900 is too large to store in a {} of precision 8. Max is 99999999".to_string()) // max is 9.9999999
+                expected_output_repr: Err("Invalid argument error: 999999900 is too large to store in a {} of precision 8. Max is 99999999".to_string()) // max is 9.9999999
             },
             // decrease precision, decrease scale, safe, infallible
             DecimalCastTestConfig {
@@ -10020,7 +10020,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 4,
                 output_scale: 3,
-                expected_output_repr: Err(r"Invalid argument error: 100000 is too large to store in a {} of precision 4. Max is 9999".to_string()) // max is 9.999
+                expected_output_repr: Err("Invalid argument error: 100000 is too large to store in a {} of precision 4. Max is 9999".to_string()) // max is 9.999
             },
             // decrease precision, same scale, safe
             DecimalCastTestConfig {
@@ -10038,7 +10038,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 6,
                 output_scale: 5,
-                expected_output_repr: Err(r"Invalid argument error: 9999999 is too large to store in a {} of precision 6. Max is 999999".to_string()) // max is 9.99999
+                expected_output_repr: Err("Invalid argument error: 9999999 is too large to store in a {} of precision 6. Max is 999999".to_string()) // max is 9.99999
             },
             // same precision, increase scale, safe
             DecimalCastTestConfig {
@@ -10056,7 +10056,7 @@ mod tests {
                 input_repr: 123456, // 12.3456
                 output_prec: 7,
                 output_scale: 6,
-                expected_output_repr: Err(r"Invalid argument error: 12345600 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.99999
+                expected_output_repr: Err("Invalid argument error: 12345600 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.99999
             },
             // same precision, decrease scale, infallible
             DecimalCastTestConfig {
@@ -10075,6 +10075,33 @@ mod tests {
                 output_prec: 7,
                 output_scale: 5,
                 expected_output_repr: Ok(9999999), // 99.99999
+            },
+            // precision increase, input scale & output scale = 0, infallible
+            DecimalCastTestConfig {
+                input_prec: 7,
+                input_scale: 0,
+                input_repr: 1234567, // 1234567
+                output_prec: 8,
+                output_scale: 0,
+                expected_output_repr: Ok(1234567), // 1234567
+            },
+            // precision decrease, input scale & output scale = 0, failure
+            DecimalCastTestConfig {
+                input_prec: 7,
+                input_scale: 0,
+                input_repr: 1234567, // 1234567
+                output_prec: 6,
+                output_scale: 0,
+                expected_output_repr: Err("Invalid argument error: 1234567 is too large to store in a {} of precision 6. Max is 999999".to_string())
+            },
+            // precision decrease, input scale & output scale = 0, success
+            DecimalCastTestConfig {
+                input_prec: 7,
+                input_scale: 0,
+                input_repr: 123456, // 123456
+                output_prec: 6,
+                output_scale: 0,
+                expected_output_repr: Ok(123456), // 123456
             },
         ];
 
@@ -10124,7 +10151,7 @@ mod tests {
                 input_repr: -12345,
                 output_prec: 6,
                 output_scale: 5,
-                expected_output_repr: Err(r"Invalid argument error: -1234500 is too small to store in a {} of precision 6. Min is -999999".to_string())
+                expected_output_repr: Err("Invalid argument error: -1234500 is too small to store in a {} of precision 6. Min is -999999".to_string())
             },
         ];
 
@@ -10175,7 +10202,7 @@ mod tests {
                 output_prec: 6,
                 output_scale: 3,
                 expected_output_repr:
-                    Err(r"Invalid argument error: 1000000 is too large to store in a {} of precision 6. Max is 999999".to_string()),
+                    Err("Invalid argument error: 1000000 is too large to store in a {} of precision 6. Max is 999999".to_string()),
             },
         ];
         for t in test_cases {
