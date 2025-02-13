@@ -2424,51 +2424,46 @@ mod tests {
         };
     }
 
-    macro_rules! generate_decimal_cast_test_case {
-        ($INPUT_DATA_TYPE: ident, $INPUT_ARRAY_TYPE: ident, $INPUT_CONVERSION: expr,
-         $OUTPUT_DATA_TYPE: ident, $OUTPUT_ARRAY_TYPE: ident, $OUTPUT_CONVERSION: expr,
-         $TEST_CONFIG: expr
-         ) => {
-            let array = vec![Some($INPUT_CONVERSION($TEST_CONFIG.input_repr))];
-            let array = array
-                .into_iter()
-                .collect::<$INPUT_ARRAY_TYPE>()
-                .with_precision_and_scale($TEST_CONFIG.input_prec, $TEST_CONFIG.input_scale)
-                .unwrap();
-            let input_type =
-                DataType::$INPUT_DATA_TYPE($TEST_CONFIG.input_prec, $TEST_CONFIG.input_scale);
-            let output_type =
-                DataType::$OUTPUT_DATA_TYPE($TEST_CONFIG.output_prec, $TEST_CONFIG.output_scale);
-            assert!(can_cast_types(&input_type, &output_type));
+    fn run_decimal_cast_test_case<I, O>(t: DecimalCastTestConfig)
+    where
+        I: DecimalType,
+        O: DecimalType,
+        I::Native: DecimalCast,
+        O::Native: DecimalCast,
+    {
+        let array = vec![I::Native::from_decimal(t.input_repr)];
+        let array = array
+            .into_iter()
+            .collect::<PrimitiveArray<I>>()
+            .with_precision_and_scale(t.input_prec, t.input_scale)
+            .unwrap();
+        let input_type = array.data_type();
+        let output_type = O::TYPE_CONSTRUCTOR(t.output_prec, t.output_scale);
+        assert!(can_cast_types(&input_type, &output_type));
 
-            let options = CastOptions {
-                safe: false,
-                ..Default::default()
-            };
-            let result = cast_with_options(&array, &output_type, &options);
-
-            match $TEST_CONFIG.expected_output_repr {
-                Ok(v) => {
-                    // make sure that the configuration is set up correctly
-                    let expected_array = vec![Some($OUTPUT_CONVERSION(v))];
-                    let expected_array = expected_array
-                        .into_iter()
-                        .collect::<$OUTPUT_ARRAY_TYPE>()
-                        .with_precision_and_scale(
-                            $TEST_CONFIG.output_prec,
-                            $TEST_CONFIG.output_scale,
-                        )
-                        .unwrap();
-                    assert_eq!(*result.unwrap(), expected_array,);
-                }
-                Err(expected_output_message_template) => {
-                    assert!(result.is_err());
-                    let expected_error_message = expected_output_message_template
-                        .replace("{}", stringify!($OUTPUT_DATA_TYPE));
-                    assert_eq!(result.unwrap_err().to_string(), expected_error_message);
-                }
-            }
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
         };
+        let result = cast_with_options(&array, &output_type, &options);
+
+        match t.expected_output_repr {
+            Ok(v) => {
+                let expected_array = vec![O::Native::from_decimal(v)];
+                let expected_array = expected_array
+                    .into_iter()
+                    .collect::<PrimitiveArray<O>>()
+                    .with_precision_and_scale(t.output_prec, t.output_scale)
+                    .unwrap();
+                assert_eq!(*result.unwrap(), expected_array);
+            }
+            Err(expected_output_message_template) => {
+                assert!(result.is_err());
+                let expected_error_message =
+                    expected_output_message_template.replace("{}", O::PREFIX);
+                assert_eq!(result.unwrap_err().to_string(), expected_error_message);
+            }
+        }
     }
 
     fn create_decimal128_array(
@@ -9919,42 +9914,10 @@ mod tests {
     }
 
     fn run_decimal_cast_test_case_between_multiple_types(t: DecimalCastTestConfig) {
-        generate_decimal_cast_test_case!(
-            Decimal128,
-            Decimal128Array,
-            |x| x,
-            Decimal128,
-            Decimal128Array,
-            |x| x,
-            t.clone()
-        );
-        generate_decimal_cast_test_case!(
-            Decimal128,
-            Decimal128Array,
-            |x| x,
-            Decimal256,
-            Decimal256Array,
-            |x| i256::from_i128(x),
-            t.clone()
-        );
-        generate_decimal_cast_test_case!(
-            Decimal256,
-            Decimal256Array,
-            |x| i256::from_i128(x),
-            Decimal256,
-            Decimal256Array,
-            |x| i256::from_i128(x),
-            t.clone()
-        );
-        generate_decimal_cast_test_case!(
-            Decimal256,
-            Decimal256Array,
-            |x| i256::from_i128(x),
-            Decimal128,
-            Decimal128Array,
-            |x| x,
-            t.clone()
-        );
+        run_decimal_cast_test_case::<Decimal128Type, Decimal128Type>(t.clone());
+        run_decimal_cast_test_case::<Decimal128Type, Decimal256Type>(t.clone());
+        run_decimal_cast_test_case::<Decimal256Type, Decimal128Type>(t.clone());
+        run_decimal_cast_test_case::<Decimal256Type, Decimal256Type>(t.clone());
     }
 
     #[test]
