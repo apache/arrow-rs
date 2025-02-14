@@ -386,8 +386,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Self::new_with_options(input, Default::default()).await
     }
 
-    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source,
-    /// [`ArrowReaderOptions`] and [`FileDecryptionProperties`] if the data is encrypted.
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source
+    /// and [`ArrowReaderOptions`]. If the data is encrypted, [`ArrowReaderOptions`] should
+    /// have the [`FileDecryptionProperties`] set.
     pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
         Ok(Self::new_with_metadata(input, metadata))

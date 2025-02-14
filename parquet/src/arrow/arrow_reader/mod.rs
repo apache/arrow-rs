@@ -554,13 +554,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         Ok(Self::new_with_metadata(reader, metadata))
     }
 
-    /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`] and [`FileDecryptionProperties`]
-    #[cfg(feature = "encryption")]
-    pub fn try_new_with_decryption(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(&reader, options)?;
-        Ok(Self::new_with_metadata(reader, metadata))
-    }
-
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
     ///
     /// This interface allows:
@@ -850,22 +843,6 @@ impl ParquetRecordBatchReader {
     /// See [`ParquetRecordBatchReaderBuilder`] for more options
     pub fn try_new<T: ChunkReader + 'static>(reader: T, batch_size: usize) -> Result<Self> {
         ParquetRecordBatchReaderBuilder::try_new(reader)?
-            .with_batch_size(batch_size)
-            .build()
-    }
-
-    /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader and [`FileDecryptionProperties`]
-    ///
-    /// Note: this is needed when the parquet file is encrypted
-    #[cfg(feature = "encryption")]
-    pub fn try_new_with_decryption<T: ChunkReader + 'static>(
-        reader: T,
-        batch_size: usize,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
-    ) -> Result<Self> {
-        let options = ArrowReaderOptions::default()
-            .with_file_decryption_properties(file_decryption_properties.cloned().unwrap());
-        ParquetRecordBatchReaderBuilder::try_new_with_decryption(reader, options)?
             .with_batch_size(batch_size)
             .build()
     }
@@ -2025,15 +2002,11 @@ mod tests {
     ) {
         let options = ArrowReaderOptions::default()
             .with_file_decryption_properties(decryption_properties.clone());
-        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
         let file_metadata = metadata.metadata.file_metadata();
 
-        let record_reader = ParquetRecordBatchReader::try_new_with_decryption(
-            file,
-            128,
-            Some(&decryption_properties),
-        )
-        .unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let record_reader = builder.build().unwrap();
 
         assert_eq!(file_metadata.num_rows(), 50);
         assert_eq!(file_metadata.schema_descr().num_columns(), 8);
