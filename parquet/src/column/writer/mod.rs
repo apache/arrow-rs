@@ -419,6 +419,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_page_boundary_ascending: true,
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
+            // metadata_encryptor: metadata_encryptor,
+            // data_encryptor: data_encryptor,
         }
     }
 
@@ -3403,7 +3405,8 @@ mod tests {
                 .with_file_encryption_properties(file_encryption_properties)
                 .build(),
         );
-        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut _writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        todo!()
     }
 
     #[test]

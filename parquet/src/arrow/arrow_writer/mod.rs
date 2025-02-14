@@ -1127,9 +1127,9 @@ mod tests {
 
     use std::fs::File;
 
-    use crate::arrow::arrow_reader::{
-        ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
-    };
+    #[cfg(feature = "encryption")]
+    use crate::arrow::arrow_reader::ArrowReaderOptions;
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
@@ -1143,8 +1143,10 @@ mod tests {
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
-    use crate::encryption::decryption::FileDecryptionProperties;
-    use crate::encryption::encryption::FileEncryptionProperties;
+    #[cfg(feature = "encryption")]
+    use crate::encryption::{
+        decryption::FileDecryptionProperties, encryption::FileEncryptionProperties,
+    };
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
     use crate::file::page_index::index_reader::read_offset_indexes;
