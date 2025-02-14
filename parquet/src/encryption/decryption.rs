@@ -138,6 +138,7 @@ impl CryptoContext {
     }
 }
 
+/// FileDecryptionProperties hold keys and AAD data required to decrypt a Parquet file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     footer_key: Vec<u8>,
@@ -146,6 +147,7 @@ pub struct FileDecryptionProperties {
 }
 
 impl FileDecryptionProperties {
+    /// Returns a new FileDecryptionProperties builder
     pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new(footer_key)
     }

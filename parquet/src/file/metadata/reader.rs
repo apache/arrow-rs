@@ -156,7 +156,7 @@ impl ParquetMetaDataReader {
         self
     }
 
-    /// Provide the [`FileDecryptionProperties`] to use when decrypting the file.
+    /// Provide the FileDecryptionProperties to use when decrypting the file.
     ///
     /// This is only necessary when the file is encrypted.
     #[cfg(feature = "encryption")]

@@ -108,7 +108,6 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
-    /// If data is encrypted, the [`FileDecryptionProperties`] should be provided.
     fn get_metadata<'a>(
         &'a mut self,
         #[cfg(feature = "encryption")] file_decryption_properties: Option<
@@ -243,8 +242,7 @@ pub struct AsyncReader<T>(T);
 ///
 /// This builder  handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
-/// they wish to be read by the resulting stream. If footer or columns are encrypted
-/// [`FileDecryptionProperties`] should be provided.
+/// they wish to be read by the resulting stream.
 ///
 /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
 ///
@@ -387,8 +385,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source
-    /// and [`ArrowReaderOptions`]. If the data is encrypted, [`ArrowReaderOptions`] should
-    /// have the [`FileDecryptionProperties`] set.
+    /// and [`ArrowReaderOptions`].
     pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
         Ok(Self::new_with_metadata(input, metadata))
