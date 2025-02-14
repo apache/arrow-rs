@@ -136,6 +136,37 @@ impl RingGcmBlockEncryptor {
 
 impl BlockEncryptor for RingGcmBlockEncryptor {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
-        todo!()
+        let mut ciphertext = Vec::with_capacity(plaintext.len() + TAG_LEN);
+        ciphertext.extend(plaintext);
+        let nonce = self.nonce_sequence.advance().unwrap();
+        let nonce_bytes = nonce.as_ref().clone();
+        self.key.seal_in_place_append_tag(nonce, Aad::from(aad), &mut ciphertext).unwrap();
+
+        let mut out = Vec::with_capacity(ciphertext.len() + SIZE_LEN + NONCE_LEN);
+        out.extend((ciphertext.len() as u32).to_le_bytes());
+        out.extend(nonce_bytes);
+        out.extend_from_slice(ciphertext.as_ref());
+        out
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_trip() {
+        let key = [0u8; 16];
+        let mut encryptor = RingGcmBlockEncryptor::new(&key);
+        let decryptor = RingGcmBlockDecryptor::new(&key);
+
+        let plaintext = b"hello, world!";
+        let aad = b"some aad";
+
+        let ciphertext = encryptor.encrypt(plaintext, aad);
+        let decrypted = decryptor.decrypt(&ciphertext, aad).unwrap();
+
+        assert_eq!(plaintext, decrypted.as_slice());
     }
 }
