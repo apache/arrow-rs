@@ -172,7 +172,7 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    file_encryption_properties: Option<FileEncryptionProperties>,
+    pub(crate) file_encryption_properties: Option<FileEncryptionProperties>,
 }
 
 impl Default for WriterProperties {
@@ -373,11 +373,6 @@ impl WriterProperties {
             .get(col)
             .and_then(|c| c.bloom_filter_properties())
             .or_else(|| self.default_column_properties.bloom_filter_properties())
-    }
-
-    #[cfg(feature = "encryption")]
-    pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
-        self.file_encryption_properties.as_ref()
     }
 }
 
