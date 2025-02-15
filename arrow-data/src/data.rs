@@ -696,17 +696,21 @@ impl ArrayData {
     ///
     /// This also aligns buffers of children data
     pub fn align_buffers(&mut self) {
-        let layout = layout(&self.data_type);
-        for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
-            if let BufferSpec::FixedWidth { alignment, .. } = spec {
-                if buffer.as_ptr().align_offset(*alignment) != 0 {
-                    *buffer = Buffer::from_slice_ref(buffer.as_ref());
+        // use a dynamic stack to avoid stack overflow for very deeply nested arrays
+        let mut stack: Vec<&mut ArrayData> = vec![self];
+        while let Some(data) = stack.pop() {
+            let layout = layout(&data.data_type);
+            for (buffer, spec) in data.buffers.iter_mut().zip(&layout.buffers) {
+                if let BufferSpec::FixedWidth { alignment, .. } = spec {
+                    if buffer.as_ptr().align_offset(*alignment) != 0 {
+                        *buffer = Buffer::from_slice_ref(buffer.as_ref());
+                    }
                 }
             }
-        }
-        // align children data recursively
-        for data in self.child_data.iter_mut() {
-            data.align_buffers()
+            // align children data recursively
+            for child in data.child_data.iter_mut() {
+                stack.push(child);
+            }
         }
     }
 
