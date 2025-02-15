@@ -18,13 +18,13 @@
 use arrow_array::{Array, FixedSizeListArray, Int32Array};
 use arrow_schema::Field;
 use criterion::*;
-use rand::{rng, Rng};
+use rand::{thread_rng, Rng};
 use std::sync::Arc;
 
 fn gen_fsl(len: usize, value_len: usize) -> FixedSizeListArray {
-    let mut rng = rng();
+    let mut rng = thread_rng();
     let values = Arc::new(Int32Array::from(
-        (0..len).map(|_| rng.random::<i32>()).collect::<Vec<_>>(),
+        (0..len).map(|_| rng.gen::<i32>()).collect::<Vec<_>>(),
     ));
     let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
     FixedSizeListArray::new(field, value_len as i32, values, None)

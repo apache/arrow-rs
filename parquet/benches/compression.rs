@@ -18,7 +18,7 @@
 use criterion::*;
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::compression::create_codec;
-use rand::distr::Alphanumeric;
+use rand::distributions::Alphanumeric;
 use rand::prelude::*;
 
 fn do_bench(c: &mut Criterion, name: &str, uncompressed: &[u8]) {
@@ -76,7 +76,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Create a collection of 64 words
     let words: Vec<Vec<_>> = (0..64)
         .map(|_| {
-            let len = rng.random_range(1..12);
+            let len = rng.gen_range(1..12);
             rng.sample_iter(&Alphanumeric).take(len).collect()
         })
         .collect();
@@ -84,7 +84,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Build data by concatenating these words randomly together
     let mut uncompressed = Vec::with_capacity(DATA_SIZE);
     while uncompressed.len() < DATA_SIZE {
-        let word = &words[rng.random_range(0..words.len())];
+        let word = &words[rng.gen_range(0..words.len())];
         uncompressed.extend_from_slice(&word[..word.len().min(DATA_SIZE - uncompressed.len())])
     }
     assert_eq!(uncompressed.len(), DATA_SIZE);
