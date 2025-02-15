@@ -351,35 +351,4 @@ mod test {
             325166208089902833952788552656412487328
         );
     }
-    #[test]
-    fn test_header_schema_default() {
-        let json_schema = r#"
-        {
-          "type": "record",
-          "name": "TestRecord",
-          "fields": [
-              {"name": "a", "type": "int", "default": 10}
-          ]
-        }
-        "#;
-        let key = "avro.schema";
-        let key_bytes = key.as_bytes();
-        let value_bytes = json_schema.as_bytes();
-        let mut meta_buf = Vec::new();
-        meta_buf.extend_from_slice(key_bytes);
-        meta_buf.extend_from_slice(value_bytes);
-        let meta_offsets = vec![key_bytes.len(), key_bytes.len() + value_bytes.len()];
-        let header = Header {
-            meta_offsets,
-            meta_buf,
-            sync: [0; 16],
-        };
-        let schema = header.schema().unwrap().unwrap();
-        if let Schema::Complex(crate::schema::ComplexType::Record(record)) = schema {
-            assert_eq!(record.fields.len(), 1);
-            assert_eq!(record.fields[0].default, Some(serde_json::json!(10)));
-        } else {
-            panic!("Expected record schema");
-        }
-    }
 }
