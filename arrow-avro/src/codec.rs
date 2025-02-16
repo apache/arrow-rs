@@ -48,24 +48,6 @@ pub struct AvroDataType {
 }
 
 impl AvroDataType {
-    /// Create a new AvroDataType with the given parts.
-    pub fn new(
-        codec: Codec,
-        nullability: Option<Nullability>,
-        metadata: HashMap<String, String>,
-    ) -> Self {
-        AvroDataType {
-            codec,
-            nullability,
-            metadata: Arc::new(metadata),
-        }
-    }
-
-    /// Create a new AvroDataType from a `Codec`, with default (no) nullability and empty metadata.
-    pub fn from_codec(codec: Codec) -> Self {
-        Self::new(codec, None, Default::default())
-    }
-
     /// Returns an arrow [`Field`] with the given name, applying `nullability` if present.
     pub fn field_with_name(&self, name: &str) -> Field {
         let is_nullable = self.nullability.is_some();
