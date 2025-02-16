@@ -265,8 +265,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Timestamp(_, _), _) if to_type.is_numeric() => true,
         (_, Timestamp(_, _)) if from_type.is_numeric() => true,
-        (Date64, Timestamp(_, None)) => true,
-        (Date32, Timestamp(_, None)) => true,
+        (Date64, Timestamp(_, _)) => true,
+        (Date32, Timestamp(_, _)) => true,
         (
             Timestamp(_, _),
             Timestamp(_, _)
@@ -1806,43 +1806,54 @@ pub fn cast_with_options(
                     })?,
             ))
         }
-        (Date64, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
+        (Date64, Timestamp(TimeUnit::Second, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS),
+                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS)
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date64, Timestamp(TimeUnit::Millisecond, None)) => {
-            cast_reinterpret_arrays::<Date64Type, TimestampMillisecondType>(array)
-        }
-        (Date64, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
+        (Date64, Timestamp(TimeUnit::Millisecond, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS)),
+                .reinterpret_cast::<TimestampMillisecondType>()
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date64, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
+
+        (Date64, Timestamp(TimeUnit::Microsecond, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS)),
+                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS))
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date32, Timestamp(TimeUnit::Second, None)) => Ok(Arc::new(
+        (Date64, Timestamp(TimeUnit::Nanosecond, to_tz)) => Ok(Arc::new(
+            array
+                .as_primitive::<Date64Type>()
+                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS))
+                .with_timezone_opt(to_tz.clone()),
+        )),
+        (Date32, Timestamp(TimeUnit::Second, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY),
+                .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY)
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date32, Timestamp(TimeUnit::Millisecond, None)) => Ok(Arc::new(
+        (Date32, Timestamp(TimeUnit::Millisecond, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMillisecondType>(|x| (x as i64) * MILLISECONDS_IN_DAY),
+                .unary::<_, TimestampMillisecondType>(|x| (x as i64) * MILLISECONDS_IN_DAY)
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date32, Timestamp(TimeUnit::Microsecond, None)) => Ok(Arc::new(
+        (Date32, Timestamp(TimeUnit::Microsecond, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY),
+                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY)
+                .with_timezone_opt(to_tz.clone()),
         )),
-        (Date32, Timestamp(TimeUnit::Nanosecond, None)) => Ok(Arc::new(
+        (Date32, Timestamp(TimeUnit::Nanosecond, to_tz)) => Ok(Arc::new(
             array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY),
+                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY)
+                .with_timezone_opt(to_tz.clone()),
         )),
 
         (_, Duration(unit)) if from_type.is_numeric() => {
@@ -5215,6 +5226,52 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(actual, $expected);
         }};
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_with_timezone() {
+        let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Millisecond, Some(tz.into())),
+        )
+        .unwrap();
+
+        let c = b.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(864000000005, c.value(0));
+        assert_eq!(1545696000001, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("1997-05-19 05:45:00.005000"),
+            Some("2018-12-25 05:45:00.001000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
     }
 
     #[test]
