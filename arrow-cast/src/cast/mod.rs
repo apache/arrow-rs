@@ -5229,7 +5229,237 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_date32_to_timestamp_with_timezone() {
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Second, Some(tz.into())),
+        )
+        .unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(1609459200, c.value(0));
+        assert_eq!(1640995200, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("2021-01-01 05:45:00.000000"),
+            Some("2022-01-01 05:45:00.000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_with_timezone_ms() {
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Millisecond, Some(tz.into())),
+        )
+        .unwrap();
+        let c = b.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(1609459200000, c.value(0));
+        assert_eq!(1640995200000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("2021-01-01 05:45:00.000000"),
+            Some("2022-01-01 05:45:00.000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_with_timezone_us() {
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(tz.into())),
+        )
+        .unwrap();
+        let c = b.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(1609459200000000, c.value(0));
+        assert_eq!(1640995200000000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("2021-01-01 05:45:00.000000000"),
+            Some("2022-01-01 05:45:00.000000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date32_to_timestamp_with_timezone_ns() {
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into())),
+        )
+        .unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(1609459200000000000, c.value(0));
+        assert_eq!(1640995200000000000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("2021-01-01 05:45:00.000000000"),
+            Some("2022-01-01 05:45:00.000000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
     fn test_cast_date64_to_timestamp_with_timezone() {
+        let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Second, Some(tz.into())),
+        )
+        .unwrap();
+
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(864000000, c.value(0));
+        assert_eq!(1545696000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("1997-05-19 05:45:00.000000"),
+            Some("2018-12-25 05:45:00.000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_with_timezone_ms() {
         let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
         let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
         let b = cast(
@@ -5244,12 +5474,104 @@ mod tests {
         assert!(c.is_null(2));
 
         let expected = vec![
+            Some("1997-05-19 05:45:00.005"),
+            Some("2018-12-25 05:45:00.001"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.3f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_with_timezone_us() {
+        let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Microsecond, Some(tz.into())),
+        )
+        .unwrap();
+
+        let c = b.as_primitive::<TimestampMicrosecondType>();
+        assert_eq!(864000000005000, c.value(0));
+        assert_eq!(1545696000001000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
             Some("1997-05-19 05:45:00.005000"),
             Some("2018-12-25 05:45:00.001000"),
             None,
         ];
 
         let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default()
+                .with_timestamp_format(Some(ts_format))
+                .with_timestamp_tz_format(Some(ts_format)),
+        };
+
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::Utf8View,
+            StringViewArray,
+            cast_options,
+            expected
+        );
+        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
+        assert_cast_timestamp_to_string!(
+            c,
+            DataType::LargeUtf8,
+            LargeStringArray,
+            cast_options,
+            expected
+        );
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_with_timezone_ns() {
+        let array = Date64Array::from(vec![Some(864000000005), Some(1545696000001), None]);
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.into())),
+        )
+        .unwrap();
+
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(864000000005000000, c.value(0));
+        assert_eq!(1545696000001000000, c.value(1));
+        assert!(c.is_null(2));
+
+        let expected = vec![
+            Some("1997-05-19 05:45:00.005000000"),
+            Some("2018-12-25 05:45:00.001000000"),
+            None,
+        ];
+
+        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
         let cast_options = CastOptions {
             safe: true,
             format_options: FormatOptions::default()
