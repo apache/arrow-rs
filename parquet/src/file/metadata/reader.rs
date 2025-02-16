@@ -95,7 +95,7 @@ impl FooterTail {
     }
 
     /// Whether the footer metadata is encrypted
-    pub fn encrypted_footer(&self) -> bool {
+    pub fn is_encrypted_footer(&self) -> bool {
         self.encrypted_footer
     }
 }
@@ -570,7 +570,7 @@ impl ParquetMetaDataReader {
         let start = file_size - footer_metadata_len as u64;
         Self::decode_metadata(
             chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-            footer.encrypted_footer(),
+            footer.is_encrypted_footer(),
             #[cfg(feature = "encryption")]
             self.file_decryption_properties.as_ref(),
         )
@@ -639,7 +639,7 @@ impl ParquetMetaDataReader {
             Ok((
                 Self::decode_metadata(
                     &meta,
-                    footer.encrypted_footer(),
+                    footer.is_encrypted_footer(),
                     #[cfg(feature = "encryption")]
                     file_decryption_properties,
                 )?,
@@ -651,7 +651,7 @@ impl ParquetMetaDataReader {
             Ok((
                 Self::decode_metadata(
                     slice,
-                    footer.encrypted_footer(),
+                    footer.is_encrypted_footer(),
                     #[cfg(feature = "encryption")]
                     file_decryption_properties,
                 )?,

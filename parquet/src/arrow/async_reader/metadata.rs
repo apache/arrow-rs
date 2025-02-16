@@ -131,7 +131,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             (
                 ParquetMetaDataReader::decode_metadata(
                     &meta,
-                    footer.encrypted_footer(),
+                    footer.is_encrypted_footer(),
                     #[cfg(feature = "encryption")]
                     None,
                 )?,
@@ -144,7 +144,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             (
                 ParquetMetaDataReader::decode_metadata(
                     slice,
-                    footer.encrypted_footer(),
+                    footer.is_encrypted_footer(),
                     #[cfg(feature = "encryption")]
                     None,
                 )?,

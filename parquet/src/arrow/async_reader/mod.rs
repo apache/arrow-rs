@@ -179,7 +179,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
                 &buf,
-                footer.encrypted_footer(),
+                footer.is_encrypted_footer(),
                 #[cfg(feature = "encryption")]
                 file_decryption_properties,
             )?))
