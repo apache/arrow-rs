@@ -23,7 +23,6 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-
 #![warn(missing_docs)]
 #![recursion_limit = "128"]
 

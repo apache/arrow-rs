@@ -42,7 +42,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
