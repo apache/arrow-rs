@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_json"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-array = { workspace = true }
@@ -59,4 +61,3 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 [[bench]]
 name = "serde"
 harness = false
-
