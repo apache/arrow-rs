@@ -32,9 +32,12 @@ use arrow_schema::{ArrowError, DataType};
 /// Hash collisions will result in replacement
 struct Interner<'a, V> {
     state: RandomState,
-    buckets: Vec<Option<(Option<&'a [u8]>, V)>>,
+    buckets: Vec<Option<InternerBucket<'a, V>>>,
     shift: u32,
 }
+
+/// A single bucket in [`Interner`].
+type InternerBucket<'a, V> = (Option<&'a [u8]>, V);
 
 impl<'a, V> Interner<'a, V> {
     /// Capacity controls the number of unique buckets allocated within the Interner
