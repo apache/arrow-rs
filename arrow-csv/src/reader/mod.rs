@@ -1661,7 +1661,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_rows());
+        assert_eq!(10, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1805,6 +1805,9 @@ mod tests {
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
+        assert_eq!(infer_field_schema("NaN"), DataType::Float64);
+        assert_eq!(infer_field_schema("inf"), DataType::Float64);
+        assert_eq!(infer_field_schema("-inf"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("trUe"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
@@ -2374,7 +2377,7 @@ mod tests {
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
-            ("test/data/various_types.csv", true, 7),
+            ("test/data/various_types.csv", true, 10),
             ("test/data/decimal_test.csv", false, 10),
         ];
 
