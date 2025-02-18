@@ -40,7 +40,7 @@ use hyper::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::HeaderName;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -353,10 +353,9 @@ impl GoogleCloudStorageClient {
     }
 
     pub(crate) fn object_url(&self, path: &Path) -> String {
-        let encoded = utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
         format!(
             "{}/{}/{}",
-            self.config.base_url, self.bucket_name_encoded, encoded
+            self.config.base_url, self.bucket_name_encoded, path,
         )
     }
 
@@ -556,8 +555,7 @@ impl GoogleCloudStorageClient {
         let credential = self.get_credential().await?;
         let url = self.object_url(to);
 
-        let from = utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
-        let source = format!("{}/{}", self.bucket_name_encoded, from);
+        let source = format!("{}/{}", self.bucket_name_encoded, from.as_ref());
 
         let mut builder = self
             .client
