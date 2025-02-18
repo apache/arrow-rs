@@ -19,7 +19,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 /// A cheaply cloneable, ordered collection of [`Bytes`]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PutPayload(Arc<[Bytes]>);
 
 impl Default for PutPayload {
