@@ -221,6 +221,8 @@ impl InferredDataType {
             } else {
                 1 << m
             }
+        } else if string == "NaN" || string == "inf" || string == "-inf" {
+            1 << 2 // Float64
         } else {
             1 << 8 // Utf8
         }
