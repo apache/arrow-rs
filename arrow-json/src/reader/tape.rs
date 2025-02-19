@@ -583,7 +583,7 @@ impl TapeDecoder {
             self.bytes.len()
         );
 
-        let strings = std::str::from_utf8(&self.bytes)
+        let strings = simdutf8::basic::from_utf8(&self.bytes)
             .map_err(|_| ArrowError::JsonError("Encountered non-UTF-8 data".to_string()))?;
 
         for offset in self.offsets.iter().copied() {
