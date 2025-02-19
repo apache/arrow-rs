@@ -685,9 +685,11 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
-        // Reqwest will remove the `Content-Length` header if it is configured to
-        // transparently decompress the body via the non-default `gzip` feature.
-        builder = builder.no_gzip();
+        // Explicitly disable compression, since it may be automatically enabled
+        // when certain reqwest features are enabled. Compression interferes
+        // with the `Content-Length` header, which is used to determine the
+        // size of objects.
+        builder = builder.no_gzip().no_brotli().no_zstd().no_deflate();
 
         if self.randomize_addresses.get()? {
             builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
