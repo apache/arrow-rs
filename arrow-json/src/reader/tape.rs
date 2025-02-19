@@ -615,29 +615,31 @@ impl TapeDecoder {
 }
 
 /// A wrapper around a slice iterator that provides some helper functionality
-struct BufIter<'a>(std::slice::Iter<'a, u8>);
+struct BufIter<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
 
 impl<'a> BufIter<'a> {
     fn new(buf: &'a [u8]) -> Self {
-        Self(buf.iter())
+        Self { buf, pos: 0 }
     }
 
     fn as_slice(&self) -> &'a [u8] {
-        self.0.as_slice()
+        &self.buf[self.pos..]
     }
 
     fn is_empty(&self) -> bool {
-        self.0.len() == 0
+        self.pos >= self.buf.len()
     }
 
     fn peek(&self) -> Option<u8> {
-        self.0.as_slice().first().copied()
+        self.buf.get(self.pos).copied()
     }
 
+    #[inline]
     fn advance(&mut self, skip: usize) {
-        for _ in 0..skip {
-            self.0.next();
-        }
+        self.pos += skip;
     }
 
     fn advance_until<F: FnMut(u8) -> bool>(&mut self, f: F) -> &[u8] {
@@ -663,11 +665,14 @@ impl Iterator for BufIter<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().copied()
+        let b = self.peek();
+        self.pos += 1;
+        b
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        let s = self.buf.len().checked_sub(self.pos).unwrap_or_default();
+        (s, Some(s))
     }
 }
 
