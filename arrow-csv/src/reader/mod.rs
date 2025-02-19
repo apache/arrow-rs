@@ -221,7 +221,7 @@ impl InferredDataType {
             } else {
                 1 << m
             }
-        } else if string == "NaN" || string == "inf" || string == "-inf" {
+        } else if string == "NaN" || string == "nan" || string == "inf" || string == "-inf" {
             1 << 2 // Float64
         } else {
             1 << 8 // Utf8
@@ -1806,6 +1806,7 @@ mod tests {
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
         assert_eq!(infer_field_schema("NaN"), DataType::Float64);
+        assert_eq!(infer_field_schema("nan"), DataType::Float64);
         assert_eq!(infer_field_schema("inf"), DataType::Float64);
         assert_eq!(infer_field_schema("-inf"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
