@@ -46,6 +46,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
+use crate::checksum::ChecksumAlgorithm;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
@@ -57,6 +58,7 @@ static MS_CONTENT_ENCODING: HeaderName = HeaderName::from_static("x-ms-blob-cont
 static MS_CONTENT_LANGUAGE: HeaderName = HeaderName::from_static("x-ms-blob-content-language");
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
+static CHECKSUM_MD5_HEADER: HeaderName = HeaderName::from_static("Content-MD5");
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -227,6 +229,9 @@ impl PutRequest<'_> {
         for (k, v) in &attributes {
             builder = match k {
                 Attribute::CacheControl => builder.header(&MS_CACHE_CONTROL, v.as_ref()),
+                Attribute::Checksum(algorithm) => match algorithm {
+                    ChecksumAlgorithm::MD5 => builder.header(&CHECKSUM_MD5_HEADER, v.as_ref()),
+                }
                 Attribute::ContentDisposition => {
                     builder.header(&MS_CONTENT_DISPOSITION, v.as_ref())
                 }
