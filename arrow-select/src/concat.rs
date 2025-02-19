@@ -740,6 +740,24 @@ mod tests {
     }
 
     #[test]
+    fn test_string_dictionary_array_nulls_in_values() {
+        let input_1_keys = Int32Array::from_iter_values([0, 2, 1, 3]);
+        let input_1_values = StringArray::from(vec![Some("foo"), None, Some("bar"), Some("fiz")]);
+        let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+
+        let input_2_keys = Int32Array::from_iter_values([0]);
+        let input_2_values = StringArray::from(vec![None, Some("hello")]);
+        let input_2 = DictionaryArray::new(input_2_keys, Arc::new(input_2_values));
+
+        let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
+
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_string_dictionary_merge() {
         let mut builder = StringDictionaryBuilder::<Int32Type>::new();
         for i in 0..20 {
