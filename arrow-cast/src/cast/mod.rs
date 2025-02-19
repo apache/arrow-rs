@@ -1806,55 +1806,63 @@ pub fn cast_with_options(
                     })?,
             ))
         }
-        (Date64, Timestamp(TimeUnit::Second, to_tz)) => Ok(Arc::new(
-            array
+        (Date64, Timestamp(TimeUnit::Second, _)) => {
+            let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS)
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date64, Timestamp(TimeUnit::Millisecond, to_tz)) => Ok(Arc::new(
-            array
-                .as_primitive::<Date64Type>()
-                .reinterpret_cast::<TimestampMillisecondType>()
-                .with_timezone_opt(to_tz.clone()),
-        )),
+                .unary::<_, TimestampSecondType>(|x| x / MILLISECONDS);
 
-        (Date64, Timestamp(TimeUnit::Microsecond, to_tz)) => Ok(Arc::new(
-            array
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date64, Timestamp(TimeUnit::Millisecond, _)) => {
+            let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS))
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date64, Timestamp(TimeUnit::Nanosecond, to_tz)) => Ok(Arc::new(
-            array
+                .reinterpret_cast::<TimestampMillisecondType>();
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+
+        (Date64, Timestamp(TimeUnit::Microsecond, _)) => {
+            let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS))
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date32, Timestamp(TimeUnit::Second, to_tz)) => Ok(Arc::new(
-            array
+                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS));
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date64, Timestamp(TimeUnit::Nanosecond, _)) => {
+            let array = array
+                .as_primitive::<Date64Type>()
+                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS));
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date32, Timestamp(TimeUnit::Second, _)) => {
+            let array = array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY)
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date32, Timestamp(TimeUnit::Millisecond, to_tz)) => Ok(Arc::new(
-            array
+                .unary::<_, TimestampSecondType>(|x| (x as i64) * SECONDS_IN_DAY);
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date32, Timestamp(TimeUnit::Millisecond, _)) => {
+            let array = array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMillisecondType>(|x| (x as i64) * MILLISECONDS_IN_DAY)
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date32, Timestamp(TimeUnit::Microsecond, to_tz)) => Ok(Arc::new(
-            array
+                .unary::<_, TimestampMillisecondType>(|x| (x as i64) * MILLISECONDS_IN_DAY);
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date32, Timestamp(TimeUnit::Microsecond, _)) => {
+            let array = array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY)
-                .with_timezone_opt(to_tz.clone()),
-        )),
-        (Date32, Timestamp(TimeUnit::Nanosecond, to_tz)) => Ok(Arc::new(
-            array
+                .unary::<_, TimestampMicrosecondType>(|x| (x as i64) * MICROSECONDS_IN_DAY);
+
+            cast_with_options(&array, to_type, cast_options)
+        }
+        (Date32, Timestamp(TimeUnit::Nanosecond, _)) => {
+            let array = array
                 .as_primitive::<Date32Type>()
-                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY)
-                .with_timezone_opt(to_tz.clone()),
-        )),
+                .unary::<_, TimestampNanosecondType>(|x| (x as i64) * NANOSECONDS_IN_DAY);
+
+            cast_with_options(&array, to_type, cast_options)
+        }
 
         (_, Duration(unit)) if from_type.is_numeric() => {
             let array = cast_with_options(array, &Int64, cast_options)?;
@@ -5229,6 +5237,29 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_date32_to_timestamp_and_timestamp_with_timezone() {
+        let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
+        let a = Date32Array::from(vec![Some(18628), None, None]); // 2021-1-1, 2022-1-1
+        let array = Arc::new(a) as ArrayRef;
+
+        let b = cast(
+            &array,
+            &DataType::Timestamp(TimeUnit::Second, Some(tz.into())),
+        )
+        .unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
+
+        let b = cast(&array, &DataType::Timestamp(TimeUnit::Second, None)).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00", result.value(0));
+    }
+
+    #[test]
     fn test_cast_date32_to_timestamp_with_timezone() {
         let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
         let a = Date32Array::from(vec![Some(18628), Some(18993), None]); // 2021-1-1, 2022-1-1
@@ -5239,39 +5270,14 @@ mod tests {
         )
         .unwrap();
         let c = b.as_primitive::<TimestampSecondType>();
-        assert_eq!(1609459200, c.value(0));
-        assert_eq!(1640995200, c.value(1));
+        assert_eq!(1609438500, c.value(0));
+        assert_eq!(1640974500, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("2021-01-01 05:45:00.000000"),
-            Some("2022-01-01 05:45:00.000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
+        assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
     }
 
     #[test]
@@ -5285,39 +5291,14 @@ mod tests {
         )
         .unwrap();
         let c = b.as_primitive::<TimestampMillisecondType>();
-        assert_eq!(1609459200000, c.value(0));
-        assert_eq!(1640995200000, c.value(1));
+        assert_eq!(1609438500000, c.value(0));
+        assert_eq!(1640974500000, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("2021-01-01 05:45:00.000000"),
-            Some("2022-01-01 05:45:00.000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
+        assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
     }
 
     #[test]
@@ -5331,39 +5312,14 @@ mod tests {
         )
         .unwrap();
         let c = b.as_primitive::<TimestampMicrosecondType>();
-        assert_eq!(1609459200000000, c.value(0));
-        assert_eq!(1640995200000000, c.value(1));
+        assert_eq!(1609438500000000, c.value(0));
+        assert_eq!(1640974500000000, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("2021-01-01 05:45:00.000000000"),
-            Some("2022-01-01 05:45:00.000000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
+        assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
     }
 
     #[test]
@@ -5377,39 +5333,14 @@ mod tests {
         )
         .unwrap();
         let c = b.as_primitive::<TimestampNanosecondType>();
-        assert_eq!(1609459200000000000, c.value(0));
-        assert_eq!(1640995200000000000, c.value(1));
+        assert_eq!(1609438500000000000, c.value(0));
+        assert_eq!(1640974500000000000, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("2021-01-01 05:45:00.000000000"),
-            Some("2022-01-01 05:45:00.000000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("2021-01-01T00:00:00+05:45", result.value(0));
+        assert_eq!("2022-01-01T00:00:00+05:45", result.value(1));
     }
 
     #[test]
@@ -5423,39 +5354,14 @@ mod tests {
         .unwrap();
 
         let c = b.as_primitive::<TimestampSecondType>();
-        assert_eq!(864000000, c.value(0));
-        assert_eq!(1545696000, c.value(1));
+        assert_eq!(863979300, c.value(0));
+        assert_eq!(1545675300, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("1997-05-19 05:45:00.000000"),
-            Some("2018-12-25 05:45:00.000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("1997-05-19T00:00:00+05:45", result.value(0));
+        assert_eq!("2018-12-25T00:00:00+05:45", result.value(1));
     }
 
     #[test]
@@ -5469,39 +5375,14 @@ mod tests {
         .unwrap();
 
         let c = b.as_primitive::<TimestampMillisecondType>();
-        assert_eq!(864000000005, c.value(0));
-        assert_eq!(1545696000001, c.value(1));
+        assert_eq!(863979300005, c.value(0));
+        assert_eq!(1545675300001, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("1997-05-19 05:45:00.005"),
-            Some("2018-12-25 05:45:00.001"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.3f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
+        assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
     }
 
     #[test]
@@ -5515,39 +5396,14 @@ mod tests {
         .unwrap();
 
         let c = b.as_primitive::<TimestampMicrosecondType>();
-        assert_eq!(864000000005000, c.value(0));
-        assert_eq!(1545696000001000, c.value(1));
+        assert_eq!(863979300005000, c.value(0));
+        assert_eq!(1545675300001000, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("1997-05-19 05:45:00.005000"),
-            Some("2018-12-25 05:45:00.001000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.6f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
+        assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
     }
 
     #[test]
@@ -5561,39 +5417,14 @@ mod tests {
         .unwrap();
 
         let c = b.as_primitive::<TimestampNanosecondType>();
-        assert_eq!(864000000005000000, c.value(0));
-        assert_eq!(1545696000001000000, c.value(1));
+        assert_eq!(863979300005000000, c.value(0));
+        assert_eq!(1545675300001000000, c.value(1));
         assert!(c.is_null(2));
 
-        let expected = vec![
-            Some("1997-05-19 05:45:00.005000000"),
-            Some("2018-12-25 05:45:00.001000000"),
-            None,
-        ];
-
-        let ts_format = "%Y-%m-%d %H:%M:%S%.9f";
-        let cast_options = CastOptions {
-            safe: true,
-            format_options: FormatOptions::default()
-                .with_timestamp_format(Some(ts_format))
-                .with_timestamp_tz_format(Some(ts_format)),
-        };
-
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::Utf8View,
-            StringViewArray,
-            cast_options,
-            expected
-        );
-        assert_cast_timestamp_to_string!(c, DataType::Utf8, StringArray, cast_options, expected);
-        assert_cast_timestamp_to_string!(
-            c,
-            DataType::LargeUtf8,
-            LargeStringArray,
-            cast_options,
-            expected
-        );
+        let string_array = cast(&c, &DataType::Utf8).unwrap();
+        let result = string_array.as_string::<i32>();
+        assert_eq!("1997-05-19T00:00:00.005+05:45", result.value(0));
+        assert_eq!("2018-12-25T00:00:00.001+05:45", result.value(1));
     }
 
     #[test]
