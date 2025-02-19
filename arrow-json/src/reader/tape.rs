@@ -17,6 +17,7 @@
 
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
+use memchr::memchr2;
 use serde::Serialize;
 use std::fmt::Write;
 
@@ -394,7 +395,7 @@ impl TapeDecoder {
                 }
                 // Decoding a string
                 DecoderState::String => {
-                    let s = iter.advance_until(|b| matches!(b, b'\\' | b'"'));
+                    let s = iter.skip_chrs(b'\\', b'"');
                     self.bytes.extend_from_slice(s);
 
                     match next!(iter) {
@@ -625,10 +626,12 @@ impl<'a> BufIter<'a> {
         Self { buf, pos: 0 }
     }
 
+    #[inline]
     fn as_slice(&self) -> &'a [u8] {
         &self.buf[self.pos..]
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
         self.pos >= self.buf.len()
     }
@@ -648,6 +651,20 @@ impl<'a> BufIter<'a> {
             Some(x) => {
                 self.advance(x);
                 &s[..x]
+            }
+            None => {
+                self.advance(s.len());
+                s
+            }
+        }
+    }
+
+    fn skip_chrs(&mut self, c1: u8, c2: u8) -> &[u8] {
+        let s = self.as_slice();
+        match memchr2(c1, c2, s) {
+            Some(p) => {
+                self.advance(p);
+                &s[..p]
             }
             None => {
                 self.advance(s.len());

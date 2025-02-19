@@ -46,6 +46,7 @@ serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { workspace = true }
 lexical-core = { version = "1.0", default-features = false}
+memchr = "2.7.4"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
