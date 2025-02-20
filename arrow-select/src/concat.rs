@@ -37,7 +37,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -223,8 +223,22 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
+        // Get all the unique data types
+        let input_data_types = {
+            let unique = arrays
+                .iter()
+                .map(|array| array.data_type())
+                .collect::<HashSet<&DataType>>();
+
+            unique
+                .iter()
+                .map(|dt| format!("{dt}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
         return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to concatenate arrays of different data types.".to_string(),
+            format!("It is not possible to concatenate arrays of different data types ({input_data_types})."),
         ));
     }
 
@@ -342,7 +356,13 @@ mod tests {
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
             &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
         ]);
-        assert!(re.is_err());
+
+        match re.expect_err("concat should have failed") {
+            ArrowError::InvalidArgumentError(desc) => {
+                assert_eq!(desc, "It is not possible to concatenate arrays of different data types (Int64, Utf8).");
+            }
+            _ => panic!("Expected InvalidArgumentError"),
+        }
     }
 
     #[test]
