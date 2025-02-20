@@ -180,7 +180,7 @@ impl<'a> Tape<'a> {
             TapeElement::Null => out.push_str("null"),
             TapeElement::I64(high) => match self.get(idx + 1) {
                 TapeElement::I32(low) => {
-                    let val = (high as i64) << 32 | (low as u32) as i64;
+                    let val = ((high as i64) << 32) | (low as u32) as i64;
                     let _ = write!(out, "{val}");
                     return idx + 2;
                 }
@@ -191,7 +191,7 @@ impl<'a> Tape<'a> {
             }
             TapeElement::F64(high) => match self.get(idx + 1) {
                 TapeElement::F32(low) => {
-                    let val = f64::from_bits((high as u64) << 32 | low as u64);
+                    let val = f64::from_bits(((high as u64) << 32) | low as u64);
                     let _ = write!(out, "{val}");
                     return idx + 2;
                 }
@@ -491,7 +491,7 @@ impl TapeDecoder {
                 // Parse a unicode escape sequence
                 DecoderState::Unicode(high, low, idx) => loop {
                     match *idx {
-                        0..=3 => *high = *high << 4 | parse_hex(next!(iter))? as u16,
+                        0..=3 => *high = (*high << 4) | parse_hex(next!(iter))? as u16,
                         4 => {
                             if let Some(c) = char::from_u32(*high as u32) {
                                 write_char(c, &mut self.bytes);
@@ -508,7 +508,7 @@ impl TapeDecoder {
                             b'u' => {}
                             b => return Err(err(b, "parsing surrogate pair unicode")),
                         },
-                        6..=9 => *low = *low << 4 | parse_hex(next!(iter))? as u16,
+                        6..=9 => *low = (*low << 4) | parse_hex(next!(iter))? as u16,
                         _ => {
                             let c = char_from_surrogate_pair(*low, *high)?;
                             write_char(c, &mut self.bytes);
@@ -683,7 +683,7 @@ fn err(b: u8, ctx: &str) -> ArrowError {
 
 /// Creates a character from an UTF-16 surrogate pair
 fn char_from_surrogate_pair(low: u16, high: u16) -> Result<char, ArrowError> {
-    let n = (((high - 0xD800) as u32) << 10 | (low - 0xDC00) as u32) + 0x1_0000;
+    let n = (((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32 + 0x1_0000);
     char::from_u32(n)
         .ok_or_else(|| ArrowError::JsonError(format!("Invalid UTF-16 surrogate pair {n}")))
 }
