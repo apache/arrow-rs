@@ -595,6 +595,32 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
+    // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
+    //
+    // According to [ISO 8601], years have:
+    //  Four digits or more for the year. Years in the range 0000 to 9999 will be pre-padded by
+    //  zero to ensure four digits. Years outside that range will have a prefixed positive or negative symbol.
+    //
+    // [ISO 8601]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/time/format/DateTimeFormatter.html#ISO_LOCAL_DATE
+    if string.starts_with('+') || string.starts_with('-') {
+        // Skip the sign and look for the hyphen that terminates the year digits.
+        // According to ISO 8601 the unsigned part must be at least 4 digits.
+        let rest = &string[1..];
+        let hyphen = rest.find('-')?;
+        if hyphen < 4 {
+            return None;
+        }
+        // The year substring is the sign and the digits (but not the separator)
+        // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999"
+        let year: i32 = string[..hyphen + 1].parse().ok()?;
+        // The remainder should begin with a '-' which we strip off, leaving the month-day part.
+        let remainder = string[hyphen + 1..].strip_prefix('-')?;
+        let mut parts = remainder.splitn(2, '-');
+        let month: u32 = parts.next()?.parse().ok()?;
+        let day: u32 = parts.next()?.parse().ok()?;
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
     if string.len() > 10 {
         // Try to parse as datetime and return just the date part
         return string_to_datetime(&Utc, string)

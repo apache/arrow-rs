@@ -479,7 +479,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -667,11 +667,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_true_false_count() {
-        let mut rng = rng();
+        let mut rng = thread_rng();
 
         for _ in 0..10 {
             // No nulls
-            let d: Vec<_> = (0..2000).map(|_| rng.random_bool(0.5)).collect();
+            let d: Vec<_> = (0..2000).map(|_| rng.gen_bool(0.5)).collect();
             let b = BooleanArray::from(d.clone());
 
             let expected_true = d.iter().filter(|x| **x).count();
@@ -680,7 +680,7 @@ mod tests {
 
             // With nulls
             let d: Vec<_> = (0..2000)
-                .map(|_| rng.random_bool(0.5).then(|| rng.random_bool(0.5)))
+                .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
                 .collect();
             let b = BooleanArray::from(d.clone());
 

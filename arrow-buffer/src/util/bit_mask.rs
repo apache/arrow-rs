@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng, TryRngCore};
+    use rand::{Fill, Rng, SeedableRng};
     use std::fmt::Display;
 
     #[test]
@@ -322,20 +322,20 @@ mod tests {
             // -------------------+-----------------+-------
 
             // length of data to copy
-            let len = rng.random_range(0..=200);
+            let len = rng.gen_range(0..=200);
 
             // randomly pick where we will write to
-            let offset_write_bits = rng.random_range(0..=200);
+            let offset_write_bits = rng.gen_range(0..=200);
             let offset_write_bytes = if offset_write_bits % 8 == 0 {
                 offset_write_bits / 8
             } else {
                 (offset_write_bits / 8) + 1
             };
-            let extra_write_data_bytes = rng.random_range(0..=5); // ensure 0 shows up often
+            let extra_write_data_bytes = rng.gen_range(0..=5); // ensure 0 shows up often
 
             // randomly decide where we will read from
-            let extra_read_data_bytes = rng.random_range(0..=5); // make sure 0 shows up often
-            let offset_read_bits = rng.random_range(0..=200);
+            let extra_read_data_bytes = rng.gen_range(0..=5); // make sure 0 shows up often
+            let offset_read_bits = rng.gen_range(0..=200);
             let offset_read_bytes = if offset_read_bits % 8 != 0 {
                 (offset_read_bits / 8) + 1
             } else {
@@ -356,7 +356,7 @@ mod tests {
             self.data
                 .resize(offset_read_bytes + len + extra_read_data_bytes, 0);
             // fill source data with random bytes
-            rng.try_fill_bytes(self.data.as_mut_slice()).unwrap();
+            self.data.try_fill(rng).unwrap();
             self.offset_read = offset_read_bits;
 
             self.len = len;

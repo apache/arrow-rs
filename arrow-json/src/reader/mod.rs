@@ -615,11 +615,27 @@ impl Decoder {
         self.tape_decoder.serialize(rows)
     }
 
+    /// True if the decoder is currently part way through decoding a record.
+    pub fn has_partial_record(&self) -> bool {
+        self.tape_decoder.has_partial_row()
+    }
+
+    /// The number of unflushed records, including the partially decoded record (if any).
+    pub fn len(&self) -> usize {
+        self.tape_decoder.num_buffered_rows()
+    }
+
+    /// True if there are no records to flush, i.e. [`Self::len`] is zero.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Flushes the currently buffered data to a [`RecordBatch`]
     ///
-    /// Returns `Ok(None)` if no buffered data
+    /// Returns `Ok(None)` if no buffered data, i.e. [`Self::is_empty`] is true.
     ///
-    /// Note: if called part way through decoding a record, this will return an error
+    /// Note: This will return an error if called part way through decoding a record,
+    /// i.e. [`Self::has_partial_record`] is true.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         let tape = self.tape_decoder.finish()?;
 
@@ -802,6 +818,20 @@ mod tests {
             Field::new("d", DataType::Date32, true),
             Field::new("e", DataType::Date64, true),
         ]));
+
+        let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+        assert!(decoder.is_empty());
+        assert_eq!(decoder.len(), 0);
+        assert!(!decoder.has_partial_record());
+        assert_eq!(decoder.decode(buf.as_bytes()).unwrap(), 221);
+        assert!(!decoder.is_empty());
+        assert_eq!(decoder.len(), 6);
+        assert!(!decoder.has_partial_record());
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 6);
+        assert!(decoder.is_empty());
+        assert_eq!(decoder.len(), 0);
+        assert!(!decoder.has_partial_record());
 
         let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
@@ -2157,6 +2187,14 @@ mod tests {
             vec![Field::new("child", DataType::Int32, false)],
             true,
         )]));
+
+        let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+        let _ = decoder.decode(r#"{"a": { "child":"#.as_bytes()).unwrap();
+        assert!(decoder.tape_decoder.has_partial_row());
+        assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
+        let _ = decoder.flush().unwrap_err();
+        assert!(decoder.tape_decoder.has_partial_row());
+        assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
 
         let parse_err = |s: &str| {
             ReaderBuilder::new(schema.clone())

@@ -37,7 +37,7 @@ use parquet::{
     data_type::{ByteArrayType, Int32Type, Int64Type},
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
-use rand::distr::uniform::SampleUniform;
+use rand::distributions::uniform::SampleUniform;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -119,14 +119,14 @@ where
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
                     // create the Float16 value
-                    let value = f16::from_f32(rng.random_range(min..max));
+                    let value = f16::from_f32(rng.gen_range(min..max));
                     // Float16 in parquet is stored little-endian
                     let bytes = match column_desc.physical_type() {
                         Type::FIXED_LEN_BYTE_ARRAY => {
@@ -177,14 +177,14 @@ where
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
                     // create the decimal value
-                    let value = rng.random_range(min..max);
+                    let value = rng.gen_range(min..max);
                     // decimal of parquet use the big-endian to store
                     let bytes = match column_desc.physical_type() {
                         Type::BYTE_ARRAY => {
@@ -235,14 +235,14 @@ fn build_encoded_flba_bytes_page_iterator<const BYTE_LENGTH: usize>(
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
                     // create the FLBA(BYTE_LENGTH) value
-                    let value = (0..BYTE_LENGTH).map(|_| rng.random()).collect::<Vec<u8>>();
+                    let value = (0..BYTE_LENGTH).map(|_| rng.gen()).collect::<Vec<u8>>();
                     let value =
                         <FixedLenByteArrayType as parquet::data_type::DataType>::T::from(value);
                     values.push(value);
@@ -284,13 +284,13 @@ where
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
-                    let value = FromPrimitive::from_usize(rng.random_range(min..max)).unwrap();
+                    let value = FromPrimitive::from_usize(rng.gen_range(min..max)).unwrap();
                     values.push(value);
                 }
                 def_levels.push(def_level);
@@ -336,14 +336,14 @@ where
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
                     // select random value from list of unique values
-                    let value = unique_values[rng.random_range(0..NUM_UNIQUE_VALUES)];
+                    let value = unique_values[rng.gen_range(0..NUM_UNIQUE_VALUES)];
                     values.push(value);
                 }
                 def_levels.push(def_level);
@@ -393,7 +393,7 @@ fn build_plain_encoded_byte_array_page_iterator_inner(
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
@@ -452,15 +452,14 @@ fn build_dictionary_encoded_string_page_iterator(
             let mut values = Vec::with_capacity(VALUES_PER_PAGE);
             let mut def_levels = Vec::with_capacity(VALUES_PER_PAGE);
             for _k in 0..VALUES_PER_PAGE {
-                let def_level = if rng.random::<f32>() < null_density {
+                let def_level = if rng.gen::<f32>() < null_density {
                     max_def_level - 1
                 } else {
                     max_def_level
                 };
                 if def_level == max_def_level {
                     // select random value from list of unique values
-                    let string_value =
-                        unique_values[rng.random_range(0..NUM_UNIQUE_VALUES)].as_str();
+                    let string_value = unique_values[rng.gen_range(0..NUM_UNIQUE_VALUES)].as_str();
                     values.push(parquet::data_type::ByteArray::from(string_value));
                 }
                 def_levels.push(def_level);
@@ -513,12 +512,12 @@ fn build_string_list_page_iterator(
             let mut rep_levels = Vec::with_capacity(VALUES_PER_PAGE * MAX_LIST_LEN);
             for k in 0..VALUES_PER_PAGE {
                 rep_levels.push(0);
-                if rng.random::<f32>() < null_density {
+                if rng.gen::<f32>() < null_density {
                     // Null list
                     def_levels.push(0);
                     continue;
                 }
-                let len = rng.random_range(0..MAX_LIST_LEN);
+                let len = rng.gen_range(0..MAX_LIST_LEN);
                 if len == 0 {
                     // Empty list
                     def_levels.push(1);
@@ -528,7 +527,7 @@ fn build_string_list_page_iterator(
                 (1..len).for_each(|_| rep_levels.push(1));
 
                 for l in 0..len {
-                    if rng.random::<f32>() < null_density {
+                    if rng.gen::<f32>() < null_density {
                         // Null element
                         def_levels.push(2);
                     } else {

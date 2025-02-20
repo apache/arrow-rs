@@ -442,6 +442,30 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_dictionary_nulls() {
+        let input_1_keys = Int32Array::from_iter_values([0, 2, 1, 3]);
+        let input_1_values = StringArray::from(vec![Some("foo"), None, Some("bar"), Some("fiz")]);
+        let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+        let input_2: DictionaryArray<Int32Type> = vec![None].into_iter().collect();
+
+        let expected = vec![Some("fiz"), None, None, Some("foo")];
+
+        let values = interleave(
+            &[&input_1 as _, &input_2 as _],
+            &[(0, 3), (0, 2), (1, 0), (0, 0)],
+        )
+        .unwrap();
+        let dictionary = values.as_dictionary::<Int32Type>();
+        let actual: Vec<Option<&str>> = dictionary
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_lists() {
         // [[1, 2], null, [3]]
         let mut a = ListBuilder::new(Int32Builder::new());

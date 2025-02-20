@@ -329,7 +329,7 @@ mod tests {
     use crate::Error;
 
     use super::*;
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
     use std::ops::Range;
 
     /// Calls coalesce_ranges and validates the returned data is correct
@@ -395,20 +395,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_coalesce_fuzz() {
-        let mut rand = rng();
+        let mut rand = thread_rng();
         for _ in 0..100 {
-            let object_len = rand.random_range(10..250);
-            let range_count = rand.random_range(0..10);
+            let object_len = rand.gen_range(10..250);
+            let range_count = rand.gen_range(0..10);
             let ranges: Vec<_> = (0..range_count)
                 .map(|_| {
-                    let start = rand.random_range(0..object_len);
+                    let start = rand.gen_range(0..object_len);
                     let max_len = 20.min(object_len - start);
-                    let len = rand.random_range(0..max_len);
+                    let len = rand.gen_range(0..max_len);
                     start..start + len
                 })
                 .collect();
 
-            let coalesce = rand.random_range(1..5);
+            let coalesce = rand.gen_range(1..5);
             let fetches = do_fetch(ranges.clone(), coalesce).await;
 
             for fetch in fetches.windows(2) {

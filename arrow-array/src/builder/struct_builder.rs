@@ -296,10 +296,11 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                         value_builder,
                         capacity,
                     )
+                    .with_keys_field(fields[0].clone())
                     .with_values_field(fields[1].clone()),
                 )
             }
-            t => panic!("The field of Map data type {t:?} should has a child Struct field"),
+            t => panic!("The field of Map data type {t:?} should have a child Struct field"),
         },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t @ DataType::Dictionary(key_type, value_type) => {

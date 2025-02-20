@@ -31,8 +31,8 @@ fn create_slices(size: usize) -> Vec<(usize, usize)> {
 
     (0..size)
         .map(|_| {
-            let start = rng.random_range(0..size / 2);
-            let end = rng.random_range(start + 1..size);
+            let start = rng.gen_range(0..size / 2);
+            let end = rng.gen_range(start + 1..size);
             (start, end)
         })
         .collect()
