@@ -536,6 +536,7 @@ mod config;
 
 mod tags;
 
+pub use extensions::{Extensions, Extension};
 pub use tags::TagSet;
 
 pub mod multipart;
@@ -545,6 +546,7 @@ mod upload;
 mod util;
 
 mod attributes;
+mod extensions;
 
 #[cfg(any(feature = "integration", test))]
 pub mod integration;
@@ -910,7 +912,6 @@ pub struct ObjectMeta {
     /// A version indicator for this object
     pub version: Option<String>,
 }
-
 /// Options for a get request, such as range
 #[derive(Debug, Default, Clone)]
 pub struct GetOptions {
@@ -963,6 +964,13 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
     pub head: bool,
+
+    /// Implementation-specific extensions.  but
+    /// intended for use by [`ObjectStore`] implementations that need to pass context-specific
+    /// information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub extensions: Extensions,
 }
 
 impl GetOptions {
