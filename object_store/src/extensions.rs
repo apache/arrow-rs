@@ -53,13 +53,10 @@ impl Extensions {
         self.inner.insert(id, a);
     }
 
-    fn set_ext_wrapper<T: Any + Send + Sync + std::fmt::Debug + 'static>(
-        &mut self,
-        t: ExtWrapper<T>,
-    ) {
+    fn set_ext_wrapped<T: Any + Send + Sync + std::fmt::Debug + 'static>(&mut self, t: T) {
         let id = TypeId::of::<T>();
-        // println!("inserting: {id:?}: {}", std::any::type_name::<T>());
-        let a = Arc::new(t);
+        //println!("inserting: {id:?}: {}", std::any::type_name::<T>());
+        let a = Arc::new(ExtWrapper::new(t));
         self.inner.insert(id, a);
     }
 
@@ -211,17 +208,10 @@ mod test {
     #[test]
     fn equality_ext_wrapper() {
         let mut exts1 = Extensions::default();
-        let wrapped1 = ExtWrapper::new(0);
-        let t1 = wrapped1.type_id();
-        println!("type id of ExtWrapper<i32>: {t1:?}");
-        exts1.set_ext_wrapper(wrapped1);
+        exts1.set_ext_wrapped(0);
 
         let mut exts2 = Extensions::default();
-        let wrapped2 = ExtWrapper::new(1);
-        let t2 = wrapped2.type_id();
-        println!("type id of ExtWrapper<i32>: {t2:?}");
-
-        exts2.set_ext_wrapper(wrapped2);
+        exts2.set_ext_wrapped(1);
 
         assert_eq!(
             exts1, exts2,
@@ -232,8 +222,7 @@ mod test {
         );
 
         let mut exts3 = Extensions::default();
-        let wrapped3 = ExtWrapper::new(0);
-        exts3.set_ext_wrapper(wrapped3);
+        exts3.set_ext_wrapped(0);
 
         assert_eq!(exts1, exts3, "extensions of type ExtWrapper are equal");
     }
@@ -260,14 +249,12 @@ mod test {
         let mut exts = Extensions::default();
 
         println!("validate ExtWrapper<i32> with value 0");
-        let wrapped = ExtWrapper::new(0i32);
-        exts.set_ext_wrapper(wrapped);
+        exts.set_ext_wrapped(0i32);
         let expected = exts.get_ext::<i32>().expect("must get a value");
         assert_eq!(0, *expected, "return the same instance we just added");
 
         println!("validate replacing previous ExtWrapper<i32> with value 1");
-        let wrapped = ExtWrapper::new(1i32);
-        exts.set_ext_wrapper(wrapped);
+        exts.set_ext_wrapped(1i32);
         let expected = exts.get_ext::<i32>().expect("must get a value");
         assert_eq!(1, *expected, "return the same instance we just added");
     }
