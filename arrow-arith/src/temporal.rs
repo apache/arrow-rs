@@ -53,7 +53,6 @@ pub enum DatePart {
     Month,
     /// ISO week of the year, in range `1..=53`
     Week,
-    /// Alias for Week
     WeekISO,
     /// Day of the month, in range `1..=31`
     Day,
@@ -95,12 +94,7 @@ where
     match part {
         DatePart::Quarter => |d| d.quarter() as i32,
         DatePart::Year => |d| d.year(),
-        DatePart::YearISO => |d| {
-            let week_iso = d.iso_week();
-            let y_iso = week_iso.year();
-            println!("==> WeekIso {:?}, YearISO:  computed = {}", week_iso, y_iso);
-            y_iso
-        },
+        DatePart::YearISO => |d| d.iso_week().year(),
         DatePart::Month => |d| d.month() as i32,
         DatePart::Week | DatePart::WeekISO => |d| d.iso_week().week() as i32,
         DatePart::Day => |d| d.day() as i32,
@@ -441,14 +435,12 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Year => Ok(self.unary_opt(|d| Some(d / 12))),
-            DatePart::YearISO => {
-                Ok(self.unary_opt(|d| Some(d / 12 + if d % 12 >= 0 { 1 } else { 0 })))
-            }
             DatePart::Month => Ok(self.unary_opt(|d| Some(d % 12))),
 
             DatePart::Quarter
             | DatePart::Week
             | DatePart::WeekISO
+            | DatePart::YearISO
             | DatePart::Day
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
@@ -494,13 +486,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Year => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months / 12))),
-            DatePart::YearISO => Ok(self.unary_opt(|d: IntervalMonthDayNano| {
-                Some((d.months / 12) + if d.days >= 0 { 1 } else { 0 })
-            })),
             DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months))),
-            DatePart::Week | DatePart::WeekISO => {
-                Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7)))
-            }
+            DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
             DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days))),
             DatePart::Hour => {
                 Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 60 * 1_000_000_000)).try_into().ok()))
@@ -520,6 +507,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             DatePart::Nanosecond => Ok(self.unary_opt(|d| d.nanoseconds.try_into().ok())),
 
             DatePart::Quarter
+            | DatePart::WeekISO
+            | DatePart::YearISO
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
             | DatePart::DayOfYear => {
@@ -532,9 +521,7 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
-                Ok(self.unary_opt(|d| (d / (60 * 60 * 24 * 7)).try_into().ok()))
-            }
+            DatePart::Week => Ok(self.unary_opt(|d| (d / (60 * 60 * 24 * 7)).try_into().ok())),
             DatePart::Day => Ok(self.unary_opt(|d| (d / (60 * 60 * 24)).try_into().ok())),
             DatePart::Hour => Ok(self.unary_opt(|d| (d / (60 * 60)).try_into().ok())),
             DatePart::Minute => Ok(self.unary_opt(|d| (d / 60).try_into().ok())),
@@ -551,6 +538,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
 
             DatePart::Year
             | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -565,7 +553,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
             DatePart::Day => Ok(self.unary_opt(|d| (d / (1_000 * 60 * 60 * 24)).try_into().ok())),
@@ -582,6 +570,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
 
             DatePart::Year
             | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -627,7 +616,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
             DatePart::Day => {
@@ -644,6 +633,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
 
             DatePart::Year
             | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
