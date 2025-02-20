@@ -2439,7 +2439,7 @@ mod tests {
             .unwrap();
         let input_type = array.data_type();
         let output_type = O::TYPE_CONSTRUCTOR(t.output_prec, t.output_scale);
-        assert!(can_cast_types(&input_type, &output_type));
+        assert!(can_cast_types(input_type, &output_type));
 
         let options = CastOptions {
             safe: false,
