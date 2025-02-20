@@ -142,6 +142,7 @@ where
 /// assert_eq!(week_iso.as_ref(), &expected);
 /// let year_iso = date_part(&input, DatePart::YearISO).unwrap();
 /// let expected: Int32Array = vec![Some(2021), None, Some(2024)].into();
+/// assert_eq!(year_iso.as_ref(), &expected);
 /// ```
 pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowError> {
     downcast_temporal_array!(
@@ -2096,5 +2097,86 @@ mod tests {
         ensure_returns_error(&DurationMillisecondArray::from(vec![0]));
         ensure_returns_error(&DurationMicrosecondArray::from(vec![0]));
         ensure_returns_error(&DurationNanosecondArray::from(vec![0]));
+    }
+    #[test]
+    fn test_temporal_array_date64_week_iso() {
+        let a: PrimitiveArray<Date64Type> = vec![Some(1514764800000), Some(1550636625000)].into();
+
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1, actual.value(0));
+        assert_eq!(8, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_year_iso() {
+        let a: PrimitiveArray<Date64Type> = vec![Some(1514764800000), Some(1550636625000)].into();
+
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2018, actual.value(0));
+        assert_eq!(2019, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_week_iso() {
+        let a = TimestampSecondArray::from(vec![0, 86400 * 4, 86400 * 4 - 1]);
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1, actual.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_year_iso() {
+        let a = TimestampSecondArray::from(vec![0, 86400 * 4, 86400 * 4 - 1]);
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1970, actual.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_week_iso_edge_cases() {
+        // 2015-12-28 is the first day of the first ISO week of 2016
+        // 2016-01-03 is the last day of the first ISO week of 2016
+        let a: PrimitiveArray<Date64Type> = vec![Some(1451260800000), Some(1451779200000)].into();
+
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(53, actual.value(0));
+        assert_eq!(53, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_year_iso_edge_cases() {
+        // 2015-12-28 is the first day of the first ISO week of 2016
+        // 2016-01-03 is the last day of the first ISO week of 2016
+        let a: PrimitiveArray<Date64Type> = vec![Some(1451260800000), Some(1451779200000)].into();
+
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2016, actual.value(0));
+        assert_eq!(2016, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_week_iso_edge_cases() {
+        // 2015-12-28 is the first day of the first ISO week of 2016
+        // 2016-01-03 is the last day of the first ISO week of 2016
+        let a = TimestampSecondArray::from(vec![1451260800, 1451779200]);
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(53, actual.value(0));
+        assert_eq!(53, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_year_iso_edge_cases() {
+        // 2015-12-28 is the first day of the first ISO week of 2016
+        // 2016-01-03 is the last day of the first ISO week of 2016
+        let a = TimestampSecondArray::from(vec![1451260800, 1451779200]);
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2016, actual.value(0));
+        assert_eq!(2016, actual.value(1));
     }
 }
