@@ -225,16 +225,18 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
         // Get all the unique data types
         let input_data_types = {
-            let unique = arrays
-                .iter()
-                .map(|array| array.data_type())
-                .collect::<HashSet<&DataType>>();
+            let (names, _) = arrays.iter().map(|array| array.data_type()).fold(
+                (vec![], HashSet::<&DataType>::new()),
+                |(mut names, mut unique_data_types), dt| {
+                    if unique_data_types.insert(dt) {
+                        names.push(format!("{}", dt));
+                    }
 
-            unique
-                .iter()
-                .map(|dt| format!("{dt}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+                    (names, unique_data_types)
+                },
+            );
+
+            names.join(", ")
         };
 
         return Err(ArrowError::InvalidArgumentError(
@@ -354,15 +356,14 @@ mod tests {
     fn test_concat_incompatible_datatypes() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
             &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
 
-        match re.expect_err("concat should have failed") {
-            ArrowError::InvalidArgumentError(desc) => {
-                assert_eq!(desc, "It is not possible to concatenate arrays of different data types (Int64, Utf8).");
-            }
-            _ => panic!("Expected InvalidArgumentError"),
-        }
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
     }
 
     #[test]
@@ -944,7 +945,7 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types.");
+        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
     }
 
     #[test]
