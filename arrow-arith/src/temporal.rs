@@ -94,8 +94,17 @@ where
 {
     match part {
         DatePart::Quarter => |d| d.quarter() as i32,
-        DatePart::Year => |d| d.year(),
-        DatePart::YearISO => |d| d.iso_week().year(),
+        DatePart::Year => |d| {
+            let y = d.year();
+            println!("==> Year: input  computed = {}", y);
+            y
+        },
+        DatePart::YearISO => |d| {
+            let week_iso = d.iso_week();
+            let y_iso = week_iso.year();
+            println!("==> WeekIso {:?}, YearISO:  computed = {}", week_iso, y_iso);
+            y_iso
+        },
         DatePart::Month => |d| d.month() as i32,
         DatePart::Week | DatePart::WeekISO => |d| d.iso_week().week() as i32,
         DatePart::Day => |d| d.day() as i32,
@@ -107,7 +116,7 @@ where
         DatePart::Second => |d| d.second() as i32,
         DatePart::Millisecond => |d| (d.nanosecond() / 1_000_000) as i32,
         DatePart::Microsecond => |d| (d.nanosecond() / 1_000) as i32,
-        DatePart::Nanosecond => |d| (d.nanosecond()) as i32,
+        DatePart::Nanosecond => |d| d.nanosecond() as i32,
     }
 }
 
