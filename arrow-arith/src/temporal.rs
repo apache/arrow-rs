@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use cast::as_primitive_array;
-use chrono::{Datelike, TimeZone, Timelike, Utc};
+use chrono::{Datelike, NaiveDate, TimeZone, Timelike, Utc};
 
 use arrow_array::temporal_conversions::{
     date32_to_datetime, date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
@@ -436,10 +436,12 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
         match part {
             DatePart::Year => Ok(self.unary_opt(|d| Some(d / 12))),
             DatePart::YearISO => {
-                Ok(self.unary_opt(|d| Some(d / 12 + if d % 12 >= 0 { 1 } else { 0 })))
+                Ok(self.unary_opt(|d| {
+                    let date = NaiveDate::from_num_days_from_ce_opt(d)?; // Convert days to a date
+                    Some(date.iso_week().year()) // Get the correct ISO year
+                }))
             }
             DatePart::Month => Ok(self.unary_opt(|d| Some(d % 12))),
-
             DatePart::Quarter
             | DatePart::Week
             | DatePart::WeekISO
@@ -462,7 +464,12 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
 impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => Ok(self.unary_opt(|d| Some(d.days / 7))),
+            DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
+            DatePart::WeekISO => Ok(self.unary_opt(|d: IntervalMonthDayNano| {
+                let base = chrono::Utc.timestamp(0, 0);
+                let dt = base.checked_add_signed(chrono::Duration::days(d.days as i64));
+                dt.map(|dt| dt.iso_week().week())
+            })),
             DatePart::Day => Ok(self.unary_opt(|d| Some(d.days))),
             DatePart::Hour => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 60 * 1_000)))),
             DatePart::Minute => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 1_000)))),
@@ -488,13 +495,19 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Year => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months / 12))),
-            DatePart::YearISO => Ok(self.unary_opt(|d: IntervalMonthDayNano| {
-                Some((d.months / 12) + if d.days >= 0 { 1 } else { 0 })
-            })),
-            DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months))),
-            DatePart::Week | DatePart::WeekISO => {
-                Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7)))
+            DatePart::YearISO => {
+                Ok(self.unary_opt(|d| {
+                    let date = NaiveDate::from_num_days_from_ce_opt(d)?; // Convert days to a date
+                    Some(date.iso_week().year()) // Get the correct ISO year
+                }))
             }
+            DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months))),
+            DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
+            DatePart::WeekISO => Ok(self.unary_opt(|d: IntervalMonthDayNano| {
+                let base = chrono::Utc.timestamp(0, 0);
+                let dt = base.checked_add_signed(chrono::Duration::days(d.days as i64));
+                dt.map(|dt| dt.iso_week().week())
+            })),
             DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days))),
             DatePart::Hour => {
                 Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 60 * 1_000_000_000)).try_into().ok()))
@@ -526,9 +539,15 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
-                Ok(self.unary_opt(|d| (d / (60 * 60 * 24 * 7)).try_into().ok()))
-            }
+            DatePart::Week => Ok(self.unary_opt(|d| (d / (60 * 60 * 24 * 7)).try_into().ok())),
+            DatePart::WeekISO => Ok(self.unary_opt(|d| {
+                chrono::Utc
+                    .timestamp(d, 0)
+                    .iso_week()
+                    .week()
+                    .try_into()
+                    .ok()
+            })),
             DatePart::Day => Ok(self.unary_opt(|d| (d / (60 * 60 * 24)).try_into().ok())),
             DatePart::Hour => Ok(self.unary_opt(|d| (d / (60 * 60)).try_into().ok())),
             DatePart::Minute => Ok(self.unary_opt(|d| (d / 60).try_into().ok())),
@@ -559,9 +578,17 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
+            DatePart::WeekISO => Ok(self.unary_opt(|d| {
+                chrono::Utc
+                    .timestamp_millis(d)
+                    .iso_week()
+                    .week()
+                    .try_into()
+                    .ok()
+            })),
             DatePart::Day => Ok(self.unary_opt(|d| (d / (1_000 * 60 * 60 * 24)).try_into().ok())),
             DatePart::Hour => Ok(self.unary_opt(|d| (d / (1_000 * 60 * 60)).try_into().ok())),
             DatePart::Minute => Ok(self.unary_opt(|d| (d / (1_000 * 60)).try_into().ok())),
@@ -590,9 +617,16 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
+            DatePart::WeekISO => Ok(self.unary_opt(|d| {
+                if let chrono::LocalResult::Single(dt) = chrono::Utc.timestamp_micros(d) {
+                    Some(dt.iso_week().week())
+                } else {
+                    None
+                }
+            })),
             DatePart::Day => {
                 Ok(self.unary_opt(|d| (d / (1_000_000 * 60 * 60 * 24)).try_into().ok()))
             }
@@ -621,9 +655,17 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
+            DatePart::WeekISO => Ok(self.unary_opt(|d| {
+                chrono::Utc
+                    .timestamp_nanos(d)
+                    .iso_week()
+                    .week()
+                    .try_into()
+                    .ok()
+            })),
             DatePart::Day => {
                 Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24)).try_into().ok()))
             }
