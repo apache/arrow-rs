@@ -47,12 +47,13 @@ pub enum DatePart {
     Quarter,
     /// Calendar year
     Year,
-    /// ISO year
+    /// ISO year, computed as per ISO 8601
     YearISO,
     /// Month in the year, in range `1..=12`
     Month,
-    /// ISO week of the year, in range `1..=53`
+    /// week of the year, in range `1..=53`, computed as per ISO 8601
     Week,
+    /// ISO week of the year, in range `1..=53`
     WeekISO,
     /// Day of the month, in range `1..=31`
     Day,
@@ -460,7 +461,7 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
 impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => Ok(self.unary_opt(|d| Some(d.days / 7))),
+            DatePart::Week => Ok(self.unary_opt(|d| Some(d.days / 7))),
             DatePart::Day => Ok(self.unary_opt(|d| Some(d.days))),
             DatePart::Hour => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 60 * 1_000)))),
             DatePart::Minute => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 1_000)))),
@@ -472,6 +473,7 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
             DatePart::Quarter
             | DatePart::Year
             | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
@@ -585,7 +587,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
 impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
-            DatePart::Week | DatePart::WeekISO => {
+            DatePart::Week => {
                 Ok(self.unary_opt(|d| (d / (1_000_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
             DatePart::Day => {
@@ -602,6 +604,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
 
             DatePart::Year
             | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
