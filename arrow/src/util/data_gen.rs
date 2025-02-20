@@ -532,12 +532,12 @@ mod tests {
         let fields = vec![
             Field::new("a", DataType::Int32, true),
             Field::new(
-                "timestamp_with_timezone",
+                "timestamp_without_timezone",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 true,
             ),
             Field::new(
-                "timestamp_without_timezone",
+                "timestamp_with_timezone",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 true,
             ),
