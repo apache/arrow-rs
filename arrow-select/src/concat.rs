@@ -225,16 +225,21 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
         // Get all the unique data types
         let input_data_types = {
-            let (names, _) = arrays.iter().map(|array| array.data_type()).fold(
-                (vec![], HashSet::<&DataType>::new()),
-                |(mut names, mut unique_data_types), dt| {
-                    if unique_data_types.insert(dt) {
-                        names.push(format!("{}", dt));
-                    }
+            let unique = arrays
+                .iter()
+                .map(|array| array.data_type())
+                .collect::<HashSet<&DataType>>();
 
-                    (names, unique_data_types)
-                },
-            );
+            // Allow unused mut as we need it for tests
+            #[allow(unused_mut)]
+            let mut names = unique
+                .into_iter()
+                .map(|dt| format!("{dt}"))
+                .collect::<Vec<_>>();
+
+            // Only sort in tests to make the error message is deterministic
+            #[cfg(test)]
+            names.sort();
 
             names.join(", ")
         };
@@ -363,7 +368,7 @@ mod tests {
             &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Int64, Utf8).");
     }
 
     #[test]
