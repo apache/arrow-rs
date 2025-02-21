@@ -32,17 +32,15 @@ pub struct Extensions {
 
 impl PartialEq for Extensions {
     fn eq(&self, other: &Self) -> bool {
-        for (k, v) in &self.inner {
-            if let Some(ov) = other.inner.get(&k) {
-                if !v.clone().partial_eq(ov.clone().as_any()) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
+        if self.inner.len() != other.inner.len() {
+            return false;
         }
 
-        true
+        self.inner.iter().all(|(key, value)| {
+            other.inner.get(key).map_or(false, |other| {
+                value.clone().partial_eq(other.clone().as_any())
+            })
+        })
     }
 }
 
@@ -166,13 +164,20 @@ mod test {
         exts1.set_ext_wrapped(String::from("meow"));
 
         let mut exts2 = Extensions::default();
-        exts2.set_ext_wrapped(1);
+        exts2.set_ext_wrapped(0);
 
         assert_ne!(
             exts1, exts2,
             "two different Extensions cannot be equal if they don't carry the same types"
         );
+
+        // validate the PartialEq impl is commutative
+        assert_ne!(
+            exts2, exts1,
+            "two different Extensions cannot be equal if they don't carry the same types"
+        );
     }
+
     #[test]
     fn equality_ext_wrapper() {
         let mut exts1 = Extensions::default();
