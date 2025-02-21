@@ -3574,9 +3574,10 @@ mod tests {
 
         let footer_key = "0123456789012345".as_bytes();
         let column_key = "1234567890123450".as_bytes();
+        let false_key = "1234567890123451".as_bytes();
 
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("int".as_bytes().to_vec(), column_key.to_vec())
+        let decryption_properties = FileDecryptionProperties::builder(false_key.to_vec())
+            .with_column_key("int".as_bytes().to_vec(), false_key.to_vec())
             .build()
             .unwrap();
 

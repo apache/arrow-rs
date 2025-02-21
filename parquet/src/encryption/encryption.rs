@@ -63,12 +63,12 @@ pub struct FileEncryptor {
     encryption_properties: FileEncryptionProperties,
     footer_encryptor: Option<Arc<dyn BlockEncryptor>>,
     column_encryptors: Option<HashMap<Vec<u8>, Arc<dyn BlockEncryptor>>>,
-    file_aad: Vec<u8>,
+    file_aad: Option<Vec<u8>>,
 }
 
 impl FileEncryptor {
     pub(crate) fn new(
-        encryption_properties: FileEncryptionProperties, file_aad: Vec<u8>,
+        encryption_properties: FileEncryptionProperties, file_aad: Option<Vec<u8>>,
     ) -> Self {
         let footer_encryptor = RingGcmBlockEncryptor::new(&encryption_properties.footer_key.clone());
         let mut column_encryptors: HashMap<Vec<u8>, Arc<dyn BlockEncryptor>> = HashMap::new();
