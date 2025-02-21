@@ -177,13 +177,14 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let mut buf = TrackedWrite::new(buf);
         #[cfg(feature = "encryption")]
         let file_encryptor = if properties.file_encryption_properties.is_some() {
+            let file_aad = properties.file_aad.clone();
             Some(FileEncryptor::new(
                 properties
                     .file_encryption_properties
                     .as_ref()
                     .unwrap()
                     .clone(),
-                vec![],
+                file_aad,
             ))
         } else {
             None
@@ -565,7 +566,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 .as_ref()
                 .unwrap()
                 .clone(),
-            vec![],
+            self.props.file_aad.clone(),
         );
 
         Ok(match self.next_column_desc() {
@@ -744,12 +745,22 @@ impl<'a> SerializedColumnWriter<'a> {
 /// `SerializedPageWriter` should not be used after calling `close()`.
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
+    #[cfg(feature = "encryption")]
+    encryptor: Option<FileEncryptor>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Creates new page writer.
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
-        Self { sink }
+        Self {
+            sink,
+            encryptor: None,
+        }
+    }
+
+    fn with_encryptor(&mut self, encryptor: &FileEncryptor) -> Result<()> {
+        self.encryptor = Some(encryptor.clone());
+        Ok(())
     }
 
     /// Serializes page header into Thrift.
@@ -758,6 +769,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         {
+            // todo: encrypt
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
         }
@@ -767,6 +779,8 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        // todo: encrypt
+        todo!("encrypt page");
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 

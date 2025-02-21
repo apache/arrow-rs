@@ -3392,6 +3392,9 @@ mod tests {
             }
         ";
         let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = vec![ByteArray::from(vec![128u8; 32]); 7];
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+
         let file: File = tempfile::tempfile().unwrap();
 
         let builder = WriterProperties::builder();
@@ -3403,9 +3406,20 @@ mod tests {
         let props = Arc::new(
             builder
                 .with_file_encryption_properties(file_encryption_properties)
+                .with_file_aad(Some("test_aad".as_bytes().to_vec()))
                 .build(),
         );
-        let mut _writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
         todo!()
     }
 
