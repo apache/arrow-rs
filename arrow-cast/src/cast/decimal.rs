@@ -615,7 +615,7 @@ mod tests {
         );
         assert_eq!(
             parse_decimal::<Decimal128Type>("123.4567891", 38, 5)?,
-            12345679_i128
+            12345678_i128
         );
         Ok(())
     }

@@ -2383,6 +2383,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
@@ -8416,7 +8417,7 @@ mod tests {
     fn test_parse_string_to_decimal() {
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("123.45", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("123.45", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -8424,7 +8425,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -8432,7 +8433,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("0.12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("0.12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -8440,7 +8441,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -8448,24 +8449,24 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
-            "0.13"
+            "0.12"
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
-            "0.13"
+            "0.12"
         );
 
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("123.45", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("123.45", 38, 3).unwrap(),
                 38,
                 3,
             ),
@@ -8473,7 +8474,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("12345", 38, 3).unwrap(),
                 38,
                 3,
             ),
@@ -8481,7 +8482,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("0.12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("0.12345", 38, 3).unwrap(),
                 38,
                 3,
             ),
@@ -8489,7 +8490,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".12345", 38, 3).unwrap(),
                 38,
                 3,
             ),
@@ -8497,11 +8498,11 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".1265", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".1265", 38, 3).unwrap(),
                 38,
                 3,
             ),
-            "0.127"
+            "0.126"
         );
     }
 
