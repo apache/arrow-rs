@@ -988,11 +988,6 @@ pub fn parse_decimal<T: DecimalType>(
         }
     }
 
-    //handle scale = 0 , scale down by fractional digits
-    if scale == 0 {
-        result = result.div_wrapping(base.pow_wrapping(fractionals as u32))
-    }
-
     Ok(if negative {
         result.neg_wrapping()
     } else {
