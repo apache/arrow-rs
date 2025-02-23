@@ -120,6 +120,7 @@ impl HttpClient {
         self.0.call(request).await
     }
 
+    #[allow(unused)]
     pub(crate) fn get<U>(&self, url: U) -> HttpRequestBuilder
     where
         U: TryInto<Uri>,
@@ -128,12 +129,31 @@ impl HttpClient {
         self.request(Method::GET, url)
     }
 
+    #[allow(unused)]
     pub(crate) fn post<U>(&self, url: U) -> HttpRequestBuilder
     where
         U: TryInto<Uri>,
         U::Error: Into<RequestBuilderError>,
     {
         self.request(Method::POST, url)
+    }
+
+    #[allow(unused)]
+    pub(crate) fn put<U>(&self, url: U) -> HttpRequestBuilder
+    where
+        U: TryInto<Uri>,
+        U::Error: Into<RequestBuilderError>,
+    {
+        self.request(Method::PUT, url)
+    }
+
+    #[allow(unused)]
+    pub(crate) fn delete<U>(&self, url: U) -> HttpRequestBuilder
+    where
+        U: TryInto<Uri>,
+        U::Error: Into<RequestBuilderError>,
+    {
+        self.request(Method::DELETE, url)
     }
 
     pub(crate) fn request<U>(&self, method: Method, url: U) -> HttpRequestBuilder

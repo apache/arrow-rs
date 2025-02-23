@@ -48,7 +48,7 @@ use crate::{
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
-use hyper::Method;
+use http::Method;
 use url::Url;
 
 use crate::client::get::GetClientExt;

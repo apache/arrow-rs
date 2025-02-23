@@ -41,6 +41,7 @@ use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
+use crate::client::{HttpConnector, ReqwestConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -203,6 +204,7 @@ pub struct HttpBuilder {
     url: Option<String>,
     client_options: ClientOptions,
     retry_config: RetryConfig,
+    http_connector: Option<Arc<dyn HttpConnector>>,
 }
 
 impl HttpBuilder {
@@ -235,13 +237,29 @@ impl HttpBuilder {
         self
     }
 
+    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
+        self.http_connector = Some(Arc::new(connector));
+        self
+    }
+
     /// Build an [`HttpStore`] with the configured options
     pub fn build(self) -> Result<HttpStore> {
         let url = self.url.ok_or(Error::MissingUrl)?;
         let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
 
+        let client = match self.http_connector {
+            None => ReqwestConnector::default().connect(&self.client_options)?,
+            Some(x) => x.connect(&self.client_options)?,
+        };
+
         Ok(HttpStore {
-            client: Arc::new(Client::new(parsed, self.client_options, self.retry_config)?),
+            client: Arc::new(Client::new(
+                parsed,
+                client,
+                self.client_options,
+                self.retry_config,
+            )),
         })
     }
 }

@@ -1,6 +1,8 @@
 use crate::client::connection::HttpErrorKind;
 use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody, HttpResponse};
-use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry};
+use http::header::{
+    Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry, AUTHORIZATION, CONTENT_TYPE,
+};
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use serde::Serialize;
@@ -125,6 +127,20 @@ impl HttpRequestBuilder {
         self
     }
 
+    #[cfg(feature = "gcp")]
+    pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
+        let value = HeaderValue::try_from(format!("Bearer {}", token));
+        match (value, &mut self.request) {
+            (Ok(mut v), Ok(r)) => {
+                v.set_sensitive(true);
+                r.headers_mut().insert(AUTHORIZATION, v);
+            }
+            (Err(e), Ok(_)) => self.request = Err(e.into()),
+            (_, Err(_)) => {}
+        }
+        self
+    }
+
     pub(crate) fn json<S: Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
@@ -162,6 +178,26 @@ impl HttpRequestBuilder {
         self
     }
 
+    pub(crate) fn form<T: Serialize>(mut self, form: T) -> Self {
+        let mut error = None;
+        if let Ok(ref mut req) = self.request {
+            match serde_urlencoded::to_string(form) {
+                Ok(body) => {
+                    req.headers_mut().insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("application/x-www-form-urlencoded"),
+                    );
+                    *req.body_mut() = body.into();
+                }
+                Err(err) => error = Some(err.into()),
+            }
+        }
+        if let Some(err) = error {
+            self.request = Err(err);
+        }
+        self
+    }
+
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
@@ -173,7 +209,6 @@ impl HttpRequestBuilder {
         (self.client, self.request)
     }
 
-    #[cfg(test)]
     pub(crate) async fn send(self) -> Result<HttpResponse, HttpError> {
         match self.request {
             Ok(r) => Ok(self.client.execute(r).await?),

@@ -774,7 +774,7 @@ mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
     use crate::client::HttpClient;
-    use hyper::Response;
+    use http::Response;
     use reqwest::{Client, Method};
     use std::env;
 

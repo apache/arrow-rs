@@ -47,6 +47,7 @@ walkdir = { version = "2", optional = true }
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http = { version = "1.2.0", optional = true }
+http-body-util = { version = "0.1", optional = true }
 httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
@@ -65,7 +66,7 @@ nix = { version = "0.29.0", features = ["fs"] }
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "dep:http", "form_urlencoded", "serde_urlencoded"]
+cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "dep:http", "http-body-util", "form_urlencoded", "serde_urlencoded"]
 azure = ["cloud", "httparse"]
 fs = ["walkdir"]
 gcp = ["cloud", "rustls-pemfile"]
@@ -75,10 +76,8 @@ tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = []
 
 [dev-dependencies] # In alphabetical order
-futures-test = "0.3"
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
-http-body-util = "0.1"
 rand = "0.8"
 tempfile = "3.1.0"
 regex = "1.11.1"

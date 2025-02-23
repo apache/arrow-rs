@@ -489,7 +489,7 @@ mod tests {
     use crate::ClientOptions;
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
-    use hyper::HeaderMap;
+    use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 

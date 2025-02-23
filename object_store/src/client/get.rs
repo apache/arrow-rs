@@ -23,11 +23,11 @@ use crate::path::Path;
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use hyper::header::{
+use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
     CONTENT_TYPE,
 };
-use hyper::StatusCode;
+use http::StatusCode;
 use reqwest::header::ToStrError;
 
 /// A client that can perform a get request
@@ -260,8 +260,7 @@ fn get_result<T: GetClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper::http;
-    use hyper::http::header::*;
+    use http::header::*;
 
     struct TestClient {}
 
