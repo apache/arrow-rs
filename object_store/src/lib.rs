@@ -526,7 +526,7 @@ pub mod signer;
 pub mod throttle;
 
 #[cfg(feature = "cloud")]
-mod client;
+pub mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{

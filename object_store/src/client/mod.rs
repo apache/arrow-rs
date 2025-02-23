@@ -42,18 +42,26 @@ pub(crate) mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) mod s3;
 
+mod body;
+pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
+
+pub(crate) mod builder;
+pub use builder::{ReqwestConnector, HttpConnector};
+
+mod connection;
+pub use connection::{HttpClient, HttpError, HttpService};
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
-use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
