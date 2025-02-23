@@ -1,4 +1,4 @@
-use crate::client::connection::HttpError;
+use crate::client::connection::{HttpError, HttpErrorKind};
 use crate::{collect_bytes, PutPayload};
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -6,6 +6,7 @@ use futures::StreamExt;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
+use serde::de::DeserializeOwned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -31,6 +32,7 @@ impl HttpRequestBody {
         }
     }
 
+    /// Returns true if this body is empty
     pub fn is_empty(&self) -> bool {
         match &self.0 {
             Inner::Bytes(x) => x.is_empty(),
@@ -46,6 +48,7 @@ impl HttpRequestBody {
         }
     }
 
+    /// If this body consists of a single contiguous [`Bytes`], returns it
     pub fn as_bytes(&self) -> Option<&Bytes> {
         match &self.0 {
             Inner::Bytes(x) => Some(x),
@@ -62,6 +65,12 @@ impl From<Bytes> for HttpRequestBody {
 
 impl From<Vec<u8>> for HttpRequestBody {
     fn from(value: Vec<u8>) -> Self {
+        Self(Inner::Bytes(value.into()))
+    }
+}
+
+impl From<String> for HttpRequestBody {
+    fn from(value: String) -> Self {
         Self(Inner::Bytes(value.into()))
     }
 }
@@ -155,6 +164,17 @@ impl HttpResponseBody {
     pub fn bytes_stream(self) -> BoxStream<'static, Result<Bytes, HttpError>> {
         self.0.into_data_stream().boxed()
     }
+
+    /// Returns the response as a [`String`]
+    pub(crate) async fn text(self) -> Result<String, HttpError> {
+        let b = self.bytes().await?;
+        String::from_utf8(b.into()).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
+    }
+
+    pub(crate) async fn json<B: DeserializeOwned>(self) -> Result<B, HttpError> {
+        let b = self.bytes().await?;
+        serde_json::from_slice(&b).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
+    }
 }
 
 impl From<Bytes> for HttpResponseBody {
@@ -165,6 +185,12 @@ impl From<Bytes> for HttpResponseBody {
 
 impl From<Vec<u8>> for HttpResponseBody {
     fn from(value: Vec<u8>) -> Self {
+        Bytes::from(value).into()
+    }
+}
+
+impl From<String> for HttpResponseBody {
+    fn from(value: String) -> Self {
         Bytes::from(value).into()
     }
 }

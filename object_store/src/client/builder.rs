@@ -1,4 +1,5 @@
-use crate::client::{HttpClient, HttpRequest, HttpRequestBody};
+use crate::client::connection::HttpErrorKind;
+use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody, HttpResponse};
 use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry};
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
@@ -22,6 +23,12 @@ pub(crate) enum RequestBuilderError {
     SerdeUrl(#[from] serde_urlencoded::ser::Error),
 }
 
+impl From<RequestBuilderError> for HttpError {
+    fn from(value: RequestBuilderError) -> Self {
+        HttpError::new(HttpErrorKind::Request, value)
+    }
+}
+
 impl From<std::convert::Infallible> for RequestBuilderError {
     fn from(value: std::convert::Infallible) -> Self {
         match value {}
@@ -41,7 +48,7 @@ impl HttpRequestBuilder {
         }
     }
 
-    pub fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
+    pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
             request: Ok(request),
@@ -129,7 +136,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    pub fn query<T: Serialize + ?Sized>(mut self, query: &T) -> Self {
+    pub(crate) fn query<T: Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             let mut out = format!("{}?", req.uri().path());
@@ -164,5 +171,13 @@ impl HttpRequestBuilder {
 
     pub(crate) fn into_parts(self) -> (HttpClient, Result<HttpRequest, RequestBuilderError>) {
         (self.client, self.request)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn send(self) -> Result<HttpResponse, HttpError> {
+        match self.request {
+            Ok(r) => Ok(self.client.execute(r).await?),
+            Err(e) => Err(e.into()),
+        }
     }
 }

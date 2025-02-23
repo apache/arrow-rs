@@ -55,7 +55,9 @@ static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: reqwest::Error },
@@ -65,13 +67,13 @@ enum Error {
 
     #[error("Error performing get request {}: {}", path, source)]
     GetRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing request {}: {}", path, source)]
     Request {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
@@ -93,7 +95,9 @@ enum Error {
     MissingVersion,
 
     #[error("Error performing complete multipart request: {}", source)]
-    CompleteMultipartRequest { source: crate::client::retry::Error },
+    CompleteMultipartRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting complete multipart response body: {}", source)]
     CompleteMultipartResponseBody { source: reqwest::Error },
@@ -102,7 +106,9 @@ enum Error {
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
     #[error("Error signing blob: {}", source)]
-    SignBlobRequest { source: crate::client::retry::Error },
+    SignBlobRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Got invalid signing blob response: {}", source)]
     InvalidSignBlobResponse { source: reqwest::Error },

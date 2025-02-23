@@ -73,7 +73,9 @@ const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Error performing token request: {}", source)]
-    TokenRequest { source: crate::client::retry::Error },
+    TokenRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: reqwest::Error },

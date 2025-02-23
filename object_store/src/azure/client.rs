@@ -63,24 +63,26 @@ static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 pub(crate) enum Error {
     #[error("Error performing get request {}: {}", path, source)]
     GetRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing put request {}: {}", path, source)]
     PutRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing delete request {}: {}", path, source)]
     DeleteRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing bulk delete request: {}", source)]
-    BulkDeleteRequest { source: crate::client::retry::Error },
+    BulkDeleteRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error receiving bulk delete request body: {}", source)]
     BulkDeleteRequestBody { source: reqwest::Error },
@@ -108,7 +110,9 @@ pub(crate) enum Error {
     },
 
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: reqwest::Error },
@@ -125,7 +129,9 @@ pub(crate) enum Error {
     MissingETag,
 
     #[error("Error requesting user delegation key: {}", source)]
-    DelegationKeyRequest { source: crate::client::retry::Error },
+    DelegationKeyRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting user delegation key response body: {}", source)]
     DelegationKeyResponseBody { source: reqwest::Error },
@@ -684,7 +690,7 @@ impl AzureClient {
         let url = self.config.path_url(&Path::from("/"));
         let batch_response = self
             .client
-            .request(Method::POST, url)
+            .post(url)
             .query(&[("restype", "container"), ("comp", "batch")])
             .header(
                 CONTENT_TYPE,
@@ -774,7 +780,7 @@ impl AzureClient {
             .unwrap_or_default();
         let response = self
             .client
-            .request(Method::POST, url)
+            .post(url)
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)

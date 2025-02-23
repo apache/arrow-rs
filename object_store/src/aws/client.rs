@@ -22,7 +22,7 @@ use crate::aws::{
     AwsAuthorizer, AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, COPY_SOURCE_HEADER,
     STORE, STRICT_PATH_ENCODE_SET, TAGS_HEADER,
 };
-use crate::client::builder::HttpRequestBuilder;
+use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::get::GetClient;
 use crate::client::header::{get_etag, HeaderConfig};
 use crate::client::header::{get_put_result, get_version};
@@ -43,13 +43,11 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
-use http::Method;
-use hyper::header::{
+use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use hyper::http::HeaderName;
-use hyper::{http, HeaderMap};
+use http::{HeaderMap, HeaderName, Method};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
@@ -68,7 +66,9 @@ const ALGORITHM: &str = "x-amz-checksum-algorithm";
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error("Error performing DeleteObjects request: {}", source)]
-    DeleteObjectsRequest { source: crate::client::retry::Error },
+    DeleteObjectsRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error(
         "DeleteObjects request failed for key {}: {} (code: {})",
@@ -91,7 +91,9 @@ pub(crate) enum Error {
     },
 
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
     ListResponseBody { source: HttpError },
@@ -101,7 +103,7 @@ pub(crate) enum Error {
 
     #[error("Error performing complete multipart request: {}: {}", path, source)]
     CompleteMultipartRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
@@ -273,7 +275,7 @@ pub enum RequestError {
 
     #[error("Retry")]
     Retry {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 }
@@ -308,8 +310,8 @@ impl Request<'_> {
 
     pub(crate) fn header<K>(self, k: K, v: &str) -> Self
     where
-        HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        K: TryInto<HeaderName>,
+        K::Error: Into<RequestBuilderError>,
     {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
@@ -758,7 +760,7 @@ impl S3Client {
 
         let request = self
             .client
-            .request(Method::POST, url)
+            .post(url)
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(credential.authorizer(), None);
@@ -783,6 +785,7 @@ impl S3Client {
             .map_err(|source| Error::Metadata { source })?;
 
         let data = response
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;

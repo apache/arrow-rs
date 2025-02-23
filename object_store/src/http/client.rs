@@ -37,7 +37,7 @@ use url::Url;
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Request error: {}", source)]
-    Request { source: retry::Error },
+    Request { source: retry::RetryError },
 
     #[error("Request error: {}", source)]
     Reqwest { source: reqwest::Error },

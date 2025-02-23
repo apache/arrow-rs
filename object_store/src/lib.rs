@@ -1373,6 +1373,7 @@ mod tests {
             }
         };
     }
+    use crate::client::HttpResponse;
     pub(crate) use maybe_skip_integration;
 
     /// Test that the returned stream does not borrow the lifetime of Path
@@ -1411,7 +1412,7 @@ mod tests {
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
+        Fut: std::future::Future<Output = Result<HttpResponse>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;
@@ -1477,7 +1478,7 @@ mod tests {
 
         for path in [path, multi_path, buf_path] {
             let resp = get_tags(path.clone()).await.unwrap();
-            let body = resp.bytes().await.unwrap();
+            let body = resp.into_body().bytes().await.unwrap();
 
             let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
             resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));

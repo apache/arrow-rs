@@ -789,13 +789,13 @@ mod cloud {
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
-        client: Client,
+        client: HttpClient,
         retry: RetryConfig,
         cache: TokenCache<Arc<T::Credential>>,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub(crate) fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub(crate) fn new(inner: T, client: HttpClient, retry: RetryConfig) -> Self {
             Self {
                 inner,
                 client,
@@ -829,7 +829,7 @@ mod cloud {
 
         async fn fetch_token(
             &self,
-            client: &Client,
+            client: &HttpClient,
             retry: &RetryConfig,
         ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
     }

@@ -23,8 +23,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use http::Method;
-use reqwest::{Response, StatusCode};
+use http::{Method, StatusCode};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -32,8 +31,8 @@ use crate::aws::client::S3Client;
 use crate::aws::credential::CredentialExt;
 use crate::aws::{AwsAuthorizer, AwsCredential};
 use crate::client::get::GetClientExt;
-use crate::client::retry::Error as RetryError;
 use crate::client::retry::RetryExt;
+use crate::client::retry::{RequestError, RetryError};
 use crate::path::Path;
 use crate::{Error, GetOptions, Result};
 
@@ -330,18 +329,13 @@ impl DynamoCommit {
             }
         };
 
-        let fut = builder
+        // TODO: Timeout
+        builder
             .json(&req)
             .header("X-Amz-Target", target)
             .with_aws_sigv4(authorizer, None)
-            .send_retry(&s3.config.retry_config);
-
-        tokio::time::timeout(Duration::from_millis(self.timeout), fut)
+            .send_retry(&s3.config.retry_config)
             .await
-            .map_err(|e| RetryError::Server {
-                status: StatusCode::REQUEST_TIMEOUT,
-                body: None,
-            })?
     }
 }
 
@@ -389,8 +383,8 @@ async fn check_precondition(client: &S3Client, path: &Path, etag: Option<&str>) 
 
 /// Parses the error response if any
 fn parse_error_response(e: &RetryError) -> Option<ErrorResponse<'_>> {
-    match e {
-        RetryError::Client {
+    match e.inner() {
+        RequestError::Status {
             status: StatusCode::BAD_REQUEST,
             body: Some(b),
         } => serde_json::from_str(b).ok(),

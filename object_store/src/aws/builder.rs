@@ -940,16 +940,20 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                client,
+                HttpClient::new(client),
                 self.retry_config.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
             info!("Using Task credential provider");
+
+            // TODO: FIXME
+            let client = self.client_options.clone().with_allow_http(true).client()?;
+
             Arc::new(TaskCredentialProvider {
                 url: format!("http://169.254.170.2{uri}"),
                 retry: self.retry_config.clone(),
                 // The instance metadata endpoint is access over HTTP
-                client: self.client_options.clone().with_allow_http(true).client()?,
+                client: HttpClient::new(client),
                 cache: Default::default(),
             }) as _
         } else {
@@ -964,7 +968,7 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                self.client_options.metadata_client()?,
+                HttpClient::new(self.client_options.metadata_client()?),
                 self.retry_config.clone(),
             )) as _
         };
@@ -986,7 +990,7 @@ impl AmazonS3Builder {
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
                         },
-                        self.client_options.client()?,
+                        HttpClient::new(self.client_options.client()?),
                         self.retry_config.clone(),
                     )
                     .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes

@@ -18,6 +18,7 @@
 use std::ops::Range;
 
 use crate::client::header::{header_meta, HeaderConfig};
+use crate::client::HttpResponse;
 use crate::path::Path;
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
@@ -28,8 +29,6 @@ use hyper::header::{
 };
 use hyper::StatusCode;
 use reqwest::header::ToStrError;
-use reqwest::Response;
-use crate::client::HttpResponse;
 
 /// A client that can perform a get request
 #[async_trait]

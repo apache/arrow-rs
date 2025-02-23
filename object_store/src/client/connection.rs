@@ -2,48 +2,98 @@ use crate::client::body::{HttpRequest, HttpResponse};
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::HttpResponseBody;
 use async_trait::async_trait;
-use http::{Method, StatusCode, Uri};
+use http::{Method, Uri};
 use http_body_util::BodyExt;
+use std::error::Error;
 use std::sync::Arc;
 
-/// An HTTP error
+/// An HTTP protocol error
 ///
-/// Combines a generic message with an optional [`StatusCode`]
+/// Clients should return this when an HTTP request fails to be completed, e.g. because
+/// of a connection issue. This does **not** include HTTP requests that are return
+/// non 2xx Status Codes, as these should instead be returned as an [`HttpResponse`]
+/// with the appropriate status code set.
 #[derive(Debug, thiserror::Error)]
+#[error("HTTP error: {source}")]
 pub struct HttpError {
-    status_code: Option<StatusCode>,
+    kind: HttpErrorKind,
     #[source]
-    source: Box<dyn std::error::Error + Send + Sync>,
+    source: Box<dyn Error + Send + Sync>,
 }
 
-impl std::fmt::Display for HttpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.source.fmt(f)
-    }
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HttpErrorKind {
+    /// Request timed out
+    Timeout,
+    /// An error occurred whilst connecting to the remote
+    Connect,
+    /// An error occurred whilst making the request
+    Request,
+    /// An error occurred whilst decoding the response
+    Decode,
+    /// The request was aborted
+    Interrupted,
+    /// An unknown error occurred
+    Unknown,
 }
 
 impl HttpError {
     /// Create a new [`HttpError`] with the optional status code
-    pub fn new<E>(e: E, status_code: Option<StatusCode>) -> Self
+    pub fn new<E>(kind: HttpErrorKind, e: E) -> Self
     where
-        E: std::error::Error + Send + Sync + 'static,
+        E: Error + Send + Sync + 'static,
     {
         Self {
-            status_code,
+            kind,
             source: Box::new(e),
         }
     }
 
     pub(crate) fn reqwest(e: reqwest::Error) -> Self {
+        let mut kind = if e.is_timeout() {
+            HttpErrorKind::Timeout
+        } else if e.is_connect() {
+            HttpErrorKind::Connect
+        } else if e.is_decode() {
+            HttpErrorKind::Decode
+        } else {
+            HttpErrorKind::Unknown
+        };
+
+        // Reqwest error variants aren't great, attempt to refine them
+        let mut source = e.source();
+        while let Some(e) = source {
+            if let Some(e) = e.downcast_ref::<hyper::Error>() {
+                if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
+                    kind = HttpErrorKind::Request;
+                } else if e.is_timeout() {
+                    kind = HttpErrorKind::Timeout;
+                }
+                break;
+            }
+            if let Some(e) = e.downcast_ref::<std::io::Error>() {
+                match e.kind() {
+                    std::io::ErrorKind::TimedOut => kind = HttpErrorKind::Timeout,
+                    std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
+                    _ => {}
+                }
+                break;
+            }
+            source = e.source();
+        }
         Self {
-            status_code: e.status(),
-            source: Box::new(e),
+            kind,
+            // We strip URL as it will be included by RetryError if not sensitive
+            source: Box::new(e.without_url()),
         }
     }
 
-    /// Returns the [`StatusCode`] associated with this error if any
-    pub fn status_code(&self) -> Option<StatusCode> {
-        self.status_code
+    /// Returns the [`HttpErrorKind`]
+    pub fn kind(&self) -> HttpErrorKind {
+        self.kind
     }
 }
 
@@ -64,6 +114,7 @@ impl HttpClient {
         Self(Arc::new(service))
     }
 
+    /// Performs [`HttpRequest`] using this client
     pub async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
         self.0.call(request).await
     }

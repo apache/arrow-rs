@@ -83,7 +83,9 @@ pub enum Error {
     UnsupportedKey { encoding: String },
 
     #[error("Error performing token request: {}", source)]
-    TokenRequest { source: crate::client::retry::Error },
+    TokenRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: reqwest::Error },
