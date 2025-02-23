@@ -126,7 +126,7 @@ impl Parse for S3CopyIfNotExists {
 /// Configure how to provide conditional put support for [`AmazonS3`].
 ///
 /// [`AmazonS3`]: super::AmazonS3
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 #[allow(missing_copy_implementations)]
 #[non_exhaustive]
 pub enum S3ConditionalPut {
@@ -136,6 +136,7 @@ pub enum S3ConditionalPut {
     /// Encoded as `etag` ignoring whitespace
     ///
     /// [HTTP precondition]: https://datatracker.ietf.org/doc/html/rfc9110#name-preconditions
+    #[default]
     ETagMatch,
 
     /// The name of a DynamoDB table to use for coordination
