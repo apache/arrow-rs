@@ -161,13 +161,15 @@ impl<'a> AwsAuthorizer<'a> {
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
     pub fn authorize(&self, request: &mut HttpRequest, pre_calculated_digest: Option<&[u8]>) {
+        let url = Url::parse(&request.uri().to_string()).unwrap();
+
         if let Some(ref token) = self.credential.token {
             let token_val = HeaderValue::from_str(token).unwrap();
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
             request.headers_mut().insert(header, token_val);
         }
 
-        let host = request.uri().host().unwrap_or_default();
+        let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
         let host_val = HeaderValue::from_str(host).unwrap();
         request.headers_mut().insert("host", host_val);
 
@@ -206,7 +208,6 @@ impl<'a> AwsAuthorizer<'a> {
 
         let scope = self.scope(date);
 
-        let url = Url::parse(&request.uri().to_string()).unwrap();
         let string_to_sign = self.string_to_sign(
             date,
             &scope,

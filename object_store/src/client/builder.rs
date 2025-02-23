@@ -17,7 +17,7 @@
 
 use crate::client::connection::HttpErrorKind;
 use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody};
-use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry, CONTENT_TYPE};
+use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry};
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use serde::Serialize;
@@ -157,6 +157,7 @@ impl HttpRequestBuilder {
         self
     }
 
+    #[cfg(any(feature = "aws", feature = "gcp"))]
     pub(crate) fn json<S: Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
@@ -168,6 +169,7 @@ impl HttpRequestBuilder {
         self
     }
 
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
     pub(crate) fn query<T: Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -194,13 +196,14 @@ impl HttpRequestBuilder {
         self
     }
 
+    #[cfg(any(feature = "gcp", feature = "azure"))]
     pub(crate) fn form<T: Serialize>(mut self, form: T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             match serde_urlencoded::to_string(form) {
                 Ok(body) => {
                     req.headers_mut().insert(
-                        CONTENT_TYPE,
+                        http::header::CONTENT_TYPE,
                         HeaderValue::from_static("application/x-www-form-urlencoded"),
                     );
                     *req.body_mut() = body.into();

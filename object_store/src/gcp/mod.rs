@@ -414,7 +414,7 @@ mod test {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("Client error with status 404 Not Found"),
+            err.contains("Server returned non-2xx status code: 404 Not Found"),
             "{}",
             err
         )
