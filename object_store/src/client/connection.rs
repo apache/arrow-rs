@@ -1,6 +1,7 @@
 use crate::client::body::{HttpRequest, HttpResponse};
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::HttpResponseBody;
+use crate::ClientOptions;
 use async_trait::async_trait;
 use http::{Method, Uri};
 use http_body_util::BodyExt;
@@ -162,5 +163,23 @@ impl HttpService for reqwest::Client {
 
         let body = HttpResponseBody::new(body.map_err(HttpError::reqwest));
         Ok(HttpResponse::from_parts(parts, body))
+    }
+}
+
+/// A factory for [`HttpClient`]
+pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
+    /// Create a new [`HttpClient`] with the provided [`ClientOptions`]
+    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient>;
+}
+
+/// [`HttpConnector`] using [`reqwest::Client`]
+#[derive(Debug, Default)]
+#[allow(missing_copy_implementations)]
+pub struct ReqwestConnector {}
+
+impl HttpConnector for ReqwestConnector {
+    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+        let client = options.client()?;
+        Ok(HttpClient::new(client))
     }
 }

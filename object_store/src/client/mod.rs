@@ -48,7 +48,7 @@ pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
 pub(crate) mod builder;
 
 mod connection;
-pub use connection::{HttpClient, HttpError, HttpService};
+pub use connection::{HttpClient, HttpConnector, HttpError, HttpService, ReqwestConnector};
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
@@ -600,17 +600,16 @@ impl ClientOptions {
         }
     }
 
-    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
     #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-    pub(crate) fn metadata_client(&self) -> Result<Client> {
+    pub(crate) fn metadata_options(&self) -> ClientOptions {
         self.clone()
             .with_allow_http(true)
             .with_connect_timeout(Duration::from_secs(1))
-            .client()
     }
 
     pub(crate) fn client(&self) -> Result<Client> {
