@@ -23,6 +23,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use http::Method;
 use reqwest::{Response, StatusCode};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
@@ -317,25 +318,30 @@ impl DynamoCommit {
         cred: Option<&AwsCredential>,
         target: &str,
         req: R,
-    ) -> Result<Response, RetryError> {
+    ) -> Result<HttpResponse, RetryError> {
         let region = &s3.config.region;
         let authorizer = cred.map(|x| AwsAuthorizer::new(x, "dynamodb", region));
 
         let builder = match &s3.config.endpoint {
-            Some(e) => s3.client.post(e),
+            Some(e) => s3.client.request(Method::POST, e),
             None => {
                 let url = format!("https://dynamodb.{region}.amazonaws.com");
-                s3.client.post(url)
+                s3.client.request(Method::POST, url)
             }
         };
 
-        builder
-            .timeout(Duration::from_millis(self.timeout))
+        let fut = builder
             .json(&req)
             .header("X-Amz-Target", target)
             .with_aws_sigv4(authorizer, None)
-            .send_retry(&s3.config.retry_config)
+            .send_retry(&s3.config.retry_config);
+
+        tokio::time::timeout(Duration::from_millis(self.timeout), fut)
             .await
+            .map_err(|e| RetryError::Server {
+                status: StatusCode::REQUEST_TIMEOUT,
+                body: None,
+            })?
     }
 }
 
@@ -518,6 +524,7 @@ mod number {
     }
 }
 
+use crate::client::HttpResponse;
 /// Re-export integration_test to be called by s3_test
 #[cfg(test)]
 pub(crate) use tests::integration_test;

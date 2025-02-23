@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use http_body_util::combinators::BoxBody;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -17,6 +17,11 @@ pub type HttpRequest = http::Request<HttpRequestBody>;
 pub struct HttpRequestBody(Inner);
 
 impl HttpRequestBody {
+    /// An empty [`HttpRequestBody`]
+    pub fn empty() -> Self {
+        Self(Inner::Bytes(Bytes::new()))
+    }
+
     pub(crate) fn into_reqwest(self) -> reqwest::Body {
         match self.0 {
             Inner::Bytes(b) => b.into(),
@@ -25,11 +30,39 @@ impl HttpRequestBody {
             )),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match &self.0 {
+            Inner::Bytes(x) => x.is_empty(),
+            Inner::PutPayload(_, x) => x.iter().any(|x| !x.is_empty()),
+        }
+    }
+
+    /// Returns the total length of the [`Bytes`] in this body
+    pub fn content_length(&self) -> usize {
+        match &self.0 {
+            Inner::Bytes(x) => x.len(),
+            Inner::PutPayload(_, x) => x.content_length(),
+        }
+    }
+
+    pub fn as_bytes(&self) -> Option<&Bytes> {
+        match &self.0 {
+            Inner::Bytes(x) => Some(x),
+            _ => None,
+        }
+    }
 }
 
 impl From<Bytes> for HttpRequestBody {
     fn from(value: Bytes) -> Self {
         Self(Inner::Bytes(value))
+    }
+}
+
+impl From<Vec<u8>> for HttpRequestBody {
+    fn from(value: Vec<u8>) -> Self {
+        Self(Inner::Bytes(value.into()))
     }
 }
 
@@ -119,7 +152,19 @@ impl HttpResponseBody {
     }
 
     /// Returns a stream of this response data
-    pub async fn bytes_stream(self) -> BoxStream<'static, Result<Bytes, HttpError>> {
+    pub fn bytes_stream(self) -> BoxStream<'static, Result<Bytes, HttpError>> {
         self.0.into_data_stream().boxed()
+    }
+}
+
+impl From<Bytes> for HttpResponseBody {
+    fn from(value: Bytes) -> Self {
+        Self::new(Full::new(value).map_err(|e| match e {}))
+    }
+}
+
+impl From<Vec<u8>> for HttpResponseBody {
+    fn from(value: Vec<u8>) -> Self {
+        Bytes::from(value).into()
     }
 }

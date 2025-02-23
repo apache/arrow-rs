@@ -46,7 +46,6 @@ mod body;
 pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
 
 pub(crate) mod builder;
-pub use builder::{ReqwestConnector, HttpConnector};
 
 mod connection;
 pub use connection::{HttpClient, HttpError, HttpService};
@@ -56,7 +55,7 @@ pub(crate) mod parts;
 
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -714,7 +713,7 @@ pub(crate) trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }
 
-impl GetOptionsExt for RequestBuilder {
+impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
         use hyper::header::*;
 
@@ -836,6 +835,7 @@ mod cloud {
     }
 }
 
+use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
 

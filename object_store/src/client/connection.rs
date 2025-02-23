@@ -1,7 +1,8 @@
 use crate::client::body::{HttpRequest, HttpResponse};
+use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::HttpResponseBody;
 use async_trait::async_trait;
-use http::StatusCode;
+use http::{Method, StatusCode, Uri};
 use http_body_util::BodyExt;
 use std::sync::Arc;
 
@@ -63,8 +64,34 @@ impl HttpClient {
         Self(Arc::new(service))
     }
 
-    pub(crate) async fn send(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.0.call(req).await
+    pub async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.0.call(request).await
+    }
+
+    pub(crate) fn get<U>(&self, url: U) -> HttpRequestBuilder
+    where
+        U: TryInto<Uri>,
+        U::Error: Into<RequestBuilderError>,
+    {
+        self.request(Method::GET, url)
+    }
+
+    pub(crate) fn post<U>(&self, url: U) -> HttpRequestBuilder
+    where
+        U: TryInto<Uri>,
+        U::Error: Into<RequestBuilderError>,
+    {
+        self.request(Method::POST, url)
+    }
+
+    pub(crate) fn request<U>(&self, method: Method, url: U) -> HttpRequestBuilder
+    where
+        U: TryInto<Uri>,
+        U::Error: Into<RequestBuilderError>,
+    {
+        HttpRequestBuilder::new(self.clone())
+            .uri(url)
+            .method(method)
     }
 }
 

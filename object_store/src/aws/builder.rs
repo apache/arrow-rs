@@ -23,7 +23,7 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::TokenCredentialProvider;
+use crate::client::{HttpClient, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::prelude::BASE64_STANDARD;
@@ -1039,7 +1039,9 @@ impl AmazonS3Builder {
             request_payer: self.request_payer.get()?,
         };
 
-        let client = Arc::new(S3Client::new(config)?);
+        // TODO: Allow overriding this on the builder
+        let http_client = HttpClient::new(config.client_options.client()?);
+        let client = Arc::new(S3Client::new(config, http_client));
 
         Ok(AmazonS3 { client })
     }

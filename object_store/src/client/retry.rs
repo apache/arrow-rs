@@ -18,11 +18,14 @@
 //! A shared HTTP client implementation incorporating retries
 
 use crate::client::backoff::{Backoff, BackoffConfig};
+use crate::client::builder::HttpRequestBuilder;
+use crate::client::{HttpClient, HttpRequest, HttpResponse};
 use crate::PutPayload;
 use futures::future::BoxFuture;
 use reqwest::header::LOCATION;
 use reqwest::{Client, Request, Response, StatusCode};
 use std::error::Error as StdError;
+use std::io::Read;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
@@ -190,8 +193,8 @@ fn body_contains_error(response_body: &str) -> bool {
 }
 
 pub(crate) struct RetryableRequest {
-    client: Client,
-    request: Request,
+    client: HttpClient,
+    request: HttpRequest,
 
     max_retries: usize,
     retry_timeout: Duration,
@@ -247,7 +250,7 @@ impl RetryableRequest {
         }
     }
 
-    pub(crate) async fn send(self) -> Result<Response> {
+    pub(crate) async fn send(self) -> Result<HttpResponse> {
         let max_retries = self.max_retries;
         let retry_timeout = self.retry_timeout;
         let mut retries = 0;
@@ -264,18 +267,16 @@ impl RetryableRequest {
         };
 
         loop {
-            let mut request = self
-                .request
-                .try_clone()
-                .expect("request body must be cloneable");
+            let mut request = self.request.clone();
 
             if let Some(payload) = &self.payload {
-                *request.body_mut() = Some(payload.body());
+                *request.body_mut() = payload.clone().into();
             }
 
             match self.client.execute(request).await {
-                Ok(r) => match r.error_for_status_ref() {
-                    Ok(_) if r.status().is_success() => {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
                         // For certain S3 requests, 200 response may contain `InternalError` or
                         // `SlowDown` in the message. These responses should be handled similarly
                         // to r5xx errors.
@@ -325,26 +326,21 @@ impl RetryableRequest {
                             );
                             tokio::time::sleep(sleep).await;
                         }
-                    }
-                    Ok(r) if r.status() == StatusCode::NOT_MODIFIED => {
+                    } else if status == StatusCode::NOT_MODIFIED {
                         return Err(Error::Client {
                             body: None,
                             status: StatusCode::NOT_MODIFIED,
-                        })
-                    }
-                    Ok(r) => {
-                        let is_bare_redirect =
-                            r.status().is_redirection() && !r.headers().contains_key(LOCATION);
+                        });
+                    } else if status.is_redirection() {
+                        let is_bare_redirect = !r.headers().contains_key(LOCATION);
                         return match is_bare_redirect {
                             true => Err(Error::BareRedirect),
-                            // Not actually sure if this is reachable, but here for completeness
                             false => Err(Error::Client {
                                 body: None,
                                 status: r.status(),
                             }),
                         };
-                    }
-                    Err(e) => {
+                    } else {
                         let e = sanitize_err(e);
                         let status = r.status();
                         if retries == max_retries
@@ -387,9 +383,9 @@ impl RetryableRequest {
                         );
                         tokio::time::sleep(sleep).await;
                     }
-                },
+                }
                 Err(e) => {
-                    let e = sanitize_err(e);
+                    // let e = sanitize_err(e);
 
                     let mut do_retry = false;
                     if e.is_connect()
@@ -463,9 +459,9 @@ pub(crate) trait RetryExt {
     fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>>;
 }
 
-impl RetryExt for reqwest::RequestBuilder {
+impl RetryExt for HttpRequestBuilder {
     fn retryable(self, config: &RetryConfig) -> RetryableRequest {
-        let (client, request) = self.build_split();
+        let (client, request) = self.into_parts();
         let request = request.expect("request must be valid");
 
         RetryableRequest {
@@ -482,7 +478,7 @@ impl RetryExt for reqwest::RequestBuilder {
         }
     }
 
-    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<Response>> {
+    fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<HttpResponse>> {
         let request = self.retryable(config);
         Box::pin(async move { request.send().await })
     }
@@ -492,6 +488,7 @@ impl RetryExt for reqwest::RequestBuilder {
 mod tests {
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{body_contains_error, Error, RetryExt};
+    use crate::client::HttpClient;
     use crate::RetryConfig;
     use hyper::header::LOCATION;
     use hyper::Response;
@@ -522,10 +519,12 @@ mod tests {
             retry_timeout: Duration::from_secs(1000),
         };
 
-        let client = Client::builder()
-            .timeout(Duration::from_millis(100))
-            .build()
-            .unwrap();
+        let client = HttpClient::new(
+            Client::builder()
+                .timeout(Duration::from_millis(100))
+                .build()
+                .unwrap(),
+        );
 
         let do_request = || client.request(Method::GET, mock.url()).send_retry(&retry);
 

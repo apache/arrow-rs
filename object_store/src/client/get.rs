@@ -29,6 +29,7 @@ use hyper::header::{
 use hyper::StatusCode;
 use reqwest::header::ToStrError;
 use reqwest::Response;
+use crate::client::HttpResponse;
 
 /// A client that can perform a get request
 #[async_trait]
@@ -38,7 +39,7 @@ pub(crate) trait GetClient: Send + Sync + 'static {
     /// Configure the [`HeaderConfig`] for this client
     const HEADER_CONFIG: HeaderConfig;
 
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response>;
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse>;
 }
 
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
@@ -148,7 +149,7 @@ enum GetResultError {
 fn get_result<T: GetClient>(
     location: &Path,
     range: Option<GetRange>,
-    response: Response,
+    response: HttpResponse,
 ) -> Result<GetResult, GetResultError> {
     let mut meta = header_meta(location, response.headers(), T::HEADER_CONFIG)?;
 
@@ -241,6 +242,7 @@ fn get_result<T: GetClient>(
     }
 
     let stream = response
+        .into_body()
         .bytes_stream()
         .map_err(|source| crate::Error::Generic {
             store: T::STORE,
@@ -275,7 +277,7 @@ mod tests {
             user_defined_metadata_prefix: Some("x-test-meta-"),
         };
 
-        async fn get_request(&self, _: &Path, _: GetOptions) -> Result<Response> {
+        async fn get_request(&self, _: &Path, _: GetOptions) -> Result<HttpResponse> {
             unimplemented!()
         }
     }
@@ -286,7 +288,7 @@ mod tests {
         status: StatusCode,
         content_range: Option<&str>,
         headers: Option<Vec<(&str, &str)>>,
-    ) -> Response {
+    ) -> HttpResponse {
         let mut builder = http::Response::builder();
         if let Some(range) = content_range {
             builder = builder.header(CONTENT_RANGE, range);
@@ -306,9 +308,8 @@ mod tests {
         builder
             .status(status)
             .header(CONTENT_LENGTH, object_size)
-            .body(body)
+            .body(body.into())
             .unwrap()
-            .into()
     }
 
     #[tokio::test]
