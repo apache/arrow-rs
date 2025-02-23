@@ -1286,7 +1286,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));

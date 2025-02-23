@@ -1181,7 +1181,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(
             col1.values(),
-            &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
+            &[100, 200, 205, 1103420, 0, 0].map(T::Native::usize_as)
         );
 
         let col2 = batches[0].column(1).as_primitive::<T>();
@@ -1201,7 +1201,7 @@ mod tests {
         assert!(col3.is_null(5));
         assert_eq!(
             col3.values(),
-            &[3830, 12345, 0, 0, 0, 0].map(T::Native::usize_as)
+            &[3830, 12346, 0, 0, 0, 0].map(T::Native::usize_as)
         );
     }
 

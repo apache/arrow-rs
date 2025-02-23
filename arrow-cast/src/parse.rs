@@ -850,7 +850,16 @@ fn parse_e_notation<T: DecimalType>(
     }
 
     if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_with_scale = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_with_one_scale_up =
+            result.div_wrapping(base.pow_wrapping(-exp.add_wrapping(1) as _));
+        let rounding_digit =
+            result_with_one_scale_up.sub_wrapping(result_with_scale.mul_wrapping(base));
+        if rounding_digit >= T::Native::usize_as(5) {
+            result = result_with_scale.add_wrapping(T::Native::usize_as(1));
+        } else {
+            result = result_with_scale;
+        }
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
     }
@@ -868,6 +877,7 @@ pub fn parse_decimal<T: DecimalType>(
     let mut result = T::Native::usize_as(0);
     let mut fractionals: i8 = 0;
     let mut digits: u8 = 0;
+    let mut rounding_digit = -1; // to store digit after the scale for rounding
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
@@ -895,6 +905,13 @@ pub fn parse_decimal<T: DecimalType>(
             b'0'..=b'9' => {
                 if digits == 0 && *b == b'0' {
                     // Ignore leading zeros.
+                    continue;
+                }
+                if fractionals == scale && scale != 0 {
+                    // Capture the rounding digit once
+                    if rounding_digit < 0 {
+                        rounding_digit = (b - b'0') as i8;
+                    }
                     continue;
                 }
                 digits += 1;
@@ -925,11 +942,17 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale && scale != 0 {
+                    if fractionals == scale {
+                        // Capture the rounding digit once
+                        if rounding_digit < 0 {
+                            rounding_digit = (b - b'0') as i8;
+                        }
                         // We have processed all the digits that we need. All that
                         // is left is to validate that the rest of the string contains
                         // valid digits.
-                        continue;
+                        if scale != 0 {
+                            continue;
+                        }
                     }
                     fractionals += 1;
                     digits += 1;
@@ -985,6 +1008,13 @@ pub fn parse_decimal<T: DecimalType>(
             return Err(ArrowError::ParseError(format!(
                 "parse decimal overflow ({s})"
             )));
+        }
+        if scale == 0 {
+            result = result.div_wrapping(base.pow_wrapping(fractionals as u32))
+        }
+        //add one if >=5
+        if rounding_digit >= 5 {
+            result = result.add_wrapping(T::Native::usize_as(1));
         }
     }
 
