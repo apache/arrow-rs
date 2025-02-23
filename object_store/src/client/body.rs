@@ -5,10 +5,10 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
+use hyper::body::{Body, Frame, SizeHint};
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use hyper::body::{Body, Frame, SizeHint};
 
 /// An HTTP Request
 pub type HttpRequest = http::Request<HttpRequestBody>;
