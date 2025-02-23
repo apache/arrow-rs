@@ -1050,7 +1050,6 @@ impl AmazonS3Builder {
             request_payer: self.request_payer.get()?,
         };
 
-        // TODO: Allow overriding this on the builder
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(S3Client::new(config, http_client));
 
