@@ -175,7 +175,7 @@ pub(crate) struct AzureConfig {
 }
 
 impl AzureConfig {
-    pub(crate) fn path_url(&self, path: &Path) -> String {
+    pub(crate) fn path_url(&self, path: &Path) -> Url {
         let mut url = self.service.clone();
         {
             let mut path_mut = url.path_segments_mut().unwrap();
@@ -184,7 +184,7 @@ impl AzureConfig {
             }
             path_mut.push(&self.container).extend(path.parts());
         }
-        url.into()
+        url
     }
     async fn get_credential(&self) -> Result<Option<Arc<AzureCredential>>> {
         if self.skip_signature {
@@ -522,7 +522,7 @@ impl AzureClient {
 
     fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
         let url = self.config.path_url(path);
-        let builder = self.client.request(Method::PUT, url);
+        let builder = self.client.request(Method::PUT, url.as_str());
 
         PutRequest {
             path,
@@ -619,7 +619,7 @@ impl AzureClient {
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
         self.client
-            .request(Method::DELETE, url)
+            .delete(url.as_str())
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
@@ -649,7 +649,7 @@ impl AzureClient {
             // Build subrequest with proper authorization
             let request = self
                 .client
-                .request(Method::DELETE, url)
+                .delete(url.as_str())
                 .header(CONTENT_LENGTH, HeaderValue::from(0))
                 // Each subrequest must be authorized individually [1] and we use
                 // the CredentialExt for this.
@@ -692,7 +692,7 @@ impl AzureClient {
         let url = self.config.path_url(&Path::from("/"));
         let batch_response = self
             .client
-            .post(url)
+            .post(url.as_str())
             .query(&[("restype", "container"), ("comp", "batch")])
             .header(
                 CONTENT_TYPE,
@@ -733,7 +733,7 @@ impl AzureClient {
 
         let mut builder = self
             .client
-            .request(Method::PUT, url)
+            .request(Method::PUT, url.as_str())
             .header(&COPY_SOURCE, source.to_string())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"));
 
@@ -781,9 +781,10 @@ impl AzureClient {
             .as_deref()
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
+
         let response = self
             .client
-            .post(url)
+            .post(url.as_str())
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
@@ -848,7 +849,7 @@ impl AzureClient {
             .unwrap_or_default();
         let response = self
             .client
-            .request(Method::GET, url)
+            .get(url.as_str())
             .query(&[("comp", "tags")])
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
@@ -896,7 +897,7 @@ impl GetClient for AzureClient {
 
         let mut builder = self
             .client
-            .request(method, url)
+            .request(method, url.as_str())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
             .body(Bytes::new());
 
@@ -971,7 +972,7 @@ impl ListClient for Arc<AzureClient> {
             .unwrap_or_default();
         let response = self
             .client
-            .request(Method::GET, url)
+            .get(url.as_str())
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)

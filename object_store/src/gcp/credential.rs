@@ -660,7 +660,7 @@ impl TokenProvider for AuthorizedUserCredentials {
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let response = client
             .post(DEFAULT_TOKEN_GCP_URI)
-            .form(&[
+            .form([
                 ("grant_type", "refresh_token"),
                 ("client_id", &self.client_id),
                 ("client_secret", &self.client_secret),

@@ -17,7 +17,7 @@
 
 use super::client::UserDelegationKey;
 use crate::azure::STORE;
-use crate::client::builder::HttpRequestBuilder;
+use crate::client::builder::{add_query_pairs, HttpRequestBuilder};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
@@ -242,9 +242,10 @@ impl<'a> AzureAuthorizer<'a> {
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
+                let url = Url::parse(&request.uri().to_string()).unwrap();
                 let signature = generate_authorization(
                     request.headers(),
-                    request.url(),
+                    &url,
                     request.method(),
                     self.account,
                     key,
@@ -264,10 +265,7 @@ impl<'a> AzureAuthorizer<'a> {
                 );
             }
             AzureCredential::SASToken(query_pairs) => {
-                request
-                    .url_mut()
-                    .query_pairs_mut()
-                    .extend_pairs(query_pairs);
+                add_query_pairs(request.uri_mut(), query_pairs);
             }
         }
     }
@@ -630,7 +628,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
         let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
-            .form(&[
+            .form([
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
                 ("scope", AZURE_STORAGE_SCOPE),
@@ -812,7 +810,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
         let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
-            .form(&[
+            .form([
                 ("client_id", self.client_id.as_str()),
                 (
                     "client_assertion_type",

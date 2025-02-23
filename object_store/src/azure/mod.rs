@@ -68,7 +68,7 @@ impl MicrosoftAzure {
     }
 
     /// Create a full URL to the resource specified by `path` with this instance's configuration.
-    fn path_url(&self, path: &Path) -> String {
+    fn path_url(&self, path: &Path) -> Url {
         self.client.config().path_url(path)
     }
 }

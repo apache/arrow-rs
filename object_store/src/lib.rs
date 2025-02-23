@@ -1373,7 +1373,6 @@ mod tests {
             }
         };
     }
-    use crate::client::HttpResponse;
     pub(crate) use maybe_skip_integration;
 
     /// Test that the returned stream does not borrow the lifetime of Path
@@ -1412,7 +1411,7 @@ mod tests {
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: std::future::Future<Output = Result<HttpResponse>> + Send,
+        Fut: std::future::Future<Output = Result<client::HttpResponse>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;

@@ -1038,11 +1038,11 @@ mod tests {
         let retry_config = RetryConfig::default();
 
         // Verify only allows IMDSv2
-        let resp = client
+        let (client, req) = client
             .request(Method::GET, format!("{endpoint}/latest/meta-data/ami-id"))
-            .send()
-            .await
-            .unwrap();
+            .into_parts();
+
+        let resp = client.execute(req.unwrap()).await.unwrap();
 
         assert_eq!(
             resp.status(),

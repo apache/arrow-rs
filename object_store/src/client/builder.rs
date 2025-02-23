@@ -1,11 +1,10 @@
 use crate::client::connection::HttpErrorKind;
-use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody, HttpResponse};
-use http::header::{
-    Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry, AUTHORIZATION, CONTENT_TYPE,
-};
+use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody};
+use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry, CONTENT_TYPE};
 use http::uri::{InvalidUri, PathAndQuery};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use serde::Serialize;
+use std::borrow::Borrow;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RequestBuilderError {
@@ -27,7 +26,7 @@ pub(crate) enum RequestBuilderError {
 
 impl From<RequestBuilderError> for HttpError {
     fn from(value: RequestBuilderError) -> Self {
-        HttpError::new(HttpErrorKind::Request, value)
+        Self::new(HttpErrorKind::Request, value)
     }
 }
 
@@ -133,7 +132,7 @@ impl HttpRequestBuilder {
         match (value, &mut self.request) {
             (Ok(mut v), Ok(r)) => {
                 v.set_sensitive(true);
-                r.headers_mut().insert(AUTHORIZATION, v);
+                r.headers_mut().insert(http::header::AUTHORIZATION, v);
             }
             (Err(e), Ok(_)) => self.request = Err(e.into()),
             (_, Err(_)) => {}
@@ -208,11 +207,49 @@ impl HttpRequestBuilder {
     pub(crate) fn into_parts(self) -> (HttpClient, Result<HttpRequest, RequestBuilderError>) {
         (self.client, self.request)
     }
+}
 
-    pub(crate) async fn send(self) -> Result<HttpResponse, HttpError> {
-        match self.request {
-            Ok(r) => Ok(self.client.execute(r).await?),
-            Err(e) => Err(e.into()),
-        }
+pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
+where
+    I: IntoIterator,
+    I::Item: Borrow<(K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut parts = uri.clone().into_parts();
+
+    let mut out = match parts.path_and_query {
+        Some(p) => match p.query() {
+            Some(x) => format!("{}?{}", p.path(), x),
+            None => format!("{}?", p.path()),
+        },
+        None => "/?".to_string(),
+    };
+    let mut serializer = form_urlencoded::Serializer::new(&mut out);
+    serializer.extend_pairs(query_pairs);
+
+    parts.path_and_query = Some(out.try_into().unwrap());
+    *uri = Uri::from_parts(parts).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_query_pairs() {
+        let mut uri = Uri::from_static("https://foo@example.com/bananas?foo=1");
+
+        add_query_pairs(&mut uri, [("bingo", "foo"), ("auth", "test")]);
+        assert_eq!(
+            uri.to_string(),
+            "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test"
+        );
+
+        add_query_pairs(&mut uri, [("t1", "funky shenanigans"), ("a", "😀")]);
+        assert_eq!(
+            uri.to_string(),
+            "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test&t1=funky+shenanigans&a=%F0%9F%98%80"
+        );
     }
 }
