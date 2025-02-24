@@ -42,9 +42,17 @@ async fn test_empty() {
 
 #[tokio::test]
 async fn test_empty_batch() {
-    let batch = make_primitive_batch(5);
-    let empty = RecordBatch::new_empty(batch.schema());
-    roundtrip(vec![empty]).await;
+    let schema = make_primitive_batch(5).schema();
+    let empty_batch = RecordBatch::new_empty(schema);
+    let stream =
+        FlightDataEncoderBuilder::new().build(futures::stream::iter(vec![Ok(empty_batch.clone())]));
+
+    let data: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(stream)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert_eq!(data, vec![empty_batch]);
 }
 
 #[tokio::test]
@@ -94,7 +102,17 @@ async fn test_primitive_empty() {
     let batch = make_primitive_batch(5);
     let empty = RecordBatch::new_empty(batch.schema());
 
-    roundtrip(vec![batch, empty]).await;
+    let stream = FlightDataEncoderBuilder::new().build(futures::stream::iter(vec![
+        Ok(batch.clone()),
+        Ok(empty.clone()),
+    ]));
+
+    let data: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(stream)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert_eq!(data, vec![batch, empty]);
 }
 
 #[tokio::test]

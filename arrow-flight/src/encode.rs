@@ -618,6 +618,11 @@ fn split_batch_for_grpc_response(
     batch: RecordBatch,
     max_flight_data_size: usize,
 ) -> Vec<RecordBatch> {
+    if batch.num_rows() == 0 {
+        // Empty batch, no need to split
+        return vec![batch];
+    }
+
     let size = batch
         .columns()
         .iter()
@@ -731,6 +736,7 @@ fn hydrate_dictionary(array: &ArrayRef, data_type: &DataType) -> Result<ArrayRef
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::decode::{DecodedPayload, FlightDataDecoder};
     use arrow_array::builder::{
         GenericByteDictionaryBuilder, ListBuilder, StringDictionaryBuilder, StructBuilder,
@@ -743,8 +749,6 @@ mod tests {
     use arrow_schema::{UnionFields, UnionMode};
     use builder::{GenericStringBuilder, MapBuilder};
     use std::collections::HashMap;
-
-    use super::*;
 
     #[test]
     /// ensure only the batch's used data (not the allocated data) is sent
@@ -1665,6 +1669,9 @@ mod tests {
 
         // 10 8 byte entries into 1k byte pieces means one piece
         verify_split(10, 1024, vec![10]);
+
+        // 0 8 byte entries into 1k byte pieces means one piece
+        verify_split(0, 1024, vec![0]);
     }
 
     /// Creates a UInt64Array of 8 byte integers with input_rows rows
