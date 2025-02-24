@@ -491,22 +491,26 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months))),
             DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
             DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days))),
-            DatePart::Hour => {
-                Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 60 * 1_000_000_000)).try_into().ok()))
-            }
-            DatePart::Minute => {
-                Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 1_000_000_000)).try_into().ok()))
-            }
+            DatePart::Hour => Ok(self.unary_opt(|d| {
+                ((d.nanoseconds / (60 * 60 * 1_000_000_000)) % 24)
+                    .try_into()
+                    .ok()
+            })),
+            DatePart::Minute => Ok(self.unary_opt(|d| {
+                ((d.nanoseconds / (60 * 1_000_000_000)) % 60)
+                    .try_into()
+                    .ok()
+            })),
             DatePart::Second => {
-                Ok(self.unary_opt(|d| (d.nanoseconds / 1_000_000_000).try_into().ok()))
+                Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000_000_000) % 60).try_into().ok()))
             }
             DatePart::Millisecond => {
-                Ok(self.unary_opt(|d| (d.nanoseconds / 1_000_000).try_into().ok()))
+                Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000_000) % 1000).try_into().ok()))
             }
             DatePart::Microsecond => {
-                Ok(self.unary_opt(|d| (d.nanoseconds / 1_000).try_into().ok()))
+                Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000) % 1000).try_into().ok()))
             }
-            DatePart::Nanosecond => Ok(self.unary_opt(|d| d.nanoseconds.try_into().ok())),
+            DatePart::Nanosecond => Ok(self.unary_opt(|d| (d.nanoseconds % 1000).try_into().ok())),
 
             DatePart::Quarter
             | DatePart::WeekISO
@@ -1855,8 +1859,19 @@ mod tests {
     fn test_interval_month_day_nano_array() {
         let input: IntervalMonthDayNanoArray = vec![
             IntervalMonthDayNano::ZERO,
-            IntervalMonthDayNano::new(5, 10, 42),
-            IntervalMonthDayNano::new(16, 35, MILLISECONDS_IN_DAY * 1_000_000 + 1),
+            IntervalMonthDayNano::new(5, 10, 42), // 5m, 10d, 42ns
+            IntervalMonthDayNano::new(16, 35, MILLISECONDS_IN_DAY * 1_000_000 + 1), // 16m, 35d, + 1d, 0ms, 1ns
+            IntervalMonthDayNano::new(
+                0,
+                0,
+                NANOSECONDS_IN_DAY * 2
+                    + NANOSECONDS * 60 * 60 * 4
+                    + NANOSECONDS * 60 * 22
+                    + NANOSECONDS * 11
+                    + 1_000_000 * 33
+                    + 1_000 * 44
+                    + 5,
+            ), // 2d, 4hr, 22m, 11s, 33ms, 44us, 5ns
         ]
         .into();
 
@@ -1866,12 +1881,14 @@ mod tests {
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(1, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Month).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(5, actual.value(1));
         assert_eq!(16, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         // Week and day follow from day, but are not affected by months or nanos.
         let actual = date_part(&input, DatePart::Week).unwrap();
@@ -1879,51 +1896,57 @@ mod tests {
         assert_eq!(0, actual.value(0));
         assert_eq!(1, actual.value(1));
         assert_eq!(5, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Day).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(10, actual.value(1));
         assert_eq!(35, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         // Times follow from nanos, but are not affected by months or days.
         let actual = date_part(&input, DatePart::Hour).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(24, actual.value(2));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(4, actual.value(3));
 
         let actual = date_part(&input, DatePart::Minute).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(24 * 60, actual.value(2));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(22, actual.value(3));
 
         let actual = date_part(&input, DatePart::Second).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(24 * 60 * 60, actual.value(2));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(11, actual.value(3));
 
         let actual = date_part(&input, DatePart::Millisecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(24 * 60 * 60 * 1_000, actual.value(2));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(33, actual.value(3));
 
         let actual = date_part(&input, DatePart::Microsecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        // Overflow gives zero.
         assert_eq!(0, actual.value(2));
+        assert_eq!(44, actual.value(3));
 
         let actual = date_part(&input, DatePart::Nanosecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(42, actual.value(1));
-        // Overflow gives zero.
-        assert_eq!(0, actual.value(2));
+        assert_eq!(1, actual.value(2));
+        assert_eq!(5, actual.value(3));
     }
 
     #[test]
