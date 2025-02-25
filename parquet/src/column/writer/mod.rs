@@ -3420,7 +3420,7 @@ mod tests {
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
-        todo!()
+        todo!("add page encryption")
     }
 
     #[test]
