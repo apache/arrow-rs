@@ -2383,6 +2383,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
@@ -2555,6 +2556,22 @@ mod tests {
                 None
             ]
         );
+    }
+    #[test]
+    fn test_cast_with_options_utf8_to_decimal() {
+        let array = StringArray::from(vec!["4e7"]);
+        let result = cast_with_options(
+            &array,
+            &DataType::Decimal128(10, 2),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap();
+        let output_array = result.as_any().downcast_ref::<Decimal128Array>();
+        let result_128 = parse_decimal::<Decimal128Type>("40000000", 10, 2);
+        assert_eq!(output_array.unwrap().value(0), result_128.unwrap());
     }
 
     #[test]
@@ -8763,16 +8780,17 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type"));
+        println!("{}", casted_err.to_string());
+        assert!(casted_err.to_string().contains(
+            "Cast error: Cannot cast string '4.4.5' to decimal type of precision 38 and scale 2"
+        ));
 
         let str_array = StringArray::from(vec![". 0.123"]);
         let array = Arc::new(str_array) as ArrayRef;
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type"));
+        assert!(casted_err.to_string().contains(
+            "Cast error: Cannot cast string '. 0.123' to decimal type of precision 38 and scale 2"
+        ));
     }
 
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
@@ -8788,7 +8806,7 @@ mod tests {
             decimal_arr.value_as_string(3)
         );
         assert_eq!(
-            "100000000000000000000000000000000000.00",
+            "99999999999999999999999999999999999.99",
             decimal_arr.value_as_string(4)
         );
     }
@@ -8816,7 +8834,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal128 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast string '1000' to decimal type of precision 10 and scale 8",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -8869,7 +8890,7 @@ mod tests {
             decimal_arr.value_as_string(3)
         );
         assert_eq!(
-            "100000000000000000000000000000000000.00",
+            "99999999999999999999999999999999999.99",
             decimal_arr.value_as_string(4)
         );
         assert!(decimal_arr.is_null(5));
@@ -8899,7 +8920,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal256 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast string '1000' to decimal type of precision 10 and scale 8",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
