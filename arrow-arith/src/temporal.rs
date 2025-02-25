@@ -488,11 +488,11 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Year => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months / 12))),
-            DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months))),
+            DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months % 12))),
             DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
-            DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days))),
+            DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days % 7))),
             DatePart::Hour => Ok(self.unary_opt(|d| {
-                ((d.nanoseconds / (60 * 60 * 1_000_000_000)) % 24)
+                ((d.nanoseconds / (60 * 60 * 1_000_000_000)) % 24) // Hour may be over 24, but won't be counted in days. Removing %24 will include a day part in the hours
                     .try_into()
                     .ok()
             })),
@@ -1859,8 +1859,8 @@ mod tests {
     fn test_interval_month_day_nano_array() {
         let input: IntervalMonthDayNanoArray = vec![
             IntervalMonthDayNano::ZERO,
-            IntervalMonthDayNano::new(5, 10, 42), // 5m, 10d, 42ns
-            IntervalMonthDayNano::new(16, 35, MILLISECONDS_IN_DAY * 1_000_000 + 1), // 16m, 35d, + 1d, 0ms, 1ns
+            IntervalMonthDayNano::new(5, 10, 42), // 5m, 1w, 3d, 42ns
+            IntervalMonthDayNano::new(16, 35, MILLISECONDS_IN_DAY * 1_000_000 + 1), // 1y, 4m, 5w (35d), + 1d, 0ms, 1ns
             IntervalMonthDayNano::new(
                 0,
                 0,
@@ -1887,7 +1887,7 @@ mod tests {
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(5, actual.value(1));
-        assert_eq!(16, actual.value(2));
+        assert_eq!(4, actual.value(2));
         assert_eq!(0, actual.value(3));
 
         // Week and day follow from day, but are not affected by months or nanos.
@@ -1901,8 +1901,8 @@ mod tests {
         let actual = date_part(&input, DatePart::Day).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
-        assert_eq!(10, actual.value(1));
-        assert_eq!(35, actual.value(2));
+        assert_eq!(3, actual.value(1));
+        assert_eq!(0, actual.value(2));
         assert_eq!(0, actual.value(3));
 
         // Times follow from nanos, but are not affected by months or days.
