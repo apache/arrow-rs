@@ -102,13 +102,15 @@ use crate::encryption::{
     modules::{create_module_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "encryption")]
+use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
 #[cfg(feature = "encryption")]
-use crate::format::ColumnCryptoMetaData;
+use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SizeStatistics, SortingColumn,
@@ -657,11 +659,14 @@ impl RowGroupMetaData {
                             d.path().string()
                         ));
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
                         let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(column_name.as_str())?
+                        decryptor.get_column_metadata_decryptor(
+                            column_name.as_str(),
+                            crypto_metadata.key_metadata.as_deref(),
+                        )?
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()?
                     }
                 };
@@ -854,6 +859,8 @@ pub struct ColumnChunkMetaData {
     unencoded_byte_array_data_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
+    #[cfg(feature = "encryption")]
+    column_crypto_metadata: Option<ColumnCryptoMetaData>,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1143,6 +1150,12 @@ impl ColumnChunkMetaData {
         self.definition_level_histogram.as_ref()
     }
 
+    /// Returns the encryption metadata for this column chunk.
+    #[cfg(feature = "encryption")]
+    pub fn crypto_metadata(&self) -> Option<&ColumnCryptoMetaData> {
+        self.column_crypto_metadata.as_ref()
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -1197,6 +1210,13 @@ impl ColumnChunkMetaData {
         let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
         let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
+        #[cfg(feature = "encryption")]
+        let column_crypto_metadata = if let Some(crypto_metadata) = cc.crypto_metadata {
+            Some(column_crypto_metadata::try_from_thrift(&crypto_metadata)?)
+        } else {
+            None
+        };
+
         let result = ColumnChunkMetaData {
             column_descr,
             encodings,
@@ -1220,6 +1240,8 @@ impl ColumnChunkMetaData {
             unencoded_byte_array_data_bytes,
             repetition_level_histogram,
             definition_level_histogram,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata,
         };
         Ok(result)
     }
@@ -1343,6 +1365,8 @@ impl ColumnChunkMetaDataBuilder {
             unencoded_byte_array_data_bytes: None,
             repetition_level_histogram: None,
             definition_level_histogram: None,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata: None,
         })
     }
 
@@ -1954,7 +1978,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2448;
+        let base_expected_size = 2656;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1984,7 +2008,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2816;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2952;
+        let bigger_expected_size = 3160;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
