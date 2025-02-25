@@ -18,9 +18,16 @@
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
+use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
+
+/// Trait for retrieving an encryption key using the key's metadata
+pub trait KeyRetriever: Send + Sync {
+    fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>>;
+}
 
 pub fn read_and_decrypt<T: Read>(
     decryptor: &Arc<dyn BlockDecryptor>,
@@ -53,22 +60,39 @@ pub(crate) struct CryptoContext {
 }
 
 impl CryptoContext {
-    pub(crate) fn new(
+    pub(crate) fn for_column(
+        file_decryptor: &FileDecryptor,
+        column_crypto_metadata: &ColumnCryptoMetaData,
+        column_name: &str,
         row_group_idx: usize,
         column_ordinal: usize,
-        data_decryptor: Arc<dyn BlockDecryptor>,
-        metadata_decryptor: Arc<dyn BlockDecryptor>,
-        file_aad: Vec<u8>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let (data_decryptor, metadata_decryptor) = match column_crypto_metadata {
+            ColumnCryptoMetaData::EncryptionWithFooterKey => {
+                // TODO: In GCM-CTR mode will this need to be a non-GCM decryptor?
+                let data_decryptor = file_decryptor.get_footer_decryptor()?;
+                let metadata_decryptor = file_decryptor.get_footer_decryptor()?;
+                (data_decryptor, metadata_decryptor)
+            }
+            ColumnCryptoMetaData::EncryptionWithColumnKey(column_key_encryption) => {
+                let key_metadata = &column_key_encryption.key_metadata;
+                let data_decryptor = file_decryptor
+                    .get_column_data_decryptor(column_name, key_metadata.as_deref())?;
+                let metadata_decryptor = file_decryptor
+                    .get_column_metadata_decryptor(column_name, key_metadata.as_deref())?;
+                (data_decryptor, metadata_decryptor)
+            }
+        };
+
+        Ok(CryptoContext {
             row_group_idx,
             column_ordinal,
             page_ordinal: None,
             dictionary_page: false,
             data_decryptor,
             metadata_decryptor,
-            file_aad,
-        }
+            file_aad: file_decryptor.file_aad().clone(),
+        })
     }
 
     pub(crate) fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
@@ -137,9 +161,11 @@ impl CryptoContext {
 }
 
 /// FileDecryptionProperties hold keys and AAD data required to decrypt a Parquet file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct FileDecryptionProperties {
-    footer_key: Vec<u8>,
+    // Invariant: Either footer_key or key_retriever is set
+    footer_key: Option<Vec<u8>>,
+    key_retriever: Option<Arc<dyn KeyRetriever>>,
     column_keys: HashMap<String, Vec<u8>>,
     pub(crate) aad_prefix: Option<Vec<u8>>,
 }
@@ -149,10 +175,32 @@ impl FileDecryptionProperties {
     pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new(footer_key)
     }
+
+    pub fn with_key_retriever(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilder {
+        DecryptionPropertiesBuilder::new_with_key_retriever(key_retriever)
+    }
+}
+
+impl std::fmt::Debug for FileDecryptionProperties {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FileDecryptionProperties {{ }}")
+    }
+}
+
+impl PartialEq for FileDecryptionProperties {
+    // FileDecryptionProperties needs to implement PartialEq to allow
+    // ParquetMetadata to implement PartialEq.
+    // We cannot compare a key retriever, but this isn't derived from the metadata.
+    fn eq(&self, other: &Self) -> bool {
+        self.footer_key == other.footer_key
+            && self.column_keys == other.column_keys
+            && self.aad_prefix == other.aad_prefix
+    }
 }
 
 pub struct DecryptionPropertiesBuilder {
-    footer_key: Vec<u8>,
+    footer_key: Option<Vec<u8>>,
+    key_retriever: Option<Arc<dyn KeyRetriever>>,
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
 }
@@ -160,7 +208,19 @@ pub struct DecryptionPropertiesBuilder {
 impl DecryptionPropertiesBuilder {
     pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
-            footer_key,
+            footer_key: Some(footer_key),
+            key_retriever: None,
+            column_keys: HashMap::default(),
+            aad_prefix: None,
+        }
+    }
+
+    pub fn new_with_key_retriever(
+        key_retriever: Arc<dyn KeyRetriever>,
+    ) -> DecryptionPropertiesBuilder {
+        Self {
+            footer_key: None,
+            key_retriever: Some(key_retriever),
             column_keys: HashMap::default(),
             aad_prefix: None,
         }
@@ -169,6 +229,7 @@ impl DecryptionPropertiesBuilder {
     pub fn build(self) -> Result<FileDecryptionProperties> {
         Ok(FileDecryptionProperties {
             footer_key: self.footer_key,
+            key_retriever: self.key_retriever,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
         })
@@ -189,72 +250,82 @@ impl DecryptionPropertiesBuilder {
 #[derive(Clone, Debug)]
 pub(crate) struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
-    footer_decryptor: Option<Arc<dyn BlockDecryptor>>,
+    footer_decryptor: Arc<dyn BlockDecryptor>,
     file_aad: Vec<u8>,
 }
 
 impl PartialEq for FileDecryptor {
     fn eq(&self, other: &Self) -> bool {
-        self.decryption_properties == other.decryption_properties
+        self.decryption_properties == other.decryption_properties && self.file_aad == other.file_aad
     }
 }
 
 impl FileDecryptor {
     pub(crate) fn new(
         decryption_properties: &FileDecryptionProperties,
+        footer_key_metadata: Option<&[u8]>,
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
-    ) -> Result<Self, ParquetError> {
+    ) -> Result<Self> {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
-        // todo decr: if no key available yet (not set in properties, should be retrieved from metadata)
-        let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key)
-            .map_err(|e| {
-                general_err!(
-                    "Invalid footer key. {}",
-                    e.to_string().replace("Parquet error: ", "")
-                )
-            })?;
+        let footer_decryptor = if let Some(footer_key) = &decryption_properties.footer_key {
+            RingGcmBlockDecryptor::new(footer_key)
+        } else if let Some(key_retriever) = &decryption_properties.key_retriever {
+            let footer_key = key_retriever.retrieve_key(footer_key_metadata.unwrap_or_default())?;
+            RingGcmBlockDecryptor::new(&footer_key)
+        } else {
+            unreachable!()
+        };
+        let footer_decryptor = footer_decryptor.map_err(|e| {
+            general_err!(
+                "Invalid footer key. {}",
+                e.to_string().replace("Parquet error: ", "")
+            )
+        })?;
+
         Ok(Self {
-            footer_decryptor: Some(Arc::new(footer_decryptor)),
+            footer_decryptor: Arc::new(footer_decryptor),
             decryption_properties: decryption_properties.clone(),
             file_aad,
         })
     }
 
-    pub(crate) fn get_footer_decryptor(&self) -> Result<Arc<dyn BlockDecryptor>, ParquetError> {
-        Ok(self.footer_decryptor.clone().unwrap())
+    pub(crate) fn get_footer_decryptor(&self) -> Result<Arc<dyn BlockDecryptor>> {
+        Ok(self.footer_decryptor.clone())
     }
 
     pub(crate) fn get_column_data_decryptor(
         &self,
         column_name: &str,
-    ) -> Result<Arc<dyn BlockDecryptor>, ParquetError> {
+        key_metadata: Option<&[u8]>,
+    ) -> Result<Arc<dyn BlockDecryptor>> {
         match self.decryption_properties.column_keys.get(column_name) {
             Some(column_key) => Ok(Arc::new(RingGcmBlockDecryptor::new(column_key)?)),
-            None => self.get_footer_decryptor(),
+            None => {
+                match (
+                    key_metadata,
+                    self.decryption_properties.key_retriever.as_ref(),
+                ) {
+                    (Some(key_metadata), Some(key_retriever)) => {
+                        let key = key_retriever.retrieve_key(key_metadata)?;
+                        Ok(Arc::new(RingGcmBlockDecryptor::new(&key)?))
+                    }
+                    _ => self.get_footer_decryptor(),
+                }
+            }
         }
     }
 
     pub(crate) fn get_column_metadata_decryptor(
         &self,
         column_name: &str,
-    ) -> Result<Arc<dyn BlockDecryptor>, ParquetError> {
+        key_metadata: Option<&[u8]>,
+    ) -> Result<Arc<dyn BlockDecryptor>> {
         // Once GCM CTR mode is implemented, data and metadata decryptors may be different
-        self.get_column_data_decryptor(column_name)
+        self.get_column_data_decryptor(column_name, key_metadata)
     }
 
     pub(crate) fn file_aad(&self) -> &Vec<u8> {
         &self.file_aad
-    }
-
-    pub(crate) fn is_column_encrypted(&self, column_name: &str) -> bool {
-        // Column is encrypted if either uniform encryption is used or an encryption key is set for the column
-        match self.decryption_properties.column_keys.is_empty() {
-            false => self
-                .decryption_properties
-                .column_keys
-                .contains_key(column_name),
-            true => true,
-        }
     }
 }

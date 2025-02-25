@@ -1029,29 +1029,23 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
         let crypto_context = if let Some(file_decryptor) = self.metadata.clone().file_decryptor() {
-            let column_name = &self
+            let column_name = &self.metadata.file_metadata().schema_descr().column(i);
+
+            let crypto_metadata = self
                 .metadata
-                .clone()
-                .file_metadata()
-                .schema_descr()
-                .column(i);
+                .row_group(self.row_group_idx)
+                .column(i)
+                .crypto_metadata();
 
-            if file_decryptor.is_column_encrypted(column_name.name()) {
-                let data_decryptor =
-                    file_decryptor.get_column_data_decryptor(column_name.name())?;
-                let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name())?;
-
-                let crypto_context = CryptoContext::new(
+            match crypto_metadata {
+                Some(crypto_metadata) => Some(Arc::new(CryptoContext::for_column(
+                    file_decryptor,
+                    crypto_metadata,
+                    column_name.name(),
                     self.row_group_idx,
                     i,
-                    data_decryptor,
-                    metadata_decryptor,
-                    file_decryptor.file_aad().clone(),
-                );
-                Some(Arc::new(crypto_context))
-            } else {
-                None
+                )?)),
+                None => None,
             }
         } else {
             None

@@ -17,12 +17,13 @@
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
-use crate::encryption_util::verify_encryption_test_data;
+use crate::encryption_util::{verify_encryption_test_data, TestKeyRetriever};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::errors::ParquetError;
+use std::sync::Arc;
 use tokio::fs::File;
 
 #[tokio::test]
@@ -266,6 +267,67 @@ async fn test_read_encrypted_file_from_object_store() {
     let record_batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
     verify_encryption_test_data(record_batches, &metadata);
+}
+
+#[tokio::test]
+async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    let key_retriever = TestKeyRetriever::new()
+        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
+        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
+        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_non_uniform_encryption_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    let key_retriever = TestKeyRetriever::new()
+        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
+        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
+        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_uniform_encryption_with_key_retriever() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    let key_retriever =
+        TestKeyRetriever::new().with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec());
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
+        .await
+        .unwrap();
 }
 
 async fn verify_encryption_test_file_read_async(
