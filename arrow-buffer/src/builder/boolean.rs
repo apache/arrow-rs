@@ -197,12 +197,18 @@ impl BooleanBufferBuilder {
     /// Appends a slice of booleans into the buffer
     #[inline]
     pub fn append_slice(&mut self, slice: &[bool]) {
-        let additional = slice.len();
+        self.append_iter(slice.iter().copied())
+    }
+
+    /// Appends a iter of booleans into the buffer
+    #[inline]
+    pub fn append_iter(&mut self, iter: impl ExactSizeIterator<Item = bool>) {
+        let additional = iter.len();
         self.advance(additional);
 
         let offset = self.len() - additional;
-        for (i, v) in slice.iter().enumerate() {
-            if *v {
+        for (i, v) in iter.enumerate() {
+            if v {
                 unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
             }
         }
