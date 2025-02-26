@@ -54,8 +54,8 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     let mut rng = seedable_rng();
     let indices: Vec<_> = (0..len)
         .map(|_| {
-            let array_idx = rng.random_range(0..values.len());
-            let value_idx = rng.random_range(0..values[array_idx].len());
+            let array_idx = rng.gen_range(0..values.len());
+            let value_idx = rng.gen_range(0..values[array_idx].len());
             (array_idx, value_idx)
         })
         .collect();

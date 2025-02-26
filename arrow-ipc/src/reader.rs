@@ -1128,7 +1128,7 @@ impl FileReaderBuilder {
 /// For an example creating Arrays without copying using  memory mapped (`mmap`)
 /// files see the [`zero_copy_ipc`] example.
 ///
-/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+/// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 /// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking

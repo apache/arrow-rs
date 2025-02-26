@@ -312,11 +312,11 @@ mod tests {
                     let mut expected = Vec::with_capacity(1024);
 
                     for _ in 0..50 {
-                        let chunk_size = rng.random_range(0..30);
-                        let data: Vec<_> = (0..chunk_size).map(|_| rng.random()).collect();
+                        let chunk_size = rng.gen_range(0..30);
+                        let data: Vec<_> = (0..chunk_size).map(|_| rng.gen()).collect();
                         expected.extend_from_slice(&data);
 
-                        match rng.random_bool(method) {
+                        match rng.gen_bool(method) {
                             true => write.put(data.into()),
                             false => write.write(&data),
                         }

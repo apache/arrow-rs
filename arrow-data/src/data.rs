@@ -1956,7 +1956,13 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
-    /// Note: This is shorthand for `self.skip_validation(true).build().unwrap()`
+    /// Note: This is shorthand for
+    /// ```rust
+    /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
+    /// # let _ = unsafe {
+    /// builder.skip_validation(true).build().unwrap()
+    /// # };
+    /// ```
     ///
     /// # Safety
     ///

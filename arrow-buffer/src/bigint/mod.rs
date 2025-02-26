@@ -475,8 +475,8 @@ impl i256 {
     /// Interpret 4 `u64` digits, least significant first, as a [`i256`]
     fn from_digits(digits: [u64; 4]) -> Self {
         Self::from_parts(
-            digits[0] as u128 | (digits[1] as u128) << 64,
-            digits[2] as i128 | (digits[3] as i128) << 64,
+            digits[0] as u128 | ((digits[1] as u128) << 64),
+            digits[2] as i128 | ((digits[3] as i128) << 64),
         )
     }
 
@@ -746,7 +746,7 @@ impl Shl<u8> for i256 {
             self
         } else if rhs < 128 {
             Self {
-                high: self.high << rhs | (self.low >> (128 - rhs)) as i128,
+                high: (self.high << rhs) | (self.low >> (128 - rhs)) as i128,
                 low: self.low << rhs,
             }
         } else {
@@ -768,7 +768,7 @@ impl Shr<u8> for i256 {
         } else if rhs < 128 {
             Self {
                 high: self.high >> rhs,
-                low: self.low >> rhs | ((self.high as u128) << (128 - rhs)),
+                low: (self.low >> rhs) | ((self.high as u128) << (128 - rhs)),
             }
         } else {
             Self {
@@ -840,7 +840,7 @@ impl ToPrimitive for i256 {
 mod tests {
     use super::*;
     use num::Signed;
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1091,16 +1091,16 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_i256_fuzz() {
-        let mut rng = rng();
+        let mut rng = thread_rng();
 
         for _ in 0..1000 {
             let mut l = [0_u8; 32];
-            let len = rng.random_range(0..32);
-            l.iter_mut().take(len).for_each(|x| *x = rng.random());
+            let len = rng.gen_range(0..32);
+            l.iter_mut().take(len).for_each(|x| *x = rng.gen());
 
             let mut r = [0_u8; 32];
-            let len = rng.random_range(0..32);
-            r.iter_mut().take(len).for_each(|x| *x = rng.random());
+            let len = rng.gen_range(0..32);
+            r.iter_mut().take(len).for_each(|x| *x = rng.gen());
 
             test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
         }

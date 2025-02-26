@@ -19,10 +19,8 @@
 
 use std::sync::Arc;
 
-use rand::{
-    distr::uniform::{SampleRange, SampleUniform},
-    Rng,
-};
+use rand::distributions::uniform::SampleRange;
+use rand::{distributions::uniform::SampleUniform, Rng};
 
 use crate::array::*;
 use crate::error::{ArrowError, Result};
@@ -120,23 +118,33 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(unit, _) => {
-            match unit {
-                TimeUnit::Second => Arc::new(create_random_temporal_array::<TimestampSecondType>(
+        Timestamp(unit, tz) => match unit {
+            TimeUnit::Second => Arc::new(
+                create_random_temporal_array::<TimestampSecondType>(size, primitive_null_density)
+                    .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Millisecond => Arc::new(
+                create_random_temporal_array::<TimestampMillisecondType>(
                     size,
                     primitive_null_density,
-                )),
-                TimeUnit::Millisecond => Arc::new(create_random_temporal_array::<
-                    TimestampMillisecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Microsecond => Arc::new(create_random_temporal_array::<
-                    TimestampMicrosecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<
-                    TimestampNanosecondType,
-                >(size, primitive_null_density)),
-            }
-        }
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Microsecond => Arc::new(
+                create_random_temporal_array::<TimestampMicrosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Nanosecond => Arc::new(
+                create_random_temporal_array::<TimestampNanosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+        },
         Date32 => Arc::new(create_random_temporal_array::<Date32Type>(
             size,
             primitive_null_density,
@@ -372,7 +380,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     offsets.push(current_offset);
 
     (0..size).for_each(|_| {
-        current_offset += rng.random_range(min..max);
+        current_offset += rng.gen_range(min..max);
         offsets.push(current_offset);
     });
 
@@ -385,7 +393,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
     {
         let mut_slice = mut_buf.as_slice_mut();
         (0..size).for_each(|i| {
-            if rng.random::<f32>() >= null_density {
+            if rng.gen::<f32>() >= null_density {
                 bit_util::set_bit(mut_slice, i)
             }
         })
@@ -404,7 +412,7 @@ pub trait RandomTemporalValue: ArrowTemporalType {
     where
         Self::Native: SampleUniform,
     {
-        rng.random_range(Self::value_range())
+        rng.gen_range(Self::value_range())
     }
 
     /// Generate a random value of the type
@@ -505,7 +513,7 @@ where
 
     (0..size)
         .map(|_| {
-            if rng.random::<f32>() < null_density {
+            if rng.gen::<f32>() < null_density {
                 None
             } else {
                 Some(T::random(&mut rng))
@@ -521,7 +529,19 @@ mod tests {
     #[test]
     fn test_create_batch() {
         let size = 32;
-        let fields = vec![Field::new("a", DataType::Int32, true)];
+        let fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "timestamp_without_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "timestamp_with_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+        ];
         let schema = Schema::new(fields);
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
