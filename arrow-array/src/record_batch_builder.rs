@@ -13,12 +13,12 @@ pub struct RecordBatchBuilder {
 
 impl RecordBatchBuilder {
     /// Creates a RecordBatchBuilder with the given schema.
-    fn new(schema: SchemaRef) -> Self {
+    pub fn new(schema: SchemaRef) -> Self {
         Self::with_capacity(schema, 0)
     }
 
     /// Creates a RecordBatchBuilder with the given schema and initial capacity.
-    fn with_capacity(schema: SchemaRef, capacity: usize) -> Self {
+    pub fn with_capacity(schema: SchemaRef, capacity: usize) -> Self {
         let builders = schema
             .fields()
             .iter()
