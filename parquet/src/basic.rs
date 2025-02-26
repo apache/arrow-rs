@@ -29,7 +29,7 @@ use crate::errors::{ParquetError, Result};
 // Re-export crate::format types used in this module
 pub use crate::format::{
     BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType, NullType,
-    StringType, TimeType, TimeUnit, TimestampType, UUIDType,
+    StringType, TimeType, TimeUnit, TimestampType, UUIDType,VariantType
 };
 
 // ----------------------------------------------------------------------
@@ -168,6 +168,9 @@ pub enum ConvertedType {
     /// the number of milliseconds associated with the provided duration.
     /// This duration of time is independent of any particular timezone or date.
     INTERVAL,
+
+    /// A variant type.
+    VARIANT,
 }
 
 // ----------------------------------------------------------------------
@@ -228,6 +231,13 @@ pub enum LogicalType {
     Uuid,
     /// A 16-bit floating point number.
     Float16,
+    /// A variant type.
+    Variant {
+        /// The metadata of the variant.
+        metadata: Vec<u8>,
+        /// The value of the variant.
+        value: Vec<u8>,
+    },
 }
 
 // ----------------------------------------------------------------------
@@ -579,6 +589,7 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Variant { .. } => SortOrder::UNDEFINED, // TODO: consider variant sort order
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -618,6 +629,7 @@ impl ColumnOrder {
             ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
                 SortOrder::UNDEFINED
             }
+            ConvertedType::VARIANT => SortOrder::UNDEFINED, // TODO: consider variant sort order
 
             // Fall back to physical type.
             ConvertedType::NONE => Self::get_default_sort_order(physical_type),
@@ -768,6 +780,7 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
                 parquet::ConvertedType::JSON => ConvertedType::JSON,
                 parquet::ConvertedType::BSON => ConvertedType::BSON,
                 parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
+                parquet::ConvertedType::VARIANT => ConvertedType::VARIANT,
                 _ => {
                     return Err(general_err!(
                         "unexpected parquet converted type: {}",
@@ -805,6 +818,7 @@ impl From<ConvertedType> for Option<parquet::ConvertedType> {
             ConvertedType::JSON => Some(parquet::ConvertedType::JSON),
             ConvertedType::BSON => Some(parquet::ConvertedType::BSON),
             ConvertedType::INTERVAL => Some(parquet::ConvertedType::INTERVAL),
+            ConvertedType::VARIANT => Some(parquet::ConvertedType::VARIANT),
         }
     }
 }
@@ -841,6 +855,10 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
+            parquet::LogicalType::VARIANT(v) => LogicalType::Variant {
+                metadata: v.metadata,
+                value: v.value,
+            },
         }
     }
 }
@@ -882,6 +900,12 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
+            LogicalType::Variant { metadata, value } => parquet::LogicalType::VARIANT(VariantType {
+                metadata,
+                value,
+            }),
+
+     
         }
     }
 }
@@ -933,7 +957,8 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Bson => ConvertedType::BSON,
                 LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
                     ConvertedType::NONE
-                }
+                },
+                LogicalType::Variant { .. } => ConvertedType::VARIANT,
             },
             None => ConvertedType::NONE,
         }
@@ -1142,6 +1167,7 @@ impl str::FromStr for ConvertedType {
             "JSON" => Ok(ConvertedType::JSON),
             "BSON" => Ok(ConvertedType::BSON),
             "INTERVAL" => Ok(ConvertedType::INTERVAL),
+            "VARIANT" => Ok(ConvertedType::VARIANT),
             other => Err(general_err!("Invalid parquet converted type {}", other)),
         }
     }
@@ -1182,6 +1208,10 @@ impl str::FromStr for LogicalType {
                 "Interval parquet logical type not yet supported"
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
+            "VARIANT" => Ok(LogicalType::Variant {
+                metadata: vec![],
+                value: vec![],
+            }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
@@ -1315,7 +1345,8 @@ mod tests {
         assert_eq!(ConvertedType::JSON.to_string(), "JSON");
         assert_eq!(ConvertedType::BSON.to_string(), "BSON");
         assert_eq!(ConvertedType::INTERVAL.to_string(), "INTERVAL");
-        assert_eq!(ConvertedType::DECIMAL.to_string(), "DECIMAL")
+        assert_eq!(ConvertedType::DECIMAL.to_string(), "DECIMAL");
+        assert_eq!(ConvertedType::VARIANT.to_string(), "VARIANT");
     }
 
     #[test]
@@ -1416,7 +1447,11 @@ mod tests {
         assert_eq!(
             ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
             ConvertedType::DECIMAL
-        )
+        );
+        assert_eq!(
+            ConvertedType::try_from(Some(parquet::ConvertedType::VARIANT)).unwrap(),
+            ConvertedType::VARIANT
+        );
     }
 
     #[test]
@@ -1511,7 +1546,11 @@ mod tests {
         assert_eq!(
             Some(parquet::ConvertedType::DECIMAL),
             ConvertedType::DECIMAL.into()
-        )
+        );
+        assert_eq!(
+            Some(parquet::ConvertedType::VARIANT),
+            ConvertedType::VARIANT.into()
+        );
     }
 
     #[test]
@@ -1683,7 +1722,14 @@ mod tests {
                 .parse::<ConvertedType>()
                 .unwrap(),
             ConvertedType::DECIMAL
-        )
+        );
+        assert_eq!(
+            ConvertedType::VARIANT
+                .to_string()
+                .parse::<ConvertedType>()
+                .unwrap(),
+            ConvertedType::VARIANT
+        );
     }
 
     #[test]
@@ -1834,6 +1880,13 @@ mod tests {
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::from(Some(LogicalType::Variant {
+                metadata: vec![1, 2, 3],
+                value: vec![4, 5, 6],
+            })),
+            ConvertedType::VARIANT
         );
     }
 
@@ -2218,7 +2271,14 @@ mod tests {
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![LogicalType::List, LogicalType::Map];
+        let undefined = vec![
+            LogicalType::List,
+            LogicalType::Map,
+            LogicalType::Variant {
+                metadata: vec![],
+                value: vec![],
+            },
+        ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 
@@ -2269,6 +2329,7 @@ mod tests {
             ConvertedType::MAP,
             ConvertedType::MAP_KEY_VALUE,
             ConvertedType::INTERVAL,
+            ConvertedType::VARIANT,
         ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
 

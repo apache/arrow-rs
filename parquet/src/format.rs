@@ -198,6 +198,9 @@ impl ConvertedType {
   /// the provided duration.  This duration of time is independent of any
   /// particular timezone or date.
   pub const INTERVAL: ConvertedType = ConvertedType(21);
+
+  pub const VARIANT: ConvertedType = ConvertedType(22);
+
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::UTF8,
     Self::MAP,
@@ -220,7 +223,7 @@ impl ConvertedType {
     Self::INT_64,
     Self::JSON,
     Self::BSON,
-    Self::INTERVAL,
+    Self::VARIANT,
   ];
 }
 
@@ -260,6 +263,7 @@ impl From<i32> for ConvertedType {
       19 => ConvertedType::JSON,
       20 => ConvertedType::BSON,
       21 => ConvertedType::INTERVAL,
+      22 => ConvertedType::VARIANT,
       _ => ConvertedType(i)
     }
   }
@@ -1834,6 +1838,66 @@ impl crate::thrift::TSerializable for BsonType {
   }
 }
 
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct VariantType {
+    pub metadata: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl VariantType {
+  pub fn new(metadata: Vec<u8>, value: Vec<u8>) -> Self {
+      Self { metadata, value }
+  }
+
+  // Getters that return references to the underlying bytes
+  pub fn metadata(&self) -> &[u8] {
+      self.metadata.as_slice()
+  }
+
+  pub fn value(&self) -> &[u8] {
+      self.value.as_slice()
+  }
+}
+impl crate::thrift::TSerializable for VariantType {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<Self> {
+      i_prot.read_struct_begin()?;
+      let mut metadata = None;
+      let mut value = None;
+      
+      loop {
+          let field_ident = i_prot.read_field_begin()?;
+          if field_ident.field_type == TType::Stop {
+              break;
+          }
+          let field_id = field_id(&field_ident)?;
+          match field_id {
+              1 => metadata = Some(Vec::<u8>::from(i_prot.read_bytes()?)),
+              2 => value = Some(Vec::<u8>::from(i_prot.read_bytes()?)),
+              _ => i_prot.skip(field_ident.field_type)?,
+          }
+          i_prot.read_field_end()?;
+      }
+      i_prot.read_struct_end()?;
+      
+      Ok(VariantType {
+          metadata: metadata.unwrap_or_default(),
+          value: value.unwrap_or_default(),
+      })
+  }
+
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+      o_prot.write_struct_begin(&TStructIdentifier::new("VariantType  "))?;
+      o_prot.write_field_begin(&TFieldIdentifier::new("metadata", TType::String, 1))?;
+      o_prot.write_bytes(self.metadata.as_slice())?;
+      o_prot.write_field_end()?;
+      o_prot.write_field_begin(&TFieldIdentifier::new("value", TType::String, 2))?;
+      o_prot.write_bytes(self.value.as_slice())?;
+      o_prot.write_field_end()?;
+      o_prot.write_field_stop()?;
+      o_prot.write_struct_end()
+  }
+}
+
 //
 // LogicalType
 //
@@ -1854,6 +1918,7 @@ pub enum LogicalType {
   BSON(BsonType),
   UUID(UUIDType),
   FLOAT16(Float16Type),
+  VARIANT(VariantType),
 }
 
 impl crate::thrift::TSerializable for LogicalType {
@@ -2070,6 +2135,11 @@ impl crate::thrift::TSerializable for LogicalType {
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
+      LogicalType::VARIANT(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("VARIANT", TType::Struct, 16))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+        },
     }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
@@ -5478,4 +5548,5 @@ impl crate::thrift::TSerializable for FileCryptoMetaData {
     o_prot.write_struct_end()
   }
 }
+
 

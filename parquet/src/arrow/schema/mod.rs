@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow_ipc::writer;
 #[cfg(feature = "arrow_canonical_extension_types")]
-use arrow_schema::extension::{Json, Uuid};
+use arrow_schema::extension::{Json, Uuid, Variant};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
