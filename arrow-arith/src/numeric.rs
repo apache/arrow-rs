@@ -1148,7 +1148,6 @@ mod tests {
         assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
         assert!(r.value(5).is_nan());
 
-
         let result = rem_wrapping(&a, &b).unwrap();
         let r = result.as_primitive::<Float32Type>();
         assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
