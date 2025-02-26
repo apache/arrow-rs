@@ -452,6 +452,11 @@ impl<'a> RecordBatchDecoder<'a> {
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
     ///
+    /// Note this API is somewhat "funky" as it allows the caller to skip validation
+    /// without having to use `unsafe` code. If this is ever made public
+    /// it should be made clearer that this is a potentially unsafe by
+    /// using an `unsafe` function that takes a boolean flag.
+    ///
     /// # Safety
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
