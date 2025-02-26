@@ -463,11 +463,9 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
         match part {
             DatePart::Week => Ok(self.unary_opt(|d| Some(d.days / 7))),
             DatePart::Day => Ok(self.unary_opt(|d| Some(d.days % 7))),
-            DatePart::Hour => {
-                Ok(self.unary_opt(|d| Some((d.milliseconds / (60 * 60 * 1_000)) % 24)))
-            }
-            DatePart::Minute => Ok(self.unary_opt(|d| Some((d.milliseconds / (60 * 1_000)) % 60))),
-            DatePart::Second => Ok(self.unary_opt(|d| Some((d.milliseconds / 1_000) % 60))),
+            DatePart::Hour => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 60 * 1_000) % 24))),
+            DatePart::Minute => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 1_000) % 60))),
+            DatePart::Second => Ok(self.unary_opt(|d| Some(d.milliseconds / 1_000 % 60))),
             DatePart::Millisecond => Ok(self.unary_opt(|d| Some(d.milliseconds % 1_000))),
             DatePart::Microsecond | DatePart::Nanosecond => Ok(self.unary_opt(|_| Some(0))),
 
@@ -493,15 +491,13 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
             DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days % 7))),
             DatePart::Hour => Ok(self.unary_opt(|d| {
-                ((d.nanoseconds / (60 * 60 * 1_000_000_000)) % 24)
+                (d.nanoseconds / (60 * 60 * 1_000_000_000) % 24)
                     .try_into()
                     .ok()
             })),
-            DatePart::Minute => Ok(self.unary_opt(|d| {
-                ((d.nanoseconds / (60 * 1_000_000_000)) % 60)
-                    .try_into()
-                    .ok()
-            })),
+            DatePart::Minute => {
+                Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 1_000_000_000) % 60).try_into().ok()))
+            }
             DatePart::Second => {
                 Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000_000_000) % 60).try_into().ok()))
             }
@@ -529,9 +525,9 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Week => Ok(self.unary_opt(|d| (d / (60 * 60 * 24 * 7)).try_into().ok())),
-            DatePart::Day => Ok(self.unary_opt(|d| ((d / (60 * 60 * 24)) % 7).try_into().ok())),
-            DatePart::Hour => Ok(self.unary_opt(|d| ((d / (60 * 60)) % 24).try_into().ok())),
-            DatePart::Minute => Ok(self.unary_opt(|d| ((d / 60) % 60).try_into().ok())),
+            DatePart::Day => Ok(self.unary_opt(|d| (d / (60 * 60 * 24) % 7).try_into().ok())),
+            DatePart::Hour => Ok(self.unary_opt(|d| (d / (60 * 60) % 24).try_into().ok())),
+            DatePart::Minute => Ok(self.unary_opt(|d| (d / 60 % 60).try_into().ok())),
             DatePart::Second => Ok(self.unary_opt(|d| (d % 60).try_into().ok())),
             DatePart::Millisecond | DatePart::Microsecond | DatePart::Nanosecond => {
                 Ok(self.unary_opt(|_| Some(0)))
@@ -593,8 +589,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
                 Ok(self.unary_opt(|d| (d / (1_000_000 * 60 * 60) % 24).try_into().ok()))
             }
             DatePart::Minute => Ok(self.unary_opt(|d| (d / (1_000_000 * 60) % 60).try_into().ok())),
-            DatePart::Second => Ok(self.unary_opt(|d| ((d / 1_000_000) % 60).try_into().ok())),
-            DatePart::Millisecond => Ok(self.unary_opt(|d| ((d / 1_000) % 1_000).try_into().ok())),
+            DatePart::Second => Ok(self.unary_opt(|d| (d / 1_000_000 % 60).try_into().ok())),
+            DatePart::Millisecond => Ok(self.unary_opt(|d| (d / 1_000 % 1_000).try_into().ok())),
             DatePart::Microsecond => Ok(self.unary_opt(|d| (d % 1_000).try_into().ok())),
             DatePart::Nanosecond => Ok(self.unary_opt(|_| Some(0))),
 
@@ -619,16 +615,20 @@ impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
                 Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24 * 7)).try_into().ok()))
             }
             DatePart::Day => {
-                Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24)).try_into().ok()))
+                Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60 * 24) % 7).try_into().ok()))
             }
             DatePart::Hour => {
-                Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60)).try_into().ok()))
+                Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60 * 60) % 24).try_into().ok()))
             }
-            DatePart::Minute => Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60)).try_into().ok())),
-            DatePart::Second => Ok(self.unary_opt(|d| (d / 1_000_000_000).try_into().ok())),
-            DatePart::Millisecond => Ok(self.unary_opt(|d| (d / 1_000_000).try_into().ok())),
-            DatePart::Microsecond => Ok(self.unary_opt(|d| (d / 1_000).try_into().ok())),
-            DatePart::Nanosecond => Ok(self.unary_opt(|d| d.try_into().ok())),
+            DatePart::Minute => {
+                Ok(self.unary_opt(|d| (d / (1_000_000_000 * 60) % 60).try_into().ok()))
+            }
+            DatePart::Second => Ok(self.unary_opt(|d| (d / 1_000_000_000 % 60).try_into().ok())),
+            DatePart::Millisecond => {
+                Ok(self.unary_opt(|d| (d / 1_000_000 % 1_000).try_into().ok()))
+            }
+            DatePart::Microsecond => Ok(self.unary_opt(|d| (d / 1_000 % 1_000).try_into().ok())),
+            DatePart::Nanosecond => Ok(self.unary_opt(|d| (d % 1_000).try_into().ok())),
 
             DatePart::Year
             | DatePart::YearISO
@@ -2182,31 +2182,69 @@ mod tests {
 
     #[test]
     fn test_duration_nanosecond() {
-        let input: DurationNanosecondArray = vec![0, 42, 60 * 60 * 24 + 1].into();
+        let input: DurationNanosecondArray = vec![
+            0,                                                                         // 0ns
+            42,                                                                        // 42ns
+            60 * 60 * 24 + 1, // 86us, 401ns
+            NANOSECONDS_IN_DAY * 14 + NANOSECONDS_IN_DAY + NANOSECONDS_IN_DAY / 2 + 1, // 2w, 1d, 12h, 1ns
+        ]
+        .into();
+
+        let actual = date_part(&input, DatePart::Week).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(0, actual.value(1));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(2, actual.value(3));
+
+        let actual = date_part(&input, DatePart::Day).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(0, actual.value(1));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(1, actual.value(3));
+
+        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(0, actual.value(1));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(12, actual.value(3));
+
+        let actual = date_part(&input, DatePart::Minute).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(0, actual.value(1));
+        assert_eq!(0, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Second).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(0, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Millisecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(0, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Microsecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!((60 * 60 * 24 + 1) / 1_000, actual.value(2));
+        assert_eq!(86, actual.value(2));
+        assert_eq!(0, actual.value(3));
 
         let actual = date_part(&input, DatePart::Nanosecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(42, actual.value(1));
-        assert_eq!(60 * 60 * 24 + 1, actual.value(2));
+        assert_eq!(401, actual.value(2));
+        assert_eq!(1, actual.value(3));
     }
 
     #[test]
