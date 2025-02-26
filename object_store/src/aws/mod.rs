@@ -169,6 +169,7 @@ impl ObjectStore for AmazonS3 {
 
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
+            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
@@ -220,6 +221,7 @@ impl ObjectStore for AmazonS3 {
                         })
                         .await
                     }
+                    S3ConditionalPut::Disabled => Err(Error::NotImplemented),
                 }
             }
         }
@@ -560,6 +562,7 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
+        let test_conditional_put = config.conditional_put != S3ConditionalPut::Disabled;
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -592,7 +595,9 @@ mod tests {
         if test_not_exists {
             copy_if_not_exists(&integration).await;
         }
-        put_opts(&integration, true).await;
+        if test_conditional_put {
+            put_opts(&integration, true).await;
+        }
 
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);

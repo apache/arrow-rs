@@ -823,7 +823,8 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Configure how to provide conditional put operations
+    /// Configure how to provide conditional put operations.
+    /// if not set, the default value will be `S3ConditionalPut::ETagMatch`
     pub fn with_conditional_put(mut self, config: S3ConditionalPut) -> Self {
         self.conditional_put = config.into();
         self

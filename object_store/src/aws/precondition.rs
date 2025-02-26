@@ -148,6 +148,9 @@ pub enum S3ConditionalPut {
     ///
     /// This will use the same region, credentials and endpoint as configured for S3
     Dynamo(DynamoCommit),
+
+    /// Disable `conditional put`
+    Disabled,
 }
 
 impl std::fmt::Display for S3ConditionalPut {
@@ -155,6 +158,7 @@ impl std::fmt::Display for S3ConditionalPut {
         match self {
             Self::ETagMatch => write!(f, "etag"),
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
+            Self::Disabled => write!(f, "disabled"),
         }
     }
 }
@@ -163,6 +167,7 @@ impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
+            "disabled" => Some(Self::Disabled),
             trimmed => match trimmed.split_once(':')? {
                 ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
                 _ => None,
