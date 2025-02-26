@@ -17,12 +17,16 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use crate::{
+    Array, ArrayRef, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
+};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
+
+use super::take_in_utils;
 
 /// Builder for [`GenericByteArray`]
 ///
@@ -127,6 +131,56 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
         self.offsets_builder.append(self.next_offset());
+    }
+
+    /// Take values at indices from array into the builder.
+    pub fn take_in<I>(&mut self, array: &GenericByteArray<T>, indices: &PrimitiveArray<I>)
+    where
+        I: ArrowPrimitiveType,
+    {
+        take_in_utils::take_in_nulls(&mut self.null_buffer_builder, array.nulls(), &indices);
+
+        let indices_has_nulls = indices.null_count() > 0;
+        let array_has_nulls = indices.null_count() > 0;
+
+        match (indices_has_nulls, array_has_nulls) {
+            (true, true) => {
+                for idx in indices.iter() {
+                    match idx {
+                        Some(idx) => {
+                            if array.is_valid(idx.as_usize()) {
+                                self.append_value(&array.value(idx.as_usize()))
+                            } else {
+                                self.append_null();
+                            }
+                        }
+                        None => self.append_null(),
+                    };
+                }
+            }
+            (true, false) => {
+                for idx in indices.iter() {
+                    match idx {
+                        Some(idx) => self.append_value(&array.value(idx.as_usize())),
+                        None => self.append_null(),
+                    };
+                }
+            }
+            (false, true) => {
+                for idx in indices.values().iter() {
+                    if array.is_valid(idx.as_usize()) {
+                        self.append_value(&array.value(idx.as_usize()));
+                    } else {
+                        self.append_null();
+                    }
+                }
+            }
+            (false, false) => {
+                for idx in indices.values().iter() {
+                    self.append_value(&array.value(idx.as_usize()));
+                }
+            }
+        }
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
