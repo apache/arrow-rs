@@ -22,3 +22,5 @@ mod key_material;
 mod key_unwrapper;
 pub mod kms;
 mod kms_manager;
+#[cfg(test)]
+mod test_kms;

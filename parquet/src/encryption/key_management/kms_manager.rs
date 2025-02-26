@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::encryption::key_management::kms::{KmsClient, KmsClientRef, KmsConnectionConfig};
+use crate::encryption::key_management::kms::{
+    KmsClient, KmsClientFactory, KmsClientRef, KmsConnectionConfig,
+};
 use crate::errors::Result;
 use std::sync::{Arc, Mutex};
 
-pub type ClientFactory =
-    Mutex<Box<dyn FnMut(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync>>;
+type ClientFactory = Mutex<Box<dyn KmsClientFactory>>;
 
 /// Manages caching the KMS and allowing interaction with it
 pub struct KmsManager {
@@ -45,7 +46,7 @@ impl KmsManager {
         let client = match kms_client {
             None => {
                 let mut client_factory = self.kms_client_factory.lock().unwrap();
-                let client = client_factory(kms_connection_config)?;
+                let client = client_factory.create_client(kms_connection_config)?;
                 *kms_client = Some(client.clone());
                 client
             }

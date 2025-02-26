@@ -17,7 +17,7 @@
 
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
-use crate::encryption::key_management::kms::{KmsClient, KmsClientRef, KmsConnectionConfig};
+use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConfig};
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
 use std::collections::HashMap;
@@ -254,9 +254,9 @@ pub struct CryptoFactory {
 
 impl CryptoFactory {
     /// Create a new CryptoFactory, providing a factory function for creating KMS clients
-    pub fn new<F>(kms_client_factory: F) -> Self
+    pub fn new<T>(kms_client_factory: T) -> Self
     where
-        F: FnMut(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync + 'static,
+        T: KmsClientFactory + 'static,
     {
         CryptoFactory {
             kms_manager: Arc::new(KmsManager::new(Mutex::new(Box::new(kms_client_factory)))),
@@ -285,37 +285,17 @@ impl CryptoFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::prelude::BASE64_STANDARD;
-    use base64::Engine;
-
-    struct TestKmsClient {}
-
-    impl TestKmsClient {
-        fn new(_kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
-            Ok(Arc::new(Self {}))
-        }
-    }
-
-    impl KmsClient for TestKmsClient {
-        fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String> {
-            todo!("wrap key")
-        }
-
-        fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>> {
-            assert!(wrapped_key.starts_with(master_key_identifier));
-            let key_b64 = wrapped_key.split_once(":").unwrap().1;
-            BASE64_STANDARD.decode(key_b64).map_err(|e| {
-                ParquetError::General(format!("Error base64 decoding wrapped key: {}", e))
-            })
-        }
-    }
+    use crate::encryption::key_management::test_kms::TestKmsClientFactory;
 
     #[test]
     fn test_file_decryption_properties() {
         let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
         let config = Default::default();
 
-        let crypto_factory = CryptoFactory::new(TestKmsClient::new);
+        let mut key_map = HashMap::default();
+        key_map.insert("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
+
+        let crypto_factory = CryptoFactory::new(TestKmsClientFactory::new(key_map.clone()));
         let decryption_props = crypto_factory
             .file_decryption_properties(kms_config, config)
             .unwrap();
@@ -324,18 +304,21 @@ mod tests {
         let key_retriever = decryption_props.key_retriever.unwrap();
 
         let expected_dek = "1234567890123450".as_bytes().to_vec();
-        let b64_key = BASE64_STANDARD.encode(&expected_dek);
+        let kms = TestKmsClientFactory::new(key_map)
+            .create_client(&Default::default())
+            .unwrap();
 
+        let wrapped_key = kms.wrap_key(&expected_dek, "kc1").unwrap();
         let key_material = format!(
             r#"{{
             "keyMaterialType": "PKMT1",
             "internalStorage": true,
             "isFooterKey": false,
             "masterKeyID": "kc1",
-            "wrappedDEK": "kc1:{}",
+            "wrappedDEK": "{}",
             "doubleWrapping": false
-        }}"#,
-            b64_key
+            }}"#,
+            wrapped_key
         );
 
         let dek = key_retriever.retrieve_key(key_material.as_bytes()).unwrap();

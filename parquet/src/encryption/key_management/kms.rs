@@ -39,3 +39,23 @@ impl KmsConnectionConfig {
         Self {}
     }
 }
+
+impl Default for KmsConnectionConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Trait for factories that create KMS clients
+pub trait KmsClientFactory: Send {
+    fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef>;
+}
+
+impl<T> KmsClientFactory for T
+where
+    T: Fn(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + 'static,
+{
+    fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+        self(kms_connection_config)
+    }
+}
