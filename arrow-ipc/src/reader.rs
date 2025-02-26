@@ -456,7 +456,7 @@ impl<'a> RecordBatchDecoder<'a> {
     ///
     /// Relies on the caller only passing a flag with `true` value if they are
     /// certain that the data is valid
-    pub fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
         self.skip_validation = skip_validation;
         self
     }
