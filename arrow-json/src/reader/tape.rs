@@ -17,6 +17,7 @@
 
 use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
+use memchr::memchr2;
 use serde::Serialize;
 use std::fmt::Write;
 
@@ -394,7 +395,7 @@ impl TapeDecoder {
                 }
                 // Decoding a string
                 DecoderState::String => {
-                    let s = iter.advance_until(|b| matches!(b, b'\\' | b'"'));
+                    let s = iter.skip_chrs(b'\\', b'"');
                     self.bytes.extend_from_slice(s);
 
                     match next!(iter) {
@@ -582,7 +583,7 @@ impl TapeDecoder {
             self.bytes.len()
         );
 
-        let strings = std::str::from_utf8(&self.bytes)
+        let strings = simdutf8::basic::from_utf8(&self.bytes)
             .map_err(|_| ArrowError::JsonError("Encountered non-UTF-8 data".to_string()))?;
 
         for offset in self.offsets.iter().copied() {
@@ -615,29 +616,33 @@ impl TapeDecoder {
 }
 
 /// A wrapper around a slice iterator that provides some helper functionality
-struct BufIter<'a>(std::slice::Iter<'a, u8>);
+struct BufIter<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
 
 impl<'a> BufIter<'a> {
     fn new(buf: &'a [u8]) -> Self {
-        Self(buf.iter())
+        Self { buf, pos: 0 }
     }
 
+    #[inline]
     fn as_slice(&self) -> &'a [u8] {
-        self.0.as_slice()
+        &self.buf[self.pos..]
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
-        self.0.len() == 0
+        self.pos >= self.buf.len()
     }
 
     fn peek(&self) -> Option<u8> {
-        self.0.as_slice().first().copied()
+        self.buf.get(self.pos).copied()
     }
 
+    #[inline]
     fn advance(&mut self, skip: usize) {
-        for _ in 0..skip {
-            self.0.next();
-        }
+        self.pos += skip;
     }
 
     fn advance_until<F: FnMut(u8) -> bool>(&mut self, f: F) -> &[u8] {
@@ -646,6 +651,20 @@ impl<'a> BufIter<'a> {
             Some(x) => {
                 self.advance(x);
                 &s[..x]
+            }
+            None => {
+                self.advance(s.len());
+                s
+            }
+        }
+    }
+
+    fn skip_chrs(&mut self, c1: u8, c2: u8) -> &[u8] {
+        let s = self.as_slice();
+        match memchr2(c1, c2, s) {
+            Some(p) => {
+                self.advance(p);
+                &s[..p]
             }
             None => {
                 self.advance(s.len());
@@ -663,11 +682,14 @@ impl Iterator for BufIter<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().copied()
+        let b = self.peek();
+        self.pos += 1;
+        b
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
+        let s = self.buf.len().checked_sub(self.pos).unwrap_or_default();
+        (s, Some(s))
     }
 }
 
