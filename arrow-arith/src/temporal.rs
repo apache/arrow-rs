@@ -93,7 +93,7 @@ where
     T: ChronoDateExt + Datelike + Timelike,
 {
     match part {
-        DatePart::Quarter => |d| ChronoDateExt::quarter(&d) as i32,
+        DatePart::Quarter => |d| d.quarter() as i32,
         DatePart::Year => |d| d.year(),
         DatePart::YearISO => |d| d.iso_week().year(),
         DatePart::Month => |d| d.month() as i32,
@@ -658,12 +658,6 @@ pub(crate) use return_compute_error_with;
 
 // Internal trait, which is used for mapping values from DateLike structures
 trait ChronoDateExt {
-    /// Returns a value in range `1..=4` indicating the quarter this date falls into
-    fn quarter(&self) -> u32;
-
-    /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
-    fn quarter0(&self) -> u32;
-
     /// Returns the day of week; Monday is encoded as `0`, Tuesday as `1`, etc.
     fn num_days_from_monday(&self) -> i32;
 
@@ -672,14 +666,6 @@ trait ChronoDateExt {
 }
 
 impl<T: Datelike> ChronoDateExt for T {
-    fn quarter(&self) -> u32 {
-        self.quarter0() + 1
-    }
-
-    fn quarter0(&self) -> u32 {
-        self.month0() / 3
-    }
-
     fn num_days_from_monday(&self) -> i32 {
         self.weekday().num_days_from_monday() as i32
     }
