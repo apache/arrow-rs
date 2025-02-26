@@ -322,20 +322,12 @@ impl RecordBatchDecoder<'_> {
         let null_count = struct_node.null_count() as usize;
         let len = struct_node.length() as usize;
 
+        let nulls = (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into());
         if struct_arrays.is_empty() {
             // `StructArray::from` can't infer the correct row count
             // if we have zero fields
-            return Ok(Arc::new(StructArray::new_empty_fields(
-                len,
-                (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
-            )));
+            return Ok(Arc::new(StructArray::new_empty_fields(len, nulls)));
         }
-
-        let nulls = if null_count > 0 {
-            Some(BooleanBuffer::new(null_buffer, 0, len).into())
-        } else {
-            None
-        };
 
         let struct_array = if self.skip_validation.get() {
             // safety: flag can only be set via unsafe code
