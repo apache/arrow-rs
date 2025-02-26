@@ -109,4 +109,6 @@
 pub(crate) mod ciphers;
 pub mod decrypt;
 pub mod encrypt;
+#[cfg(feature = "key_management")]
+pub mod key_management;
 pub(crate) mod modules;
