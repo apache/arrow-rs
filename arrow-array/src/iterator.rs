@@ -44,7 +44,7 @@ use arrow_buffer::NullBuffer;
 /// [`PrimitiveArray`]: crate::PrimitiveArray
 /// [`compute::unary`]: https://docs.rs/arrow/latest/arrow/compute/fn.unary.html
 /// [`compute::try_unary`]: https://docs.rs/arrow/latest/arrow/compute/fn.try_unary.html
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrayIter<T: ArrayAccessor> {
     array: T,
     logical_nulls: Option<NullBuffer>,
