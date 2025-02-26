@@ -1799,6 +1799,7 @@ impl PartialEq for ArrayData {
 /// assert!(flag.get()); // now true
 /// ```
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct UnsafeFlag(bool);
 
 impl UnsafeFlag {
