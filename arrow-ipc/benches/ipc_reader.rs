@@ -32,7 +32,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("arrow_ipc_reader");
 
     group.bench_function("StreamReader/read_10", |b| {
-        let buffer = ipc_stream();
+        let buffer = ipc_stream(IpcWriteOptions::default());
         b.iter(move || {
             let projection = None;
             let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
@@ -44,7 +44,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function("StreamReader/no_validation/read_10", |b| {
-        let buffer = ipc_stream();
+        let buffer = ipc_stream(IpcWriteOptions::default());
         b.iter(move || {
             let projection = None;
             let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
@@ -60,7 +60,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function("StreamReader/read_10/zstd", |b| {
-        let buffer = ipc_stream_zstd();
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::ZSTD))
+                .unwrap(),
+        );
         b.iter(move || {
             let projection = None;
             let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
@@ -72,7 +76,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function("StreamReader/no_validation/read_10/zstd", |b| {
-        let buffer = ipc_stream_zstd();
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::ZSTD))
+                .unwrap(),
+        );
         b.iter(move || {
             let projection = None;
             let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
@@ -164,24 +172,9 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 /// Return an IPC stream with 10 record batches
-fn ipc_stream() -> Vec<u8> {
+fn ipc_stream(options: IpcWriteOptions) -> Vec<u8> {
     let batch = create_batch(8192, true);
     let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
-    let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref()).unwrap();
-    for _ in 0..10 {
-        writer.write(&batch).unwrap();
-    }
-    writer.finish().unwrap();
-    buffer
-}
-
-/// Return an IPC stream with ZSTD compression with 10 record batches
-fn ipc_stream_zstd() -> Vec<u8> {
-    let batch = create_batch(8192, true);
-    let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
-    let options = IpcWriteOptions::default()
-        .try_with_compression(Some(CompressionType::ZSTD))
-        .unwrap();
     let mut writer =
         StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options).unwrap();
     for _ in 0..10 {
