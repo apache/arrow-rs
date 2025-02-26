@@ -35,7 +35,7 @@ impl Resolve for ShuffleResolver {
                 let it = (name.as_str(), 0).to_socket_addrs()?;
                 let mut addrs = it.collect::<Vec<_>>();
 
-                addrs.shuffle(&mut rand::thread_rng());
+                addrs.shuffle(&mut rand::rng());
 
                 Ok(Box::new(addrs.into_iter()) as Addrs)
             });

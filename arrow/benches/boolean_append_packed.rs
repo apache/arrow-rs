@@ -17,22 +17,22 @@
 
 use arrow::array::BooleanBufferBuilder;
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn rand_bytes(len: usize) -> Vec<u8> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut buf = vec![0_u8; len];
     rng.fill(buf.as_mut_slice());
     buf
 }
 
 fn boolean_append_packed(c: &mut Criterion) {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let source = rand_bytes(1024);
     let ranges: Vec<_> = (0..100)
         .map(|_| {
-            let start: usize = rng.gen_range(0..1024 * 8);
-            let end: usize = rng.gen_range(start..1024 * 8);
+            let start: usize = rng.random_range(0..1024 * 8);
+            let end: usize = rng.random_range(start..1024 * 8);
             start..end
         })
         .collect();

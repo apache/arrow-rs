@@ -65,12 +65,12 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
 mod tests {
     use super::*;
     use arrow_array::builder::BooleanBufferBuilder;
-    use rand::prelude::*;
+    use rand::{prelude::*, rng};
 
     #[test]
     fn test_bit_fns() {
-        let mut rng = thread_rng();
-        let mask_length = rng.gen_range(1..1024);
+        let mut rng = rng();
+        let mask_length = rng.random_range(1..1024);
         let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
             .take(mask_length)
             .collect();
@@ -92,8 +92,8 @@ mod tests {
         assert_eq!(count_set_bits(&[0xFF], 1..1), 0);
 
         for _ in 0..20 {
-            let start = rng.gen_range(0..bools.len());
-            let end = rng.gen_range(start..bools.len());
+            let start = rng.random_range(0..bools.len());
+            let end = rng.random_range(start..bools.len());
 
             let actual = count_set_bits(nulls.as_slice(), start..end);
             let expected = bools[start..end].iter().filter(|x| **x).count();

@@ -18,17 +18,17 @@
 use arrow::array::{Int32RunArray, StringArray, StringRunBuilder};
 use arrow::datatypes::Int32Type;
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn build_strings_runs(
     physical_array_len: usize,
     logical_array_len: usize,
     string_len: usize,
 ) -> Int32RunArray {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let run_len = logical_array_len / physical_array_len;
     let mut values: Vec<String> = (0..physical_array_len)
-        .map(|_| (0..string_len).map(|_| rng.gen::<char>()).collect())
+        .map(|_| (0..string_len).map(|_| rng.random::<char>()).collect())
         .flat_map(|s| std::iter::repeat(s).take(run_len))
         .collect();
     while values.len() < logical_array_len {

@@ -49,7 +49,7 @@ hyper = { version = "1.2", default-features = false, optional = true }
 quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"], optional = true }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
@@ -76,7 +76,7 @@ futures-test = "0.3"
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
 http-body-util = "0.1"
-rand = "0.8"
+rand = "0.9"
 tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.

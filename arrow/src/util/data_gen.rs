@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
-use rand::distributions::uniform::SampleRange;
-use rand::{distributions::uniform::SampleUniform, Rng};
+use rand::{
+    distr::uniform::{SampleRange, SampleUniform},
+    Rng,
+};
 
 use crate::array::*;
 use crate::error::{ArrowError, Result};
@@ -380,7 +382,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     offsets.push(current_offset);
 
     (0..size).for_each(|_| {
-        current_offset += rng.gen_range(min..max);
+        current_offset += rng.random_range(min..max);
         offsets.push(current_offset);
     });
 
@@ -393,7 +395,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
     {
         let mut_slice = mut_buf.as_slice_mut();
         (0..size).for_each(|i| {
-            if rng.gen::<f32>() >= null_density {
+            if rng.random::<f32>() >= null_density {
                 bit_util::set_bit(mut_slice, i)
             }
         })
@@ -412,7 +414,7 @@ pub trait RandomTemporalValue: ArrowTemporalType {
     where
         Self::Native: SampleUniform,
     {
-        rng.gen_range(Self::value_range())
+        rng.random_range(Self::value_range())
     }
 
     /// Generate a random value of the type
@@ -513,7 +515,7 @@ where
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 Some(T::random(&mut rng))

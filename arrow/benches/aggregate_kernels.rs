@@ -18,7 +18,7 @@
 #[macro_use]
 extern crate criterion;
 use criterion::{Criterion, Throughput};
-use rand::distributions::{Distribution, Standard};
+use rand::distr::{Distribution, StandardUniform};
 
 extern crate arrow;
 
@@ -31,7 +31,7 @@ const BATCH_SIZE: usize = 64 * 1024;
 
 fn primitive_benchmark<T: ArrowNumericType>(c: &mut Criterion, name: &str)
 where
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let nonnull_array = create_primitive_array::<T>(BATCH_SIZE, 0.0);
     let nullable_array = create_primitive_array::<T>(BATCH_SIZE, 0.5);

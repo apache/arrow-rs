@@ -24,17 +24,17 @@ use arrow_array::{Array, ArrayRef, Int32Array, UnionArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, UnionFields};
 use criterion::*;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 fn array_with_nulls() -> ArrayRef {
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
-    let values = ScalarBuffer::from_iter(repeat_with(|| rng.gen()).take(4096));
+    let values = ScalarBuffer::from_iter(repeat_with(|| rng.random()).take(4096));
 
     // nulls with at least one null and one valid
     let nulls: NullBuffer = [true, false]
         .into_iter()
-        .chain(repeat_with(|| rng.gen()))
+        .chain(repeat_with(|| rng.random()))
         .take(4096)
         .collect();
 
@@ -42,9 +42,9 @@ fn array_with_nulls() -> ArrayRef {
 }
 
 fn array_without_nulls() -> ArrayRef {
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
-    let values = ScalarBuffer::from_iter(repeat_with(|| rng.gen()).take(4096));
+    let values = ScalarBuffer::from_iter(repeat_with(|| rng.random()).take(4096));
 
     Arc::new(Int32Array::new(values.clone(), None))
 }

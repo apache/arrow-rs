@@ -4151,7 +4151,7 @@ mod tests {
     fn test_partial_rand_sort() {
         let size = 1000u32;
         let mut rng = StdRng::seed_from_u64(42);
-        let mut before: Vec<u32> = (0..size).map(|_| rng.gen::<u32>()).collect();
+        let mut before: Vec<u32> = (0..size).map(|_| rng.random::<u32>()).collect();
         let mut d = before.clone();
         let last = (rng.next_u32() % size) as usize;
         d.sort_unstable();

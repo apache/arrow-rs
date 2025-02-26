@@ -351,17 +351,17 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_packed_decoder() {
-        let mut rng = thread_rng();
-        let len: usize = rng.gen_range(512..1024);
+        let mut rng = rng();
+        let len: usize = rng.random_range(512..1024);
 
         let mut expected = BooleanBufferBuilder::new(len);
         let mut encoder = RleEncoder::new(1, 1024);
         for _ in 0..len {
-            let bool = rng.gen_bool(0.8);
+            let bool = rng.random_bool(0.8);
             encoder.put(bool as u64);
             expected.append(bool);
         }
@@ -379,7 +379,7 @@ mod tests {
                 break;
             }
 
-            let to_read = rng.gen_range(1..=remaining);
+            let to_read = rng.random_range(1..=remaining);
             decoder.read(&mut decoded, to_read).unwrap();
         }
 
@@ -389,15 +389,15 @@ mod tests {
 
     #[test]
     fn test_packed_decoder_skip() {
-        let mut rng = thread_rng();
-        let len: usize = rng.gen_range(512..1024);
+        let mut rng = rng();
+        let len: usize = rng.random_range(512..1024);
 
         let mut expected = BooleanBufferBuilder::new(len);
         let mut encoder = RleEncoder::new(1, 1024);
 
         let mut total_value = 0;
         for _ in 0..len {
-            let bool = rng.gen_bool(0.8);
+            let bool = rng.random_bool(0.8);
             encoder.put(bool as u64);
             expected.append(bool);
             if bool {
@@ -421,8 +421,8 @@ mod tests {
             if remaining_levels == 0 {
                 break;
             }
-            let to_read_or_skip_level = rng.gen_range(1..=remaining_levels);
-            if rng.gen_bool(0.5) {
+            let to_read_or_skip_level = rng.random_range(1..=remaining_levels);
+            if rng.random_bool(0.5) {
                 let (skip_val_num, skip_level_num) = decoder.skip(to_read_or_skip_level).unwrap();
                 skip_value += skip_val_num;
                 skip_level += skip_level_num

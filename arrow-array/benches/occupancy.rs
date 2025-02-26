@@ -19,7 +19,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{DictionaryArray, Int32Array};
 use arrow_buffer::NullBuffer;
 use criterion::*;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::sync::Arc;
 
 fn gen_dict(
@@ -28,11 +28,11 @@ fn gen_dict(
     occupancy: f64,
     null_percent: f64,
 ) -> DictionaryArray<Int32Type> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let values = Int32Array::from(vec![0; values_len]);
     let max_key = (values_len as f64 * occupancy) as i32;
-    let keys = (0..len).map(|_| rng.gen_range(0..max_key)).collect();
-    let nulls = (0..len).map(|_| !rng.gen_bool(null_percent)).collect();
+    let keys = (0..len).map(|_| rng.random_range(0..max_key)).collect();
+    let nulls = (0..len).map(|_| !rng.random_bool(null_percent)).collect();
 
     let keys = Int32Array::new(keys, Some(NullBuffer::new(nulls)));
     DictionaryArray::new(keys, Arc::new(values))

@@ -72,8 +72,8 @@ fn bench_string_regexp_is_match_scalar(arr_a: &StringArray, value_b: &str) {
 
 fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
     (0..size).map(|_| {
-        let len = rng.gen_range(0..64);
-        let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+        let len = rng.random_range(0..64);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
         Some(String::from_utf8(bytes).unwrap())
     })
 }

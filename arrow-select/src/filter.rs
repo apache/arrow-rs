@@ -864,8 +864,10 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use rand::distributions::{Alphanumeric, Standard};
+    use rand::distr::uniform::{UniformSampler, UniformUsize};
+    use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
+    use rand::rng;
 
     use super::*;
 
@@ -1475,9 +1477,9 @@ mod tests {
     }
 
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
-        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.random()))
             .take(mask_len)
             .collect();
 
@@ -1516,15 +1518,19 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test_slices_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
-            let mask_len = rng.gen_range(0..1024);
+            let mask_len = rng.random_range(0..1024);
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = uusize
+                .sample(&mut rng)
+                .checked_rem(max_truncate)
+                .unwrap_or(0);
 
             test_slices_fuzz(mask_len, offset, truncate);
         }
@@ -1549,11 +1555,11 @@ mod tests {
     /// Generates an array of length `len` with `valid_percent` non-null values
     fn gen_primitive<T>(len: usize, valid_percent: f64) -> Vec<Option<T>>
     where
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
-            .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
             .collect()
     }
 
@@ -1563,11 +1569,11 @@ mod tests {
         valid_percent: f64,
         str_len_range: std::ops::Range<usize>,
     ) -> Vec<Option<String>> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(str_len_range.clone());
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(str_len_range.clone());
                     (0..len)
                         .map(|_| char::from(rng.sample(Alphanumeric)))
                         .collect()
@@ -1584,24 +1590,24 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_filter() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for i in 0..100 {
             let filter_percent = match i {
                 0..=4 => 1.,
                 5..=10 => 0.,
-                _ => rng.gen_range(0.0..1.0),
+                _ => rng.random_range(0.0..1.0),
             };
 
-            let valid_percent = rng.gen_range(0.0..1.0);
+            let valid_percent = rng.random_range(0.0..1.0);
 
-            let array_len = rng.gen_range(32..256);
-            let array_offset = rng.gen_range(0..10);
+            let array_len = rng.random_range(32..256);
+            let array_offset = rng.random_range(0..10);
 
             // Construct a predicate
-            let filter_offset = rng.gen_range(0..10);
-            let filter_truncate = rng.gen_range(0..10);
-            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
+            let filter_offset = rng.random_range(0..10);
+            let filter_truncate = rng.random_range(0..10);
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.random_bool(filter_percent)))
                 .take(array_len + filter_offset - filter_truncate)
                 .collect();
 

@@ -716,7 +716,7 @@ mod tests {
     use super::*;
 
     use crate::util::test_common::rand_gen::random_numbers;
-    use rand::distributions::{Distribution, Standard};
+    use rand::distr::{Distribution, StandardUniform};
     use std::fmt::Debug;
 
     #[test]
@@ -1066,7 +1066,7 @@ mod tests {
     fn test_put_aligned_rand_numbers<T>(total: usize, num_bits: usize)
     where
         T: Copy + FromBytes + AsBytes + Debug + PartialEq,
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
         assert!(num_bits <= 32);
         assert!(total % 2 == 0);

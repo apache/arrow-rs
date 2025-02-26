@@ -527,8 +527,8 @@ mod tests {
     use super::*;
     use crate::aws::AmazonS3;
     use crate::ObjectStore;
-    use rand::distributions::Alphanumeric;
-    use rand::{thread_rng, Rng};
+    use rand::distr::Alphanumeric;
+    use rand::{rng, Rng};
 
     #[test]
     fn test_attribute_serde() {
@@ -571,7 +571,7 @@ mod tests {
             _ => panic!("Should conflict"),
         }
 
-        let rng = thread_rng();
+        let rng = rng();
         let etag = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
         let t = Some(etag.as_str());
 
