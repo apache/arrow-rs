@@ -23,9 +23,8 @@ use crate::client::connection::HttpErrorKind;
 use crate::client::{HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::PutPayload;
 use futures::future::BoxFuture;
-use http::{Method, Uri};
-use reqwest::header::LOCATION;
-use reqwest::StatusCode;
+use http::header::LOCATION;
+use http::{Method, StatusCode, Uri};
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -469,7 +468,7 @@ impl RetryExt for HttpRequestBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "reqwest"))]
 mod tests {
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{body_contains_error, RequestError, RetryExt};

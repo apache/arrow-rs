@@ -20,9 +20,9 @@ use crate::{collect_bytes, PutPayload};
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::StreamExt;
+use http_body::{Body, Frame, SizeHint};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
-use hyper::body::{Body, Frame, SizeHint};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -39,6 +39,7 @@ impl HttpRequestBody {
         Self(Inner::Bytes(Bytes::new()))
     }
 
+    #[cfg(feature = "reqwest")]
     pub(crate) fn into_reqwest(self) -> reqwest::Body {
         match self.0 {
             Inner::Bytes(b) => b.into(),

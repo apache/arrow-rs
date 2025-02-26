@@ -19,7 +19,7 @@
 
 use crate::{path::Path, Result};
 use async_trait::async_trait;
-use reqwest::Method;
+use http::Method;
 use std::{fmt, time::Duration};
 use url::Url;
 

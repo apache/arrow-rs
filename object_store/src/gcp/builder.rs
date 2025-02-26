@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
+use crate::client::{default_connector, HttpConnector, TokenCredentialProvider};
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
@@ -442,9 +442,10 @@ impl GoogleCloudStorageBuilder {
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
 
-        let http = self
-            .http_connector
-            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
+        let http = match self.http_connector {
+            Some(connector) => connector,
+            None => default_connector()?,
+        };
 
         // First try to initialize from the service account information.
         let service_account_credentials =

@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "http")]
+    #[cfg(all(feature = "http", feature = "reqwest"))]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
         use http::{header::USER_AGENT, Response};

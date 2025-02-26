@@ -45,7 +45,7 @@ pub enum S3CopyIfNotExists {
     /// other than 412.
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
-    HeaderWithStatus(String, String, reqwest::StatusCode),
+    HeaderWithStatus(String, String, http::StatusCode),
     /// Native Amazon S3 supports copy if not exists through a multipart upload
     /// where the upload copies an existing object and is completed only if the
     /// new object does not already exist.
