@@ -1135,7 +1135,21 @@ mod tests {
         assert_eq!(r.value(3), -4. / -3.);
         assert!(r.value(5).is_nan());
 
+        let result = div_wrapping(&a, &b).unwrap();
+        let r = result.as_primitive::<Float32Type>();
+        assert_eq!(r.value(0), 1.);
+        assert_eq!(r.value(1), 1.);
+        assert!(r.value(2) < f32::EPSILON);
+        assert_eq!(r.value(3), -4. / -3.);
+        assert!(r.value(5).is_nan());
+
         let result = rem(&a, &b).unwrap();
+        let r = result.as_primitive::<Float32Type>();
+        assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
+        assert!(r.value(5).is_nan());
+
+
+        let result = rem_wrapping(&a, &b).unwrap();
         let r = result.as_primitive::<Float32Type>();
         assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
         assert!(r.value(5).is_nan());
@@ -1217,7 +1231,11 @@ mod tests {
             .unwrap();
         let err = div(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+        let err = div_wrapping(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+        let err = rem_wrapping(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
     }
 
