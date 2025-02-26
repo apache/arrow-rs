@@ -220,7 +220,7 @@ fn add_date_and_version_headers(request: &mut HttpRequest) {
         .insert(&VERSION, AZURE_VERSION.clone());
 }
 
-/// Authorize a [`Request`] with an [`AzureAuthorizer`]
+/// Authorize a [`HttpRequest`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
     credential: &'a AzureCredential,

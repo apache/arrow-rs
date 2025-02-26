@@ -39,20 +39,35 @@ pub struct HttpError {
     source: Box<dyn Error + Send + Sync>,
 }
 
+/// Identifies the kind of [`HttpError`]
+///
+/// This is used, among other things, to determine if a request can be retried
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HttpErrorKind {
-    /// Request timed out
-    Timeout,
     /// An error occurred whilst connecting to the remote
+    ///
+    /// Will be automatically retried
     Connect,
     /// An error occurred whilst making the request
+    ///
+    /// Will be automatically retried
     Request,
-    /// An error occurred whilst decoding the response
-    Decode,
+    /// Request timed out
+    ///
+    /// Will be automatically retried if the request is idempotent
+    Timeout,
     /// The request was aborted
+    ///
+    /// Will be automatically retried if the request is idempotent
     Interrupted,
+    /// An error occurred whilst decoding the response
+    ///
+    /// Will not be automatically retried
+    Decode,
     /// An unknown error occurred
+    ///
+    /// Will not be automatically retried
     Unknown,
 }
 

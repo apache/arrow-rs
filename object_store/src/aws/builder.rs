@@ -171,7 +171,7 @@ pub struct AmazonS3Builder {
     encryption_customer_key_base64: Option<String>,
     /// When set to true, charge requester for bucket operations
     request_payer: ConfigValue<bool>,
-    /// The [`HttpConnector`] to use to make [`HttpClient`]
+    /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
 

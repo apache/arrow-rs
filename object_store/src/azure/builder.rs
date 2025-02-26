@@ -178,7 +178,7 @@ pub struct MicrosoftAzureBuilder {
     fabric_session_token: Option<String>,
     /// Fabric cluster identifier
     fabric_cluster_identifier: Option<String>,
-    /// The [`HttpConnector`] to use to make [`HttpClient`]
+    /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
 

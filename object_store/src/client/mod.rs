@@ -48,7 +48,9 @@ pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
 pub(crate) mod builder;
 
 mod connection;
-pub use connection::{HttpClient, HttpConnector, HttpError, HttpService, ReqwestConnector};
+pub use connection::{
+    HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService, ReqwestConnector,
+};
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;

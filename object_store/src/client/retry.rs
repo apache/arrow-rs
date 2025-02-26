@@ -406,10 +406,8 @@ impl RetryableRequest {
 
                     let do_retry = match e.kind() {
                         HttpErrorKind::Connect | HttpErrorKind::Request => true, // Request not sent, can retry
-                        HttpErrorKind::Timeout => is_idempotent,
-                        HttpErrorKind::Unknown
-                        | HttpErrorKind::Interrupted
-                        | HttpErrorKind::Decode => false,
+                        HttpErrorKind::Timeout | HttpErrorKind::Interrupted => is_idempotent,
+                        HttpErrorKind::Unknown | HttpErrorKind::Decode => false,
                     };
 
                     if ctx.retries == ctx.max_retries

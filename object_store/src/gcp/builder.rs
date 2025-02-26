@@ -111,7 +111,7 @@ pub struct GoogleCloudStorageBuilder {
     credentials: Option<GcpCredentialProvider>,
     /// Credentials for sign url
     signing_credentials: Option<GcpSigningCredentialProvider>,
-    /// The [`HttpConnector`] to use to make [`HttpClient`]
+    /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
 

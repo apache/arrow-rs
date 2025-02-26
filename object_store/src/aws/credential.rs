@@ -91,7 +91,7 @@ impl AwsCredential {
     }
 }
 
-/// Authorize a [`Request`] with an [`AwsCredential`] using [AWS SigV4]
+/// Authorize a [`HttpRequest`] with an [`AwsCredential`] using [AWS SigV4]
 ///
 /// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
 #[derive(Debug)]

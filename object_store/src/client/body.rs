@@ -23,7 +23,6 @@ use futures::StreamExt;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
-use serde::de::DeserializeOwned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -188,7 +187,8 @@ impl HttpResponseBody {
         String::from_utf8(b.into()).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
     }
 
-    pub(crate) async fn json<B: DeserializeOwned>(self) -> Result<B, HttpError> {
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    pub(crate) async fn json<B: serde::de::DeserializeOwned>(self) -> Result<B, HttpError> {
         let b = self.bytes().await?;
         serde_json::from_slice(&b).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
     }

@@ -17,11 +17,9 @@
 
 use crate::client::connection::HttpErrorKind;
 use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody};
-use http::header::{Entry, InvalidHeaderName, InvalidHeaderValue, OccupiedEntry};
-use http::uri::{InvalidUri, PathAndQuery};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
-use serde::Serialize;
-use std::borrow::Borrow;
+use http::header::{InvalidHeaderName, InvalidHeaderValue};
+use http::uri::InvalidUri;
+use http::{HeaderName, HeaderValue, Method, Uri};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RequestBuilderError {
@@ -66,6 +64,7 @@ impl HttpRequestBuilder {
         }
     }
 
+    #[cfg(any(feature = "aws", feature = "azure"))]
     pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
@@ -111,7 +110,10 @@ impl HttpRequestBuilder {
         self
     }
 
-    pub(crate) fn headers(mut self, headers: HeaderMap) -> Self {
+    #[cfg(feature = "aws")]
+    pub(crate) fn headers(mut self, headers: http::HeaderMap) -> Self {
+        use http::header::{Entry, OccupiedEntry};
+
         if let Ok(ref mut req) = self.request {
             // IntoIter of HeaderMap yields (Option<HeaderName>, HeaderValue).
             // The first time a name is yielded, it will be Some(name), and if
@@ -158,7 +160,7 @@ impl HttpRequestBuilder {
     }
 
     #[cfg(any(feature = "aws", feature = "gcp"))]
-    pub(crate) fn json<S: Serialize>(mut self, s: S) -> Self {
+    pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
                 *request.body_mut() = json.into();
@@ -170,7 +172,7 @@ impl HttpRequestBuilder {
     }
 
     #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-    pub(crate) fn query<T: Serialize + ?Sized>(mut self, query: &T) -> Self {
+    pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             let mut out = format!("{}?", req.uri().path());
@@ -181,7 +183,7 @@ impl HttpRequestBuilder {
                 error = Some(err.into());
             }
 
-            match PathAndQuery::from_maybe_shared(out) {
+            match http::uri::PathAndQuery::from_maybe_shared(out) {
                 Ok(p) => {
                     let mut parts = req.uri().clone().into_parts();
                     parts.path_and_query = Some(p);
@@ -197,7 +199,7 @@ impl HttpRequestBuilder {
     }
 
     #[cfg(any(feature = "gcp", feature = "azure"))]
-    pub(crate) fn form<T: Serialize>(mut self, form: T) -> Self {
+    pub(crate) fn form<T: serde::Serialize>(mut self, form: T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             match serde_urlencoded::to_string(form) {
@@ -217,6 +219,7 @@ impl HttpRequestBuilder {
         self
     }
 
+    #[cfg(any(feature = "gcp", feature = "azure", feature = "gcp"))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
@@ -229,10 +232,11 @@ impl HttpRequestBuilder {
     }
 }
 
+#[cfg(any(test, feature = "azure"))]
 pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
 where
     I: IntoIterator,
-    I::Item: Borrow<(K, V)>,
+    I::Item: std::borrow::Borrow<(K, V)>,
     K: AsRef<str>,
     V: AsRef<str>,
 {
