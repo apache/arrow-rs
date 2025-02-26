@@ -37,6 +37,8 @@ mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
 pub use variable_shape_tensor::{VariableShapeTensor, VariableShapeTensorMetadata};
+mod variant;
+pub use variant::Variant;
 
 use crate::{ArrowError, Field};
 
