@@ -232,6 +232,9 @@ pub use record_batch::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
 };
 
+mod record_batch_builder;
+pub use record_batch_builder::RecordBatchBuilder;
+
 mod arithmetic;
 pub use arithmetic::ArrowNativeTypeOp;
 

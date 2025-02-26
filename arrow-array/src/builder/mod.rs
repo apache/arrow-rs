@@ -238,6 +238,9 @@ pub use arrow_buffer::BooleanBufferBuilder;
 pub use arrow_buffer::NullBufferBuilder;
 
 mod boolean_builder;
+use arrow_schema::DataType;
+use arrow_schema::IntervalUnit;
+use arrow_schema::TimeUnit;
 pub use boolean_builder::*;
 mod buffer_builder;
 pub use buffer_builder::*;
@@ -273,6 +276,8 @@ mod union_builder;
 
 pub use union_builder::*;
 
+use crate::types::BinaryViewType;
+use crate::types::StringViewType;
 use crate::ArrayRef;
 use std::any::Any;
 
@@ -418,3 +423,101 @@ pub type StringBuilder = GenericStringBuilder<i32>;
 ///
 /// See examples on [`GenericStringBuilder`]
 pub type LargeStringBuilder = GenericStringBuilder<i64>;
+
+/// Create an empty builder for `data_type` with capacity `capacity`
+pub fn new_empty_builder(data_type: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
+    match data_type {
+        DataType::Null => todo!(),
+        DataType::Boolean => todo!(),
+        DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)) as _,
+        DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)) as _,
+        DataType::Int32 => Box::new(Int32Builder::with_capacity(capacity)) as _,
+        DataType::Int64 => Box::new(Int64Builder::with_capacity(capacity)) as _,
+        DataType::UInt8 => Box::new(UInt8Builder::with_capacity(capacity)) as _,
+        DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)) as _,
+        DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)) as _,
+        DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)) as _,
+        DataType::Float16 => Box::new(Float16Builder::with_capacity(capacity)) as _,
+        DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)) as _,
+        DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)) as _,
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            Box::new(TimestampSecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            Box::new(TimestampMillisecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            Box::new(TimestampMicrosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            Box::new(TimestampNanosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)) as _,
+        DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)) as _,
+        DataType::Time32(TimeUnit::Second) => {
+            Box::new(Time32SecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            Box::new(Time32MillisecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            Box::new(Time64MicrosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            Box::new(Time64NanosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Duration(TimeUnit::Second) => {
+            Box::new(DurationSecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Duration(TimeUnit::Millisecond) => {
+            Box::new(DurationMillisecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            Box::new(DurationMicrosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Duration(TimeUnit::Nanosecond) => {
+            Box::new(DurationNanosecondBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            Box::new(IntervalYearMonthBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            Box::new(IntervalDayTimeBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            Box::new(IntervalMonthDayNanoBuilder::with_capacity(capacity)) as _
+        }
+        DataType::Binary => Box::new(GenericBinaryBuilder::<i32>::with_capacity(
+            capacity, capacity,
+        )) as _,
+        DataType::FixedSizeBinary(_) => todo!(),
+        DataType::LargeBinary => Box::new(GenericBinaryBuilder::<i64>::with_capacity(
+            capacity, capacity,
+        )) as _,
+        DataType::BinaryView => Box::new(GenericByteViewBuilder::<BinaryViewType>::with_capacity(
+            capacity,
+        )) as _,
+        DataType::Utf8 => Box::new(GenericStringBuilder::<i32>::with_capacity(
+            capacity, capacity,
+        )) as _,
+        DataType::LargeUtf8 => Box::new(GenericStringBuilder::<i64>::with_capacity(
+            capacity, capacity,
+        )) as _,
+        DataType::Utf8View => Box::new(GenericByteViewBuilder::<StringViewType>::with_capacity(
+            capacity,
+        )) as _,
+        DataType::List(_field) => todo!(),
+        DataType::ListView(_field) => todo!(),
+        DataType::FixedSizeList(_field, _) => todo!(),
+        DataType::LargeList(_field) => todo!(),
+        DataType::LargeListView(_field) => todo!(),
+        DataType::Struct(_fields) => todo!(),
+        DataType::Union(_union_fields, _union_mode) => todo!(),
+        DataType::Dictionary(_data_type, _data_type1) => todo!(),
+        DataType::Decimal128(_, _) => todo!(),
+        DataType::Decimal256(_, _) => todo!(),
+        DataType::Map(_field, _) => todo!(),
+        DataType::RunEndEncoded(_field, _field1) => todo!(),
+        dt => panic!("Unexpected data type {dt:?}"),
+    }
+}
