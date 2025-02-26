@@ -179,6 +179,19 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Appends nulls from a NullBuffer into the builder
+    pub fn append_buffer(&mut self, buffer: &NullBuffer) {
+        if buffer.null_count() == 0 {
+            self.append_n_non_nulls(buffer.null_count());
+        } else {
+            self.materialize();
+            self.bitmap_builder
+                .as_mut()
+                .unwrap()
+                .append_buffer(buffer.inner());
+        }
+    }
+
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
