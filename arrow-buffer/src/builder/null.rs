@@ -169,13 +169,19 @@ impl NullBufferBuilder {
     /// Appends a boolean slice into the builder
     /// to indicate the validations of these items.
     pub fn append_slice(&mut self, slice: &[bool]) {
-        if slice.iter().any(|v| !v) {
-            self.materialize_if_needed()
+        self.append_iter(slice.iter().copied());
+    }
+
+    /// Append booleans from an `iter` into hte builder
+    pub fn append_iter(&mut self, iter: impl ExactSizeIterator<Item = bool> + Clone) {
+        if iter.clone().any(|v| !v) {
+            self.materialize_if_needed();
         }
+
         if let Some(buf) = self.bitmap_builder.as_mut() {
-            buf.append_slice(slice)
+            buf.append_iter(iter);
         } else {
-            self.len += slice.len();
+            self.len += iter.count();
         }
     }
 
