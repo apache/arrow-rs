@@ -32,27 +32,26 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 /// It is stored as **two binary values**: `metadata` and `value`.
 ///
 /// The **metadata field is required** and must be a valid Variant metadata string.
-/// The **value field is optional** and contains the serialized Variant data.
+/// The **value field is required** and contains the serialized Variant data.
 ///
 /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#variant>
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
     metadata: Vec<u8>, // Required binary metadata
-    value: Option<Vec<u8>>, // Optional binary value
+    value: Vec<u8>, // Required binary value
 }
 
 impl Variant {
     /// Creates a new `Variant` with metadata and value.
-    pub fn new(metadata: Vec<u8>, value: Option<Vec<u8>>) -> Self {
+    pub fn new(metadata: Vec<u8>, value: Vec<u8>) -> Self {
         Self { metadata, value }
     }
 
-    /// Creates a Variant representing an empty structure (for `null` values).
-    pub fn empty() -> Self {
-        Self {
-            metadata: Vec::new(),
-            value: None,
-        }
+    /// Creates a Variant representing an empty structure.
+    pub fn empty() -> Result<Self, ArrowError> {
+        Err(ArrowError::InvalidArgumentError(
+            "Variant cannot be empty because metadata and value are required".to_owned(),
+        ))
     }
 
     /// Returns the metadata as a byte array.
@@ -60,9 +59,15 @@ impl Variant {
         &self.metadata
     }
 
-    /// Returns the value as an optional byte array.
-    pub fn value(&self) -> Option<&[u8]> {
-        self.value.as_deref()
+    /// Returns the value as an byte array.
+    pub fn value(&self) -> &[u8] {
+        &self.value
+    }
+
+    /// Sets the value of the Variant.
+    pub fn set_value(mut self, value: Vec<u8>) -> Self {
+        self.value = value;
+        self
     }
 }
 
@@ -97,13 +102,12 @@ impl ExtensionType for Variant {
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        let variant = Self {
-            metadata,
-            value: None, // No value stored in schema definition
-        };
+        let variant = Self { metadata, value: vec![0]};
         variant.supports_data_type(data_type)?;
         Ok(variant)
     }
+    
+    
 }
 
 #[cfg(test)]
@@ -137,13 +141,16 @@ mod tests {
 
     #[test]
     fn variant_supports_valid_data_types() {
-        let variant = Variant::new(vec![1, 2, 3], Some(vec![4, 5, 6]));
+        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
         assert!(variant.supports_data_type(&DataType::Binary).is_ok());
         assert!(variant.supports_data_type(&DataType::LargeBinary).is_ok());
-        let variant = Variant::try_new(&DataType::Binary, vec![1, 2, 3]);
-        assert!(variant.is_ok());
-        let variant = Variant::try_new(&DataType::LargeBinary, vec![4, 5, 6]);
-        assert!(variant.is_ok());
+
+        let variant = Variant::try_new(&DataType::Binary, vec![1, 2, 3]).unwrap().set_value(vec![4, 5, 6]);
+        assert!(variant.supports_data_type(&DataType::Binary).is_ok());
+
+        let variant = Variant::try_new(&DataType::LargeBinary, vec![1, 2, 3]).unwrap().set_value(vec![4, 5, 6]);
+        assert!(variant.supports_data_type(&DataType::LargeBinary).is_ok());
+
         let result = Variant::try_new(&DataType::Utf8, vec![1, 2, 3]);
         assert!(result.is_err());
         if let Err(ArrowError::InvalidArgumentError(msg)) = result {
@@ -154,7 +161,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Variant data type mismatch")]
     fn variant_rejects_invalid_data_type() {
-        let variant = Variant::new(vec![1, 2, 3], Some(vec![4, 5, 6]));
+        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
         variant.supports_data_type(&DataType::Utf8).unwrap();
     }
 
@@ -162,22 +169,20 @@ mod tests {
     fn variant_creation() {
         let metadata = vec![10, 20, 30];
         let value = vec![40, 50, 60];
-        let variant = Variant::new(metadata.clone(), Some(value.clone()));
-        assert_eq!(variant.metadata(), &metadata);
-        assert_eq!(variant.value(), Some(&value[..]));
+        let variant = Variant::new(metadata.clone(), value.clone());
+        assert_eq!(variant.value(), &value);
     }
 
     #[test]
     fn variant_empty() {
         let variant = Variant::empty();
-        assert!(variant.metadata().is_empty());
-        assert!(variant.value().is_none());
+        assert!(variant.is_err());
     }
 
     #[test]
     fn variant_field_extension() {
         let mut field = Field::new("", DataType::Binary, false);
-        let variant = Variant::new(vec![1, 2, 3], Some(vec![4, 5, 6]));
+        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
         field.try_with_extension_type(variant).unwrap();
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_NAME_KEY),
