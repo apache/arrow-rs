@@ -17,7 +17,7 @@
 
 use crate::encryption::decrypt::KeyRetriever;
 use crate::encryption::key_management::crypto_factory::DecryptionConfiguration;
-use crate::encryption::key_management::key_material::deserialize_key_material;
+use crate::encryption::key_management::key_material::KeyMaterial;
 use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors;
@@ -47,7 +47,7 @@ impl KeyUnwrapper {
 impl KeyRetriever for KeyUnwrapper {
     fn retrieve_key(&self, key_metadata: &[u8]) -> errors::Result<Vec<u8>> {
         let key_material = std::str::from_utf8(key_metadata)?;
-        let key_material = deserialize_key_material(key_material)?;
+        let key_material = KeyMaterial::deserialize(key_material)?;
         if key_material.double_wrapping {
             return Err(ParquetError::NYI(
                 "Double wrapping is not yet implemented".to_owned(),

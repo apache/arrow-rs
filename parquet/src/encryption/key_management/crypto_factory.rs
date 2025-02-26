@@ -285,6 +285,7 @@ impl CryptoFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encryption::key_management::key_material::KeyMaterialBuilder;
     use crate::encryption::key_management::test_kms::TestKmsClientFactory;
 
     #[test]
@@ -309,19 +310,15 @@ mod tests {
             .unwrap();
 
         let wrapped_key = kms.wrap_key(&expected_dek, "kc1").unwrap();
-        let key_material = format!(
-            r#"{{
-            "keyMaterialType": "PKMT1",
-            "internalStorage": true,
-            "isFooterKey": false,
-            "masterKeyID": "kc1",
-            "wrappedDEK": "{}",
-            "doubleWrapping": false
-            }}"#,
-            wrapped_key
-        );
+        let key_material = KeyMaterialBuilder::for_column_key()
+            .with_single_wrapped_key("kc1".to_owned(), wrapped_key)
+            .build()
+            .unwrap();
+        let serialized_key_material = key_material.serialize().unwrap();
 
-        let dek = key_retriever.retrieve_key(key_material.as_bytes()).unwrap();
+        let dek = key_retriever
+            .retrieve_key(serialized_key_material.as_bytes())
+            .unwrap();
 
         assert_eq!(dek, expected_dek);
     }

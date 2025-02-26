@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 /// Serializable key material that describes a wrapped encryption key
 /// and includes metadata required to unwrap it.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct KeyMaterial {
     /// The type of the key material.
     /// Currently only one type is supported: "PKMT1"
@@ -71,19 +71,106 @@ pub struct KeyMaterial {
     pub wrapped_kek: Option<String>,
 }
 
-pub fn deserialize_key_material(key_material: &str) -> Result<KeyMaterial> {
-    let material: KeyMaterial = serde_json::from_str(key_material).map_err(|e| {
-        ParquetError::General(format!(
-            "Error deserializing JSON encryption key material: {e}"
-        ))
-    })?;
-    if material.key_material_type != "PKMT1" {
-        return Err(ParquetError::General(format!(
-            "Unsupported key material type: {}",
-            material.key_material_type
-        )));
+pub struct KeyMaterialBuilder {
+    is_footer_key: bool,
+    kms_instance_id: Option<String>,
+    kms_instance_url: Option<String>,
+    master_key_id: Option<String>,
+    wrapped_dek: Option<String>,
+    double_wrapping: bool,
+    key_encryption_key_id: Option<String>,
+    wrapped_kek: Option<String>,
+}
+
+impl KeyMaterialBuilder {
+    pub fn for_footer_key(kms_instance_id: String, kms_instance_url: String) -> Self {
+        Self {
+            is_footer_key: true,
+            kms_instance_id: Some(kms_instance_id),
+            kms_instance_url: Some(kms_instance_url),
+            master_key_id: None,
+            wrapped_dek: None,
+            double_wrapping: false,
+            key_encryption_key_id: None,
+            wrapped_kek: None,
+        }
     }
-    Ok(material)
+
+    pub fn for_column_key() -> Self {
+        Self {
+            is_footer_key: false,
+            kms_instance_id: None,
+            kms_instance_url: None,
+            master_key_id: None,
+            wrapped_dek: None,
+            double_wrapping: false,
+            key_encryption_key_id: None,
+            wrapped_kek: None,
+        }
+    }
+
+    pub fn with_single_wrapped_key(mut self, master_key_id: String, wrapped_dek: String) -> Self {
+        self.double_wrapping = false;
+        self.master_key_id = Some(master_key_id);
+        self.wrapped_dek = Some(wrapped_dek);
+        self
+    }
+
+    pub fn with_double_wrapped_key(
+        mut self,
+        master_key_id: String,
+        key_encryption_key_id: String,
+        wrapped_kek: String,
+        wrapped_dek: String,
+    ) -> Self {
+        self.double_wrapping = true;
+        self.master_key_id = Some(master_key_id);
+        self.key_encryption_key_id = Some(key_encryption_key_id);
+        self.wrapped_kek = Some(wrapped_kek);
+        self.wrapped_dek = Some(wrapped_dek);
+        self
+    }
+
+    pub fn build(self) -> Result<KeyMaterial> {
+        if let (Some(master_key_id), Some(wrapped_dek)) = (self.master_key_id, self.wrapped_dek) {
+            Ok(KeyMaterial {
+                key_material_type: "PKMT1".to_string(),
+                internal_storage: true,
+                key_reference: None,
+                is_footer_key: self.is_footer_key,
+                kms_instance_id: self.kms_instance_id,
+                kms_instance_url: self.kms_instance_url,
+                master_key_id,
+                wrapped_dek,
+                double_wrapping: self.double_wrapping,
+                key_encryption_key_id: self.key_encryption_key_id,
+                wrapped_kek: self.wrapped_kek,
+            })
+        } else {
+            Err(general_err!(
+                "Wrapped key not set when building key material"
+            ))
+        }
+    }
+}
+
+impl KeyMaterial {
+    pub fn deserialize(key_material: &str) -> Result<Self> {
+        let material: KeyMaterial = serde_json::from_str(key_material)
+            .map_err(|e| general_err!("Error deserializing JSON encryption key material: {}", e))?;
+        if material.key_material_type != "PKMT1" {
+            return Err(general_err!(
+                "Unsupported key material type: {}",
+                material.key_material_type
+            ));
+        }
+        Ok(material)
+    }
+
+    pub fn serialize(&self) -> Result<String> {
+        serde_json::to_string(self)
+            .map_err(|e| general_err!("Error serializing key material to JSON: {}", e))
+    }
 }
 
 #[cfg(test)]
@@ -91,86 +178,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deserialize_footer_key_material() {
-        let key_material = r#"{
-            "keyMaterialType": "PKMT1",
-            "internalStorage": true,
-            "isFooterKey": true,
-            "kmsInstanceID": "DEFAULT",
-            "kmsInstanceURL": "DEFAULT",
-            "masterKeyID": "kf",
-            "wrappedDEK": "AAAA",
-            "doubleWrapping": true,
-            "keyEncryptionKeyID": "kek_01",
-            "wrappedKEK": "BBBB"
-        }"#;
+    fn test_footer_key_material_round_trip() {
+        let key_material =
+            KeyMaterialBuilder::for_footer_key("DEFAULT".to_owned(), "DEFAULT".to_owned())
+                .with_double_wrapped_key(
+                    "kf".to_owned(),
+                    "kek1".to_owned(),
+                    "AAAA".to_owned(),
+                    "BBBB".to_owned(),
+                )
+                .build()
+                .unwrap();
 
-        let key_material = deserialize_key_material(key_material).unwrap();
-        assert_eq!(key_material.key_material_type, "PKMT1");
-        assert!(key_material.internal_storage);
-        assert!(key_material.is_footer_key);
-        assert!(key_material.double_wrapping);
-        assert_eq!(key_material.kms_instance_id.as_deref(), Some("DEFAULT"));
-        assert_eq!(key_material.kms_instance_url.as_deref(), Some("DEFAULT"));
-        assert_eq!(key_material.master_key_id, "kf");
-        assert_eq!(key_material.wrapped_dek, "AAAA");
-        assert_eq!(
-            key_material.key_encryption_key_id.as_deref(),
-            Some("kek_01")
-        );
-        assert_eq!(key_material.wrapped_kek.as_deref(), Some("BBBB"));
+        let serialized = key_material.serialize().unwrap();
+        let deserialized = KeyMaterial::deserialize(&serialized).unwrap();
+
+        assert_eq!(key_material, deserialized);
     }
 
     #[test]
-    fn test_deserialize_column_key_material() {
-        let key_material = r#"{
-            "keyMaterialType": "PKMT1",
-            "internalStorage": true,
-            "isFooterKey": false,
-            "masterKeyID": "kc1",
-            "wrappedDEK": "AAAA",
-            "doubleWrapping": true,
-            "keyEncryptionKeyID": "kek_01",
-            "wrappedKEK": "BBBB"
-        }"#;
+    fn test_column_key_material_round_trip() {
+        let key_material = KeyMaterialBuilder::for_column_key()
+            .with_double_wrapped_key(
+                "kc1".to_owned(),
+                "kek1".to_owned(),
+                "AAAA".to_owned(),
+                "BBBB".to_owned(),
+            )
+            .build()
+            .unwrap();
 
-        let key_material = deserialize_key_material(key_material).unwrap();
-        assert_eq!(key_material.key_material_type, "PKMT1");
-        assert!(key_material.internal_storage);
-        assert!(!key_material.is_footer_key);
-        assert!(key_material.double_wrapping);
-        assert!(key_material.kms_instance_id.is_none());
-        assert!(key_material.kms_instance_url.is_none());
-        assert_eq!(key_material.master_key_id, "kc1");
-        assert_eq!(key_material.wrapped_dek, "AAAA");
-        assert_eq!(
-            key_material.key_encryption_key_id.as_deref(),
-            Some("kek_01")
-        );
-        assert_eq!(key_material.wrapped_kek.as_deref(), Some("BBBB"));
+        let serialized = key_material.serialize().unwrap();
+        let deserialized = KeyMaterial::deserialize(&serialized).unwrap();
+
+        assert_eq!(key_material, deserialized);
     }
 
     #[test]
-    fn test_deserialize_single_wrapping_key_material() {
-        let key_material = r#"{
-            "keyMaterialType": "PKMT1",
-            "internalStorage": true,
-            "isFooterKey": false,
-            "masterKeyID": "kc1",
-            "wrappedDEK": "AAAA",
-            "doubleWrapping": false
-        }"#;
+    fn test_single_wrapping_key_material_round_trip() {
+        let key_material = KeyMaterialBuilder::for_column_key()
+            .with_single_wrapped_key("kc1".to_owned(), "CCCC".to_owned())
+            .build()
+            .unwrap();
 
-        let key_material = deserialize_key_material(key_material).unwrap();
-        assert_eq!(key_material.key_material_type, "PKMT1");
-        assert!(key_material.internal_storage);
-        assert!(!key_material.is_footer_key);
-        assert!(!key_material.double_wrapping);
-        assert!(key_material.kms_instance_id.is_none());
-        assert!(key_material.kms_instance_url.is_none());
-        assert_eq!(key_material.master_key_id, "kc1");
-        assert_eq!(key_material.wrapped_dek, "AAAA");
-        assert!(key_material.key_encryption_key_id.is_none());
-        assert!(key_material.wrapped_kek.is_none());
+        let serialized = key_material.serialize().unwrap();
+        let deserialized = KeyMaterial::deserialize(&serialized).unwrap();
+
+        assert_eq!(key_material, deserialized);
     }
 }
