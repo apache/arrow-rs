@@ -19,7 +19,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ByteView;
 use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
@@ -28,7 +28,9 @@ use hashbrown::HashTable;
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, ArrowPrimitiveType, GenericByteViewArray, PrimitiveArray};
+
+use super::take_in_utils;
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -361,6 +363,76 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.views_builder.append(0);
     }
 
+    /// Take values at indices from array into the builder.
+    pub fn take_in<I>(&mut self, array: &GenericByteViewArray<T>, indices: &PrimitiveArray<I>)
+    where
+        I: ArrowPrimitiveType,
+    {
+        // lots of todos:
+        // - Maybe: Decide on GC based on indices to array length ratio
+        // - Maybe: GC only fully-empty buffers
+        // - Maybe: Use take_in_nulls / take_in_native in GC path
+
+        let capacity_needed: u32 = indices
+            .iter()
+            .map(|idx| match idx {
+                Some(idx) => {
+                    let len = if array.is_valid(idx.as_usize()) {
+                        let view = array.views().get(idx.as_usize()).unwrap();
+                        *view as u32
+                    } else {
+                        0
+                    };
+                    if len <= 12 {
+                        0
+                    } else {
+                        len
+                    }
+                }
+                None => 0,
+            })
+            .sum();
+
+        if array.get_buffer_memory_size() > 2 * capacity_needed as usize {
+            for index in indices {
+                match index {
+                    Some(index) => {
+                        if array.is_valid(index.as_usize()) {
+                            self.append_value(array.value(index.as_usize()));
+                        } else {
+                            self.append_null();
+                        }
+                    }
+                    None => {
+                        self.append_null();
+                    }
+                }
+            }
+        } else {
+            self.flush_in_progress();
+
+            let start = self.len();
+            let start_buffers = self.completed.len();
+
+            take_in_utils::take_in_nulls(&mut self.null_buffer_builder, array.nulls(), indices);
+
+            take_in_utils::take_in_native::<u128, I>(
+                &mut self.views_builder,
+                &array.views(),
+                indices,
+            );
+
+            self.completed
+                .extend(array.data_buffers().into_iter().cloned());
+            for i in start..self.len() {
+                let mut view = ByteView::from(self.views_builder.as_slice_mut()[i]);
+                if view.length > 12 {
+                    view.buffer_index += start_buffers as u32; // overflow check needed?
+                    self.views_builder.as_slice_mut()[i] = view.as_u128();
+                }
+            }
+        }
+    }
     /// Builds the [`GenericByteViewArray`] and reset this builder
     pub fn finish(&mut self) -> GenericByteViewArray<T> {
         self.flush_in_progress();
