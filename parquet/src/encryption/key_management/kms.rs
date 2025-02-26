@@ -15,10 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encryption Key Management Tools for Parquet
+use crate::errors::Result;
 
-pub mod crypto_factory;
-mod key_material;
-mod key_unwrapper;
-pub mod kms;
-mod kms_manager;
+/// API for interacting with a KMS.
+/// This should be implemented by user code for integration with your KMS.
+pub trait KmsClient: Send + Sync {
+    /// Wrap encryption key bytes using the KMS with the specified master key
+    fn wrap_key(&self, key_bytes: &[u8], master_key_identifier: &str) -> Result<String>;
+
+    /// Unwrap a wrapped encryption key using the KMS with the specified master key
+    fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>>;
+}
+
+/// Holds configuration options required to connect to a KMS
+pub struct KmsConnectionConfig {}
+
+impl KmsConnectionConfig {
+    pub fn new() -> Self {
+        Self {}
+    }
+}

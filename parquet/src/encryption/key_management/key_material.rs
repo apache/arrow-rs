@@ -25,50 +25,50 @@ pub struct KeyMaterial {
     /// The type of the key material.
     /// Currently only one type is supported: "PKMT1"
     #[serde(rename = "keyMaterialType")]
-    key_material_type: String,
+    pub key_material_type: String,
 
     /// Whether key material is stored inline in this JSON data or in an external file
     #[serde(rename = "internalStorage")]
-    internal_storage: bool,
+    pub internal_storage: bool,
 
     /// If internal storage is false, a reference to the external key material file
     #[serde(rename = "keyReference")]
-    key_reference: Option<String>,
+    pub key_reference: Option<String>,
 
     /// Whether the material belongs to a file footer key
     #[serde(rename = "isFooterKey")]
-    is_footer_key: bool,
+    pub is_footer_key: bool,
 
     /// The KMS instance ID. Only written for footer key material
     #[serde(rename = "kmsInstanceID")]
-    kms_instance_id: Option<String>,
+    pub kms_instance_id: Option<String>,
 
     /// The KMS instance URL. Only written for footer key material
     #[serde(rename = "kmsInstanceURL")]
-    kms_instance_url: Option<String>,
+    pub kms_instance_url: Option<String>,
 
     /// An identifier for the master key used to generate the key material
     #[serde(rename = "masterKeyID")]
-    master_key_id: String,
+    pub master_key_id: String,
 
     /// The wrapped data encryption key
     #[serde(rename = "wrappedDEK")]
-    wrapped_dek: String,
+    pub wrapped_dek: String,
 
     /// Whether double wrapping is used, where data encryption keys are wrapped
     /// with a key encryption key, which in turn is wrapped with the master key.
     /// If false (single wrapping), data encryption keys are wrapped directly with the master key.
     #[serde(rename = "doubleWrapping")]
-    double_wrapping: bool,
+    pub double_wrapping: bool,
 
     /// The identifier of the key encryption key used to wrap the data encryption key.
     /// Only written in double wrapping mode.
     #[serde(rename = "keyEncryptionKeyID")]
-    key_encryption_key_id: Option<String>,
+    pub key_encryption_key_id: Option<String>,
 
     /// The wrapped key encryption key. Only written in double wrapping mode.
     #[serde(rename = "wrappedKEK")]
-    wrapped_kek: Option<String>,
+    pub wrapped_kek: Option<String>,
 }
 
 pub fn deserialize_key_material(key_material: &str) -> Result<KeyMaterial> {
