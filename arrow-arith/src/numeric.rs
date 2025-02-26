@@ -334,9 +334,21 @@ fn integer_op<T: ArrowPrimitiveType>(
         Op::Sub => try_op!(l, l_s, r, r_s, l.sub_checked(r)),
         Op::MulWrapping => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
         Op::Mul => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
-        Op::DivWrapping => op!(l, l_s, r, r_s, l.div_wrapping(r)),
+        Op::DivWrapping => try_op!(l, l_s, r, r_s, {
+            if r.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(l.div_wrapping(r))
+            }
+        }),
         Op::Div => try_op!(l, l_s, r, r_s, l.div_checked(r)),
-        Op::RemWrapping => op!(l, l_s, r, r_s, l.mod_wrapping(r)),
+        Op::RemWrapping => try_op!(l, l_s, r, r_s, {
+            if r.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(l.mod_wrapping(r))
+            }
+        }),
         Op::Rem => try_op!(l, l_s, r, r_s, l.mod_checked(r)),
     };
     Ok(Arc::new(array))
@@ -1082,10 +1094,14 @@ mod tests {
         let b = Int16Array::from(vec![0]);
         let err = div(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+        let err = div_wrapping(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
 
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);
         let err = rem(&a, &b).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+        let err = rem_wrapping(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
     }
 
