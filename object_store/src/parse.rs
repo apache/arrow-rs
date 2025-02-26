@@ -345,7 +345,7 @@ mod tests {
     #[cfg(feature = "http")]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
-        use hyper::{header::USER_AGENT, Response};
+        use http::{header::USER_AGENT, Response};
 
         let server = MockServer::new().await;
 

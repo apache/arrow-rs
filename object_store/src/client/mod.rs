@@ -42,18 +42,27 @@ pub(crate) mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) mod s3;
 
+mod body;
+pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
+
+pub(crate) mod builder;
+
+mod connection;
+pub use connection::{
+    HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService, ReqwestConnector,
+};
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::{Client, ClientBuilder, NoProxy, Proxy};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
-use serde::{Deserialize, Serialize};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
@@ -593,17 +602,16 @@ impl ClientOptions {
         }
     }
 
-    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
     #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-    pub(crate) fn metadata_client(&self) -> Result<Client> {
+    pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
             .with_connect_timeout(Duration::from_secs(1))
-            .client()
     }
 
     pub(crate) fn client(&self) -> Result<Client> {
@@ -706,7 +714,7 @@ pub(crate) trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }
 
-impl GetOptionsExt for RequestBuilder {
+impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
         use hyper::header::*;
 
@@ -782,13 +790,13 @@ mod cloud {
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
-        client: Client,
+        client: HttpClient,
         retry: RetryConfig,
         cache: TokenCache<Arc<T::Credential>>,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub(crate) fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub(crate) fn new(inner: T, client: HttpClient, retry: RetryConfig) -> Self {
             Self {
                 inner,
                 client,
@@ -822,12 +830,13 @@ mod cloud {
 
         async fn fetch_token(
             &self,
-            client: &Client,
+            client: &HttpClient,
             retry: &RetryConfig,
         ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
     }
 }
 
+use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
 

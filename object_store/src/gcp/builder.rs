@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::TokenCredentialProvider;
+use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
@@ -111,6 +111,8 @@ pub struct GoogleCloudStorageBuilder {
     credentials: Option<GcpCredentialProvider>,
     /// Credentials for sign url
     signing_credentials: Option<GcpSigningCredentialProvider>,
+    /// The [`HttpConnector`] to use
+    http_connector: Option<Arc<dyn HttpConnector>>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -207,6 +209,7 @@ impl Default for GoogleCloudStorageBuilder {
             url: None,
             credentials: None,
             signing_credentials: None,
+            http_connector: None,
         }
     }
 }
@@ -424,6 +427,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
+        self.http_connector = Some(Arc::new(connector));
+        self
+    }
+
     /// Configure a connection to Google Cloud Storage, returning a
     /// new [`GoogleCloudStorage`] and consuming `self`
     pub fn build(mut self) -> Result<GoogleCloudStorage> {
@@ -432,6 +441,10 @@ impl GoogleCloudStorageBuilder {
         }
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
+
+        let http = self
+            .http_connector
+            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
 
         // First try to initialize from the service account information.
         let service_account_credentials =
@@ -471,7 +484,7 @@ impl GoogleCloudStorageBuilder {
         } else if let Some(credentials) = service_account_credentials.clone() {
             Arc::new(TokenCredentialProvider::new(
                 credentials.token_provider()?,
-                self.client_options.client()?,
+                http.connect(&self.client_options)?,
                 self.retry_config.clone(),
             )) as _
         } else if let Some(credentials) = application_default_credentials.clone() {
@@ -479,7 +492,7 @@ impl GoogleCloudStorageBuilder {
                 ApplicationDefaultCredentials::AuthorizedUser(token) => Arc::new(
                     TokenCredentialProvider::new(
                         token,
-                        self.client_options.client()?,
+                        http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )
                     .with_min_ttl(TOKEN_MIN_TTL),
@@ -487,7 +500,7 @@ impl GoogleCloudStorageBuilder {
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
                     Arc::new(TokenCredentialProvider::new(
                         token.token_provider()?,
-                        self.client_options.client()?,
+                        http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )) as _
                 }
@@ -496,7 +509,7 @@ impl GoogleCloudStorageBuilder {
             Arc::new(
                 TokenCredentialProvider::new(
                     InstanceCredentialProvider::default(),
-                    self.client_options.metadata_client()?,
+                    http.connect(&self.client_options.metadata_options())?,
                     self.retry_config.clone(),
                 )
                 .with_min_ttl(TOKEN_MIN_TTL),
@@ -517,7 +530,7 @@ impl GoogleCloudStorageBuilder {
                 ApplicationDefaultCredentials::AuthorizedUser(token) => {
                     Arc::new(TokenCredentialProvider::new(
                         AuthorizedUserSigningCredentials::from(token)?,
-                        self.client_options.client()?,
+                        http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )) as _
                 }
@@ -528,7 +541,7 @@ impl GoogleCloudStorageBuilder {
         } else {
             Arc::new(TokenCredentialProvider::new(
                 InstanceSigningCredentialProvider::default(),
-                self.client_options.metadata_client()?,
+                http.connect(&self.client_options.metadata_options())?,
                 self.retry_config.clone(),
             )) as _
         };
@@ -542,8 +555,9 @@ impl GoogleCloudStorageBuilder {
             self.client_options,
         );
 
+        let http_client = http.connect(&config.client_options)?;
         Ok(GoogleCloudStorage {
-            client: Arc::new(GoogleCloudStorageClient::new(config)?),
+            client: Arc::new(GoogleCloudStorageClient::new(config, http_client)?),
         })
     }
 }

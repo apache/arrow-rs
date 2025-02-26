@@ -21,7 +21,7 @@ use crate::azure::credential::{
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
-use crate::client::TokenCredentialProvider;
+use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
@@ -178,6 +178,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_session_token: Option<String>,
     /// Fabric cluster identifier
     fabric_cluster_identifier: Option<String>,
+    /// The [`HttpConnector`] to use
+    http_connector: Option<Arc<dyn HttpConnector>>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -887,6 +889,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
+        self.http_connector = Some(Arc::new(connector));
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -898,6 +906,10 @@ impl MicrosoftAzureBuilder {
         let static_creds = |credential: AzureCredential| -> AzureCredentialProvider {
             Arc::new(StaticCredentialProvider::new(credential))
         };
+
+        let http = self
+            .http_connector
+            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
 
         let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self
@@ -960,7 +972,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     fabric_credential,
-                    self.client_options.client()?,
+                    http.connect(&self.client_options)?,
                     self.retry_config.clone(),
                 )) as _
             } else if let Some(bearer_token) = self.bearer_token {
@@ -979,7 +991,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     client_credential,
-                    self.client_options.client()?,
+                    http.connect(&self.client_options)?,
                     self.retry_config.clone(),
                 )) as _
             } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
@@ -993,7 +1005,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     client_credential,
-                    self.client_options.client()?,
+                    http.connect(&self.client_options)?,
                     self.retry_config.clone(),
                 )) as _
             } else if let Some(query_pairs) = self.sas_query_pairs {
@@ -1011,7 +1023,7 @@ impl MicrosoftAzureBuilder {
                 );
                 Arc::new(TokenCredentialProvider::new(
                     msi_credential,
-                    self.client_options.metadata_client()?,
+                    http.connect(&self.client_options.metadata_options())?,
                     self.retry_config.clone(),
                 )) as _
             };
@@ -1030,7 +1042,8 @@ impl MicrosoftAzureBuilder {
             credentials: auth,
         };
 
-        let client = Arc::new(AzureClient::new(config)?);
+        let http_client = http.connect(&config.client_options)?;
+        let client = Arc::new(AzureClient::new(config, http_client));
 
         Ok(MicrosoftAzure { client })
     }

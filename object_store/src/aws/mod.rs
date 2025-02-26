@@ -140,7 +140,7 @@ impl Signer for AmazonS3 {
             .with_request_payer(self.client.config.request_payer);
 
         let path_url = self.path_url(path);
-        let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
+        let mut url = path_url.parse().map_err(|e| Error::Generic {
             store: STORE,
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
@@ -489,7 +489,7 @@ mod tests {
     use crate::ClientOptions;
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
-    use hyper::HeaderMap;
+    use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
