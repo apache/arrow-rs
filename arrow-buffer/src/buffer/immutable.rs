@@ -241,7 +241,7 @@ impl Buffer {
     ///
     /// # Panics
     ///
-    /// Panics if `offset` is larger than `len`.
+    /// Panics iff `offset` is larger than `len`.
     pub fn slice(&self, offset: usize) -> Self {
         let mut s = self.clone();
         s.advance(offset);
@@ -252,7 +252,7 @@ impl Buffer {
     ///
     /// # Panics
     ///
-    /// Panics if `offset` is larger than `len`.
+    /// Panics iff `offset` is larger than `len`.
     #[inline]
     pub fn advance(&mut self, offset: usize) {
         assert!(
@@ -276,7 +276,7 @@ impl Buffer {
     /// memory region to be shared between buffers.
     ///
     /// # Panics
-    /// Panics if `(offset + length)` is larger than the existing length.
+    /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
             offset.saturating_add(length) <= self.length,
