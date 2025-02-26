@@ -378,7 +378,7 @@ impl RleDecoder {
                 let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
                 let repeated_value =
                     T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
-                buffer[values_read..values_read+num_values].fill(repeated_value);
+                buffer[values_read..values_read + num_values].fill(repeated_value);
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
@@ -454,9 +454,8 @@ impl RleDecoder {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
                 let dict_value = dict[dict_idx].clone();
-            
-                buffer[values_read..values_read + num_values]
-                    .fill(dict_value);
+
+                buffer[values_read..values_read + num_values].fill(dict_value);
 
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
@@ -483,7 +482,7 @@ impl RleDecoder {
                     buffer[values_read..values_read + num_values]
                         .iter_mut()
                         .zip(index_buf[..num_values].iter())
-                        .for_each(|(b, i)|b.clone_from(&dict[*i as usize]));
+                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
