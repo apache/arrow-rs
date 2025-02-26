@@ -24,6 +24,7 @@ pub mod filter;
 pub mod interleave;
 pub mod nullif;
 pub mod take;
+pub mod take_in;
 pub mod union_extract;
 pub mod window;
 pub mod zip;

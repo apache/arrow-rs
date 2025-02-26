@@ -158,7 +158,7 @@ pub fn take_arrays(
 }
 
 /// Verifies that the non-null values of `indices` are all `< len`
-fn check_bounds<T: ArrowPrimitiveType>(
+pub(crate) fn check_bounds<T: ArrowPrimitiveType>(
     len: usize,
     indices: &PrimitiveArray<T>,
 ) -> Result<(), ArrowError> {
@@ -836,7 +836,7 @@ where
 
 /// To avoid generating take implementations for every index type, instead we
 /// only generate for UInt32 and UInt64 and coerce inputs to these types
-trait ToIndices {
+pub(crate) trait ToIndices {
     type T: ArrowPrimitiveType;
 
     fn to_indices(&self) -> PrimitiveArray<Self::T>;
