@@ -939,7 +939,7 @@ mod tests {
 
         // bit-packed header
         let run_bytes = ceil(num_values * bit_width, 8) as u64;
-        writer.put_vlq_int(run_bytes << 1 | 1);
+        writer.put_vlq_int((run_bytes << 1) | 1);
         for _ in 0..run_bytes {
             writer.put_aligned(0xFF_u8, 1);
         }
