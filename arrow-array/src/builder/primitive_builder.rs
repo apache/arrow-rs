@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, BufferBuilder};
-use crate::types::*;
+use crate::{types::*, Array};
 use crate::{ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
@@ -24,6 +24,8 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
+
+use super::take_in_utils;
 
 /// A signed 8-bit integer array builder.
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
@@ -272,6 +274,23 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.append_trusted_len_iter(iter);
     }
 
+    /// Takes values at indices from array into this array
+    ///
+    /// Each index in indices needs to be in-bounds for array or null - Otherwise an incorrect
+    /// result may be returned
+    #[inline]
+    pub fn take_in<I>(&mut self, array: &PrimitiveArray<T>, indices: &PrimitiveArray<I>)
+    where
+        I: ArrowPrimitiveType,
+    {
+        take_in_utils::take_in_nulls(&mut self.null_buffer_builder, array.nulls(), &indices);
+
+        take_in_utils::take_in_native::<T::Native, I>(
+            &mut self.values_builder,
+            &array.values(),
+            &indices,
+        );
+    }
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();

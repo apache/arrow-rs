@@ -232,6 +232,8 @@
 //! assert_eq!(buffer.iter().collect::<Vec<_>>(), vec![true, true, true, true, true, true, true, false]);
 //! ```
 
+mod take_in_utils;
+
 pub use arrow_buffer::BooleanBufferBuilder;
 pub use arrow_buffer::NullBufferBuilder;
 
