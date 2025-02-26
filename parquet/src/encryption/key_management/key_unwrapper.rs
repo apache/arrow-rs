@@ -18,24 +18,21 @@
 use crate::encryption::decrypt::KeyRetriever;
 use crate::encryption::key_management::crypto_factory::DecryptionConfiguration;
 use crate::encryption::key_management::key_material::deserialize_key_material;
-use crate::encryption::key_management::kms::{KmsClient, KmsConnectionConfig};
+use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors;
 use crate::errors::ParquetError;
 use std::sync::{Arc, RwLock};
 
-pub struct KeyUnwrapper<TClient> {
-    kms_manager: Arc<KmsManager<TClient>>,
+pub struct KeyUnwrapper {
+    kms_manager: Arc<KmsManager>,
     kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
     decryption_configuration: DecryptionConfiguration,
 }
 
-impl<TClient> KeyUnwrapper<TClient>
-where
-    TClient: KmsClient,
-{
+impl KeyUnwrapper {
     pub fn new(
-        kms_manager: Arc<KmsManager<TClient>>,
+        kms_manager: Arc<KmsManager>,
         kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Self {
@@ -47,10 +44,7 @@ where
     }
 }
 
-impl<TClient> KeyRetriever for KeyUnwrapper<TClient>
-where
-    TClient: KmsClient,
-{
+impl KeyRetriever for KeyUnwrapper {
     fn retrieve_key(&self, key_metadata: &[u8]) -> errors::Result<Vec<u8>> {
         let key_material = std::str::from_utf8(key_metadata)?;
         let key_material = deserialize_key_material(key_material)?;

@@ -17,7 +17,7 @@
 
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
-use crate::encryption::key_management::kms::{KmsClient, KmsConnectionConfig};
+use crate::encryption::key_management::kms::{KmsClient, KmsClientRef, KmsConnectionConfig};
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
 use std::collections::HashMap;
@@ -248,21 +248,18 @@ impl DecryptionConfigurationBuilder {
 
 /// A factory that produces file decryption and encryption properties using
 /// configuration options and a KMS client
-pub struct CryptoFactory<TClient> {
-    kms_manager: Arc<KmsManager<TClient>>,
+pub struct CryptoFactory {
+    kms_manager: Arc<KmsManager>,
 }
 
-impl<TClient> CryptoFactory<TClient>
-where
-    TClient: KmsClient + 'static,
-{
+impl CryptoFactory {
     /// Create a new CryptoFactory, providing a factory function for creating KMS clients
     pub fn new<F>(kms_client_factory: F) -> Self
     where
-        F: FnMut(&KmsConnectionConfig) -> Result<TClient> + Send + Sync + 'static,
+        F: FnMut(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync + 'static,
     {
         CryptoFactory {
-            kms_manager: Arc::new(KmsManager::new(Arc::new(Mutex::new(kms_client_factory)))),
+            kms_manager: Arc::new(KmsManager::new(Mutex::new(Box::new(kms_client_factory)))),
         }
     }
 
@@ -294,8 +291,8 @@ mod tests {
     struct TestKmsClient {}
 
     impl TestKmsClient {
-        fn new(_kms_connection_config: &KmsConnectionConfig) -> Result<Self> {
-            Ok(Self {})
+        fn new(_kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+            Ok(Arc::new(Self {}))
         }
     }
 

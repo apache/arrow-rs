@@ -15,25 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::encryption::key_management::kms::{KmsClient, KmsConnectionConfig};
-use crate::errors;
+use crate::encryption::key_management::kms::{KmsClient, KmsClientRef, KmsConnectionConfig};
 use crate::errors::Result;
 use std::sync::{Arc, Mutex};
 
-pub type ClientFactory<TClient> =
-    Arc<Mutex<dyn FnMut(&KmsConnectionConfig) -> Result<TClient> + Send + Sync>>;
+pub type ClientFactory =
+    Mutex<Box<dyn FnMut(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync>>;
 
 /// Manages caching the KMS and allowing interaction with it
-pub struct KmsManager<TClient> {
-    kms_client_factory: ClientFactory<TClient>,
-    kms_client: Mutex<Option<Arc<TClient>>>,
+pub struct KmsManager {
+    kms_client_factory: ClientFactory,
+    kms_client: Mutex<Option<KmsClientRef>>,
 }
 
-impl<TClient> KmsManager<TClient>
-where
-    TClient: KmsClient,
-{
-    pub fn new(kms_client_factory: ClientFactory<TClient>) -> Self {
+impl KmsManager {
+    pub fn new(kms_client_factory: ClientFactory) -> Self {
         Self {
             kms_client_factory,
             kms_client: Mutex::new(None),
@@ -43,13 +39,13 @@ where
     pub fn get_client(
         &self,
         kms_connection_config: &KmsConnectionConfig,
-    ) -> errors::Result<Arc<TClient>> {
+    ) -> Result<Arc<dyn KmsClient>> {
         let mut guard = self.kms_client.lock().unwrap();
         let kms_client = &mut *guard;
         let client = match kms_client {
             None => {
                 let mut client_factory = self.kms_client_factory.lock().unwrap();
-                let client = Arc::new(client_factory(kms_connection_config)?);
+                let client = client_factory(kms_connection_config)?;
                 *kms_client = Some(client.clone());
                 client
             }

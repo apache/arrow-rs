@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::errors::Result;
+use std::sync::Arc;
 
 /// API for interacting with a KMS.
 /// This should be implemented by user code for integration with your KMS.
@@ -26,6 +27,9 @@ pub trait KmsClient: Send + Sync {
     /// Unwrap a wrapped encryption key using the KMS with the specified master key
     fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>>;
 }
+
+/// A reference-counted reference to a generic `KmsClient`
+pub type KmsClientRef = Arc<dyn KmsClient>;
 
 /// Holds configuration options required to connect to a KMS
 pub struct KmsConnectionConfig {}
