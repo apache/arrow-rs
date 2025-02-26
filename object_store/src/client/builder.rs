@@ -219,7 +219,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "gcp", feature = "azure", feature = "gcp"))]
+    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
