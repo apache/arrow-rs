@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_arith"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-array = { workspace = true }
@@ -40,5 +42,3 @@ arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
-
-[dev-dependencies]
