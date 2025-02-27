@@ -37,7 +37,7 @@ pub type KmsClientRef = Arc<dyn KmsClient>;
 pub struct KmsConnectionConfig {
     kms_instance_url: String,
     kms_instance_id: String,
-    key_access_token: RwLock<String>,
+    key_access_token: String,
     custom_kms_conf: HashMap<String, String>,
 }
 
@@ -46,7 +46,7 @@ impl KmsConnectionConfig {
         Self {
             kms_instance_id: "".to_string(),
             kms_instance_url: "".to_string(),
-            key_access_token: RwLock::new("DEFAULT".to_string()),
+            key_access_token: "DEFAULT".to_string(),
             custom_kms_conf: Default::default(),
         }
     }
@@ -63,9 +63,8 @@ impl KmsConnectionConfig {
     }
 
     /// The authorization token to pass to the KMS.
-    pub fn key_access_token(&self) -> String {
-        let access_token = self.key_access_token.read().unwrap();
-        access_token.to_owned()
+    pub fn key_access_token(&self) -> &str {
+        &self.key_access_token
     }
 
     /// Any KMS specific configuration options
@@ -74,9 +73,8 @@ impl KmsConnectionConfig {
     }
 
     /// Update the authorization token to be passed to the KMS.
-    pub fn refresh_key_access_token(&self, key_access_token: String) {
-        let mut access_token = self.key_access_token.write().unwrap();
-        *access_token = key_access_token;
+    pub fn refresh_key_access_token(&mut self, key_access_token: String) {
+        self.key_access_token = key_access_token;
     }
 }
 
@@ -110,7 +108,7 @@ impl KmsConnectionConfigBuilder {
         KmsConnectionConfig {
             kms_instance_id: self.kms_instance_id,
             kms_instance_url: self.kms_instance_url,
-            key_access_token: RwLock::new(self.key_access_token),
+            key_access_token: self.key_access_token,
             custom_kms_conf: self.custom_kms_conf,
         }
     }

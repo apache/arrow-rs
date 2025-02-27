@@ -21,7 +21,7 @@ use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConf
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 /// Parquet encryption algorithms
@@ -266,7 +266,7 @@ impl CryptoFactory {
     /// Create file decryption properties for a Parquet file
     pub fn file_decryption_properties(
         &self,
-        kms_connection_config: Arc<KmsConnectionConfig>,
+        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Result<FileDecryptionProperties> {
         let key_retriever = Arc::new(KeyUnwrapper::new(
@@ -287,10 +287,11 @@ mod tests {
     use super::*;
     use crate::encryption::key_management::key_material::KeyMaterialBuilder;
     use crate::encryption::key_management::test_kms::TestKmsClientFactory;
+    use std::sync::RwLock;
 
     #[test]
     fn test_file_decryption_properties() {
-        let kms_config = Arc::new(KmsConnectionConfig::new());
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
         let config = Default::default();
 
         let mut key_map = HashMap::default();
