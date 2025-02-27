@@ -718,26 +718,39 @@ impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
         use hyper::header::*;
 
-        if let Some(range) = options.range {
+        let GetOptions {
+            if_match,
+            if_none_match,
+            if_modified_since,
+            if_unmodified_since,
+            range,
+            version: _,
+            head: _,
+            extensions,
+        } = options;
+
+        if let Some(range) = range {
             self = self.header(RANGE, range.to_string());
         }
 
-        if let Some(tag) = options.if_match {
+        if let Some(tag) = if_match {
             self = self.header(IF_MATCH, tag);
         }
 
-        if let Some(tag) = options.if_none_match {
+        if let Some(tag) = if_none_match {
             self = self.header(IF_NONE_MATCH, tag);
         }
 
         const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
-        if let Some(date) = options.if_unmodified_since {
+        if let Some(date) = if_unmodified_since {
             self = self.header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
 
-        if let Some(date) = options.if_modified_since {
+        if let Some(date) = if_modified_since {
             self = self.header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
+
+        self = self.extensions(extensions);
 
         self
     }
