@@ -20,14 +20,16 @@ use crate::encryption::key_management::crypto_factory::DecryptionConfiguration;
 use crate::encryption::key_management::key_encryption;
 use crate::encryption::key_management::key_material::KeyMaterial;
 use crate::encryption::key_management::kms::KmsConnectionConfig;
-use crate::encryption::key_management::kms_manager::KmsManager;
+use crate::encryption::key_management::kms_manager::{KekCache, KmsManager};
 use crate::errors::{ParquetError, Result};
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 pub struct KeyUnwrapper {
     kms_manager: Arc<KmsManager>,
     kms_connection_config: Arc<KmsConnectionConfig>,
     decryption_configuration: DecryptionConfiguration,
+    kek_cache: KekCache,
 }
 
 impl KeyUnwrapper {
@@ -36,10 +38,15 @@ impl KeyUnwrapper {
         kms_connection_config: Arc<KmsConnectionConfig>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Self {
+        let kek_cache = kms_manager.get_kek_cache(
+            &kms_connection_config,
+            decryption_configuration.cache_lifetime(),
+        );
         KeyUnwrapper {
             kms_manager,
             kms_connection_config,
             decryption_configuration,
+            kek_cache,
         }
     }
 
@@ -58,12 +65,19 @@ impl KeyUnwrapper {
         kek_id: &str,
         wrapped_kek: &str,
     ) -> Result<Vec<u8>> {
-        // TODO: Caching of key encryption keys
-        let client = self.kms_manager.get_client(
-            &self.kms_connection_config,
-            self.decryption_configuration.cache_lifetime(),
-        )?;
-        let kek = client.unwrap_key(wrapped_kek, master_key_id)?;
+        let mut guard = self.kek_cache.lock().unwrap();
+        let kek_cache = &mut *guard;
+        let kek = match kek_cache.entry(kek_id.to_owned()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let client = self.kms_manager.get_client(
+                    &self.kms_connection_config,
+                    self.decryption_configuration.cache_lifetime(),
+                )?;
+                let kek = client.unwrap_key(wrapped_kek, master_key_id)?;
+                entry.insert(kek)
+            }
+        };
         key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, &kek)
     }
 }
