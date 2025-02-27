@@ -169,8 +169,8 @@ impl ObjectStore for AmazonS3 {
 
         match (opts.mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
-            (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
-            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
+            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
@@ -184,11 +184,11 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
-            (PutMode::Create, Some(S3ConditionalPut::Dynamo(d))) => {
+            (PutMode::Create, S3ConditionalPut::Dynamo(d)) => {
                 d.conditional_op(&self.client, location, None, move || request.do_put())
                     .await
             }
-            (PutMode::Update(v), Some(put)) => {
+            (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
@@ -221,6 +221,7 @@ impl ObjectStore for AmazonS3 {
                         })
                         .await
                     }
+                    S3ConditionalPut::Disabled => Err(Error::NotImplemented),
                 }
             }
         }
@@ -561,7 +562,7 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
-        let test_conditional_put = config.conditional_put.is_some();
+        let test_conditional_put = config.conditional_put != S3ConditionalPut::Disabled;
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;

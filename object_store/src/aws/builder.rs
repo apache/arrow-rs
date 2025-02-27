@@ -160,7 +160,7 @@ pub struct AmazonS3Builder {
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
     /// Put precondition
-    conditional_put: Option<ConfigValue<S3ConditionalPut>>,
+    conditional_put: ConfigValue<S3ConditionalPut>,
     /// Ignore tags
     disable_tagging: ConfigValue<bool>,
     /// Encryption (See [`S3EncryptionConfigKey`])
@@ -525,7 +525,7 @@ impl AmazonS3Builder {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
             AmazonS3ConfigKey::ConditionalPut => {
-                self.conditional_put = Some(ConfigValue::Deferred(value.into()))
+                self.conditional_put = ConfigValue::Deferred(value.into())
             }
             AmazonS3ConfigKey::RequestPayer => {
                 self.request_payer = ConfigValue::Deferred(value.into())
@@ -583,9 +583,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
-            AmazonS3ConfigKey::ConditionalPut => {
-                self.conditional_put.as_ref().map(ToString::to_string)
-            }
+            AmazonS3ConfigKey::ConditionalPut => Some(self.conditional_put.to_string()),
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
             AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
             AmazonS3ConfigKey::Encryption(key) => match key {
@@ -827,9 +825,10 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Configure how to provide conditional put operations
+    /// Configure how to provide conditional put operations.
+    /// if not set, the default value will be `S3ConditionalPut::ETagMatch`
     pub fn with_conditional_put(mut self, config: S3ConditionalPut) -> Self {
-        self.conditional_put = Some(config.into());
+        self.conditional_put = config.into();
         self
     }
 
@@ -905,7 +904,6 @@ impl AmazonS3Builder {
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
-        let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -1045,7 +1043,7 @@ impl AmazonS3Builder {
             disable_tagging: self.disable_tagging.get()?,
             checksum,
             copy_if_not_exists,
-            conditional_put: put_precondition,
+            conditional_put: self.conditional_put.get()?,
             encryption_headers,
             request_payer: self.request_payer.get()?,
         };

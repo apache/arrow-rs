@@ -204,7 +204,7 @@ pub(crate) struct S3Config {
     pub disable_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
-    pub conditional_put: Option<S3ConditionalPut>,
+    pub conditional_put: S3ConditionalPut,
     pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
 }
