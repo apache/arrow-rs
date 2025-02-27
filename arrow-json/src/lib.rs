@@ -92,8 +92,8 @@ use serde_json::{Number, Value};
 /// lists, the entries must be the same number and in the same order as the
 /// struct fields. Map columns are not affected by this option.
 ///
-/// [Presto]: (https://prestodb.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
-/// [Trino]: (https://trino.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
+/// [Presto]: https://prestodb.io/docs/current/develop/client-protocol.html#important-queryresults-attributes
+/// [Trino]: https://trino.io/docs/current/develop/client-protocol.html#important-queryresults-attributes
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum StructMode {
     #[default]
