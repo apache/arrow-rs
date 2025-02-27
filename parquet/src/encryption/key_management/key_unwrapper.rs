@@ -17,11 +17,11 @@
 
 use crate::encryption::decrypt::KeyRetriever;
 use crate::encryption::key_management::crypto_factory::DecryptionConfiguration;
+use crate::encryption::key_management::key_encryption;
 use crate::encryption::key_management::key_material::KeyMaterial;
 use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::KmsManager;
-use crate::errors;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use std::sync::{Arc, RwLock};
 
 pub struct KeyUnwrapper {
@@ -42,19 +42,54 @@ impl KeyUnwrapper {
             decryption_configuration,
         }
     }
+
+    fn unwrap_single_wrapped_key(&self, wrapped_dek: &str, master_key_id: &str) -> Result<Vec<u8>> {
+        let kms_connection_config = self.kms_connection_config.read().unwrap();
+        let client = self.kms_manager.get_client(&kms_connection_config)?;
+        client.unwrap_key(wrapped_dek, master_key_id)
+    }
+
+    fn unwrap_double_wrapped_key(
+        &self,
+        wrapped_dek: &str,
+        master_key_id: &str,
+        kek_id: &str,
+        wrapped_kek: &str,
+    ) -> Result<Vec<u8>> {
+        // TODO: Caching of key encryption keys
+        let kms_connection_config = self.kms_connection_config.read().unwrap();
+        let client = self.kms_manager.get_client(&kms_connection_config)?;
+        let kek = client.unwrap_key(wrapped_kek, master_key_id)?;
+        key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, &kek)
+    }
 }
 
 impl KeyRetriever for KeyUnwrapper {
-    fn retrieve_key(&self, key_metadata: &[u8]) -> errors::Result<Vec<u8>> {
+    fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>> {
         let key_material = std::str::from_utf8(key_metadata)?;
         let key_material = KeyMaterial::deserialize(key_material)?;
-        if key_material.double_wrapping {
-            return Err(ParquetError::NYI(
-                "Double wrapping is not yet implemented".to_owned(),
+        if !key_material.internal_storage {
+            return Err(nyi_err!(
+                "Decryption using external key material is not yet implemented"
             ));
-        };
-        let kms_connection_config = self.kms_connection_config.read().unwrap();
-        let client = self.kms_manager.get_client(&kms_connection_config)?;
-        client.unwrap_key(&key_material.wrapped_dek, &key_material.master_key_id)
+        }
+        if key_material.double_wrapping {
+            if let (Some(kek_id), Some(wrapped_kek)) =
+                (key_material.key_encryption_key_id, key_material.wrapped_kek)
+            {
+                self.unwrap_double_wrapped_key(
+                    &key_material.wrapped_dek,
+                    &key_material.master_key_id,
+                    &kek_id,
+                    &wrapped_kek,
+                )
+            } else {
+                Err(general_err!(
+                    "Key uses double wrapping but key encryption key is not set"
+                ))
+            }
+        } else {
+            self.unwrap_single_wrapped_key(&key_material.wrapped_dek, &key_material.master_key_id)
+        }
     }
 }

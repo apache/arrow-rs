@@ -45,7 +45,7 @@ impl KmsManager {
         let kms_client = &mut *guard;
         let client = match kms_client {
             None => {
-                let mut client_factory = self.kms_client_factory.lock().unwrap();
+                let client_factory = self.kms_client_factory.lock().unwrap();
                 let client = client_factory.create_client(kms_connection_config)?;
                 *kms_client = Some(client.clone());
                 client

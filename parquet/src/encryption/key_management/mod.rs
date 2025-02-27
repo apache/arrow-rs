@@ -18,6 +18,7 @@
 //! Encryption Key Management Tools for Parquet
 
 pub mod crypto_factory;
+mod key_encryption;
 mod key_material;
 mod key_unwrapper;
 pub mod kms;
