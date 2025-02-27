@@ -419,6 +419,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_page_boundary_ascending: true,
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
+            // metadata_encryptor: metadata_encryptor,
+            // data_encryptor: data_encryptor,
         }
     }
 
@@ -1535,6 +1537,8 @@ mod tests {
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    #[cfg(feature = "encryption")]
+    use crate::encryption::encryption::FileEncryptionProperties;
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
@@ -2105,6 +2109,8 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            #[cfg(feature = "encryption")]
+            None,
         )
         .unwrap();
 
@@ -2157,6 +2163,8 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            #[cfg(feature = "encryption")]
+            None,
         )
         .unwrap();
 
@@ -2292,6 +2300,8 @@ mod tests {
                 r.rows_written as usize,
                 None,
                 Arc::new(props),
+                #[cfg(feature = "encryption")]
+                None,
             )
             .unwrap(),
         );
@@ -3373,6 +3383,46 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_encryption_writer() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = vec![ByteArray::from(vec![128u8; 32]); 7];
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+
+        let file: File = tempfile::tempfile().unwrap();
+
+        let builder = WriterProperties::builder();
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        let props = Arc::new(
+            builder
+                .with_file_encryption_properties(file_encryption_properties)
+                .with_file_aad(Some("test_aad".as_bytes().to_vec()))
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+        todo!("add page encryption")
+    }
+
     #[test]
     fn test_increment_max_binary_chars() {
         let r = increment(vec![0xFF, 0xFE, 0xFD, 0xFF, 0xFF]);
@@ -3741,6 +3791,8 @@ mod tests {
                 result.rows_written as usize,
                 None,
                 Arc::new(props),
+                #[cfg(feature = "encryption")]
+                None,
             )
             .unwrap(),
         );
