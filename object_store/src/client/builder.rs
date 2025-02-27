@@ -92,6 +92,13 @@ impl HttpRequestBuilder {
         self
     }
 
+    pub(crate) fn extensions(mut self, extensions: ::http::Extensions) -> Self {
+        if let Ok(r) = &mut self.request {
+            *r.extensions_mut() = extensions;
+        }
+        self
+    }
+
     pub(crate) fn header<K, V>(mut self, name: K, value: V) -> Self
     where
         K: TryInto<HeaderName>,

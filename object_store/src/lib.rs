@@ -967,6 +967,11 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
     pub head: bool,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub extensions: ::http::Extensions,
 }
 
 impl GetOptions {
