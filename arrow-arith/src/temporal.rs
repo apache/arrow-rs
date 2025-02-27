@@ -462,12 +462,17 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         match part {
             DatePart::Week => Ok(self.unary_opt(|d| Some(d.days / 7))),
-            DatePart::Day => Ok(self.unary_opt(|d| Some(d.days % 7))),
-            DatePart::Hour => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 60 * 1_000) % 24))),
+            DatePart::Day => Ok(self.unary_opt(|d| Some(d.days))),
+            DatePart::Hour => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 60 * 1_000)))),
             DatePart::Minute => Ok(self.unary_opt(|d| Some(d.milliseconds / (60 * 1_000) % 60))),
             DatePart::Second => Ok(self.unary_opt(|d| Some(d.milliseconds / 1_000 % 60))),
-            DatePart::Millisecond => Ok(self.unary_opt(|d| Some(d.milliseconds % 1_000))),
-            DatePart::Microsecond | DatePart::Nanosecond => Ok(self.unary_opt(|_| Some(0))),
+            DatePart::Millisecond => Ok(self.unary_opt(|d| Some(d.milliseconds % (60 * 1_000)))),
+            DatePart::Microsecond => {
+                Ok(self.unary_opt(|d| (d.milliseconds % (60 * 1_000)).checked_mul(1_000)))
+            }
+            DatePart::Nanosecond => {
+                Ok(self.unary_opt(|d| (d.milliseconds % (60 * 1_000)).checked_mul(1_000_000)))
+            }
 
             DatePart::Quarter
             | DatePart::Year
@@ -489,25 +494,29 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             DatePart::Year => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months / 12))),
             DatePart::Month => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.months % 12))),
             DatePart::Week => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days / 7))),
-            DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days % 7))),
-            DatePart::Hour => Ok(self.unary_opt(|d| {
-                (d.nanoseconds / (60 * 60 * 1_000_000_000) % 24)
-                    .try_into()
-                    .ok()
-            })),
+            DatePart::Day => Ok(self.unary_opt(|d: IntervalMonthDayNano| Some(d.days))),
+            DatePart::Hour => {
+                Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 60 * 1_000_000_000)).try_into().ok()))
+            }
             DatePart::Minute => {
                 Ok(self.unary_opt(|d| (d.nanoseconds / (60 * 1_000_000_000) % 60).try_into().ok()))
             }
             DatePart::Second => {
                 Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000_000_000) % 60).try_into().ok()))
             }
-            DatePart::Millisecond => {
-                Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000_000) % 1000).try_into().ok()))
+            DatePart::Millisecond => Ok(self.unary_opt(|d| {
+                (d.nanoseconds % (60 * 1_000_000_000) / 1_000_000)
+                    .try_into()
+                    .ok()
+            })),
+            DatePart::Microsecond => Ok(self.unary_opt(|d| {
+                (d.nanoseconds % (60 * 1_000_000_000) / 1_000)
+                    .try_into()
+                    .ok()
+            })),
+            DatePart::Nanosecond => {
+                Ok(self.unary_opt(|d| (d.nanoseconds % (60 * 1_000_000_000)).try_into().ok()))
             }
-            DatePart::Microsecond => {
-                Ok(self.unary_opt(|d| ((d.nanoseconds / 1_000) % 1000).try_into().ok()))
-            }
-            DatePart::Nanosecond => Ok(self.unary_opt(|d| (d.nanoseconds % 1_000).try_into().ok())),
 
             DatePart::Quarter
             | DatePart::WeekISO
@@ -1774,14 +1783,14 @@ mod tests {
     fn test_interval_day_time_array() {
         let input: IntervalDayTimeArray = vec![
             IntervalDayTime::ZERO,
-            IntervalDayTime::new(10, 42),   // 1w, 3d, 42ms
-            IntervalDayTime::new(10, 1042), // 1w, 3d, 1s, 42ms
-            IntervalDayTime::new(10, MILLISECONDS_IN_DAY as i32 + 1), // 1w, 3d, 1ms
+            IntervalDayTime::new(10, 42),   // 10d, 42ms
+            IntervalDayTime::new(10, 1042), // 10d, 1s, 42ms
+            IntervalDayTime::new(10, MILLISECONDS_IN_DAY as i32 + 1), // 10d, 24h, 1ms
             IntervalDayTime::new(
                 6,
                 (MILLISECONDS * 60 * 60 * 4 + MILLISECONDS * 60 * 22 + MILLISECONDS * 11 + 3)
                     as i32,
-            ), // 0w, 6d, 4h, 22m, 11s, 3ms
+            ), // 6d, 4h, 22m, 11s, 3ms
         ]
         .into();
 
@@ -1789,9 +1798,9 @@ mod tests {
         let actual = date_part(&input, DatePart::Day).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
-        assert_eq!(3, actual.value(1));
-        assert_eq!(3, actual.value(2));
-        assert_eq!(3, actual.value(3));
+        assert_eq!(10, actual.value(1));
+        assert_eq!(10, actual.value(2));
+        assert_eq!(10, actual.value(3));
         assert_eq!(6, actual.value(4));
 
         let actual = date_part(&input, DatePart::Week).unwrap();
@@ -1803,37 +1812,13 @@ mod tests {
         assert_eq!(0, actual.value(4));
 
         // Days doesn't affect time.
-        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = date_part(&input, DatePart::Hour).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(0, actual.value(2));
-        assert_eq!(0, actual.value(3));
-        assert_eq!(0, actual.value(4));
-
-        let actual = date_part(&input, DatePart::Microsecond).unwrap();
-        let actual = actual.as_primitive::<Int32Type>();
-        assert_eq!(0, actual.value(0));
-        assert_eq!(0, actual.value(1));
-        assert_eq!(0, actual.value(2));
-        assert_eq!(0, actual.value(3));
-        assert_eq!(0, actual.value(4));
-
-        let actual = date_part(&input, DatePart::Millisecond).unwrap();
-        let actual = actual.as_primitive::<Int32Type>();
-        assert_eq!(0, actual.value(0));
-        assert_eq!(42, actual.value(1));
-        assert_eq!(42, actual.value(2));
-        assert_eq!(1, actual.value(3));
-        assert_eq!(3, actual.value(4));
-
-        let actual = date_part(&input, DatePart::Second).unwrap();
-        let actual = actual.as_primitive::<Int32Type>();
-        assert_eq!(0, actual.value(0));
-        assert_eq!(0, actual.value(1));
-        assert_eq!(1, actual.value(2));
-        assert_eq!(0, actual.value(3));
-        assert_eq!(11, actual.value(4));
+        assert_eq!(24, actual.value(3));
+        assert_eq!(4, actual.value(4));
 
         let actual = date_part(&input, DatePart::Minute).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
@@ -1843,13 +1828,38 @@ mod tests {
         assert_eq!(0, actual.value(3));
         assert_eq!(22, actual.value(4));
 
-        let actual = date_part(&input, DatePart::Hour).unwrap();
+        let actual = date_part(&input, DatePart::Second).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(0, actual.value(2));
+        assert_eq!(1, actual.value(2));
         assert_eq!(0, actual.value(3));
-        assert_eq!(4, actual.value(4));
+        assert_eq!(11, actual.value(4));
+
+        let actual = date_part(&input, DatePart::Millisecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(42, actual.value(1));
+        assert_eq!(1042, actual.value(2));
+        assert_eq!(1, actual.value(3));
+        assert_eq!(11003, actual.value(4));
+
+        let actual = date_part(&input, DatePart::Microsecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(42_000, actual.value(1));
+        assert_eq!(1_042_000, actual.value(2));
+        assert_eq!(1_000, actual.value(3));
+        assert_eq!(11_003_000, actual.value(4));
+
+        let actual = date_part(&input, DatePart::Nanosecond).unwrap();
+        let actual = actual.as_primitive::<Int32Type>();
+        assert_eq!(0, actual.value(0));
+        assert_eq!(42_000_000, actual.value(1));
+        assert_eq!(1_042_000_000, actual.value(2));
+        assert_eq!(1_000_000, actual.value(3));
+        // Overflow returns zero.
+        assert_eq!(0, actual.value(4));
 
         // Month and year are not valid (since days in month varies).
         assert!(date_part(&input, DatePart::Month).is_err());
@@ -1863,7 +1873,7 @@ mod tests {
         let input: IntervalMonthDayNanoArray = vec![
             IntervalMonthDayNano::ZERO,
             IntervalMonthDayNano::new(5, 10, 42), // 5m, 1w, 3d, 42ns
-            IntervalMonthDayNano::new(16, 35, NANOSECONDS_IN_DAY + 1), // 1y, 4m, 5w, 0ms, 1ns
+            IntervalMonthDayNano::new(16, 35, NANOSECONDS_IN_DAY + 1), // 1y, 4m, 5w, 24h, 1ns
             IntervalMonthDayNano::new(
                 0,
                 0,
@@ -1903,8 +1913,8 @@ mod tests {
         let actual = date_part(&input, DatePart::Day).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
-        assert_eq!(3, actual.value(1));
-        assert_eq!(0, actual.value(2));
+        assert_eq!(10, actual.value(1));
+        assert_eq!(35, actual.value(2));
         assert_eq!(0, actual.value(3));
 
         // Times follow from nanos, but are not affected by months or days.
@@ -1912,7 +1922,7 @@ mod tests {
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
-        assert_eq!(0, actual.value(2));
+        assert_eq!(24, actual.value(2));
         assert_eq!(4, actual.value(3));
 
         let actual = date_part(&input, DatePart::Minute).unwrap();
@@ -1934,21 +1944,22 @@ mod tests {
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(0, actual.value(2));
-        assert_eq!(33, actual.value(3));
+        assert_eq!(11_033, actual.value(3));
 
         let actual = date_part(&input, DatePart::Microsecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(0, actual.value(1));
         assert_eq!(0, actual.value(2));
-        assert_eq!(44, actual.value(3));
+        assert_eq!(11_033_044, actual.value(3));
 
         let actual = date_part(&input, DatePart::Nanosecond).unwrap();
         let actual = actual.as_primitive::<Int32Type>();
         assert_eq!(0, actual.value(0));
         assert_eq!(42, actual.value(1));
         assert_eq!(1, actual.value(2));
-        assert_eq!(5, actual.value(3));
+        // Overflow returns zero.
+        assert_eq!(0, actual.value(3));
     }
 
     #[test]
