@@ -23,7 +23,7 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::TokenCredentialProvider;
+use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::prelude::BASE64_STANDARD;
@@ -171,6 +171,8 @@ pub struct AmazonS3Builder {
     encryption_customer_key_base64: Option<String>,
     /// When set to true, charge requester for bucket operations
     request_payer: ConfigValue<bool>,
+    /// The [`HttpConnector`] to use
+    http_connector: Option<Arc<dyn HttpConnector>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -882,12 +884,22 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
+        self.http_connector = Some(Arc::new(connector));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
         if let Some(url) = self.url.take() {
             self.parse_url(&url)?;
         }
+
+        let http = self
+            .http_connector
+            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
 
         let bucket = self.bucket_name.ok_or(Error::MissingBucketName)?;
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
@@ -925,11 +937,7 @@ impl AmazonS3Builder {
             let endpoint = format!("https://sts.{region}.amazonaws.com");
 
             // Disallow non-HTTPs requests
-            let client = self
-                .client_options
-                .clone()
-                .with_allow_http(false)
-                .client()?;
+            let options = self.client_options.clone().with_allow_http(false);
 
             let token = WebIdentityProvider {
                 token_path,
@@ -940,16 +948,19 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                client,
+                http.connect(&options)?,
                 self.retry_config.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
             info!("Using Task credential provider");
+
+            let options = self.client_options.clone().with_allow_http(true);
+
             Arc::new(TaskCredentialProvider {
                 url: format!("http://169.254.170.2{uri}"),
                 retry: self.retry_config.clone(),
                 // The instance metadata endpoint is access over HTTP
-                client: self.client_options.clone().with_allow_http(true).client()?,
+                client: http.connect(&options)?,
                 cache: Default::default(),
             }) as _
         } else {
@@ -964,7 +975,7 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                self.client_options.metadata_client()?,
+                http.connect(&self.client_options.metadata_options())?,
                 self.retry_config.clone(),
             )) as _
         };
@@ -986,7 +997,7 @@ impl AmazonS3Builder {
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
                         },
-                        self.client_options.client()?,
+                        http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )
                     .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
@@ -1039,7 +1050,8 @@ impl AmazonS3Builder {
             request_payer: self.request_payer.get()?,
         };
 
-        let client = Arc::new(S3Client::new(config)?);
+        let http_client = http.connect(&config.client_options)?;
+        let client = Arc::new(S3Client::new(config, http_client));
 
         Ok(AmazonS3 { client })
     }
