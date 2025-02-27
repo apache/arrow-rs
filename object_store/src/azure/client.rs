@@ -257,6 +257,11 @@ impl PutRequest<'_> {
         Self { builder, ..self }
     }
 
+    fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
     async fn send(self) -> Result<HttpResponse> {
         let credential = self.config.get_credential().await?;
         let sensitive = credential
@@ -540,12 +545,20 @@ impl AzureClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let builder = self
             .put_request(path, payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags);
+            .with_attributes(attributes)
+            .with_extensions(extensions)
+            .with_tags(tags);
 
-        let builder = match &opts.mode {
+        let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
             PutMode::Update(v) => {
