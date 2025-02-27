@@ -599,6 +599,12 @@ impl AzureClient {
         parts: Vec<PartId>,
         opts: PutMultipartOpts,
     ) -> Result<PutResult> {
+        let PutMultipartOpts {
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let blocks = parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
@@ -607,8 +613,9 @@ impl AzureClient {
         let payload = BlockList { blocks }.to_xml().into();
         let response = self
             .put_request(path, payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .query(&[("comp", "blocklist")])
             .idempotent(true)
             .send()
