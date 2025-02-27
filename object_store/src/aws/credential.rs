@@ -770,7 +770,7 @@ struct CreateSessionOutput {
     credentials: SessionCredentials,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "reqwest"))]
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;

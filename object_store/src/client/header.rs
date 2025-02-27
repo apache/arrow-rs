@@ -49,7 +49,7 @@ pub(crate) enum Error {
     MissingEtag,
 
     #[error("Received header containing non-ASCII data")]
-    BadHeader { source: reqwest::header::ToStrError },
+    BadHeader { source: http::header::ToStrError },
 
     #[error("Last-Modified Header missing from response")]
     MissingLastModified,

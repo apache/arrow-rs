@@ -24,11 +24,10 @@ use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPay
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
-    CONTENT_TYPE,
+    ToStrError, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+    CONTENT_RANGE, CONTENT_TYPE,
 };
 use http::StatusCode;
-use reqwest::header::ToStrError;
 
 /// A client that can perform a get request
 #[async_trait]

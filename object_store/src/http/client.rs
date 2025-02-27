@@ -29,8 +29,8 @@ use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
+use http::{Method, StatusCode};
 use percent_encoding::percent_decode_str;
-use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use url::Url;
 

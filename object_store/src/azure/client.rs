@@ -1157,7 +1157,7 @@ pub(crate) struct UserDelegationKey {
     pub value: String,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "reqwest"))]
 mod tests {
     use super::*;
     use crate::StaticCredentialProvider;

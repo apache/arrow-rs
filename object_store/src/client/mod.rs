@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Generic utilities reqwest based ObjectStore implementations
+//! Generic utilities for networked object stores
 
 pub(crate) mod backoff;
 
+#[cfg(feature = "reqwest")]
 mod dns;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "reqwest"))]
 pub(crate) mod mock_server;
 
 pub(crate) mod retry;
@@ -48,26 +49,27 @@ pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
 pub(crate) mod builder;
 
 mod connection;
-pub use connection::{
-    HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService, ReqwestConnector,
-};
+pub(crate) use connection::default_connector;
+pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
+
+#[cfg(feature = "reqwest")]
+pub use connection::ReqwestConnector;
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
+use crate::config::{fmt_duration, ConfigValue};
+use crate::path::Path;
+use crate::{GetOptions, Result};
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy};
+use http::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::{fmt_duration, ConfigValue};
-use crate::path::Path;
-use crate::{GetOptions, Result};
-
+#[cfg(feature = "reqwest")]
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
         store: "HTTP client",
@@ -75,6 +77,7 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
     }
 }
 
+#[cfg(feature = "reqwest")]
 static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// Configuration keys for [`ClientOptions`]
@@ -195,8 +198,10 @@ impl FromStr for ClientConfigKey {
 /// This is used to configure the client to trust a specific certificate. See
 /// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
+#[cfg(feature = "reqwest")]
 pub struct Certificate(reqwest::tls::Certificate);
 
+#[cfg(feature = "reqwest")]
 impl Certificate {
     /// Create a `Certificate` from a PEM encoded certificate.
     ///
@@ -243,7 +248,6 @@ impl Certificate {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
-    root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
@@ -263,6 +267,9 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
+
+    #[cfg(feature = "reqwest")]
+    root_certificates: Vec<Certificate>,
 }
 
 impl Default for ClientOptions {
@@ -276,7 +283,6 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
-            root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
             default_headers: None,
@@ -299,6 +305,8 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            #[cfg(feature = "reqwest")]
+            root_certificates: Default::default(),
         }
     }
 }
@@ -402,6 +410,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
+    #[cfg(feature = "reqwest")]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self
@@ -614,8 +623,9 @@ impl ClientOptions {
             .with_connect_timeout(Duration::from_secs(1))
     }
 
-    pub(crate) fn client(&self) -> Result<Client> {
-        let mut builder = ClientBuilder::new();
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn client(&self) -> Result<reqwest::Client> {
+        let mut builder = reqwest::ClientBuilder::new();
 
         match &self.user_agent {
             Some(user_agent) => builder = builder.user_agent(user_agent.get()?),
@@ -627,7 +637,7 @@ impl ClientOptions {
         }
 
         if let Some(proxy) = &self.proxy_url {
-            let mut proxy = Proxy::all(proxy).map_err(map_client_error)?;
+            let mut proxy = reqwest::Proxy::all(proxy).map_err(map_client_error)?;
 
             if let Some(certificate) = &self.proxy_ca_certificate {
                 let certificate = reqwest::tls::Certificate::from_pem(certificate.as_bytes())
@@ -637,7 +647,7 @@ impl ClientOptions {
             }
 
             if let Some(proxy_excludes) = &self.proxy_excludes {
-                let no_proxy = NoProxy::from_string(proxy_excludes);
+                let no_proxy = reqwest::NoProxy::from_string(proxy_excludes);
 
                 proxy = proxy.no_proxy(no_proxy);
             }
@@ -716,7 +726,7 @@ pub(crate) trait GetOptionsExt {
 
 impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
-        use hyper::header::*;
+        use http::header::*;
 
         if let Some(range) = options.range {
             self = self.header(RANGE, range.to_string());

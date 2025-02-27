@@ -1062,7 +1062,7 @@ impl CredentialProvider for AzureCliCredential {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "reqwest"))]
 mod tests {
     use futures::executor::block_on;
     use http::{Response, StatusCode};

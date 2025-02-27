@@ -31,7 +31,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
-use reqwest::Method;
+use http::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -170,7 +170,7 @@ impl Signer for MicrosoftAzure {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let azure = MicrosoftAzureBuilder::new()

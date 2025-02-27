@@ -31,8 +31,8 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use reqwest::{Method, StatusCode};
+use http::header::{IF_MATCH, IF_NONE_MATCH};
+use http::{HeaderName, Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
@@ -58,12 +58,16 @@ mod client;
 mod credential;
 mod dynamo;
 mod precondition;
-mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
+
+#[cfg(feature = "reqwest")]
+mod resolve;
+
+#[cfg(feature = "reqwest")]
 pub use resolve::resolve_bucket_region;
 
 /// This struct is used to maintain the URI path encoding
@@ -115,7 +119,7 @@ impl Signer for AmazonS3 {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let region = "us-east-1";

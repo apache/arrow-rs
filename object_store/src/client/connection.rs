@@ -17,11 +17,9 @@
 
 use crate::client::body::{HttpRequest, HttpResponse};
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
-use crate::client::HttpResponseBody;
 use crate::ClientOptions;
 use async_trait::async_trait;
 use http::{Method, Uri};
-use http_body_util::BodyExt;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -83,7 +81,8 @@ impl HttpError {
         }
     }
 
-    pub(crate) fn reqwest(e: reqwest::Error) -> Self {
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn reqwest(e: ::reqwest::Error) -> Self {
         let mut kind = if e.is_timeout() {
             HttpErrorKind::Timeout
         } else if e.is_connect() {
@@ -199,39 +198,63 @@ impl HttpClient {
     }
 }
 
-#[async_trait]
-impl HttpService for reqwest::Client {
-    async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
-        let (parts, body) = req.into_parts();
-
-        let url = parts.uri.to_string().parse().unwrap();
-        let mut req = reqwest::Request::new(parts.method, url);
-        *req.headers_mut() = parts.headers;
-        *req.body_mut() = Some(body.into_reqwest());
-
-        let r = self.execute(req).await.map_err(HttpError::reqwest)?;
-        let res: http::Response<reqwest::Body> = r.into();
-        let (parts, body) = res.into_parts();
-
-        let body = HttpResponseBody::new(body.map_err(HttpError::reqwest));
-        Ok(HttpResponse::from_parts(parts, body))
-    }
-}
-
 /// A factory for [`HttpClient`]
 pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
     /// Create a new [`HttpClient`] with the provided [`ClientOptions`]
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient>;
 }
 
-/// [`HttpConnector`] using [`reqwest::Client`]
-#[derive(Debug, Default)]
-#[allow(missing_copy_implementations)]
-pub struct ReqwestConnector {}
+#[cfg(feature = "reqwest")]
+pub(crate) fn default_connector() -> crate::Result<Arc<dyn HttpConnector>> {
+    Ok(Arc::new(ReqwestConnector::default()))
+}
 
-impl HttpConnector for ReqwestConnector {
-    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
-        let client = options.client()?;
-        Ok(HttpClient::new(client))
+#[cfg(not(feature = "reqwest"))]
+pub(crate) fn default_connector() -> crate::Result<Arc<dyn HttpConnector>> {
+    const MSG: &str = "No HTTP Client, either enable reqwest feature or override HttpConnector";
+
+    Err(crate::Error::NotSupported {
+        source: MSG.to_string().into(),
+    })
+}
+
+#[cfg(feature = "reqwest")]
+mod reqwest {
+    use super::*;
+    use crate::client::HttpResponseBody;
+    use ::reqwest::{Client, Request};
+    use http_body_util::BodyExt;
+    #[async_trait]
+    impl HttpService for Client {
+        async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+            let (parts, body) = req.into_parts();
+
+            let url = parts.uri.to_string().parse().unwrap();
+            let mut req = Request::new(parts.method, url);
+            *req.headers_mut() = parts.headers;
+            *req.body_mut() = Some(body.into_reqwest());
+
+            let r = self.execute(req).await.map_err(HttpError::reqwest)?;
+            let res: http::Response<_> = r.into();
+            let (parts, body) = res.into_parts();
+
+            let body = HttpResponseBody::new(body.map_err(HttpError::reqwest));
+            Ok(HttpResponse::from_parts(parts, body))
+        }
+    }
+
+    /// [`HttpConnector`] using [`reqwest::Client`]
+    #[derive(Debug, Default)]
+    #[allow(missing_copy_implementations)]
+    pub struct ReqwestConnector {}
+
+    impl HttpConnector for ReqwestConnector {
+        fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+            let client = options.client()?;
+            Ok(HttpClient::new(client))
+        }
     }
 }
+
+#[cfg(feature = "reqwest")]
+pub use reqwest::*;

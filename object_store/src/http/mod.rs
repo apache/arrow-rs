@@ -41,7 +41,7 @@ use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
-use crate::client::{HttpConnector, ReqwestConnector};
+use crate::client::{default_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -249,8 +249,8 @@ impl HttpBuilder {
         let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
 
         let client = match self.http_connector {
-            None => ReqwestConnector::default().connect(&self.client_options)?,
-            Some(x) => x.connect(&self.client_options)?,
+            Some(connector) => connector.connect(&self.client_options)?,
+            None => default_connector()?.connect(&self.client_options)?,
         };
 
         Ok(HttpStore {
