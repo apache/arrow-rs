@@ -389,6 +389,11 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
+    pub(crate) fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()

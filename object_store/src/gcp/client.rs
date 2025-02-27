@@ -231,6 +231,11 @@ impl Request<'_> {
         }
     }
 
+    fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
     async fn send(self) -> Result<HttpResponse> {
         let credential = self.config.credentials.get_credential().await?;
         let resp = self
@@ -384,12 +389,21 @@ impl GoogleCloudStorageClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            // not supported by GCP
+            tags: _,
+            attributes,
+            extensions,
+        } = opts;
+
         let builder = self
             .request(Method::PUT, path)
             .with_payload(payload)
-            .with_attributes(opts.attributes);
+            .with_attributes(attributes)
+            .with_extensions(extensions);
 
-        let builder = match &opts.mode {
+        let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&VERSION_MATCH, "0"),
             PutMode::Update(v) => {
@@ -398,7 +412,7 @@ impl GoogleCloudStorageClient {
             }
         };
 
-        match (opts.mode, builder.do_put().await) {
+        match (mode, builder.do_put().await) {
             (PutMode::Create, Err(crate::Error::Precondition { path, source })) => {
                 Err(crate::Error::AlreadyExists { path, source })
             }
