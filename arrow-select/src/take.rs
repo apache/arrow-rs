@@ -82,20 +82,16 @@ pub fn take(
     options: Option<TakeOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     let options = options.unwrap_or_default();
-    macro_rules! helper {
-        ($t:ty, $values:expr, $indices:expr, $options:expr) => {{
-            let indices = indices.as_primitive::<$t>();
-            if $options.check_bounds {
-                check_bounds($values.len(), indices)?;
+    downcast_integer_array!(
+        indices => {
+            if options.check_bounds {
+                check_bounds(values.len(), indices)?;
             }
             let indices = indices.to_indices();
-            take_impl($values, &indices)
-        }};
-    }
-    downcast_integer! {
-        indices.data_type() => (helper, values, indices, options),
+            take_impl(values, &indices)
+        },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
-    }
+    )
 }
 
 /// For each [ArrayRef] in the [`Vec<ArrayRef>`], take elements by index and create a new
