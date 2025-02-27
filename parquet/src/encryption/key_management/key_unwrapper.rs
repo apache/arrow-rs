@@ -22,18 +22,18 @@ use crate::encryption::key_management::key_material::KeyMaterial;
 use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 pub struct KeyUnwrapper {
     kms_manager: Arc<KmsManager>,
-    kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+    kms_connection_config: Arc<KmsConnectionConfig>,
     decryption_configuration: DecryptionConfiguration,
 }
 
 impl KeyUnwrapper {
     pub fn new(
         kms_manager: Arc<KmsManager>,
-        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: Arc<KmsConnectionConfig>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Self {
         KeyUnwrapper {
@@ -44,8 +44,10 @@ impl KeyUnwrapper {
     }
 
     fn unwrap_single_wrapped_key(&self, wrapped_dek: &str, master_key_id: &str) -> Result<Vec<u8>> {
-        let kms_connection_config = self.kms_connection_config.read().unwrap();
-        let client = self.kms_manager.get_client(&kms_connection_config)?;
+        let client = self.kms_manager.get_client(
+            &self.kms_connection_config,
+            self.decryption_configuration.cache_lifetime(),
+        )?;
         client.unwrap_key(wrapped_dek, master_key_id)
     }
 
@@ -57,8 +59,10 @@ impl KeyUnwrapper {
         wrapped_kek: &str,
     ) -> Result<Vec<u8>> {
         // TODO: Caching of key encryption keys
-        let kms_connection_config = self.kms_connection_config.read().unwrap();
-        let client = self.kms_manager.get_client(&kms_connection_config)?;
+        let client = self.kms_manager.get_client(
+            &self.kms_connection_config,
+            self.decryption_configuration.cache_lifetime(),
+        )?;
         let kek = client.unwrap_key(wrapped_kek, master_key_id)?;
         key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, &kek)
     }
