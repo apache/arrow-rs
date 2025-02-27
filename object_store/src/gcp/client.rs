@@ -453,9 +453,17 @@ impl GoogleCloudStorageClient {
         path: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
+        let PutMultipartOpts {
+            // not supported by GCP
+            tags: _,
+            attributes,
+            extensions,
+        } = opts;
+
         let response = self
             .request(Method::POST, path)
-            .with_attributes(opts.attributes)
+            .with_attributes(attributes)
+            .with_extensions(extensions)
             .header(&CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
             .send()

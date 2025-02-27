@@ -1223,7 +1223,7 @@ impl From<Attributes> for PutOptions {
 }
 
 /// Options for [`ObjectStore::put_multipart_opts`]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PutMultipartOpts {
     /// Provide a [`TagSet`] for this object
     ///
@@ -1233,7 +1233,32 @@ pub struct PutMultipartOpts {
     ///
     /// Implementations that don't support an attribute should return an error
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    pub extensions: ::http::Extensions,
 }
+
+impl PartialEq<Self> for PutMultipartOpts {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            tags,
+            attributes,
+            extensions: _,
+        } = self;
+        let Self {
+            tags: other_tags,
+            attributes: other_attributes,
+            extensions: _,
+        } = other;
+        (tags == other_tags) && (attributes == other_attributes)
+    }
+}
+
+impl Eq for PutMultipartOpts {}
 
 impl From<TagSet> for PutMultipartOpts {
     fn from(tags: TagSet) -> Self {

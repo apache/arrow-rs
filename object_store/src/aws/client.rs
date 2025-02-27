@@ -633,6 +633,12 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
+        let PutMultipartOpts {
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let mut request = self.request(Method::POST, location);
         if let Some(algorithm) = self.config.checksum {
             match algorithm {
@@ -644,8 +650,9 @@ impl S3Client {
         let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .idempotent(true)
             .send()
             .await?
