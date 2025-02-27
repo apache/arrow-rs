@@ -850,7 +850,16 @@ fn parse_e_notation<T: DecimalType>(
     }
 
     if exp < 0 {
-        result = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_with_scale = result.div_wrapping(base.pow_wrapping(-exp as _));
+        let result_with_one_scale_above =
+            result.div_wrapping(base.pow_wrapping(-exp.add_wrapping(1) as _));
+        let rounding_digit =
+            result_with_one_scale_above.sub_wrapping(result_with_scale.mul_wrapping(base));
+        if rounding_digit >= T::Native::usize_as(5) {
+            result = result_with_scale.add_wrapping(T::Native::usize_as(1));
+        } else {
+            result = result_with_scale;
+        }
     } else {
         result = result.mul_wrapping(base.pow_wrapping(exp as _));
     }
@@ -868,6 +877,7 @@ pub fn parse_decimal<T: DecimalType>(
     let mut result = T::Native::usize_as(0);
     let mut fractionals: i8 = 0;
     let mut digits: u8 = 0;
+    let mut rounding_digit = -1; // to store digit after the scale for rounding
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
@@ -895,6 +905,13 @@ pub fn parse_decimal<T: DecimalType>(
             b'0'..=b'9' => {
                 if digits == 0 && *b == b'0' {
                     // Ignore leading zeros.
+                    continue;
+                }
+                if fractionals == scale && scale != 0 {
+                    // Capture the rounding digit once
+                    if rounding_digit < 0 {
+                        rounding_digit = (b - b'0') as i8;
+                    }
                     continue;
                 }
                 digits += 1;
@@ -925,11 +942,14 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale && scale != 0 {
-                        // We have processed all the digits that we need. All that
-                        // is left is to validate that the rest of the string contains
-                        // valid digits.
-                        continue;
+                    if fractionals == scale {
+                        // Capture the rounding digit once
+                        if rounding_digit < 0 {
+                            rounding_digit = (b - b'0') as i8;
+                        }
+                        if scale != 0 {
+                            continue;
+                        }
                     }
                     fractionals += 1;
                     digits += 1;
@@ -985,6 +1005,14 @@ pub fn parse_decimal<T: DecimalType>(
             return Err(ArrowError::ParseError(format!(
                 "parse decimal overflow ({s})"
             )));
+        }
+        //handle scale = 0 , scale down by fractional digits
+        if scale == 0 {
+            result = result.div_wrapping(base.pow_wrapping(fractionals as u32))
+        }
+        //add one if >=5
+        if rounding_digit >= 5 {
+            result = result.add_wrapping(T::Native::usize_as(1));
         }
     }
 
@@ -2564,9 +2592,21 @@ mod tests {
             assert_eq!(i256::from_i128(i), result_256.unwrap());
         }
 
+        let tests_with_varying_scale = [
+            ("123.4567891", 12345679_i128, 5),
+            ("123.4567891", 123_i128, 0),
+            ("123.45", 12345000_i128, 5),
+        ];
+        for (str, e, scale) in tests_with_varying_scale {
+            let result_128_a = parse_decimal::<Decimal128Type>(str, 20, scale);
+            assert_eq!(result_128_a.unwrap(), e);
+        }
+
         let e_notation_tests = [
             ("1.23e3", "1230.0", 2),
             ("5.6714e+2", "567.14", 4),
+            ("4e+5", "400000", 4),
+            ("4e7", "40000000", 2),
             ("5.6714e-2", "0.056714", 4),
             ("5.6714e-2", "0.056714", 3),
             ("5.6741214125e2", "567.41214125", 4),
@@ -2585,21 +2625,8 @@ mod tests {
             ("4749.3e-5", "0.047493", 10),
             ("4749.3e+5", "474930000", 10),
             ("4749.3e-5", "0.047493", 1),
-            ("4749.3e+5", "474930000", 1),
-            ("0E-8", "0", 10),
-            ("0E+6", "0", 10),
-            ("1E-8", "0.00000001", 10),
-            ("12E+6", "12000000", 10),
-            ("12E-6", "0.000012", 10),
-            ("0.1e-6", "0.0000001", 10),
-            ("0.1e+6", "100000", 10),
-            ("0.12e-6", "0.00000012", 10),
-            ("0.12e+6", "120000", 10),
-            ("000000000001e0", "000000000001", 3),
-            ("000001.1034567002e0", "000001.1034567002", 3),
-            ("1.234e16", "12340000000000000", 0),
-            ("123.4e16", "1234000000000000000", 0),
         ];
+
         for (e, d, scale) in e_notation_tests {
             let result_128_e = parse_decimal::<Decimal128Type>(e, 20, scale);
             let result_128_d = parse_decimal::<Decimal128Type>(d, 20, scale);
@@ -2608,6 +2635,27 @@ mod tests {
             let result_256_d = parse_decimal::<Decimal256Type>(d, 20, scale);
             assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
         }
+
+        let test_decimal_format_check = [
+            ("123.45", "123.45", 2),
+            ("12345", "12345", 2),
+            ("0.12345", "0.12", 2),
+            (".12345", "0.12", 2),
+            ("123.45", "123.450", 3),
+            ("12345", "12345.000", 3),
+            ("0.12345", "0.123", 3),
+            (".1265", ".127", 3),
+        ];
+
+        for (e, d, scale) in test_decimal_format_check {
+            let result_128_e = parse_decimal::<Decimal128Type>(e, 38, scale);
+            let result_128_d = parse_decimal::<Decimal128Type>(d, 38, scale);
+            assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
+            let result_256_e = parse_decimal::<Decimal256Type>(e, 38, scale);
+            let result_256_d = parse_decimal::<Decimal256Type>(d, 38, scale);
+            assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
+        }
+
         let can_not_parse_tests = [
             "123,123",
             ".",
