@@ -159,15 +159,23 @@ impl ObjectStore for AmazonS3 {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let request = self
             .client
             .request(Method::PUT, location)
             .with_payload(payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .with_encryption_headers();
 
-        match (opts.mode, &self.client.config.conditional_put) {
+        match (mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
             (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
