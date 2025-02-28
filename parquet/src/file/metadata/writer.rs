@@ -28,6 +28,11 @@ use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
 
+pub(crate) fn encrypt_object<T: TSerializable>(_object: T, _key: &[u8]) -> Result<Vec<u8>> {
+    // todo!("encrypt metadata");
+    Ok(vec![])
+}
+
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
 /// See [`ParquetMetaDataWriter`] for background and example.

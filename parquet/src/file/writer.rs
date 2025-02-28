@@ -19,6 +19,7 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
+use crate::encryption::ciphers::BlockEncryptor;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex};
 use crate::thrift::TSerializable;
@@ -34,7 +35,7 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
-use crate::encryption::encryption::FileEncryptor;
+use crate::encryption::encryption::{FileEncryptionProperties, FileEncryptor};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -568,16 +569,8 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
                 #[cfg(feature = "encryption")]
                 {
-                    let file_encryptor = FileEncryptor::new(
-                        props
-                            .file_encryption_properties
-                            .clone()
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        props.file_aad.clone(),
-                    );
-                    page_writer.with_file_encryptor(&file_encryptor);
+                    page_writer
+                        .with_file_encryption_properties(props.file_encryption_properties.as_ref());
                 }
                 Some(factory(
                     column,
@@ -756,7 +749,7 @@ impl<'a> SerializedColumnWriter<'a> {
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
     #[cfg(feature = "encryption")]
-    encryptor: Option<FileEncryptor>,
+    file_encryption_properties: Option<FileEncryptionProperties>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -764,12 +757,16 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
         Self {
             sink,
-            encryptor: None,
+            #[cfg(feature = "encryption")]
+            file_encryption_properties: None,
         }
     }
 
-    fn with_file_encryptor(&mut self, encryptor: &FileEncryptor) {
-        self.encryptor = Some(encryptor.clone());
+    fn with_file_encryption_properties(
+        &mut self,
+        file_encryption_properties: Option<&FileEncryptionProperties>,
+    ) {
+        self.file_encryption_properties = file_encryption_properties.cloned();
     }
 
     /// Serializes page header into Thrift.
@@ -777,14 +774,36 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
+        #[cfg(not(feature = "encryption"))]
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            #[cfg(feature = "encryption")]
-            if self.encryptor.is_some() {
-                // todo: encrypt
-                // todo!("encrypt page header");
-            }
             header.write_to_out_protocol(&mut protocol)?;
+        }
+        {
+            #[cfg(feature = "encryption")]
+            if self.file_encryption_properties.is_some() {
+                let mut buffer: Vec<u8> = vec![];
+                {
+                    let mut sink = TrackedWrite::new(&mut buffer);
+                    let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut sink);
+                    header.write_to_out_protocol(&mut unencrypted_protocol)?;
+                }
+                let file_encryption_properties = self.file_encryption_properties.clone().unwrap();
+                // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
+                let aad_prefix = file_encryption_properties
+                    .aad_prefix
+                    .clone()
+                    .unwrap_or(Vec::new());
+                let encryptor =
+                    FileEncryptor::new(file_encryption_properties, Some(aad_prefix.clone()));
+                let encrypted_buffer = encryptor
+                    .get_footer_encryptor()
+                    .encrypt(buffer.as_slice(), aad_prefix.as_slice());
+                self.sink.write_all(encrypted_buffer.as_ref())?;
+            } else {
+                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
+                header.write_to_out_protocol(&mut protocol)?;
+            }
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
@@ -800,6 +819,25 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 
         let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
+        #[cfg(feature = "encryption")]
+        if self.file_encryption_properties.is_some() {
+            let mut buffer: Vec<u8> = vec![];
+            let file_encryption_properties = self.file_encryption_properties.clone().unwrap();
+            // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
+            let aad_prefix = file_encryption_properties
+                .aad_prefix
+                .clone()
+                .unwrap_or(Vec::new());
+            let encryptor =
+                FileEncryptor::new(file_encryption_properties, Some(aad_prefix.clone()));
+            let encrypted_buffer = encryptor
+                .get_footer_encryptor()
+                .encrypt(buffer.as_slice(), aad_prefix.as_slice());
+            self.sink.write_all(encrypted_buffer.as_slice())?;
+        } else {
+            self.sink.write_all(page.data())?;
+        }
+        #[cfg(not(feature = "encryption"))]
         self.sink.write_all(page.data())?;
 
         let mut spec = PageWriteSpec::new();
