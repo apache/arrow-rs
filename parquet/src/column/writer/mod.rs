@@ -419,8 +419,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             data_page_boundary_ascending: true,
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
-            // metadata_encryptor: metadata_encryptor,
-            // data_encryptor: data_encryptor,
         }
     }
 
@@ -1525,18 +1523,14 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
-        schema::parser::parse_message_type,
+    use crate::arrow::arrow_reader::{
+        ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
     };
-    use core::str;
-    use rand::distributions::uniform::SampleUniform;
-    use std::{fs::File, sync::Arc};
-
     use crate::column::{
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    use crate::encryption::decryption::FileDecryptionProperties;
     #[cfg(feature = "encryption")]
     use crate::encryption::encryption::FileEncryptionProperties;
     use crate::file::writer::TrackedWrite;
@@ -1545,6 +1539,15 @@ mod tests {
     };
     use crate::schema::types::{ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::random_numbers_range;
+    use crate::{
+        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
+        schema::parser::parse_message_type,
+    };
+    use arrow_array::cast::AsArray;
+    use arrow_array::types;
+    use core::str;
+    use rand::distributions::uniform::SampleUniform;
+    use std::{fs::File, sync::Arc};
 
     use super::*;
 
@@ -3420,7 +3423,51 @@ mod tests {
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
-        todo!("add page encryption")
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+                                                        // let column_1_key = "1234567890123450".as_bytes();
+                                                        // let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            // .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            // .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let record_reader = builder.build().unwrap();
+
+        assert_eq!(file_metadata.num_rows(), 10);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 1);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-rs version 54.2.0"
+        );
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 1);
+            assert_eq!(rg.num_rows(), 10);
+        });
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let binary_col = batch.column(0).as_binary::<i32>();
+
+            for (i, x) in binary_col.iter().enumerate() {
+                assert_eq!(x.is_some(), i % 2 == 0);
+                if let Some(x) = x {
+                    assert_eq!(&x[0..7], b"parquet");
+                }
+            }
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+        todo!("add tests")
     }
 
     #[test]
