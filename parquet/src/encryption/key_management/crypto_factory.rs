@@ -17,15 +17,17 @@
 
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
+use crate::encryption::key_management::key_wrapper::KeyWrapper;
 use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConfig};
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
+use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// Parquet encryption algorithms
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EncryptionAlgorithm {
     /// AES-GCM version 1, where all metadata and data pages are encrypted with AES-GCM
     AesGcmV1,
@@ -136,7 +138,9 @@ impl EncryptionConfigurationBuilder {
         }
     }
 
-    /// Specify a column master key identifier and the column names to be encrypted with this key
+    /// Specify a column master key identifier and the column names to be encrypted with this key.
+    /// Note that if no column keys are specified, uniform encryption is used where all columns
+    /// are encrypted with the footer key.
     pub fn add_column_key(mut self, master_key: String, column_paths: Vec<String>) -> Self {
         self.column_keys
             .entry(master_key)
@@ -196,6 +200,22 @@ impl EncryptionConfigurationBuilder {
         self.data_key_length_bits = key_length;
         Ok(self)
     }
+}
+
+// Temporary FileEncryptionProperties struct until low-level encryption is added
+// TODO: Delete this
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEncryptionProperties {
+    encrypt_footer: bool,
+    footer_key: EncryptionKey,
+    column_keys: Option<HashMap<String, EncryptionKey>>,
+    aad_prefix: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncryptionKey {
+    pub key: Vec<u8>,
+    pub key_metadata: Vec<u8>,
 }
 
 /// Configuration for decrypting a Parquet file
@@ -277,8 +297,71 @@ impl CryptoFactory {
         FileDecryptionProperties::with_key_retriever(key_retriever).build()
     }
 
-    pub fn file_encryption_properties(&self) {
-        todo!("file_encryption_properties");
+    pub fn file_encryption_properties(
+        &self,
+        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        encryption_configuration: &EncryptionConfiguration,
+    ) -> Result<FileEncryptionProperties> {
+        if !encryption_configuration.internal_key_material {
+            return Err(nyi_err!("External key material is not yet implemented"));
+        }
+        if encryption_configuration.encryption_algorithm != EncryptionAlgorithm::AesGcmV1 {
+            return Err(nyi_err!(
+                "Only the AES-GCM-V1 encryption algorithm is implemented"
+            ));
+        }
+        if encryption_configuration.data_key_length_bits != 128 {
+            return Err(nyi_err!("Only 128 bit data keys are currently implemented"));
+        }
+
+        let encrypt_footer = !encryption_configuration.plaintext_footer;
+        let mut key_wrapper = KeyWrapper::new(
+            self.kms_manager.clone(),
+            kms_connection_config,
+            encryption_configuration,
+        );
+
+        let footer_key = self.generate_key(
+            encryption_configuration.footer_key(),
+            true,
+            &mut key_wrapper,
+        )?;
+
+        let column_keys = if encryption_configuration.column_keys.is_empty() {
+            None
+        } else {
+            let mut column_keys = HashMap::default();
+            for (master_key_id, column_paths) in &encryption_configuration.column_keys {
+                for column_path in column_paths {
+                    let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
+                    column_keys.insert(column_path.clone(), column_key);
+                }
+            }
+            Some(column_keys)
+        };
+
+        Ok(FileEncryptionProperties {
+            encrypt_footer,
+            footer_key,
+            column_keys,
+            aad_prefix: None,
+        })
+    }
+
+    fn generate_key<'a>(
+        &self,
+        master_key_identifier: &str,
+        is_footer_key: bool,
+        key_wrapper: &'a mut KeyWrapper,
+    ) -> Result<EncryptionKey> {
+        let rng = SystemRandom::new();
+        let mut key = vec![0u8; 16];
+        rng.fill(&mut key)?;
+
+        let key_metadata =
+            key_wrapper.get_key_metadata(&key, master_key_identifier, is_footer_key)?;
+
+        Ok(EncryptionKey { key, key_metadata })
     }
 }
 
@@ -294,10 +377,7 @@ mod tests {
         let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
         let config = Default::default();
 
-        let mut key_map = HashMap::default();
-        key_map.insert("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
-
-        let crypto_factory = CryptoFactory::new(TestKmsClientFactory::new(key_map.clone()));
+        let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
         let decryption_props = crypto_factory
             .file_decryption_properties(kms_config, config)
             .unwrap();
@@ -306,7 +386,7 @@ mod tests {
         let key_retriever = decryption_props.key_retriever.unwrap();
 
         let expected_dek = "1234567890123450".as_bytes().to_vec();
-        let kms = TestKmsClientFactory::new(key_map)
+        let kms = TestKmsClientFactory::with_default_keys()
             .create_client(&Default::default())
             .unwrap();
 
@@ -329,10 +409,7 @@ mod tests {
         let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
         let config = Default::default();
 
-        let mut key_map = HashMap::default();
-        key_map.insert("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
-
-        let kms_factory = Arc::new(TestKmsClientFactory::new(key_map.clone()));
+        let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
         let crypto_factory = CryptoFactory::new(kms_factory.clone());
         let decryption_props = crypto_factory
             .file_decryption_properties(kms_config.clone(), config)
@@ -342,7 +419,7 @@ mod tests {
         let key_retriever = decryption_props.key_retriever.unwrap();
 
         let dek = "1234567890123450".as_bytes().to_vec();
-        let kms = TestKmsClientFactory::new(key_map)
+        let kms = TestKmsClientFactory::with_default_keys()
             .create_client(&Default::default())
             .unwrap();
 
@@ -381,5 +458,88 @@ mod tests {
             .retrieve_key(serialized_key_material.as_bytes())
             .unwrap();
         assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
+    }
+
+    #[test]
+    fn test_round_trip_double_wrapping_properties() {
+        round_trip_encryption_properties(true);
+    }
+
+    #[test]
+    fn test_round_trip_single_wrapping_properties() {
+        round_trip_encryption_properties(false);
+    }
+
+    #[test]
+    fn test_uniform_encryption() {
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
+            .set_double_wrapping(true)
+            .build();
+
+        let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
+
+        let file_encryption_properties = crypto_factory
+            .file_encryption_properties(kms_config.clone(), &encryption_config)
+            .unwrap();
+
+        assert!(file_encryption_properties.column_keys.is_none());
+    }
+
+    fn round_trip_encryption_properties(double_wrapping: bool) {
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
+            .set_double_wrapping(double_wrapping)
+            .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])
+            .add_column_key("kc2".to_owned(), vec!["x2".to_owned(), "x3".to_owned()])
+            .build();
+
+        let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
+        let crypto_factory = CryptoFactory::new(kms_factory.clone());
+
+        let file_encryption_properties = crypto_factory
+            .file_encryption_properties(kms_config.clone(), &encryption_config)
+            .unwrap();
+
+        let decryption_properties = crypto_factory
+            .file_decryption_properties(kms_config.clone(), Default::default())
+            .unwrap();
+        let key_retriever = decryption_properties.key_retriever.unwrap();
+
+        assert!(file_encryption_properties.encrypt_footer);
+        assert!(file_encryption_properties.aad_prefix.is_none());
+        assert_eq!(16, file_encryption_properties.footer_key.key.len());
+
+        let retrieved_footer_key = key_retriever
+            .retrieve_key(&file_encryption_properties.footer_key.key_metadata)
+            .unwrap();
+        assert_eq!(
+            &file_encryption_properties.footer_key.key,
+            &retrieved_footer_key
+        );
+
+        let column_keys = file_encryption_properties.column_keys.unwrap();
+        let mut all_columns: Vec<String> = column_keys.iter().map(|(k, _)| k.clone()).collect();
+        all_columns.sort();
+        assert_eq!(vec!["x0", "x1", "x2", "x3"], all_columns);
+        for (_, column_key) in column_keys.iter() {
+            assert_eq!(16, column_key.key.len());
+
+            let retrieved_key = key_retriever
+                .retrieve_key(&column_key.key_metadata)
+                .unwrap();
+            assert_eq!(&column_key.key, &retrieved_key);
+        }
+
+        assert_eq!(1, kms_factory.invocations().len());
+        if double_wrapping {
+            // With double wrapping, only need to wrap one KEK per master key id used
+            assert_eq!(3, kms_factory.keys_wrapped());
+            assert_eq!(3, kms_factory.keys_unwrapped());
+        } else {
+            // With single wrapping, need to wrap the footer key and a DEK per column
+            assert_eq!(5, kms_factory.keys_wrapped());
+            assert_eq!(5, kms_factory.keys_unwrapped());
+        }
     }
 }

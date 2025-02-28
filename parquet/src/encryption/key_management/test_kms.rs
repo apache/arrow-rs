@@ -31,25 +31,46 @@ use std::sync::{Arc, Mutex};
 /// with the C++ Arrow LocalWrapKmsClient
 pub struct TestKmsClient {
     key_map: HashMap<String, Vec<u8>>,
+    keys_wrapped: Arc<Mutex<usize>>,
+    keys_unwrapped: Arc<Mutex<usize>>,
 }
 
 pub struct TestKmsClientFactory {
     key_map: HashMap<String, Vec<u8>>,
     invocations: Mutex<Vec<String>>,
+    keys_wrapped: Arc<Mutex<usize>>,
+    keys_unwrapped: Arc<Mutex<usize>>,
 }
 
 impl TestKmsClientFactory {
-    pub fn new(key_map: HashMap<String, Vec<u8>>) -> Self {
+    pub fn with_default_keys() -> Self {
+        let mut key_map = HashMap::default();
+        key_map.insert("kf".to_owned(), "0123456789012345".as_bytes().to_vec());
+        key_map.insert("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
+        key_map.insert("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+
         Self {
             key_map,
             invocations: Mutex::new(Vec::new()),
+            keys_wrapped: Arc::new(Mutex::new(0)),
+            keys_unwrapped: Arc::new(Mutex::new(0)),
         }
     }
 
-    // Get the access keys used to create clients.
-    // Provided for unit testing
+    /// Get the access keys used to create clients.
+    /// Provided for unit testing
     pub fn invocations(&self) -> Vec<String> {
         self.invocations.lock().unwrap().clone()
+    }
+
+    /// Get the number of times a key was wrapped with a KMS client created by this factory
+    pub fn keys_wrapped(&self) -> usize {
+        self.keys_wrapped.lock().unwrap().clone()
+    }
+
+    /// Get the number of times a key was unwrapped with a KMS client created by this factory
+    pub fn keys_unwrapped(&self) -> usize {
+        self.keys_unwrapped.lock().unwrap().clone()
     }
 }
 
@@ -59,15 +80,25 @@ impl KmsClientFactory for TestKmsClientFactory {
             let mut invocations = self.invocations.lock().unwrap();
             invocations.push(kms_connection_config.key_access_token().to_owned());
         }
-        Ok(Arc::new(TestKmsClient {
-            key_map: self.key_map.clone(),
-        }))
+        Ok(Arc::new(TestKmsClient::new(
+            self.key_map.clone(),
+            self.keys_wrapped.clone(),
+            self.keys_unwrapped.clone(),
+        )))
     }
 }
 
 impl TestKmsClient {
-    pub fn new(key_map: HashMap<String, Vec<u8>>) -> Self {
-        Self { key_map }
+    pub fn new(
+        key_map: HashMap<String, Vec<u8>>,
+        keys_wrapped: Arc<Mutex<usize>>,
+        keys_unwrapped: Arc<Mutex<usize>>,
+    ) -> Self {
+        Self {
+            key_map,
+            keys_wrapped,
+            keys_unwrapped,
+        }
     }
 
     fn get_key(&self, master_key_identifier: &str) -> Result<LessSafeKey> {
@@ -99,6 +130,12 @@ impl KmsClient for TestKmsClient {
             key.seal_in_place_separate_tag(nonce, Aad::from(aad), &mut ciphertext[NONCE_LEN..])?;
         ciphertext.extend_from_slice(tag.as_ref());
         let encoded = BASE64_STANDARD.encode(&ciphertext);
+
+        {
+            let mut guard = self.keys_wrapped.lock().unwrap();
+            *guard += 1;
+        }
+
         Ok(encoded)
     }
 
@@ -117,6 +154,12 @@ impl KmsClient for TestKmsClient {
         let tag_len = key.algorithm().tag_len();
         key.open_in_place(nonce, Aad::from(aad), &mut plaintext)?;
         plaintext.resize(plaintext.len() - tag_len, 0u8);
+
+        {
+            let mut guard = self.keys_unwrapped.lock().unwrap();
+            *guard += 1;
+        }
+
         Ok(plaintext)
     }
 }

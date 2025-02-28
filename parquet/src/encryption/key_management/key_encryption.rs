@@ -24,7 +24,7 @@ use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 
 /// Encrypt a DEK with a KEK using AES-GCM
-pub fn encrypt_encryption_key(dek: Vec<u8>, kek_id: &str, kek_bytes: &Vec<u8>) -> Result<String> {
+pub fn encrypt_encryption_key(dek: &[u8], kek_id: &[u8], kek_bytes: &[u8]) -> Result<String> {
     let algorithm = &AES_128_GCM;
     let kek = UnboundKey::new(algorithm, kek_bytes).map_err(|e| {
         general_err!(
@@ -39,15 +39,11 @@ pub fn encrypt_encryption_key(dek: Vec<u8>, kek_id: &str, kek_bytes: &Vec<u8>) -
     rng.fill(&mut nonce)?;
     let nonce = ring::aead::Nonce::assume_unique_for_key(nonce);
 
-    let aad = BASE64_STANDARD
-        .decode(kek_id)
-        .map_err(|e| general_err!("Could not base64 decode key encryption key id: {}", e))?;
-
     let mut ciphertext = Vec::with_capacity(NONCE_LEN + dek.len() + algorithm.tag_len());
     ciphertext.extend_from_slice(nonce.as_ref());
     ciphertext.extend_from_slice(&dek);
     let tag =
-        kek.seal_in_place_separate_tag(nonce, Aad::from(aad), &mut ciphertext[NONCE_LEN..])?;
+        kek.seal_in_place_separate_tag(nonce, Aad::from(kek_id), &mut ciphertext[NONCE_LEN..])?;
     ciphertext.extend_from_slice(tag.as_ref());
     let encoded = BASE64_STANDARD.encode(&ciphertext);
     Ok(encoded)
@@ -56,8 +52,8 @@ pub fn encrypt_encryption_key(dek: Vec<u8>, kek_id: &str, kek_bytes: &Vec<u8>) -
 /// Decrypt a DEK that has been encrypted with a KEK using AES-GCM
 pub fn decrypt_encryption_key(
     wrapped_key: &str,
-    kek_id: &str,
-    kek_bytes: &Vec<u8>,
+    encoded_kek_id: &str,
+    kek_bytes: &[u8],
 ) -> Result<Vec<u8>> {
     let encrypted_key = BASE64_STANDARD
         .decode(wrapped_key)
@@ -74,7 +70,7 @@ pub fn decrypt_encryption_key(
 
     let nonce = ring::aead::Nonce::try_assume_unique_for_key(&encrypted_key[..12])?;
     let aad = BASE64_STANDARD
-        .decode(kek_id)
+        .decode(encoded_kek_id)
         .map_err(|e| general_err!("Could not base64 decode key encryption key id: {}", e))?;
 
     let mut plaintext = Vec::with_capacity(encrypted_key.len() - NONCE_LEN);
@@ -92,12 +88,14 @@ mod tests {
 
     #[test]
     fn test_key_encryption_round_trip() {
-        let dek_bytes = "1234567890123450".as_bytes().to_vec();
-        let kek_bytes = "1234567890123452".as_bytes().to_vec();
-        let kek_id = "kek1";
+        let dek_bytes = "1234567890123450".as_bytes();
+        let kek_bytes = "1234567890123452".as_bytes();
+        let kek_id = "1234567890123453".as_bytes();
+        let encoded_kek_id = BASE64_STANDARD.encode(kek_id);
 
-        let encrypted_key = encrypt_encryption_key(dek_bytes.clone(), kek_id, &kek_bytes).unwrap();
-        let decrypted_dek = decrypt_encryption_key(&encrypted_key, "kek1", &kek_bytes).unwrap();
+        let encrypted_key = encrypt_encryption_key(dek_bytes, kek_id, kek_bytes).unwrap();
+        let decrypted_dek =
+            decrypt_encryption_key(&encrypted_key, &encoded_kek_id, kek_bytes).unwrap();
 
         assert_eq!(dek_bytes, decrypted_dek);
     }

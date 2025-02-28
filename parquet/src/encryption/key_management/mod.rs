@@ -21,6 +21,7 @@ pub mod crypto_factory;
 mod key_encryption;
 mod key_material;
 mod key_unwrapper;
+mod key_wrapper;
 pub mod kms;
 mod kms_manager;
 #[cfg(test)]
