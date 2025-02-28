@@ -150,7 +150,7 @@ use super::ByteArrayType;
 /// "CrumpleFacedFish"      │  16  │ Crum │  0   │ 103  │─ ─│─ ─ ─ ┘           │eFa│
 ///                         └──────┴──────┴──────┴──────┘                      │ced│
 ///                         ┌──────┬────────────────────┐   └ ─ ─ ─ ─ ─ ─ ─ ─ ▶│Fis│
-/// "LavaMonster"           │  11  │   LavaMonster\0    │                      │hWa│
+/// "LavaMonster"           │  11  │   LavaMonster      │                      │hWa│
 ///                         └──────┴────────────────────┘               offset │sIn│
 ///                                                                       115  │Tow│
 ///                                                                            │nTo│
