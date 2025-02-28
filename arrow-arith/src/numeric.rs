@@ -68,32 +68,14 @@ pub fn div(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Div, lhs, rhs)
 }
 
-/// Perform `lhs / rhs`
-///
-/// Division by zero will result in an error, with exception to floating point numbers,
-/// which instead follow the IEEE 754 rules
-///
-/// wrapping on overflow for signed_integer::MIN / -1
-pub fn div_wrapping(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
-    arithmetic_op(Op::DivWrapping, lhs, rhs)
-}
-
 /// Perform `lhs % rhs`
 ///
-/// Overflow or division by zero will result in an error, with exception to
+/// Division by zero will result in an error, with exception to
 /// floating point numbers, which instead follow the IEEE 754 rules
+///
+/// `signed_integer::MIN % -1` will not result in an error but return 0
 pub fn rem(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Rem, lhs, rhs)
-}
-
-/// Perform `lhs % rhs`
-///
-/// Division by zero will result in an error, with exception to floating point numbers,
-/// which instead follow the IEEE 754 rules
-///
-/// wrapping on overflow for signed_integer::MIN % -1
-pub fn rem_wrapping(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
-    arithmetic_op(Op::RemWrapping, lhs, rhs)
 }
 
 macro_rules! neg_checked {
@@ -198,9 +180,7 @@ enum Op {
     Sub,
     MulWrapping,
     Mul,
-    DivWrapping,
     Div,
-    RemWrapping,
     Rem,
 }
 
@@ -210,8 +190,8 @@ impl std::fmt::Display for Op {
             Op::AddWrapping | Op::Add => write!(f, "+"),
             Op::SubWrapping | Op::Sub => write!(f, "-"),
             Op::MulWrapping | Op::Mul => write!(f, "*"),
-            Op::DivWrapping | Op::Div => write!(f, "/"),
-            Op::RemWrapping | Op::Rem => write!(f, "%"),
+            Op::Div => write!(f, "/"),
+            Op::Rem => write!(f, "%"),
         }
     }
 }
@@ -334,22 +314,14 @@ fn integer_op<T: ArrowPrimitiveType>(
         Op::Sub => try_op!(l, l_s, r, r_s, l.sub_checked(r)),
         Op::MulWrapping => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
         Op::Mul => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
-        Op::DivWrapping => try_op!(l, l_s, r, r_s, {
-            if r.is_zero() {
-                Err(ArrowError::DivideByZero)
-            } else {
-                Ok(l.div_wrapping(r))
-            }
-        }),
         Op::Div => try_op!(l, l_s, r, r_s, l.div_checked(r)),
-        Op::RemWrapping => try_op!(l, l_s, r, r_s, {
+        Op::Rem => try_op!(l, l_s, r, r_s, {
             if r.is_zero() {
                 Err(ArrowError::DivideByZero)
             } else {
                 Ok(l.mod_wrapping(r))
             }
         }),
-        Op::Rem => try_op!(l, l_s, r, r_s, l.mod_checked(r)),
     };
     Ok(Arc::new(array))
 }
@@ -368,8 +340,8 @@ fn float_op<T: ArrowPrimitiveType>(
         Op::AddWrapping | Op::Add => op!(l, l_s, r, r_s, l.add_wrapping(r)),
         Op::SubWrapping | Op::Sub => op!(l, l_s, r, r_s, l.sub_wrapping(r)),
         Op::MulWrapping | Op::Mul => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
-        Op::DivWrapping | Op::Div => op!(l, l_s, r, r_s, l.div_wrapping(r)),
-        Op::RemWrapping | Op::Rem => op!(l, l_s, r, r_s, l.mod_wrapping(r)),
+        Op::Div => op!(l, l_s, r, r_s, l.div_wrapping(r)),
+        Op::Rem => op!(l, l_s, r, r_s, l.mod_wrapping(r)),
     };
     Ok(Arc::new(array))
 }
@@ -824,7 +796,7 @@ fn decimal_op<T: DecimalType>(
                 .with_precision_and_scale(result_precision, result_scale)?
         }
 
-        Op::Div | Op::DivWrapping => {
+        Op::Div => {
             // Follow postgres and MySQL adding a fixed scale increment of 4
             // s1 + 4
             let result_scale = s1.saturating_add(4).min(T::MAX_SCALE);
@@ -855,7 +827,7 @@ fn decimal_op<T: DecimalType>(
             .with_precision_and_scale(result_precision, result_scale)?
         }
 
-        Op::Rem | Op::RemWrapping => {
+        Op::Rem => {
             // max(s1, s2)
             let result_scale = *s1.max(s2);
             // min(p1-s1, p2 -s2) + max( s1,s2 )
@@ -1077,31 +1049,20 @@ mod tests {
             err,
             "Arithmetic overflow: Overflow happened on: -32768 / -1"
         );
-        let result = div_wrapping(&a, &b).unwrap();
-        assert_eq!(result.as_ref(), &Int16Array::from(vec![-32768]));
 
         let a = Int16Array::from(vec![i16::MIN]);
         let b = Int16Array::from(vec![-1]);
-        let err = rem(&a, &b).unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "Arithmetic overflow: Overflow happened on: -32768 % -1"
-        );
-        let result = rem_wrapping(&a, &b).unwrap();
+        let result = rem(&a, &b).unwrap();
         assert_eq!(result.as_ref(), &Int16Array::from(vec![0]));
 
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);
         let err = div(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
-        let err = div_wrapping(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Divide by zero error");
 
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);
         let err = rem(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Divide by zero error");
-        let err = rem_wrapping(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
     }
 
@@ -1135,20 +1096,7 @@ mod tests {
         assert_eq!(r.value(3), -4. / -3.);
         assert!(r.value(5).is_nan());
 
-        let result = div_wrapping(&a, &b).unwrap();
-        let r = result.as_primitive::<Float32Type>();
-        assert_eq!(r.value(0), 1.);
-        assert_eq!(r.value(1), 1.);
-        assert!(r.value(2) < f32::EPSILON);
-        assert_eq!(r.value(3), -4. / -3.);
-        assert!(r.value(5).is_nan());
-
         let result = rem(&a, &b).unwrap();
-        let r = result.as_primitive::<Float32Type>();
-        assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
-        assert!(r.value(5).is_nan());
-
-        let result = rem_wrapping(&a, &b).unwrap();
         let r = result.as_primitive::<Float32Type>();
         assert_eq!(&r.values()[..5], &[0., 0., 6., -1., -1.]);
         assert!(r.value(5).is_nan());
@@ -1230,11 +1178,7 @@ mod tests {
             .unwrap();
         let err = div(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
-        let err = div_wrapping(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Divide by zero error");
-        let err = rem_wrapping(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
     }
 

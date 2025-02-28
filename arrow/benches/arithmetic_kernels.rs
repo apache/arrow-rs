@@ -60,18 +60,12 @@ fn add_benchmark(c: &mut Criterion) {
             b.iter(|| criterion::black_box(mul_wrapping(&arr_a, &scalar).unwrap()))
         });
         c.bench_function(&format!("divide({null_density})"), |b| {
-            b.iter(|| criterion::black_box(div_wrapping(&arr_a, &arr_b).unwrap()))
-        });
-        c.bench_function(&format!("divide_checked({null_density})"), |b| {
             b.iter(|| criterion::black_box(div(&arr_a, &arr_b).unwrap()))
         });
         c.bench_function(&format!("divide_scalar({null_density})"), |b| {
             b.iter(|| criterion::black_box(div(&arr_a, &scalar).unwrap()))
         });
         c.bench_function(&format!("modulo({null_density})"), |b| {
-            b.iter(|| criterion::black_box(rem_wrapping(&arr_a, &arr_b).unwrap()))
-        });
-        c.bench_function(&format!("modulo_checked({null_density})"), |b| {
             b.iter(|| criterion::black_box(rem(&arr_a, &arr_b).unwrap()))
         });
         c.bench_function(&format!("modulo_scalar({null_density})"), |b| {
