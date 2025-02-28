@@ -1523,24 +1523,31 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
-        schema::parser::parse_message_type,
+    use crate::arrow::arrow_reader::{
+        ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
     };
-    use core::str;
-    use rand::distributions::uniform::SampleUniform;
-    use std::{fs::File, sync::Arc};
-
     use crate::column::{
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    use crate::encryption::decryption::FileDecryptionProperties;
+    #[cfg(feature = "encryption")]
+    use crate::encryption::encryption::FileEncryptionProperties;
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::random_numbers_range;
+    use crate::{
+        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
+        schema::parser::parse_message_type,
+    };
+    use arrow_array::cast::AsArray;
+    use arrow_array::types;
+    use core::str;
+    use rand::distributions::uniform::SampleUniform;
+    use std::{fs::File, sync::Arc};
 
     use super::*;
 
@@ -2105,6 +2112,8 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            #[cfg(feature = "encryption")]
+            None,
         )
         .unwrap();
 
@@ -2157,6 +2166,8 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
+            #[cfg(feature = "encryption")]
+            None,
         )
         .unwrap();
 
@@ -2292,6 +2303,8 @@ mod tests {
                 r.rows_written as usize,
                 None,
                 Arc::new(props),
+                #[cfg(feature = "encryption")]
+                None,
             )
             .unwrap(),
         );
@@ -3373,6 +3386,90 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_encryption_writer() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = vec![ByteArray::from(vec![128u8; 32]); 7];
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+
+        let file: File = tempfile::tempfile().unwrap();
+
+        let builder = WriterProperties::builder();
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        let props = Arc::new(
+            builder
+                .with_file_encryption_properties(file_encryption_properties)
+                .with_file_aad(Some("test_aad".as_bytes().to_vec()))
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, Some(&def_levels), None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+                                                        // let column_1_key = "1234567890123450".as_bytes();
+                                                        // let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            // .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            // .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let record_reader = builder.build().unwrap();
+
+        assert_eq!(file_metadata.num_rows(), 10);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 1);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-rs version 54.2.0"
+        );
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 1);
+            assert_eq!(rg.num_rows(), 10);
+        });
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let binary_col = batch.column(0).as_binary::<i32>();
+
+            for (i, x) in binary_col.iter().enumerate() {
+                assert_eq!(x.is_some(), i % 2 == 0);
+                if let Some(x) = x {
+                    assert_eq!(&x[0..7], b"parquet");
+                }
+            }
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+        todo!("add tests")
+    }
+
     #[test]
     fn test_increment_max_binary_chars() {
         let r = increment(vec![0xFF, 0xFE, 0xFD, 0xFF, 0xFF]);
@@ -3741,6 +3838,8 @@ mod tests {
                 result.rows_written as usize,
                 None,
                 Arc::new(props),
+                #[cfg(feature = "encryption")]
+                None,
             )
             .unwrap(),
         );

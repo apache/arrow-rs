@@ -28,6 +28,11 @@ use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
 
+pub(crate) fn encrypt_object<T: TSerializable>(_object: T, _key: &[u8]) -> Result<Vec<u8>> {
+    // todo!("encrypt metadata");
+    Ok(vec![])
+}
+
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
 /// See [`ParquetMetaDataWriter`] for background and example.
@@ -59,6 +64,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     let start_offset = self.buf.bytes_written();
                     let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
                     offset_index.write_to_out_protocol(&mut protocol)?;
+                    // todo: encrypt
+                    // todo!("encrypt metadata");
                     let end_offset = self.buf.bytes_written();
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
@@ -83,6 +90,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                 if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
                     let start_offset = self.buf.bytes_written();
                     let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                    // todo: encrypt
+                    // todo!("encrypt metadata");
                     column_index.write_to_out_protocol(&mut protocol)?;
                     let end_offset = self.buf.bytes_written();
                     // set offset and index for offset index
@@ -136,6 +145,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
             file_metadata.write_to_out_protocol(&mut protocol)?;
+            // todo: encrypt
+            // todo!("encrypt metadata");
         }
         let end_pos = self.buf.bytes_written();
 
