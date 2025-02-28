@@ -17,7 +17,8 @@
 
 use crate::errors::Result;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::ops::Deref;
+use std::sync::Arc;
 
 /// API for interacting with a KMS.
 /// This should be implemented by user code for integration with your KMS.
@@ -147,6 +148,15 @@ impl KmsConnectionConfigBuilder {
 /// Trait for factories that create KMS clients
 pub trait KmsClientFactory: Send {
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef>;
+}
+
+impl<T> KmsClientFactory for Arc<T>
+where
+    T: KmsClientFactory + Send + Sync,
+{
+    fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+        self.deref().create_client(kms_connection_config)
+    }
 }
 
 impl<T> KmsClientFactory for T

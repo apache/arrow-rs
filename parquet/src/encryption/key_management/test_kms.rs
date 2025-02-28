@@ -25,7 +25,7 @@ use base64::Engine;
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// KMS client implementation for unit tests, which is compatible
 /// with the C++ Arrow LocalWrapKmsClient
@@ -35,16 +35,30 @@ pub struct TestKmsClient {
 
 pub struct TestKmsClientFactory {
     key_map: HashMap<String, Vec<u8>>,
+    invocations: Mutex<Vec<String>>,
 }
 
 impl TestKmsClientFactory {
     pub fn new(key_map: HashMap<String, Vec<u8>>) -> Self {
-        Self { key_map }
+        Self {
+            key_map,
+            invocations: Mutex::new(Vec::new()),
+        }
+    }
+
+    // Get the access keys used to create clients.
+    // Provided for unit testing
+    pub fn invocations(&self) -> Vec<String> {
+        self.invocations.lock().unwrap().clone()
     }
 }
 
 impl KmsClientFactory for TestKmsClientFactory {
-    fn create_client(&self, _kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+    fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
+        {
+            let mut invocations = self.invocations.lock().unwrap();
+            invocations.push(kms_connection_config.key_access_token().to_owned());
+        }
         Ok(Arc::new(TestKmsClient {
             key_map: self.key_map.clone(),
         }))

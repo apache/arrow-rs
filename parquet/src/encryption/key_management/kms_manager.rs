@@ -37,9 +37,12 @@ pub struct KmsManager {
 }
 
 impl KmsManager {
-    pub fn new(kms_client_factory: ClientFactory) -> Self {
+    pub fn new<T>(kms_client_factory: T) -> Self
+    where
+        T: KmsClientFactory + 'static,
+    {
         Self {
-            kms_client_factory,
+            kms_client_factory: Mutex::new(Box::new(kms_client_factory)),
             kms_client_cache: Mutex::new(HashMap::default()),
             kek_caches: Mutex::new(HashMap::default()),
         }

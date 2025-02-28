@@ -21,7 +21,7 @@ use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConf
 use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// Parquet encryption algorithms
@@ -259,7 +259,7 @@ impl CryptoFactory {
         T: KmsClientFactory + 'static,
     {
         CryptoFactory {
-            kms_manager: Arc::new(KmsManager::new(Mutex::new(Box::new(kms_client_factory)))),
+            kms_manager: Arc::new(KmsManager::new(kms_client_factory)),
         }
     }
 
@@ -322,5 +322,64 @@ mod tests {
             .unwrap();
 
         assert_eq!(dek, expected_dek);
+    }
+
+    #[test]
+    fn test_kms_client_caching() {
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let config = Default::default();
+
+        let mut key_map = HashMap::default();
+        key_map.insert("kc1".to_owned(), "1234567890123450".as_bytes().to_vec());
+
+        let kms_factory = Arc::new(TestKmsClientFactory::new(key_map.clone()));
+        let crypto_factory = CryptoFactory::new(kms_factory.clone());
+        let decryption_props = crypto_factory
+            .file_decryption_properties(kms_config.clone(), config)
+            .unwrap();
+
+        assert!(decryption_props.key_retriever.is_some());
+        let key_retriever = decryption_props.key_retriever.unwrap();
+
+        let dek = "1234567890123450".as_bytes().to_vec();
+        let kms = TestKmsClientFactory::new(key_map)
+            .create_client(&Default::default())
+            .unwrap();
+
+        let wrapped_key = kms.wrap_key(&dek, "kc1").unwrap();
+        let key_material = KeyMaterialBuilder::for_column_key()
+            .with_single_wrapped_key("kc1".to_owned(), wrapped_key)
+            .build()
+            .unwrap();
+        let serialized_key_material = key_material.serialize().unwrap();
+
+        assert_eq!(0, kms_factory.invocations().len());
+
+        key_retriever
+            .retrieve_key(serialized_key_material.as_bytes())
+            .unwrap();
+        assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
+
+        key_retriever
+            .retrieve_key(serialized_key_material.as_bytes())
+            .unwrap();
+        // Same client should have been reused
+        assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
+
+        {
+            let mut config = kms_config.write().unwrap();
+            config.refresh_key_access_token("super_secret".to_owned());
+        }
+
+        key_retriever
+            .retrieve_key(serialized_key_material.as_bytes())
+            .unwrap();
+        // New key access token should have been used
+        assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
+
+        key_retriever
+            .retrieve_key(serialized_key_material.as_bytes())
+            .unwrap();
+        assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
     }
 }
