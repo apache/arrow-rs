@@ -64,7 +64,7 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
     }
 }
 
-pub trait BlockEncryptor: Debug + Send + Sync {
+pub trait BlockEncryptor: Debug + Send + Sync + Clone {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
 }
 
