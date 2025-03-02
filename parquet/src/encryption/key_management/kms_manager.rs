@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::encryption::key_management::kms::{
-    KmsClient, KmsClientFactory, KmsClientRef, KmsConnectionConfig,
-};
+use crate::encryption::key_management::kms::{KmsClientFactory, KmsClientRef, KmsConnectionConfig};
 use crate::errors::Result;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,8 +31,8 @@ pub type KekCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 /// Manages caching the KMS and allowing interaction with it
 pub struct KmsManager {
     kms_client_factory: ClientFactory,
-    kms_client_cache: Mutex<HashMap<ClientKey, ClientEntry>>,
-    kek_caches: Mutex<HashMap<KekCacheKey, KekCacheEntry>>,
+    kms_client_cache: ExpiringCache<ClientKey, KmsClientRef>,
+    kek_caches: ExpiringCache<KekCacheKey, KekCache>,
 }
 
 impl KmsManager {
@@ -43,8 +42,8 @@ impl KmsManager {
     {
         Self {
             kms_client_factory: Mutex::new(Box::new(kms_client_factory)),
-            kms_client_cache: Mutex::new(HashMap::default()),
-            kek_caches: Mutex::new(HashMap::default()),
+            kms_client_cache: ExpiringCache::new(),
+            kek_caches: ExpiringCache::new(),
         }
     }
 
@@ -52,27 +51,17 @@ impl KmsManager {
         &self,
         kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
-    ) -> Result<Arc<dyn KmsClient>> {
-        let mut guard = self.kms_client_cache.lock().unwrap();
-        let kms_client_cache = &mut *guard;
+    ) -> Result<KmsClientRef> {
         let key_access_token = kms_connection_config.read_key_access_token();
         let key = ClientKey::new(
             key_access_token.clone(),
             kms_connection_config.kms_instance_id().to_owned(),
         );
-        let entry = kms_client_cache.entry(key);
-        let client = match entry {
-            Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {
-                entry.get().client.clone()
-            }
-            entry => {
+        self.kms_client_cache
+            .get_or_create_fallible(key, cache_lifetime, || {
                 let client_factory = self.kms_client_factory.lock().unwrap();
-                let client = client_factory.create_client(&kms_connection_config)?;
-                entry.insert_entry(ClientEntry::new(client.clone()));
-                client
-            }
-        };
-        Ok(client)
+                client_factory.create_client(&kms_connection_config)
+            })
     }
 
     pub fn get_kek_cache(
@@ -80,23 +69,100 @@ impl KmsManager {
         kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
     ) -> KekCache {
-        let mut guard = self.kek_caches.lock().unwrap();
-        let kek_caches = &mut *guard;
         let key = KekCacheKey::new(kms_connection_config.key_access_token().clone());
-        let entry = kek_caches.entry(key);
+        self.kek_caches.get_or_create(key, cache_lifetime, || {
+            Arc::new(Mutex::new(Default::default()))
+        })
+    }
+
+    // TODO: Clear expired clients and KEK caches
+}
+
+struct ExpiringCache<TKey, TValue> {
+    cache: Mutex<HashMap<TKey, ExpiringCacheValue<TValue>>>,
+}
+
+#[derive(Debug)]
+struct ExpiringCacheValue<TValue> {
+    value: TValue,
+    creation_time: Instant,
+}
+
+impl<TValue> ExpiringCacheValue<TValue> {
+    pub fn new(value: TValue) -> Self {
+        Self {
+            value,
+            creation_time: Instant::now(),
+        }
+    }
+
+    pub fn is_valid(&self, cache_lifetime: Option<Duration>) -> bool {
+        match cache_lifetime {
+            None => true,
+            Some(cache_lifetime) => {
+                let age = Instant::now().saturating_duration_since(self.creation_time);
+                age < cache_lifetime
+            }
+        }
+    }
+}
+
+impl<TKey, TValue> ExpiringCache<TKey, TValue>
+where
+    TKey: Eq + Hash,
+    TValue: Clone,
+{
+    pub fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::default()),
+        }
+    }
+
+    pub fn get_or_create<F>(
+        &self,
+        key: TKey,
+        cache_lifetime: Option<Duration>,
+        creator: F,
+    ) -> TValue
+    where
+        F: FnOnce() -> TValue,
+    {
+        let mut cache = self.cache.lock().unwrap();
+        let entry = cache.entry(key);
         match entry {
             Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {
-                entry.get().kek_cache.clone()
+                entry.get().value.clone()
             }
             entry => {
-                let kek_cache = Arc::new(Mutex::new(Default::default()));
-                entry.insert_entry(KekCacheEntry::new(kek_cache.clone()));
-                kek_cache
+                let value = creator();
+                entry.insert_entry(ExpiringCacheValue::new(value.clone()));
+                value
             }
         }
     }
 
-    // TODO: Clear expired clients and KEK caches
+    pub fn get_or_create_fallible<F>(
+        &self,
+        key: TKey,
+        cache_lifetime: Option<Duration>,
+        creator: F,
+    ) -> Result<TValue>
+    where
+        F: FnOnce() -> Result<TValue>,
+    {
+        let mut cache = self.cache.lock().unwrap();
+        let entry = cache.entry(key);
+        match entry {
+            Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {
+                Ok(entry.get().value.clone())
+            }
+            entry => {
+                let value = creator()?;
+                entry.insert_entry(ExpiringCacheValue::new(value.clone()));
+                Ok(value)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -114,30 +180,6 @@ impl ClientKey {
     }
 }
 
-struct ClientEntry {
-    client: KmsClientRef,
-    creation_time: Instant,
-}
-
-impl ClientEntry {
-    pub fn new(client: KmsClientRef) -> Self {
-        Self {
-            client,
-            creation_time: Instant::now(),
-        }
-    }
-
-    pub fn is_valid(&self, cache_lifetime: Option<Duration>) -> bool {
-        match cache_lifetime {
-            None => true,
-            Some(cache_lifetime) => {
-                let age = Instant::now().saturating_duration_since(self.creation_time);
-                age < cache_lifetime
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct KekCacheKey {
     key_access_token: String,
@@ -146,29 +188,5 @@ struct KekCacheKey {
 impl KekCacheKey {
     pub fn new(key_access_token: String) -> Self {
         Self { key_access_token }
-    }
-}
-
-struct KekCacheEntry {
-    kek_cache: Arc<Mutex<HashMap<String, Vec<u8>>>>,
-    creation_time: Instant,
-}
-
-impl KekCacheEntry {
-    pub fn new(kek_cache: KekCache) -> Self {
-        Self {
-            kek_cache,
-            creation_time: Instant::now(),
-        }
-    }
-
-    pub fn is_valid(&self, cache_lifetime: Option<Duration>) -> bool {
-        match cache_lifetime {
-            None => true,
-            Some(cache_lifetime) => {
-                let age = Instant::now().saturating_duration_since(self.creation_time);
-                age < cache_lifetime
-            }
-        }
     }
 }
