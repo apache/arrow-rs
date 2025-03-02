@@ -26,13 +26,13 @@ use base64::Engine;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Creates key material for data encryption keys
 pub struct KeyWrapper<'a> {
     kms_manager: Arc<KmsManager>,
-    kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+    kms_connection_config: Arc<KmsConnectionConfig>,
     encryption_configuration: &'a EncryptionConfiguration,
     master_key_to_kek: HashMap<String, KeyEncryptionKey>,
 }
@@ -40,7 +40,7 @@ pub struct KeyWrapper<'a> {
 impl<'a> KeyWrapper<'a> {
     pub fn new(
         kms_manager: Arc<KmsManager>,
-        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: Arc<KmsConnectionConfig>,
         encryption_configuration: &'a EncryptionConfiguration,
     ) -> Self {
         Self {
@@ -58,7 +58,7 @@ impl<'a> KeyWrapper<'a> {
         is_footer_key: bool,
     ) -> Result<Vec<u8>> {
         let key_material_builder = if is_footer_key {
-            let kms_config = self.kms_connection_config.read().unwrap();
+            let kms_config = &self.kms_connection_config;
             KeyMaterialBuilder::for_footer_key(
                 kms_config.kms_instance_id().to_owned(),
                 kms_config.kms_instance_url().to_owned(),
@@ -108,7 +108,7 @@ impl<'a> KeyWrapper<'a> {
 fn generate_key_encryption_key(
     master_key_id: &str,
     kms_manager: &Arc<KmsManager>,
-    kms_connection_config: &Arc<RwLock<KmsConnectionConfig>>,
+    kms_connection_config: &Arc<KmsConnectionConfig>,
     cache_lifetime: Option<Duration>,
 ) -> Result<KeyEncryptionKey> {
     let rng = SystemRandom::new();

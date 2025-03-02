@@ -23,11 +23,11 @@ use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::{KekCache, KmsManager};
 use crate::errors::{ParquetError, Result};
 use std::collections::hash_map::Entry;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 pub struct KeyUnwrapper {
     kms_manager: Arc<KmsManager>,
-    kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+    kms_connection_config: Arc<KmsConnectionConfig>,
     decryption_configuration: DecryptionConfiguration,
     kek_cache: KekCache,
 }
@@ -35,7 +35,7 @@ pub struct KeyUnwrapper {
 impl KeyUnwrapper {
     pub fn new(
         kms_manager: Arc<KmsManager>,
-        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: Arc<KmsConnectionConfig>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Self {
         let kek_cache = kms_manager.get_kek_cache(

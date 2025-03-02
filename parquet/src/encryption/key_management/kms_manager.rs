@@ -21,7 +21,7 @@ use crate::encryption::key_management::kms::{
 use crate::errors::Result;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 type ClientFactory = Mutex<Box<dyn KmsClientFactory>>;
@@ -50,14 +50,14 @@ impl KmsManager {
 
     pub fn get_client(
         &self,
-        kms_connection_config: &Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
     ) -> Result<Arc<dyn KmsClient>> {
         let mut guard = self.kms_client_cache.lock().unwrap();
         let kms_client_cache = &mut *guard;
-        let kms_connection_config = kms_connection_config.read().unwrap();
+        let key_access_token = kms_connection_config.read_key_access_token();
         let key = ClientKey::new(
-            kms_connection_config.key_access_token().to_owned(),
+            key_access_token.clone(),
             kms_connection_config.kms_instance_id().to_owned(),
         );
         let entry = kms_client_cache.entry(key);
@@ -77,13 +77,12 @@ impl KmsManager {
 
     pub fn get_kek_cache(
         &self,
-        kms_connection_config: &Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
     ) -> KekCache {
         let mut guard = self.kek_caches.lock().unwrap();
         let kek_caches = &mut *guard;
-        let kms_connection_config = kms_connection_config.read().unwrap();
-        let key = KekCacheKey::new(kms_connection_config.key_access_token().to_owned());
+        let key = KekCacheKey::new(kms_connection_config.key_access_token().clone());
         let entry = kek_caches.entry(key);
         match entry {
             Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {

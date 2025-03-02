@@ -18,7 +18,7 @@
 use crate::errors::Result;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 /// API for interacting with a KMS.
 /// This should be implemented by user code for integration with your KMS.
@@ -34,11 +34,11 @@ pub trait KmsClient: Send + Sync {
 pub type KmsClientRef = Arc<dyn KmsClient>;
 
 /// Holds configuration options required to connect to a KMS
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct KmsConnectionConfig {
     kms_instance_url: String,
     kms_instance_id: String,
-    key_access_token: String,
+    key_access_token: RwLock<String>,
     custom_kms_conf: HashMap<String, String>,
 }
 
@@ -55,8 +55,13 @@ impl KmsConnectionConfig {
     }
 
     /// The authorization token to pass to the KMS.
-    pub fn key_access_token(&self) -> &str {
-        &self.key_access_token
+    pub fn key_access_token(&self) -> String {
+        self.key_access_token.read().unwrap().clone()
+    }
+
+    /// Return the key access token inside a read lock.
+    pub fn read_key_access_token(&self) -> RwLockReadGuard<String> {
+        self.key_access_token.read().unwrap()
     }
 
     /// Any KMS specific configuration options
@@ -65,8 +70,9 @@ impl KmsConnectionConfig {
     }
 
     /// Update the authorization token to be passed to the KMS.
-    pub fn refresh_key_access_token(&mut self, key_access_token: String) {
-        self.key_access_token = key_access_token;
+    pub fn refresh_key_access_token(&self, key_access_token: String) {
+        let mut token = self.key_access_token.write().unwrap();
+        *token = key_access_token;
     }
 }
 
@@ -100,7 +106,7 @@ impl KmsConnectionConfigBuilder {
         KmsConnectionConfig {
             kms_instance_id: self.kms_instance_id,
             kms_instance_url: self.kms_instance_url,
-            key_access_token: self.key_access_token,
+            key_access_token: RwLock::new(self.key_access_token),
             custom_kms_conf: self.custom_kms_conf,
         }
     }

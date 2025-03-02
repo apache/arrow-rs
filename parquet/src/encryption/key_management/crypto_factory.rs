@@ -23,7 +23,7 @@ use crate::encryption::key_management::kms_manager::KmsManager;
 use crate::errors::{ParquetError, Result};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Parquet encryption algorithms
@@ -286,7 +286,7 @@ impl CryptoFactory {
     /// Create file decryption properties for a Parquet file
     pub fn file_decryption_properties(
         &self,
-        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: Arc<KmsConnectionConfig>,
         decryption_configuration: DecryptionConfiguration,
     ) -> Result<FileDecryptionProperties> {
         let key_retriever = Arc::new(KeyUnwrapper::new(
@@ -299,7 +299,7 @@ impl CryptoFactory {
 
     pub fn file_encryption_properties(
         &self,
-        kms_connection_config: Arc<RwLock<KmsConnectionConfig>>,
+        kms_connection_config: Arc<KmsConnectionConfig>,
         encryption_configuration: &EncryptionConfiguration,
     ) -> Result<FileEncryptionProperties> {
         if !encryption_configuration.internal_key_material {
@@ -370,12 +370,10 @@ mod tests {
     use super::*;
     use crate::encryption::key_management::key_material::KeyMaterialBuilder;
     use crate::encryption::key_management::test_kms::TestKmsClientFactory;
-    use std::sync::RwLock;
-    use crate::encryption::key_management::kms::KmsConnectionConfigBuilder;
 
     #[test]
     fn test_file_decryption_properties() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
+        let kms_config = Arc::new(KmsConnectionConfig::default());
         let config = Default::default();
 
         let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
@@ -407,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_kms_client_caching() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
+        let kms_config = Arc::new(KmsConnectionConfig::default());
         let config = Default::default();
 
         let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
@@ -444,10 +442,7 @@ mod tests {
         // Same client should have been reused
         assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
 
-        {
-            let mut config = kms_config.write().unwrap();
-            config.refresh_key_access_token("super_secret".to_owned());
-        }
+        kms_config.refresh_key_access_token("super_secret".to_owned());
 
         key_retriever
             .retrieve_key(serialized_key_material.as_bytes())
@@ -473,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_uniform_encryption() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
+        let kms_config = Arc::new(KmsConnectionConfig::default());
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(true)
             .build();
@@ -488,7 +483,7 @@ mod tests {
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
+        let kms_config = Arc::new(KmsConnectionConfig::default());
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(double_wrapping)
             .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])
