@@ -86,7 +86,6 @@ impl BlockDecoder {
                                 "Block count cannot be negative, got {c}"
                             ))
                         })?;
-
                         self.state = BlockDecoderState::Size;
                     }
                 }
@@ -114,15 +113,18 @@ impl BlockDecoder {
                 }
                 BlockDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.in_progress.sync[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    let start = 16 - self.bytes_remaining;
+                    let end = start + to_decode;
+                    self.in_progress.sync[start..end].copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
                         self.state = BlockDecoderState::Finished;
                     }
                 }
-                BlockDecoderState::Finished => return Ok(max_read - buf.len()),
+                BlockDecoderState::Finished => {
+                    return Ok(max_read - buf.len());
+                }
             }
         }
         Ok(max_read)
