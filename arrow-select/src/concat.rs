@@ -37,7 +37,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -223,8 +223,29 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
+        // Get all the unique data types
+        let input_data_types = {
+            let unique = arrays
+                .iter()
+                .map(|array| array.data_type())
+                .collect::<HashSet<&DataType>>();
+
+            // Allow unused mut as we need it for tests
+            #[allow(unused_mut)]
+            let mut names = unique
+                .into_iter()
+                .map(|dt| format!("{dt}"))
+                .collect::<Vec<_>>();
+
+            // Only sort in tests to make the error message is deterministic
+            #[cfg(test)]
+            names.sort();
+
+            names.join(", ")
+        };
+
         return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to concatenate arrays of different data types.".to_string(),
+            format!("It is not possible to concatenate arrays of different data types ({input_data_types})."),
         ));
     }
 
@@ -340,9 +361,14 @@ mod tests {
     fn test_concat_incompatible_datatypes() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
             &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
-        assert!(re.is_err());
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Int64, Utf8).");
     }
 
     #[test]
@@ -924,7 +950,7 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types.");
+        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
     }
 
     #[test]
