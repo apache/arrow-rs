@@ -232,7 +232,7 @@ impl WriterProperties {
         self.max_row_group_size
     }
 
-    /// Returns maximum number of rows in a row group.
+    /// Returns bloom filter position.
     pub fn bloom_filter_position(&self) -> BloomFilterPosition {
         self.bloom_filter_position
     }
