@@ -33,3 +33,6 @@ parquet = { workspace = true }
 parquet_derive = { path = "../parquet_derive", default-features = false }
 chrono = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
+
+[package.metadata.docs.rs]
+all-features = true
