@@ -371,10 +371,11 @@ mod tests {
     use crate::encryption::key_management::key_material::KeyMaterialBuilder;
     use crate::encryption::key_management::test_kms::TestKmsClientFactory;
     use std::sync::RwLock;
+    use crate::encryption::key_management::kms::KmsConnectionConfigBuilder;
 
     #[test]
     fn test_file_decryption_properties() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
         let config = Default::default();
 
         let crypto_factory = CryptoFactory::new(TestKmsClientFactory::with_default_keys());
@@ -406,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_kms_client_caching() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
         let config = Default::default();
 
         let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
@@ -472,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_uniform_encryption() {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(true)
             .build();
@@ -487,7 +488,7 @@ mod tests {
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
-        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::new()));
+        let kms_config = Arc::new(RwLock::new(KmsConnectionConfig::default()));
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(double_wrapping)
             .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])

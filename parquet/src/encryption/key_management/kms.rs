@@ -34,7 +34,7 @@ pub trait KmsClient: Send + Sync {
 pub type KmsClientRef = Arc<dyn KmsClient>;
 
 /// Holds configuration options required to connect to a KMS
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct KmsConnectionConfig {
     kms_instance_url: String,
     kms_instance_id: String,
@@ -43,19 +43,10 @@ pub struct KmsConnectionConfig {
 }
 
 impl KmsConnectionConfig {
-    pub fn new() -> Self {
-        Self {
-            kms_instance_id: "".to_string(),
-            kms_instance_url: "".to_string(),
-            key_access_token: "DEFAULT".to_string(),
-            custom_kms_conf: Default::default(),
-        }
-    }
-
     /// ID of the KMS instance to use for encryption,
     /// if multiple instances are available.
     pub fn kms_instance_id(&self) -> &str {
-        &self.kms_instance_url
+        &self.kms_instance_id
     }
 
     /// URL of the KMS instance to use for encryption.
@@ -81,7 +72,7 @@ impl KmsConnectionConfig {
 
 impl Default for KmsConnectionConfig {
     fn default() -> Self {
-        Self::new()
+        KmsConnectionConfigBuilder::new().build()
     }
 }
 
@@ -99,7 +90,7 @@ impl KmsConnectionConfigBuilder {
         Self {
             kms_instance_id: "".to_string(),
             kms_instance_url: "".to_string(),
-            key_access_token: "".to_string(),
+            key_access_token: "DEFAULT".to_string(),
             custom_kms_conf: Default::default(),
         }
     }
