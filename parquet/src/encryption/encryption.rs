@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use ring::rand::{SecureRandom, SystemRandom};
 use thrift::protocol::TCompactOutputProtocol;
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::Result;
@@ -47,7 +48,10 @@ pub struct FileEncryptionProperties {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
     column_keys: HashMap<Vec<u8>, EncryptionKey>,
-    pub(crate) aad_prefix: Option<Vec<u8>>,
+    aad_prefix: Option<Vec<u8>>,
+    aad_file_unique: Vec<u8>,
+    file_aad: Vec<u8>,
+    store_aad_prefix: bool,
 }
 
 impl FileEncryptionProperties {
@@ -58,6 +62,10 @@ impl FileEncryptionProperties {
     pub fn encrypt_footer(&self) -> bool {
         self.encrypt_footer
     }
+
+    pub fn file_aad(&self) -> &[u8] {
+        &self.file_aad
+    }
 }
 
 pub struct EncryptionPropertiesBuilder {
@@ -65,6 +73,7 @@ pub struct EncryptionPropertiesBuilder {
     column_keys: HashMap<Vec<u8>, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     encrypt_footer: bool,
+    store_aad_prefix: bool,
 }
 
 impl EncryptionPropertiesBuilder {
@@ -74,6 +83,7 @@ impl EncryptionPropertiesBuilder {
             column_keys: HashMap::default(),
             aad_prefix: None,
             encrypt_footer: true,
+            store_aad_prefix: true,
         }
     }
 
@@ -87,29 +97,45 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
+    pub fn with_aad_prefix_storage(mut self, store_aad_prefix: bool) -> Self {
+        self.store_aad_prefix = store_aad_prefix;
+        self
+    }
+
     pub fn build(self) -> Result<FileEncryptionProperties> {
+        // Generate unique AAD for file
+        let rng = SystemRandom::new();
+        let mut aad_file_unique = vec![0u8; 8];
+        rng.fill(&mut aad_file_unique)?;
+
+        let file_aad = match self.aad_prefix.as_ref() {
+            None => aad_file_unique.clone(),
+            Some(aad_prefix) => [aad_prefix.clone(), aad_file_unique.clone()].concat(),
+        };
+
         Ok(FileEncryptionProperties {
             encrypt_footer: self.encrypt_footer,
             footer_key: self.footer_key,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
+            aad_file_unique,
+            file_aad,
+            store_aad_prefix: self.store_aad_prefix,
         })
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct FileEncryptor {
-    file_encryption_properties: FileEncryptionProperties,
-    file_aad: Vec<u8>,
+pub struct FileEncryptor<'a> {
+    file_encryption_properties: &'a FileEncryptionProperties,
 }
 
-impl FileEncryptor {
+impl<'a> FileEncryptor<'a> {
     pub(crate) fn new(
-        file_encryption_properties: FileEncryptionProperties, file_aad: Option<Vec<u8>>,
+        file_encryption_properties: &'a FileEncryptionProperties,
     ) -> Self {
         Self {
-            file_encryption_properties: file_encryption_properties,
-            file_aad: file_aad.unwrap_or_default(),
+            file_encryption_properties,
         }
     }
 
@@ -139,16 +165,10 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
         object.write_to_out_protocol(&mut unencrypted_protocol)?;
     }
 
-    // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
-    let aad_prefix = file_encryption_properties
-        .aad_prefix
-        .clone()
-        .unwrap_or(Vec::new());
-    let encryptor =
-        FileEncryptor::new(file_encryption_properties.clone(), Some(aad_prefix.clone()));
+    let encryptor = FileEncryptor::new(file_encryption_properties);
     let encrypted_buffer = encryptor
         .get_footer_encryptor()
-        .encrypt(buffer.as_ref(), aad_prefix.as_slice());
+        .encrypt(buffer.as_ref(), file_encryption_properties.file_aad());
 
     sink.write_all(encrypted_buffer.as_ref())?;
     Ok(())
