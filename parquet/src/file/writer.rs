@@ -176,16 +176,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
-        #[cfg(feature = "encryption")]
-        let file_encryptor = if properties.file_encryption_properties.is_some() {
-            let file_aad = properties.file_aad.clone();
-            Some(FileEncryptor::new(
-                properties.file_encryption_properties.clone().unwrap(),
-                file_aad,
-            ))
-        } else {
-            None
-        };
 
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
@@ -793,20 +783,15 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
         #[cfg(feature = "encryption")]
-        if self.file_encryption_properties.is_some() {
+        if let Some(file_encryption_properties) = self.file_encryption_properties.as_ref() {
             // todo: encrypt page data with encrypt_object
+            // todo: compute correct aad
+            let aad = file_encryption_properties.file_aad();
             let mut buffer: Vec<u8> = vec![];
-            let file_encryption_properties = self.file_encryption_properties.clone().unwrap();
-            // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
-            let aad_prefix = file_encryption_properties
-                .aad_prefix
-                .clone()
-                .unwrap_or(Vec::new());
-            let encryptor =
-                FileEncryptor::new(file_encryption_properties, Some(aad_prefix.clone()));
+            let encryptor = FileEncryptor::new(file_encryption_properties);
             let encrypted_buffer = encryptor
                 .get_footer_encryptor()
-                .encrypt(buffer.as_slice(), aad_prefix.as_slice());
+                .encrypt(buffer.as_slice(), aad);
             self.sink.write_all(encrypted_buffer.as_slice())?;
         } else {
             self.sink.write_all(page.data())?;
