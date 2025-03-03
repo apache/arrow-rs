@@ -16,7 +16,11 @@
 // under the License.
 
 use std::collections::HashMap;
-use crate::encryption::ciphers::RingGcmBlockEncryptor;
+use std::io::Write;
+use thrift::protocol::TCompactOutputProtocol;
+use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
+use crate::file::writer::TrackedWrite;
+use crate::thrift::TSerializable;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileEncryptionProperties {
@@ -68,7 +72,7 @@ impl FileEncryptor {
         file_encryption_properties: FileEncryptionProperties, file_aad: Option<Vec<u8>>,
     ) -> Self {
         Self {
-            file_encryption_properties,
+            file_encryption_properties: file_encryption_properties,
             file_aad: file_aad.unwrap_or_default(),
         }
     }
@@ -84,4 +88,32 @@ impl FileEncryptor {
     pub(crate) fn get_footer_encryptor(&self) -> RingGcmBlockEncryptor {
         RingGcmBlockEncryptor::new(&self.file_encryption_properties.footer_key.clone())
     }
+}
+
+pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
+    object: T,
+    file_encryption_properties: &FileEncryptionProperties,
+    sink: &mut TrackedWrite<W>,
+) -> Result<(), crate::errors::ParquetError> {
+    // todo: encrypt
+    let mut buffer: Vec<u8> = vec![];
+    {
+        let mut sink = TrackedWrite::new(&mut buffer);
+        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut sink);
+        object.write_to_out_protocol(&mut unencrypted_protocol)?;
+    }
+
+    // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
+    let aad_prefix = file_encryption_properties
+        .aad_prefix
+        .clone()
+        .unwrap_or(Vec::new());
+    let encryptor =
+        FileEncryptor::new(file_encryption_properties.clone(), Some(aad_prefix.clone()));
+    let encrypted_buffer = encryptor
+        .get_footer_encryptor()
+        .encrypt(buffer.as_ref(), aad_prefix.as_slice());
+
+    sink.write_all(encrypted_buffer.as_ref())?;
+    Ok(())
 }
