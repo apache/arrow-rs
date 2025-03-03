@@ -36,6 +36,7 @@ use crate::column::{
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
 use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties, FileEncryptor};
+use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -758,11 +759,18 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        if self.file_encryption_properties.is_some() {
+        if let Some(file_encryption_properties) = self.file_encryption_properties.as_ref() {
+            // TODO: Compute correct AAD
+            let aad = create_module_aad(
+                file_encryption_properties.file_aad(),
+                ModuleType::DataPageHeader,
+                0, 0, None
+                )?;
             encrypt_object(
                 header,
-                &self.file_encryption_properties.as_ref().unwrap(),
+                file_encryption_properties,
                 &mut self.sink,
+                &aad
             )?;
         } else {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);

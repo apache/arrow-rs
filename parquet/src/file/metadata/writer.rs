@@ -64,6 +64,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                             offset_index.clone(),
                             self.file_encryption_properties.unwrap(),
                             &mut self.buf,
+                            self.file_encryption_properties.unwrap().file_aad(),
                         )?;
                     } else {
                         let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
@@ -98,6 +99,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                             column_index.clone(),
                             self.file_encryption_properties.unwrap(),
                             &mut self.buf,
+                            self.file_encryption_properties.unwrap().file_aad(),
                         )?;
                     } else {
                         let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
@@ -157,6 +159,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                 file_metadata.clone(),
                 &self.file_encryption_properties.unwrap(),
                 &mut self.buf,
+                self.file_encryption_properties.unwrap().file_aad(),
             )?;
         } else {
             let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
