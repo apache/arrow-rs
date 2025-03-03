@@ -15,18 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "encryption")]
 use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties};
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
-use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
+use crate::format::{AesGcmV1, ColumnIndex, EncryptionAlgorithm, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
+use crate::encryption::modules::create_footer_aad;
 
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
@@ -41,7 +43,10 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
     writer_version: i32,
+    #[cfg(feature = "encryption")]
     file_encryption_properties: Option<&'a FileEncryptionProperties>,
+    #[cfg(not(feature = "encryption"))]
+    file_encryption_properties: DisabledFileEncryptionProperties,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -154,16 +159,27 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // Write file metadata
         let start_pos = self.buf.bytes_written();
-        if self.file_encryption_properties.is_some() {
-            encrypt_object(
-                file_metadata.clone(),
-                &self.file_encryption_properties.unwrap(),
-                &mut self.buf,
-                self.file_encryption_properties.unwrap().file_aad(),
-            )?;
-        } else {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-            file_metadata.write_to_out_protocol(&mut protocol)?;
+        match self.file_encryption_properties {
+            #[cfg(feature = "encryption")]
+            Some(file_encryption_properties) if file_encryption_properties.encrypt_footer() => {
+                // First write FileCryptoMetadata
+                let crypto_metadata = Self::file_crypto_metadata(file_encryption_properties)?;
+                let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                crypto_metadata.write_to_out_protocol(&mut protocol)?;
+
+                // Then write encrypted footer
+                let aad = create_footer_aad(file_encryption_properties.file_aad())?;
+                encrypt_object(
+                    file_metadata.clone(),
+                    file_encryption_properties,
+                    &mut self.buf,
+                    &aad,
+                )?;
+            },
+            _ =>  {
+                let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                file_metadata.write_to_out_protocol(&mut protocol)?;
+            }
         }
 
         let end_pos = self.buf.bytes_written();
@@ -199,8 +215,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             key_value_metadata: None,
             created_by,
             writer_version,
-            #[cfg(feature = "encryption")]
-            file_encryption_properties: None,
+            file_encryption_properties: Default::default(),
         }
     }
 
@@ -225,6 +240,24 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     ) -> Self {
         self.file_encryption_properties = file_encryption_properties;
         self
+    }
+
+    #[cfg(feature = "encryption")]
+    fn file_crypto_metadata(file_encryption_properties: &FileEncryptionProperties) -> Result<crate::format::FileCryptoMetaData> {
+        let supply_aad_prefix = match file_encryption_properties.aad_prefix() {
+            Some(_) => Some(!file_encryption_properties.store_aad_prefix()),
+            None => None,
+        };
+        let encryption_algorithm = AesGcmV1 {
+            aad_prefix: file_encryption_properties.aad_prefix().cloned(),
+            aad_file_unique: Some(file_encryption_properties.aad_file_unique().clone()),
+            supply_aad_prefix,
+        };
+
+        Ok(crate::format::FileCryptoMetaData {
+            encryption_algorithm: EncryptionAlgorithm::AESGCMV1(encryption_algorithm),
+            key_metadata: file_encryption_properties.footer_key_metadata().cloned()
+        })
     }
 }
 
@@ -421,4 +454,11 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                 .collect()
         }
     }
+}
+
+// Empty type to make matching on encryption properties more ergonomic
+struct DisabledFileEncryptionProperties {}
+
+impl Default for DisabledFileEncryptionProperties {
+    fn default() -> Self { Self {} }
 }
