@@ -34,6 +34,10 @@ impl FileEncryptionProperties {
     pub fn builder(footer_key: Vec<u8>) -> EncryptionPropertiesBuilder {
         EncryptionPropertiesBuilder::new(footer_key)
     }
+
+    pub fn encrypt_footer(&self) -> bool {
+        self.encrypt_footer
+    }
 }
 
 pub struct EncryptionPropertiesBuilder {

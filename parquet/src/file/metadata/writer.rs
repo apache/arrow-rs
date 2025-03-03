@@ -19,8 +19,7 @@ use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties};
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
-use crate::file::writer::TrackedWrite;
-use crate::file::PARQUET_MAGIC;
+use crate::file::writer::{get_file_magic, TrackedWrite};
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
@@ -170,7 +169,12 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let metadata_len = (end_pos - start_pos) as u32;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
-        self.buf.write_all(&PARQUET_MAGIC)?;
+        #[cfg(feature = "encryption")]
+        let magic = get_file_magic(self.file_encryption_properties);
+        #[cfg(not(feature = "encryption"))]
+        let magic = get_file_magic();
+        self.buf.write_all(magic)?;
+
         Ok(file_metadata)
     }
 
