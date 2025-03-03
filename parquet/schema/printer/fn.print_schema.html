@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Prints Parquet `Type` information."><title>print_schema in parquet::schema::printer - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../../../static.files/storage-d8ac8691.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../parquet/index.html">parquet</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">print_<wbr>schema</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet::<wbr>schema::<wbr>printer</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">parquet</a>::<wbr><a href="../index.html">schema</a>::<wbr><a href="index.html">printer</a></div><h1>Function <span class="fn">print_schema</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/parquet/schema/printer.rs.html#144-153">Source</a> </span></div><pre class="rust item-decl"><code>pub fn print_schema(out: &amp;mut dyn <a class="trait" href="https://doc.rust-lang.org/nightly/std/io/trait.Write.html" title="trait std::io::Write">Write</a>, tp: &amp;<a class="enum" href="../types/enum.Type.html" title="enum parquet::schema::types::Type">Type</a>)</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Prints Parquet <a href="../types/enum.Type.html" title="enum parquet::schema::types::Type"><code>Type</code></a> information.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>parquet::{
+    basic::{ConvertedType, Repetition, Type <span class="kw">as </span>PhysicalType},
+    schema::{printer::print_schema, types::Type},
+};
+<span class="kw">use </span>std::sync::Arc;
+
+<span class="kw">let </span>field_a = Type::primitive_type_builder(<span class="string">"a"</span>, PhysicalType::BYTE_ARRAY)
+    .with_id(<span class="prelude-val">Some</span>(<span class="number">42</span>))
+    .with_converted_type(ConvertedType::UTF8)
+    .build()
+    .unwrap();
+
+<span class="kw">let </span>field_b = Type::primitive_type_builder(<span class="string">"b"</span>, PhysicalType::INT32)
+    .with_repetition(Repetition::REQUIRED)
+    .build()
+    .unwrap();
+
+<span class="kw">let </span>field_d = Type::primitive_type_builder(<span class="string">"d"</span>, PhysicalType::INT64)
+    .with_id(<span class="prelude-val">Some</span>(<span class="number">99</span>))
+    .build()
+    .unwrap();
+
+<span class="kw">let </span>field_c = Type::group_type_builder(<span class="string">"c"</span>)
+    .with_id(<span class="prelude-val">Some</span>(<span class="number">43</span>))
+    .with_fields(<span class="macro">vec!</span>[Arc::new(field_d)])
+    .build()
+    .unwrap();
+
+<span class="kw">let </span>schema = Type::group_type_builder(<span class="string">"schema"</span>)
+    .with_fields(<span class="macro">vec!</span>[Arc::new(field_a), Arc::new(field_b), Arc::new(field_c)])
+    .build()
+    .unwrap();
+
+print_schema(<span class="kw-2">&amp;mut </span>std::io::stdout(), <span class="kw-2">&amp;</span>schema);</code></pre></div>
+<p>outputs</p>
+<div class="example-wrap"><pre class="language-text"><code>message schema {
+  OPTIONAL BYTE_ARRAY a [42] (UTF8);
+  REQUIRED INT32 b;
+  message c [43] {
+    OPTIONAL INT64 d [99];
+  }
+}</code></pre></div></div></details></section></div></main></body></html>

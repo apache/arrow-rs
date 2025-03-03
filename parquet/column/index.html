@@ -1,0 +1,82 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Low level column reader and writer APIs."><title>parquet::column - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-d8ac8691.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../parquet/index.html">parquet</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module column</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example-of-writing-and-reading-data" title="Example of writing and reading data">Example of writing and reading data</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate parquet</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet</a></div><h1>Module <span>column</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet/column/mod.rs.html#18-122">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Low level column reader and writer APIs.</p>
+<p>This API is designed for reading and writing column values, definition and repetition
+levels directly.</p>
+<h2 id="example-of-writing-and-reading-data"><a class="doc-anchor" href="#example-of-writing-and-reading-data">§</a>Example of writing and reading data</h2>
+<p>Data has the following format:</p>
+<div class="example-wrap"><pre class="language-text"><code>+---------------+
+|         values|
++---------------+
+|[1, 2]         |
+|[3, null, null]|
++---------------+</code></pre></div>
+<p>The example uses column writer and reader APIs to write raw values, definition and
+repetition levels and read them to verify write/read correctness.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">let </span>path = Path::new(<span class="string">"/path/to/column_sample.parquet"</span>);
+
+<span class="comment">// Writing data using column writer API.
+
+</span><span class="kw">let </span>message_type = <span class="string">"
+  message schema {
+    optional group values (LIST) {
+      repeated group list {
+        optional INT32 element;
+      }
+    }
+  }
+"</span>;
+<span class="kw">let </span>schema = Arc::new(parse_message_type(message_type).unwrap());
+<span class="kw">let </span>file = fs::File::create(path).unwrap();
+<span class="kw">let </span><span class="kw-2">mut </span>writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
+
+<span class="kw">let </span><span class="kw-2">mut </span>row_group_writer = writer.next_row_group().unwrap();
+<span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>col_writer) = row_group_writer.next_column().unwrap() {
+    col_writer
+        .typed::&lt;Int32Type&gt;()
+        .write_batch(<span class="kw-2">&amp;</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>], <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>[<span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">2</span>]), <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">0</span>, <span class="number">1</span>, <span class="number">1</span>]))
+        .unwrap();
+    col_writer.close().unwrap();
+}
+row_group_writer.close().unwrap();
+
+writer.close().unwrap();
+
+<span class="comment">// Reading data using column reader API.
+
+</span><span class="kw">let </span>file = fs::File::open(path).unwrap();
+<span class="kw">let </span>reader = SerializedFileReader::new(file).unwrap();
+<span class="kw">let </span>metadata = reader.metadata();
+
+<span class="kw">let </span><span class="kw-2">mut </span>values = <span class="macro">vec!</span>[];
+<span class="kw">let </span><span class="kw-2">mut </span>def_levels = <span class="macro">vec!</span>[];
+<span class="kw">let </span><span class="kw-2">mut </span>rep_levels = <span class="macro">vec!</span>[];
+
+<span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..metadata.num_row_groups() {
+    <span class="kw">let </span>row_group_reader = reader.get_row_group(i).unwrap();
+    <span class="kw">let </span>row_group_metadata = metadata.row_group(i);
+
+    <span class="kw">for </span>j <span class="kw">in </span><span class="number">0</span>..row_group_metadata.num_columns() {
+        <span class="kw">let </span><span class="kw-2">mut </span>column_reader = row_group_reader.get_column_reader(j).unwrap();
+        <span class="kw">match </span>column_reader {
+            <span class="comment">// You can also use `get_typed_column_reader` method to extract typed reader.
+            </span>ColumnReader::Int32ColumnReader(<span class="kw-2">ref mut </span>typed_reader) =&gt; {
+                <span class="kw">let </span>(records, values, levels) = typed_reader.read_records(
+                    <span class="number">8</span>, <span class="comment">// maximum records to read
+                    </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span>def_levels),
+                    <span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span>rep_levels),
+                    <span class="kw-2">&amp;mut </span>values,
+                ).unwrap();
+                <span class="macro">assert_eq!</span>(records, <span class="number">2</span>);
+                <span class="macro">assert_eq!</span>(levels, <span class="number">5</span>);
+                <span class="macro">assert_eq!</span>(values, <span class="number">3</span>);
+            }
+            <span class="kw">_ </span>=&gt; {}
+        }
+    }
+}
+
+<span class="macro">assert_eq!</span>(values, <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<span class="macro">assert_eq!</span>(def_levels, <span class="macro">vec!</span>[<span class="number">3</span>, <span class="number">3</span>, <span class="number">3</span>, <span class="number">2</span>, <span class="number">2</span>]);
+<span class="macro">assert_eq!</span>(rep_levels, <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">0</span>, <span class="number">1</span>, <span class="number">1</span>]);</code></pre></div>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="page/index.html" title="mod parquet::column::page">page</a></dt><dd>Contains Parquet Page definitions and page reader interface.</dd><dt><a class="mod" href="reader/index.html" title="mod parquet::column::reader">reader</a></dt><dd>Contains column reader API.</dd><dt><a class="mod" href="writer/index.html" title="mod parquet::column::writer">writer</a></dt><dd>Contains column writer API.</dd></dl></section></div></main></body></html>

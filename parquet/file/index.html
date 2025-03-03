@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="APIs for reading parquet data."><title>parquet::file - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-d8ac8691.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../parquet/index.html">parquet</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module file</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#see-also" title="See Also:">See Also:</a></li><li><a href="#example-of-writing-a-new-file" title="Example of writing a new file">Example of writing a new file</a></li><li><a href="#example-of-reading-an-existing-file" title="Example of reading an existing file">Example of reading an existing file</a></li><li><a href="#example-of-reading-multiple-files" title="Example of reading multiple files">Example of reading multiple files</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate parquet</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet</a></div><h1>Module <span>file</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet/file/mod.rs.html#18-112">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>APIs for reading parquet data.</p>
+<p>Provides access to file and row group readers and writers, record API, metadata, etc.</p>
+<h2 id="see-also"><a class="doc-anchor" href="#see-also">§</a>See Also:</h2>
+<ul>
+<li><a href="serialized_reader/struct.SerializedFileReader.html" title="struct parquet::file::serialized_reader::SerializedFileReader"><code>SerializedFileReader</code></a> and <a href="writer/struct.SerializedFileWriter.html" title="struct parquet::file::writer::SerializedFileWriter"><code>SerializedFileWriter</code></a> for reading / writing parquet</li>
+<li><a href="metadata/index.html" title="mod parquet::file::metadata"><code>metadata</code></a>: for working with metadata such as schema</li>
+<li><a href="statistics/index.html" title="mod parquet::file::statistics"><code>statistics</code></a>: for working with statistics in metadata</li>
+</ul>
+<h2 id="example-of-writing-a-new-file"><a class="doc-anchor" href="#example-of-writing-a-new-file">§</a>Example of writing a new file</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::{fs, path::Path, sync::Arc};
+
+<span class="kw">use </span>parquet::{
+    file::{
+        properties::WriterProperties,
+        writer::SerializedFileWriter,
+    },
+    schema::parser::parse_message_type,
+};
+
+<span class="kw">let </span>path = Path::new(<span class="string">"/path/to/sample.parquet"</span>);
+
+<span class="kw">let </span>message_type = <span class="string">"
+  message schema {
+    REQUIRED INT32 b;
+  }
+"</span>;
+<span class="kw">let </span>schema = Arc::new(parse_message_type(message_type).unwrap());
+<span class="kw">let </span>file = fs::File::create(<span class="kw-2">&amp;</span>path).unwrap();
+<span class="kw">let </span><span class="kw-2">mut </span>writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
+<span class="kw">let </span><span class="kw-2">mut </span>row_group_writer = writer.next_row_group().unwrap();
+<span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>col_writer) = row_group_writer.next_column().unwrap() {
+    <span class="comment">// ... write values to a column writer
+    </span>col_writer.close().unwrap()
+}
+row_group_writer.close().unwrap();
+writer.close().unwrap();
+
+<span class="kw">let </span>bytes = fs::read(<span class="kw-2">&amp;</span>path).unwrap();
+<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>bytes[<span class="number">0</span>..<span class="number">4</span>], <span class="kw-2">&amp;</span>[<span class="string">b'P'</span>, <span class="string">b'A'</span>, <span class="string">b'R'</span>, <span class="string">b'1'</span>]);</code></pre></div>
+<h2 id="example-of-reading-an-existing-file"><a class="doc-anchor" href="#example-of-reading-an-existing-file">§</a>Example of reading an existing file</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>parquet::file::reader::{FileReader, SerializedFileReader};
+<span class="kw">use </span>std::{fs::File, path::Path};
+
+<span class="kw">let </span>path = Path::new(<span class="string">"/path/to/sample.parquet"</span>);
+<span class="kw">if let </span><span class="prelude-val">Ok</span>(file) = File::open(<span class="kw-2">&amp;</span>path) {
+    <span class="kw">let </span>reader = SerializedFileReader::new(file).unwrap();
+
+    <span class="kw">let </span>parquet_metadata = reader.metadata();
+    <span class="macro">assert_eq!</span>(parquet_metadata.num_row_groups(), <span class="number">1</span>);
+
+    <span class="kw">let </span>row_group_reader = reader.get_row_group(<span class="number">0</span>).unwrap();
+    <span class="macro">assert_eq!</span>(row_group_reader.num_columns(), <span class="number">1</span>);
+}</code></pre></div>
+<h2 id="example-of-reading-multiple-files"><a class="doc-anchor" href="#example-of-reading-multiple-files">§</a>Example of reading multiple files</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>parquet::file::reader::SerializedFileReader;
+<span class="kw">use </span>std::convert::TryFrom;
+
+<span class="kw">let </span>paths = <span class="macro">vec!</span>[
+    <span class="string">"/path/to/sample.parquet/part-1.snappy.parquet"</span>,
+    <span class="string">"/path/to/sample.parquet/part-2.snappy.parquet"
+</span>];
+<span class="comment">// Create a reader for each file and flat map rows
+</span><span class="kw">let </span>rows = paths.iter()
+    .map(|p| SerializedFileReader::try_from(<span class="kw-2">*</span>p).unwrap())
+    .flat_map(|r| r.into_iter());
+
+<span class="kw">for </span>row <span class="kw">in </span>rows {
+    <span class="macro">println!</span>(<span class="string">"{}"</span>, row.unwrap());
+}</code></pre></div>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="footer/index.html" title="mod parquet::file::footer">footer</a></dt><dd>Module for working with Parquet file footers.</dd><dt><a class="mod" href="metadata/index.html" title="mod parquet::file::metadata">metadata</a></dt><dd>Parquet metadata API</dd><dt><a class="mod" href="page_encoding_stats/index.html" title="mod parquet::file::page_encoding_stats">page_<wbr>encoding_<wbr>stats</a></dt><dd>Per-page encoding information.</dd><dt><a class="mod" href="page_index/index.html" title="mod parquet::file::page_index">page_<wbr>index</a></dt><dd>Page Index of “<a href="https://github.com/apache/parquet-format/blob/master/PageIndex.md">Column Index</a> Layout to Support Page Skipping”</dd><dt><a class="mod" href="properties/index.html" title="mod parquet::file::properties">properties</a></dt><dd>Configuration via <a href="properties/struct.WriterProperties.html" title="struct parquet::file::properties::WriterProperties"><code>WriterProperties</code></a> and <a href="properties/struct.ReaderProperties.html" title="struct parquet::file::properties::ReaderProperties"><code>ReaderProperties</code></a></dd><dt><a class="mod" href="reader/index.html" title="mod parquet::file::reader">reader</a></dt><dd>File reader API and methods to access file metadata, row group
+readers to read individual column chunks, or access record
+iterator.</dd><dt><a class="mod" href="serialized_reader/index.html" title="mod parquet::file::serialized_reader">serialized_<wbr>reader</a></dt><dd>Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
+Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)</dd><dt><a class="mod" href="statistics/index.html" title="mod parquet::file::statistics">statistics</a></dt><dd>Contains definitions for working with Parquet statistics.</dd><dt><a class="mod" href="writer/index.html" title="mod parquet::file::writer">writer</a></dt><dd>Contains file writer API, and provides methods to write row groups and columns by
+using row group writers and column writers respectively.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.FOOTER_SIZE.html" title="constant parquet::file::FOOTER_SIZE">FOOTER_<wbr>SIZE</a></dt><dd>The length of the parquet footer in bytes</dd><dt><a class="constant" href="constant.PARQUET_MAGIC.html" title="constant parquet::file::PARQUET_MAGIC">PARQUET_<wbr>MAGIC</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

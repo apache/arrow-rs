@@ -1,0 +1,95 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Binary file to converts csv to Parquet file"><title>parquet_fromcsv - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="parquet_fromcsv" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../static.files/storage-d8ac8691.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../parquet_fromcsv/index.html">parquet_<wbr>fromcsv</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#install" title="Install">Install</a></li><li><a href="#options" title="Options">Options</a><ul><li><a href="#parquet-file-options" title="Parquet file options">Parquet file options</a></li><li><a href="#input-file-options" title="Input file options">Input file options</a></li></ul></li></ul><h3><a href="#structs">Crate Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>parquet_fromcsv</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/parquet_fromcsv/parquet-fromcsv.rs.html#18-749">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Binary file to converts csv to Parquet file</p>
+<h2 id="install"><a class="doc-anchor" href="#install">§</a>Install</h2>
+<p><code>parquet-fromcsv</code> can be installed using <code>cargo</code>:</p>
+<div class="example-wrap"><pre class="language-text"><code>cargo install parquet --features=cli</code></pre></div>
+<p>After this <code>parquet-fromcsv</code> should be available:</p>
+<div class="example-wrap"><pre class="language-text"><code>parquet-fromcsv --schema message_schema_for_parquet.txt input.csv output.parquet</code></pre></div>
+<p>The binary can also be built from the source code and run as follows:</p>
+<div class="example-wrap"><pre class="language-text"><code>cargo run --features=cli --bin parquet-fromcsv --schema message_schema_for_parquet.txt \
+   \ input.csv output.parquet</code></pre></div><h2 id="options"><a class="doc-anchor" href="#options">§</a>Options</h2><div class="example-wrap"><pre class="language-text"><code>Usage: parquet [OPTIONS] --schema &lt;SCHEMA&gt; --input-file &lt;INPUT_FILE&gt; --output-file &lt;OUTPUT_FILE&gt;
+
+Options:
+  -s, --schema &lt;SCHEMA&gt;
+          message schema for output Parquet
+
+  -i, --input-file &lt;INPUT_FILE&gt;
+          input CSV file
+
+  -o, --output-file &lt;OUTPUT_FILE&gt;
+          output Parquet file
+
+  -f, --input-format &lt;INPUT_FORMAT&gt;
+          input file format
+          
+          [default: csv]
+          [possible values: csv, tsv]
+
+  -b, --batch-size &lt;BATCH_SIZE&gt;
+          batch size
+          
+          [env: PARQUET_FROM_CSV_BATCHSIZE=]
+          [default: 1000]
+
+  -h, --has-header
+          has header
+
+  -d, --delimiter &lt;DELIMITER&gt;
+          field delimiter
+          
+          default value: when input_format==CSV: &#39;,&#39; when input_format==TSV: &#39;TAB&#39;
+
+  -r, --record-terminator &lt;RECORD_TERMINATOR&gt;
+          record terminator
+          
+          [possible values: lf, crlf, cr]
+
+  -e, --escape-char &lt;ESCAPE_CHAR&gt;
+          escape character
+
+  -q, --quote-char &lt;QUOTE_CHAR&gt;
+          quote character
+
+  -D, --double-quote &lt;DOUBLE_QUOTE&gt;
+          double quote
+          
+          [possible values: true, false]
+
+  -C, --csv-compression &lt;CSV_COMPRESSION&gt;
+          compression mode of csv
+          
+          [default: UNCOMPRESSED]
+
+  -c, --parquet-compression &lt;PARQUET_COMPRESSION&gt;
+          compression mode of parquet
+          
+          [default: SNAPPY]
+
+  -w, --writer-version &lt;WRITER_VERSION&gt;
+          writer version
+
+  -m, --max-row-group-size &lt;MAX_ROW_GROUP_SIZE&gt;
+          max row group size
+
+      --enable-bloom-filter &lt;ENABLE_BLOOM_FILTER&gt;
+          whether to enable bloom filter writing
+          
+          [possible values: true, false]
+
+      --help
+          display usage help
+
+  -V, --version
+          Print version</code></pre></div><h3 id="parquet-file-options"><a class="doc-anchor" href="#parquet-file-options">§</a>Parquet file options</h3><div class="example-wrap"><pre class="language-text"><code>- `-b`, `--batch-size` : Batch size for Parquet
+- `-c`, `--parquet-compression` : Compression option for Parquet, default is SNAPPY
+- `-s`, `--schema` : Path to message schema for generated Parquet file
+- `-o`, `--output-file` : Path to output Parquet file
+- `-w`, `--writer-version` : Writer version
+- `-m`, `--max-row-group-size` : Max row group size
+-       `--enable-bloom-filter` : Enable bloom filter during writing</code></pre></div><h3 id="input-file-options"><a class="doc-anchor" href="#input-file-options">§</a>Input file options</h3><div class="example-wrap"><pre class="language-text"><code>- `-i`, `--input-file` : Path to input CSV file
+- `-f`, `--input-format` : Dialect for input file, `csv` or `tsv`.
+- `-C`, `--csv-compression` : Compression option for csv, default is UNCOMPRESSED
+- `-d`, `--delimiter : Field delimiter for CSV file, default depends `--input-format`
+- `-e`, `--escape` : Escape character for input file
+- `-h`, `--has-header` : Input has header
+- `-r`, `--record-terminator` : Record terminator character for input. default is CRLF
+- `-q`, `--quote-char` : Input quoting character</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Args.html" title="struct parquet_fromcsv::Args">Args</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.CsvDialect.html" title="enum parquet_fromcsv::CsvDialect">CsvDialect</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="enum" href="enum.ParquetFromCsvError.html" title="enum parquet_fromcsv::ParquetFromCsvError">Parquet<wbr>From<wbr>CsvError</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="enum" href="enum.RecordTerminator.html" title="enum parquet_fromcsv::RecordTerminator">Record<wbr>Terminator</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.compression_from_str.html" title="fn parquet_fromcsv::compression_from_str">compression_<wbr>from_<wbr>str</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.configure_reader_builder.html" title="fn parquet_fromcsv::configure_reader_builder">configure_<wbr>reader_<wbr>builder</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.configure_writer_properties.html" title="fn parquet_fromcsv::configure_writer_properties">configure_<wbr>writer_<wbr>properties</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.convert_csv_to_parquet.html" title="fn parquet_fromcsv::convert_csv_to_parquet">convert_<wbr>csv_<wbr>to_<wbr>parquet</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.main.html" title="fn parquet_fromcsv::main">main</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="fn" href="fn.writer_version_from_str.html" title="fn parquet_fromcsv::writer_version_from_str">writer_<wbr>version_<wbr>from_<wbr>str</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl></section></div></main></body></html>

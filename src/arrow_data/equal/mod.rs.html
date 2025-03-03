@@ -1,0 +1,166 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `arrow-data/src/equal/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="arrow_data" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../../../static.files/storage-d8ac8691.js"></script><script defer src="../../../static.files/src-script-b8d3f215.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">arrow_data/equal/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
+<a href=#2 id=2 data-nosnippet>2</a>// or more contributor license agreements.  See the NOTICE file
+<a href=#3 id=3 data-nosnippet>3</a>// distributed with this work for additional information
+<a href=#4 id=4 data-nosnippet>4</a>// regarding copyright ownership.  The ASF licenses this file
+<a href=#5 id=5 data-nosnippet>5</a>// to you under the Apache License, Version 2.0 (the
+<a href=#6 id=6 data-nosnippet>6</a>// "License"); you may not use this file except in compliance
+<a href=#7 id=7 data-nosnippet>7</a>// with the License.  You may obtain a copy of the License at
+<a href=#8 id=8 data-nosnippet>8</a>//
+<a href=#9 id=9 data-nosnippet>9</a>//   http://www.apache.org/licenses/LICENSE-2.0
+<a href=#10 id=10 data-nosnippet>10</a>//
+<a href=#11 id=11 data-nosnippet>11</a>// Unless required by applicable law or agreed to in writing,
+<a href=#12 id=12 data-nosnippet>12</a>// software distributed under the License is distributed on an
+<a href=#13 id=13 data-nosnippet>13</a>// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+<a href=#14 id=14 data-nosnippet>14</a>// KIND, either express or implied.  See the License for the
+<a href=#15 id=15 data-nosnippet>15</a>// specific language governing permissions and limitations
+<a href=#16 id=16 data-nosnippet>16</a>// under the License.
+<a href=#17 id=17 data-nosnippet>17</a>
+<a href=#18 id=18 data-nosnippet>18</a></span><span class="doccomment">//! Module containing functionality to compute array equality.
+<a href=#19 id=19 data-nosnippet>19</a>//! This module uses [ArrayData] and does not
+<a href=#20 id=20 data-nosnippet>20</a>//! depend on dynamic casting of `Array`.
+<a href=#21 id=21 data-nosnippet>21</a>
+<a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">use </span><span class="kw">crate</span>::data::ArrayData;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>arrow_buffer::i256;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>arrow_schema::{DataType, IntervalUnit};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>half::f16;
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">mod </span>boolean;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">mod </span>byte_view;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">mod </span>dictionary;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">mod </span>fixed_binary;
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">mod </span>fixed_list;
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">mod </span>list;
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">mod </span>null;
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">mod </span>primitive;
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">mod </span>run;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">mod </span>structure;
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">mod </span>union;
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">mod </span>utils;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">mod </span>variable_size;
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a><span class="comment">// these methods assume the same type, len and null count.
+<a href=#42 id=42 data-nosnippet>42</a>// For this reason, they are not exposed and are instead used
+<a href=#43 id=43 data-nosnippet>43</a>// to build the generic functions below (`equal_range` and `equal`).
+<a href=#44 id=44 data-nosnippet>44</a></span><span class="kw">use </span>boolean::boolean_equal;
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>byte_view::byte_view_equal;
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>dictionary::dictionary_equal;
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>fixed_binary::fixed_binary_equal;
+<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>fixed_list::fixed_list_equal;
+<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>list::list_equal;
+<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>null::null_equal;
+<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>primitive::primitive_equal;
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>structure::struct_equal;
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>union::union_equal;
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>variable_size::variable_sized_equal;
+<a href=#55 id=55 data-nosnippet>55</a>
+<a href=#56 id=56 data-nosnippet>56</a><span class="kw">use </span><span class="self">self</span>::run::run_equal;
+<a href=#57 id=57 data-nosnippet>57</a>
+<a href=#58 id=58 data-nosnippet>58</a><span class="doccomment">/// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
+<a href=#59 id=59 data-nosnippet>59</a>/// for `len` slots.
+<a href=#60 id=60 data-nosnippet>60</a></span><span class="attr">#[inline]
+<a href=#61 id=61 data-nosnippet>61</a></span><span class="kw">fn </span>equal_values(
+<a href=#62 id=62 data-nosnippet>62</a>    lhs: <span class="kw-2">&amp;</span>ArrayData,
+<a href=#63 id=63 data-nosnippet>63</a>    rhs: <span class="kw-2">&amp;</span>ArrayData,
+<a href=#64 id=64 data-nosnippet>64</a>    lhs_start: usize,
+<a href=#65 id=65 data-nosnippet>65</a>    rhs_start: usize,
+<a href=#66 id=66 data-nosnippet>66</a>    len: usize,
+<a href=#67 id=67 data-nosnippet>67</a>) -&gt; bool {
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">match </span>lhs.data_type() {
+<a href=#69 id=69 data-nosnippet>69</a>        DataType::Null =&gt; null_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#70 id=70 data-nosnippet>70</a>        DataType::Boolean =&gt; boolean_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#71 id=71 data-nosnippet>71</a>        DataType::UInt8 =&gt; primitive_equal::&lt;u8&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#72 id=72 data-nosnippet>72</a>        DataType::UInt16 =&gt; primitive_equal::&lt;u16&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#73 id=73 data-nosnippet>73</a>        DataType::UInt32 =&gt; primitive_equal::&lt;u32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#74 id=74 data-nosnippet>74</a>        DataType::UInt64 =&gt; primitive_equal::&lt;u64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#75 id=75 data-nosnippet>75</a>        DataType::Int8 =&gt; primitive_equal::&lt;i8&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#76 id=76 data-nosnippet>76</a>        DataType::Int16 =&gt; primitive_equal::&lt;i16&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#77 id=77 data-nosnippet>77</a>        DataType::Int32 =&gt; primitive_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#78 id=78 data-nosnippet>78</a>        DataType::Int64 =&gt; primitive_equal::&lt;i64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#79 id=79 data-nosnippet>79</a>        DataType::Float32 =&gt; primitive_equal::&lt;f32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#80 id=80 data-nosnippet>80</a>        DataType::Float64 =&gt; primitive_equal::&lt;f64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#81 id=81 data-nosnippet>81</a>        DataType::Decimal128(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; primitive_equal::&lt;i128&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#82 id=82 data-nosnippet>82</a>        DataType::Decimal256(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; primitive_equal::&lt;i256&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#83 id=83 data-nosnippet>83</a>        DataType::Date32 | DataType::Time32(<span class="kw">_</span>) | DataType::Interval(IntervalUnit::YearMonth) =&gt; {
+<a href=#84 id=84 data-nosnippet>84</a>            primitive_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#85 id=85 data-nosnippet>85</a>        }
+<a href=#86 id=86 data-nosnippet>86</a>        DataType::Date64
+<a href=#87 id=87 data-nosnippet>87</a>        | DataType::Interval(IntervalUnit::DayTime)
+<a href=#88 id=88 data-nosnippet>88</a>        | DataType::Time64(<span class="kw">_</span>)
+<a href=#89 id=89 data-nosnippet>89</a>        | DataType::Timestamp(<span class="kw">_</span>, <span class="kw">_</span>)
+<a href=#90 id=90 data-nosnippet>90</a>        | DataType::Duration(<span class="kw">_</span>) =&gt; primitive_equal::&lt;i64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#91 id=91 data-nosnippet>91</a>        DataType::Interval(IntervalUnit::MonthDayNano) =&gt; {
+<a href=#92 id=92 data-nosnippet>92</a>            primitive_equal::&lt;i128&gt;(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#93 id=93 data-nosnippet>93</a>        }
+<a href=#94 id=94 data-nosnippet>94</a>        DataType::Utf8 | DataType::Binary =&gt; {
+<a href=#95 id=95 data-nosnippet>95</a>            variable_sized_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#96 id=96 data-nosnippet>96</a>        }
+<a href=#97 id=97 data-nosnippet>97</a>        DataType::LargeUtf8 | DataType::LargeBinary =&gt; {
+<a href=#98 id=98 data-nosnippet>98</a>            variable_sized_equal::&lt;i64&gt;(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#99 id=99 data-nosnippet>99</a>        }
+<a href=#100 id=100 data-nosnippet>100</a>        DataType::FixedSizeBinary(<span class="kw">_</span>) =&gt; fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#101 id=101 data-nosnippet>101</a>        DataType::BinaryView | DataType::Utf8View =&gt; {
+<a href=#102 id=102 data-nosnippet>102</a>            byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#103 id=103 data-nosnippet>103</a>        }
+<a href=#104 id=104 data-nosnippet>104</a>        DataType::List(<span class="kw">_</span>) =&gt; list_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#105 id=105 data-nosnippet>105</a>        DataType::ListView(<span class="kw">_</span>) | DataType::LargeListView(<span class="kw">_</span>) =&gt; {
+<a href=#106 id=106 data-nosnippet>106</a>            <span class="macro">unimplemented!</span>(<span class="string">"ListView/LargeListView not yet implemented"</span>)
+<a href=#107 id=107 data-nosnippet>107</a>        }
+<a href=#108 id=108 data-nosnippet>108</a>        DataType::LargeList(<span class="kw">_</span>) =&gt; list_equal::&lt;i64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#109 id=109 data-nosnippet>109</a>        DataType::FixedSizeList(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#110 id=110 data-nosnippet>110</a>        DataType::Struct(<span class="kw">_</span>) =&gt; struct_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#111 id=111 data-nosnippet>111</a>        DataType::Union(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; union_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#112 id=112 data-nosnippet>112</a>        DataType::Dictionary(data_type, <span class="kw">_</span>) =&gt; <span class="kw">match </span>data_type.as_ref() {
+<a href=#113 id=113 data-nosnippet>113</a>            DataType::Int8 =&gt; dictionary_equal::&lt;i8&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#114 id=114 data-nosnippet>114</a>            DataType::Int16 =&gt; dictionary_equal::&lt;i16&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#115 id=115 data-nosnippet>115</a>            DataType::Int32 =&gt; dictionary_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#116 id=116 data-nosnippet>116</a>            DataType::Int64 =&gt; dictionary_equal::&lt;i64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#117 id=117 data-nosnippet>117</a>            DataType::UInt8 =&gt; dictionary_equal::&lt;u8&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#118 id=118 data-nosnippet>118</a>            DataType::UInt16 =&gt; dictionary_equal::&lt;u16&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#119 id=119 data-nosnippet>119</a>            DataType::UInt32 =&gt; dictionary_equal::&lt;u32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#120 id=120 data-nosnippet>120</a>            DataType::UInt64 =&gt; dictionary_equal::&lt;u64&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#121 id=121 data-nosnippet>121</a>            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+<a href=#122 id=122 data-nosnippet>122</a>        },
+<a href=#123 id=123 data-nosnippet>123</a>        DataType::Float16 =&gt; primitive_equal::&lt;f16&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#124 id=124 data-nosnippet>124</a>        DataType::Map(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; list_equal::&lt;i32&gt;(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#125 id=125 data-nosnippet>125</a>        DataType::RunEndEncoded(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; run_equal(lhs, rhs, lhs_start, rhs_start, len),
+<a href=#126 id=126 data-nosnippet>126</a>    }
+<a href=#127 id=127 data-nosnippet>127</a>}
+<a href=#128 id=128 data-nosnippet>128</a>
+<a href=#129 id=129 data-nosnippet>129</a><span class="kw">fn </span>equal_range(
+<a href=#130 id=130 data-nosnippet>130</a>    lhs: <span class="kw-2">&amp;</span>ArrayData,
+<a href=#131 id=131 data-nosnippet>131</a>    rhs: <span class="kw-2">&amp;</span>ArrayData,
+<a href=#132 id=132 data-nosnippet>132</a>    lhs_start: usize,
+<a href=#133 id=133 data-nosnippet>133</a>    rhs_start: usize,
+<a href=#134 id=134 data-nosnippet>134</a>    len: usize,
+<a href=#135 id=135 data-nosnippet>135</a>) -&gt; bool {
+<a href=#136 id=136 data-nosnippet>136</a>    utils::equal_nulls(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#137 id=137 data-nosnippet>137</a>        &amp;&amp; equal_values(lhs, rhs, lhs_start, rhs_start, len)
+<a href=#138 id=138 data-nosnippet>138</a>}
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a><span class="doccomment">/// Logically compares two [ArrayData].
+<a href=#141 id=141 data-nosnippet>141</a>///
+<a href=#142 id=142 data-nosnippet>142</a>/// Two arrays are logically equal if and only if:
+<a href=#143 id=143 data-nosnippet>143</a>/// * their data types are equal
+<a href=#144 id=144 data-nosnippet>144</a>/// * their lengths are equal
+<a href=#145 id=145 data-nosnippet>145</a>/// * their null counts are equal
+<a href=#146 id=146 data-nosnippet>146</a>/// * their null bitmaps are equal
+<a href=#147 id=147 data-nosnippet>147</a>/// * each of their items are equal
+<a href=#148 id=148 data-nosnippet>148</a>///
+<a href=#149 id=149 data-nosnippet>149</a>/// Two items are equal when their in-memory representation is physically equal
+<a href=#150 id=150 data-nosnippet>150</a>/// (i.e. has the same bit content).
+<a href=#151 id=151 data-nosnippet>151</a>///
+<a href=#152 id=152 data-nosnippet>152</a>/// The physical comparison depend on the data type.
+<a href=#153 id=153 data-nosnippet>153</a>///
+<a href=#154 id=154 data-nosnippet>154</a>/// # Panics
+<a href=#155 id=155 data-nosnippet>155</a>///
+<a href=#156 id=156 data-nosnippet>156</a>/// This function may panic whenever any of the [ArrayData] does not follow the
+<a href=#157 id=157 data-nosnippet>157</a>/// Arrow specification. (e.g. wrong number of buffers, buffer `len` does not
+<a href=#158 id=158 data-nosnippet>158</a>/// correspond to the declared `len`)
+<a href=#159 id=159 data-nosnippet>159</a></span><span class="kw">pub fn </span>equal(lhs: <span class="kw-2">&amp;</span>ArrayData, rhs: <span class="kw-2">&amp;</span>ArrayData) -&gt; bool {
+<a href=#160 id=160 data-nosnippet>160</a>    utils::base_equal(lhs, rhs)
+<a href=#161 id=161 data-nosnippet>161</a>        &amp;&amp; lhs.null_count() == rhs.null_count()
+<a href=#162 id=162 data-nosnippet>162</a>        &amp;&amp; utils::equal_nulls(lhs, rhs, <span class="number">0</span>, <span class="number">0</span>, lhs.len())
+<a href=#163 id=163 data-nosnippet>163</a>        &amp;&amp; equal_values(lhs, rhs, <span class="number">0</span>, <span class="number">0</span>, lhs.len())
+<a href=#164 id=164 data-nosnippet>164</a>}
+<a href=#165 id=165 data-nosnippet>165</a>
+<a href=#166 id=166 data-nosnippet>166</a><span class="comment">// See arrow/tests/array_equal.rs for tests</span></code></pre></div></section></main></body></html>

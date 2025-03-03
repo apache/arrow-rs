@@ -1,0 +1,207 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Extension types."><title>ExtensionType in arrow_schema::extension - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_schema" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../../static.files/storage-d8ac8691.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc trait"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../arrow_schema/index.html">arrow_<wbr>schema</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Extension<wbr>Type</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#required-associated-consts">Required Associated Constants</a></h3><ul class="block"><li><a href="#associatedconstant.NAME" title="NAME">NAME</a></li></ul><h3><a href="#required-associated-types">Required Associated Types</a></h3><ul class="block"><li><a href="#associatedtype.Metadata" title="Metadata">Metadata</a></li></ul><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.deserialize_metadata" title="deserialize_metadata">deserialize_metadata</a></li><li><a href="#tymethod.metadata" title="metadata">metadata</a></li><li><a href="#tymethod.serialize_metadata" title="serialize_metadata">serialize_metadata</a></li><li><a href="#tymethod.supports_data_type" title="supports_data_type">supports_data_type</a></li><li><a href="#tymethod.try_new" title="try_new">try_new</a></li></ul><h3><a href="#dyn-compatibility">Dyn Compatibility</a></h3><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In arrow_<wbr>schema::<wbr>extension</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_schema</a>::<wbr><a href="index.html">extension</a></div><h1>Trait <span class="trait">ExtensionType</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_schema/extension/mod.rs.html#188-260">Source</a> </span></div><pre class="rust item-decl"><code>pub trait ExtensionType: <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sized.html" title="trait core::marker::Sized">Sized</a> {
+    type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a>;
+
+    const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a>;
+
+    // Required methods
+    fn <a href="#tymethod.metadata" class="fn">metadata</a>(&amp;self) -&gt; &amp;Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.serialize_metadata" class="fn">serialize_metadata</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.deserialize_metadata" class="fn">deserialize_metadata</a>(
+        metadata: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a>&gt;,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a>, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.supports_data_type" class="fn">supports_data_type</a>(&amp;self, data_type: &amp;<a class="enum" href="../enum.DataType.html" title="enum arrow_schema::DataType">DataType</a>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.try_new" class="fn">try_new</a>(
+        data_type: &amp;<a class="enum" href="../enum.DataType.html" title="enum arrow_schema::DataType">DataType</a>,
+        metadata: Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;Self, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;;
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Extension types.</p>
+<p>User-defined “extension” types can be defined setting certain key value
+pairs in the <a href="../struct.Field.html" title="struct arrow_schema::Field"><code>Field</code></a> metadata structure. These extension keys are:</p>
+<ul>
+<li><a href="constant.EXTENSION_TYPE_NAME_KEY.html" title="constant arrow_schema::extension::EXTENSION_TYPE_NAME_KEY"><code>EXTENSION_TYPE_NAME_KEY</code></a></li>
+<li><a href="constant.EXTENSION_TYPE_METADATA_KEY.html" title="constant arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY"><code>EXTENSION_TYPE_METADATA_KEY</code></a></li>
+</ul>
+<p>Canonical extension types support in this crate requires the
+<code>canonical_extension_types</code> feature.</p>
+<p>Extension types may or may not use the <a href="constant.EXTENSION_TYPE_METADATA_KEY.html" title="constant arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY"><code>EXTENSION_TYPE_METADATA_KEY</code></a>
+field.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<p>The example below demonstrates how to implement this trait for a <code>Uuid</code>
+type. Note this is not the canonical extension type for <code>Uuid</code>, which does
+not include information about the <code>Uuid</code> version.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>arrow_schema::{DataType, extension::ExtensionType, Field};
+<span class="kw">use </span>std::{fmt, str::FromStr};
+
+<span class="doccomment">/// The different Uuid versions.
+</span><span class="attr">#[derive(Clone, Copy, Debug, PartialEq)]
+</span><span class="kw">enum </span>UuidVersion {
+    V1,
+    V2,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+}
+
+<span class="comment">// We'll use `Display` to serialize.
+</span><span class="kw">impl </span>fmt::Display <span class="kw">for </span>UuidVersion {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+        <span class="macro">write!</span>(
+            f,
+            <span class="string">"{}"</span>,
+            <span class="kw">match </span><span class="self">self </span>{
+                <span class="self">Self</span>::V1 =&gt; <span class="string">"V1"</span>,
+                <span class="self">Self</span>::V2 =&gt; <span class="string">"V2"</span>,
+                <span class="self">Self</span>::V3 =&gt; <span class="string">"V3"</span>,
+                <span class="self">Self</span>::V4 =&gt; <span class="string">"V4"</span>,
+                <span class="self">Self</span>::V5 =&gt; <span class="string">"V5"</span>,
+                <span class="self">Self</span>::V6 =&gt; <span class="string">"V6"</span>,
+                <span class="self">Self</span>::V7 =&gt; <span class="string">"V7"</span>,
+                <span class="self">Self</span>::V8 =&gt; <span class="string">"V8"</span>,
+            }
+        )
+    }
+}
+
+<span class="comment">// And `FromStr` to deserialize.
+</span><span class="kw">impl </span>FromStr <span class="kw">for </span>UuidVersion {
+    <span class="kw">type </span><span class="prelude-val">Err </span>= ArrowError;
+
+    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
+        <span class="kw">match </span>s {
+            <span class="string">"V1" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V1),
+            <span class="string">"V2" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V2),
+            <span class="string">"V3" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V3),
+            <span class="string">"V4" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V4),
+            <span class="string">"V5" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V5),
+            <span class="string">"V6" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V6),
+            <span class="string">"V7" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V7),
+            <span class="string">"V8" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::V8),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(ArrowError::ParseError(<span class="string">"Invalid UuidVersion"</span>.to_owned())),
+        }
+    }
+}
+
+<span class="doccomment">/// This is the extension type, not the container for Uuid values. It
+/// stores the Uuid version (this is the metadata of this extension type).
+</span><span class="attr">#[derive(Clone, Copy, Debug, PartialEq)]
+</span><span class="kw">struct </span>Uuid(UuidVersion);
+
+<span class="kw">impl </span>ExtensionType <span class="kw">for </span>Uuid {
+    <span class="comment">// We use a namespace as suggested by the specification.
+    </span><span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = <span class="string">"myorg.example.uuid"</span>;
+
+    <span class="comment">// The metadata type is the Uuid version.
+    </span><span class="kw">type </span>Metadata = UuidVersion;
+
+    <span class="comment">// We just return a reference to the Uuid version.
+    </span><span class="kw">fn </span>metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Metadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+    </span>}
+
+    <span class="comment">// We use the `Display` implementation to serialize the Uuid
+    // version.
+    </span><span class="kw">fn </span>serialize_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;String&gt; {
+        <span class="prelude-val">Some</span>(<span class="self">self</span>.<span class="number">0</span>.to_string())
+    }
+
+    <span class="comment">// We use the `FromStr` implementation to deserialize the Uuid
+    // version.
+    </span><span class="kw">fn </span>deserialize_metadata(metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Metadata, ArrowError&gt; {
+        metadata.map_or_else(
+            || {
+                <span class="prelude-val">Err</span>(ArrowError::InvalidArgumentError(
+                    <span class="string">"Uuid extension type metadata missing"</span>.to_owned(),
+                ))
+            },
+            str::parse,
+        )
+    }
+
+    <span class="comment">// The only supported data type is `FixedSizeBinary(16)`.
+    </span><span class="kw">fn </span>supports_data_type(<span class="kw-2">&amp;</span><span class="self">self</span>, data_type: <span class="kw-2">&amp;</span>DataType) -&gt; <span class="prelude-ty">Result</span>&lt;(), ArrowError&gt; {
+        <span class="kw">match </span>data_type {
+            DataType::FixedSizeBinary(<span class="number">16</span>) =&gt; <span class="prelude-val">Ok</span>(()),
+            data_type =&gt; <span class="prelude-val">Err</span>(ArrowError::InvalidArgumentError(<span class="macro">format!</span>(
+                <span class="string">"Uuid data type mismatch, expected FixedSizeBinary(16), found {data_type}"
+            </span>))),
+        }
+    }
+
+    <span class="comment">// We should always check if the data type is supported before
+    // constructing the extension type.
+    </span><span class="kw">fn </span>try_new(data_type: <span class="kw-2">&amp;</span>DataType, metadata: <span class="self">Self</span>::Metadata) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, ArrowError&gt; {
+        <span class="kw">let </span>uuid = <span class="self">Self</span>(metadata);
+        uuid.supports_data_type(data_type)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(uuid)
+    }
+}
+
+<span class="comment">// We can now construct the extension type.
+</span><span class="kw">let </span>uuid_v1 = Uuid(UuidVersion::V1);
+
+<span class="comment">// And add it to a field.
+</span><span class="kw">let </span><span class="kw-2">mut </span>field =
+    Field::new(<span class="string">""</span>, DataType::FixedSizeBinary(<span class="number">16</span>), <span class="bool-val">false</span>).with_extension_type(uuid_v1);
+
+<span class="comment">// And extract it from this field.
+</span><span class="macro">assert_eq!</span>(field.try_extension_type::&lt;Uuid&gt;()<span class="question-mark">?</span>, uuid_v1);
+
+<span class="comment">// When we try to add this to a field with an unsupported data type we
+// get an error.
+</span><span class="kw">let </span>result = Field::new(<span class="string">""</span>, DataType::Null, <span class="bool-val">false</span>).try_with_extension_type(uuid_v1);
+<span class="macro">assert!</span>(result.is_err());</code></pre></div>
+<p><a href="https://arrow.apache.org/docs/format/Columnar.html#extension-types">https://arrow.apache.org/docs/format/Columnar.html#extension-types</a></p>
+</div></details><h2 id="required-associated-consts" class="section-header">Required Associated Constants<a href="#required-associated-consts" class="anchor">§</a></h2><div class="methods"><details class="toggle" open><summary><section id="associatedconstant.NAME" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#208">Source</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a></h4></section></summary><div class="docblock"><p>The name identifying this extension type.</p>
+<p>This is the string value that is used for the
+<a href="constant.EXTENSION_TYPE_NAME_KEY.html" title="constant arrow_schema::extension::EXTENSION_TYPE_NAME_KEY"><code>EXTENSION_TYPE_NAME_KEY</code></a> in the <a href="../struct.Field.html#method.metadata" title="method arrow_schema::Field::metadata"><code>Field::metadata</code></a> of a <a href="../struct.Field.html" title="struct arrow_schema::Field"><code>Field</code></a>
+to identify this extension type.</p>
+<p>We recommend that you use a “namespace”-style prefix for extension
+type names to minimize the possibility of conflicts with multiple Arrow
+readers and writers in the same application. For example, use
+<code>myorg.name_of_type</code> instead of simply <code>name_of_type</code>.</p>
+<p>Extension names beginning with <code>arrow.</code> are reserved for canonical
+extension types, they should not be used for third-party extension
+types.</p>
+<p>Extension names are case-sensitive.</p>
+</div></details></div><h2 id="required-associated-types" class="section-header">Required Associated Types<a href="#required-associated-types" class="anchor">§</a></h2><div class="methods"><details class="toggle" open><summary><section id="associatedtype.Metadata" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#220">Source</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a></h4></section></summary><div class="docblock"><p>The metadata type of this extension type.</p>
+<p>Implementations can use strongly or loosly typed data structures here
+depending on the complexity of the metadata.</p>
+<p>Implementations can also use <code>Self</code> here if the extension type can be
+constructed directly from its metadata.</p>
+<p>If an extension type defines no metadata it should use <code>()</code> to indicate
+this.</p>
+</div></details></div><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.metadata" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#224">Source</a><h4 class="code-header">fn <a href="#tymethod.metadata" class="fn">metadata</a>(&amp;self) -&gt; &amp;Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a></h4></section></summary><div class="docblock"><p>Returns a reference to the metadata of this extension type, or <code>&amp;()</code> if
+if this extension type defines no metadata (<code>Self::Metadata=()</code>).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.serialize_metadata" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#236">Source</a><h4 class="code-header">fn <a href="#tymethod.serialize_metadata" class="fn">serialize_metadata</a>(&amp;self) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>&gt;</h4></section></summary><div class="docblock"><p>Returns the serialized representation of the metadata of this extension
+type, or <code>None</code> if this extension type defines no metadata
+(<code>Self::Metadata=()</code>).</p>
+<p>This is string value that is used for the
+<a href="constant.EXTENSION_TYPE_METADATA_KEY.html" title="constant arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY"><code>EXTENSION_TYPE_METADATA_KEY</code></a> in the <a href="../struct.Field.html#method.metadata" title="method arrow_schema::Field::metadata"><code>Field::metadata</code></a> of a
+<a href="../struct.Field.html" title="struct arrow_schema::Field"><code>Field</code></a>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.deserialize_metadata" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#248">Source</a><h4 class="code-header">fn <a href="#tymethod.deserialize_metadata" class="fn">deserialize_metadata</a>(
+    metadata: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a>&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a>, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;</h4></section></summary><div class="docblock"><p>Deserialize the metadata of this extension type from the serialized
+representation of the metadata. An extension type that defines no
+metadata should expect <code>None</code> for the serialized metadata and return
+<code>Ok(())</code>.</p>
+<p>This function should return an error when</p>
+<ul>
+<li>expected metadata is missing (for extensions types with non-optional
+metadata)</li>
+<li>unexpected metadata is set (for extension types without metadata)</li>
+<li>deserialization of metadata fails</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.supports_data_type" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#252">Source</a><h4 class="code-header">fn <a href="#tymethod.supports_data_type" class="fn">supports_data_type</a>(&amp;self, data_type: &amp;<a class="enum" href="../enum.DataType.html" title="enum arrow_schema::DataType">DataType</a>) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;</h4></section></summary><div class="docblock"><p>Returns <code>OK())</code> iff the given data type is supported by this extension
+type.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.try_new" class="method"><a class="src rightside" href="../../src/arrow_schema/extension/mod.rs.html#259">Source</a><h4 class="code-header">fn <a href="#tymethod.try_new" class="fn">try_new</a>(
+    data_type: &amp;<a class="enum" href="../enum.DataType.html" title="enum arrow_schema::DataType">DataType</a>,
+    metadata: Self::<a class="associatedtype" href="trait.ExtensionType.html#associatedtype.Metadata" title="type arrow_schema::extension::ExtensionType::Metadata">Metadata</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;Self, <a class="enum" href="../enum.ArrowError.html" title="enum arrow_schema::ArrowError">ArrowError</a>&gt;</h4></section></summary><div class="docblock"><p>Construct this extension type for a field with the given data type and
+metadata.</p>
+<p>This should return an error if the given data type is not supported by
+this extension type.</p>
+</div></details></div><h2 id="dyn-compatibility" class="section-header">Dyn Compatibility<a href="#dyn-compatibility" class="anchor">§</a></h2><div class="dyn-compatibility-info"><p>This trait is <b>not</b> <a href="https://doc.rust-lang.org/nightly/reference/items/traits.html#dyn-compatibility">dyn compatible</a>.</p><p><i>In older versions of Rust, dyn compatibility was called "object safety", so this trait is not object safe.</i></p></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-Bool8" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/bool8.rs.html#36-71">Source</a><a href="#impl-ExtensionType-for-Bool8" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.Bool8.html" title="struct arrow_schema::extension::Bool8">Bool8</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-1" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/bool8.rs.html#37">Source</a><a href="#associatedconstant.NAME-1" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.bool8&quot;</h4></section><section id="associatedtype.Metadata-1" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/bool8.rs.html#39">Source</a><a href="#associatedtype.Metadata-1" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a></h4></section></div></details><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-FixedShapeTensor" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/fixed_shape_tensor.rs.html#220-293">Source</a><a href="#impl-ExtensionType-for-FixedShapeTensor" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.FixedShapeTensor.html" title="struct arrow_schema::extension::FixedShapeTensor">FixedShapeTensor</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-2" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/fixed_shape_tensor.rs.html#221">Source</a><a href="#associatedconstant.NAME-2" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.fixed_shape_tensor&quot;</h4></section><section id="associatedtype.Metadata-2" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/fixed_shape_tensor.rs.html#223">Source</a><a href="#associatedtype.Metadata-2" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = <a class="struct" href="struct.FixedShapeTensorMetadata.html" title="struct arrow_schema::extension::FixedShapeTensorMetadata">FixedShapeTensorMetadata</a></h4></section></div></details><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-Json" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/json.rs.html#53-105">Source</a><a href="#impl-ExtensionType-for-Json" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.Json.html" title="struct arrow_schema::extension::Json">Json</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-3" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/json.rs.html#54">Source</a><a href="#associatedconstant.NAME-3" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.json&quot;</h4></section><section id="associatedtype.Metadata-3" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/json.rs.html#56">Source</a><a href="#associatedtype.Metadata-3" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = <a class="struct" href="struct.JsonMetadata.html" title="struct arrow_schema::extension::JsonMetadata">JsonMetadata</a></h4></section></div></details><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-Opaque" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/opaque.rs.html#93-131">Source</a><a href="#impl-ExtensionType-for-Opaque" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.Opaque.html" title="struct arrow_schema::extension::Opaque">Opaque</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-4" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/opaque.rs.html#94">Source</a><a href="#associatedconstant.NAME-4" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.opaque&quot;</h4></section><section id="associatedtype.Metadata-4" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/opaque.rs.html#96">Source</a><a href="#associatedtype.Metadata-4" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = <a class="struct" href="struct.OpaqueMetadata.html" title="struct arrow_schema::extension::OpaqueMetadata">OpaqueMetadata</a></h4></section></div></details><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-Uuid" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/uuid.rs.html#40-76">Source</a><a href="#impl-ExtensionType-for-Uuid" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.Uuid.html" title="struct arrow_schema::extension::Uuid">Uuid</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-5" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/uuid.rs.html#41">Source</a><a href="#associatedconstant.NAME-5" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.uuid&quot;</h4></section><section id="associatedtype.Metadata-5" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/uuid.rs.html#43">Source</a><a href="#associatedtype.Metadata-5" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a></h4></section></div></details><details class="toggle implementors-toggle"><summary><section id="impl-ExtensionType-for-VariableShapeTensor" class="impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/variable_shape_tensor.rs.html#240-338">Source</a><a href="#impl-ExtensionType-for-VariableShapeTensor" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.ExtensionType.html" title="trait arrow_schema::extension::ExtensionType">ExtensionType</a> for <a class="struct" href="struct.VariableShapeTensor.html" title="struct arrow_schema::extension::VariableShapeTensor">VariableShapeTensor</a></h3></section></summary><div class="impl-items"><section id="associatedconstant.NAME-6" class="associatedconstant trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/variable_shape_tensor.rs.html#241">Source</a><a href="#associatedconstant.NAME-6" class="anchor">§</a><h4 class="code-header">const <a href="#associatedconstant.NAME" class="constant">NAME</a>: &amp;'static <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a> = &quot;arrow.variable_shape_tensor&quot;</h4></section><section id="associatedtype.Metadata-6" class="associatedtype trait-impl"><a class="src rightside" href="../../src/arrow_schema/extension/canonical/variable_shape_tensor.rs.html#243">Source</a><a href="#associatedtype.Metadata-6" class="anchor">§</a><h4 class="code-header">type <a href="#associatedtype.Metadata" class="associatedtype">Metadata</a> = <a class="struct" href="struct.VariableShapeTensorMetadata.html" title="struct arrow_schema::extension::VariableShapeTensorMetadata">VariableShapeTensorMetadata</a></h4></section></div></details></div><script src="../../trait.impl/arrow_schema/extension/trait.ExtensionType.js" async></script></section></div></main></body></html>

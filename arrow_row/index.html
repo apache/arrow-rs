@@ -1,0 +1,81 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A comparable row-oriented representation of a collection of `Array`."><title>arrow_row - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-916cea96.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="arrow_row" data-themes="" data-resource-suffix="" data-rustdoc-version="1.87.0-nightly (f4a216d28 2025-03-02)" data-channel="nightly" data-search-js="search-f7327375.js" data-settings-js="settings-d72f25bb.js" ><script src="../static.files/storage-d8ac8691.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-a7bf3405.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../arrow_row/index.html">arrow_<wbr>row</a><span class="version">54.2.1</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#basic-example" title="Basic Example">Basic Example</a></li><li><a href="#lexsort" title="Lexsort">Lexsort</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#macros" title="Macros">Macros</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>arrow_row</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/arrow_row/lib.rs.html#18-2537">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A comparable row-oriented representation of a collection of [<code>Array</code>].</p>
+<p><a href="struct.Row.html" title="struct arrow_row::Row"><code>Row</code></a>s are <a href="http://wwwlgis.informatik.uni-kl.de/archiv/wwwdvs.informatik.uni-kl.de/courses/DBSREAL/SS2005/Vorlesungsunterlagen/Implementing_Sorting.pdf">normalized for sorting</a>, and can therefore be very efficiently <a href="https://doc.rust-lang.org/nightly/core/cmp/trait.PartialOrd.html" title="trait core::cmp::PartialOrd">compared</a>,
+using <a href="https://www.man7.org/linux/man-pages/man3/memcmp.3.html"><code>memcmp</code></a> under the hood, or used in <a href="https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts">non-comparison sorts</a> such as <a href="https://en.wikipedia.org/wiki/Radix_sort">radix sort</a>.
+This makes the row format ideal for implementing efficient multi-column sorting,
+grouping, aggregation, windowing and more, as described in more detail
+<a href="https://arrow.apache.org/blog/2022/11/07/multi-column-sorts-in-arrow-rust-part-1/">in this blog post</a>.</p>
+<p>For example, given three input [<code>Array</code>], <a href="struct.RowConverter.html" title="struct arrow_row::RowConverter"><code>RowConverter</code></a> creates byte
+sequences that <a href="https://doc.rust-lang.org/nightly/core/cmp/trait.PartialOrd.html" title="trait core::cmp::PartialOrd">compare</a> the same as when using <a href="https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort.html"><code>lexsort</code></a>.</p>
+<div class="example-wrap"><pre class="language-text"><code>   ┌─────┐   ┌─────┐   ┌─────┐
+   │     │   │     │   │     │
+   ├─────┤ ┌ ┼─────┼ ─ ┼─────┼ ┐              ┏━━━━━━━━━━━━━┓
+   │     │   │     │   │     │  ─────────────▶┃             ┃
+   ├─────┤ └ ┼─────┼ ─ ┼─────┼ ┘              ┗━━━━━━━━━━━━━┛
+   │     │   │     │   │     │
+   └─────┘   └─────┘   └─────┘
+               ...
+   ┌─────┐ ┌ ┬─────┬ ─ ┬─────┬ ┐              ┏━━━━━━━━┓
+   │     │   │     │   │     │  ─────────────▶┃        ┃
+   └─────┘ └ ┴─────┴ ─ ┴─────┴ ┘              ┗━━━━━━━━┛
+    UInt64      Utf8     F64
+
+          Input Arrays                          Row Format
+    (Columns)</code></pre></div>
+<p><em><a href="struct.Rows.html" title="struct arrow_row::Rows"><code>Rows</code></a> must be generated by the same <a href="struct.RowConverter.html" title="struct arrow_row::RowConverter"><code>RowConverter</code></a> for the comparison
+to be meaningful.</em></p>
+<h2 id="basic-example"><a class="doc-anchor" href="#basic-example">§</a>Basic Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">let </span>a1 = Arc::new(Int32Array::from_iter_values([-<span class="number">1</span>, -<span class="number">1</span>, <span class="number">0</span>, <span class="number">3</span>, <span class="number">3</span>])) <span class="kw">as </span>ArrayRef;
+<span class="kw">let </span>a2 = Arc::new(StringArray::from_iter_values([<span class="string">"a"</span>, <span class="string">"b"</span>, <span class="string">"c"</span>, <span class="string">"d"</span>, <span class="string">"d"</span>])) <span class="kw">as </span>ArrayRef;
+<span class="kw">let </span>arrays = <span class="macro">vec!</span>[a1, a2];
+
+<span class="comment">// Convert arrays to rows
+</span><span class="kw">let </span>converter = RowConverter::new(<span class="macro">vec!</span>[
+    SortField::new(DataType::Int32),
+    SortField::new(DataType::Utf8),
+]).unwrap();
+<span class="kw">let </span>rows = converter.convert_columns(<span class="kw-2">&amp;</span>arrays).unwrap();
+
+<span class="comment">// Compare rows
+</span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">4 </span>{
+    <span class="macro">assert!</span>(rows.row(i) &lt;= rows.row(i + <span class="number">1</span>));
+}
+<span class="macro">assert_eq!</span>(rows.row(<span class="number">3</span>), rows.row(<span class="number">4</span>));
+
+<span class="comment">// Convert rows back to arrays
+</span><span class="kw">let </span>converted = converter.convert_rows(<span class="kw-2">&amp;</span>rows).unwrap();
+<span class="macro">assert_eq!</span>(arrays, converted);
+
+<span class="comment">// Compare rows from different arrays
+</span><span class="kw">let </span>a1 = Arc::new(Int32Array::from_iter_values([<span class="number">3</span>, <span class="number">4</span>])) <span class="kw">as </span>ArrayRef;
+<span class="kw">let </span>a2 = Arc::new(StringArray::from_iter_values([<span class="string">"e"</span>, <span class="string">"f"</span>])) <span class="kw">as </span>ArrayRef;
+<span class="kw">let </span>arrays = <span class="macro">vec!</span>[a1, a2];
+<span class="kw">let </span>rows2 = converter.convert_columns(<span class="kw-2">&amp;</span>arrays).unwrap();
+
+<span class="macro">assert!</span>(rows.row(<span class="number">4</span>) &lt; rows2.row(<span class="number">0</span>));
+<span class="macro">assert!</span>(rows.row(<span class="number">4</span>) &lt; rows2.row(<span class="number">1</span>));
+
+<span class="comment">// Convert selection of rows back to arrays
+</span><span class="kw">let </span>selection = [rows.row(<span class="number">0</span>), rows2.row(<span class="number">1</span>), rows.row(<span class="number">2</span>), rows2.row(<span class="number">0</span>)];
+<span class="kw">let </span>converted = converter.convert_rows(selection).unwrap();
+<span class="kw">let </span>c1 = converted[<span class="number">0</span>].as_primitive::&lt;Int32Type&gt;();
+<span class="macro">assert_eq!</span>(c1.values(), <span class="kw-2">&amp;</span>[-<span class="number">1</span>, <span class="number">4</span>, <span class="number">0</span>, <span class="number">3</span>]);
+
+<span class="kw">let </span>c2 = converted[<span class="number">1</span>].as_string::&lt;i32&gt;();
+<span class="kw">let </span>c2_values: Vec&lt;<span class="kw">_</span>&gt; = c2.iter().flatten().collect();
+<span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>c2_values, <span class="kw-2">&amp;</span>[<span class="string">"a"</span>, <span class="string">"f"</span>, <span class="string">"c"</span>, <span class="string">"e"</span>]);</code></pre></div>
+<h2 id="lexsort"><a class="doc-anchor" href="#lexsort">§</a>Lexsort</h2>
+<p>The row format can also be used to implement a fast multi-column / lexicographic sort</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>lexsort_to_indices(arrays: <span class="kw-2">&amp;</span>[ArrayRef]) -&gt; UInt32Array {
+    <span class="kw">let </span>fields = arrays
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect();
+    <span class="kw">let </span>converter = RowConverter::new(fields).unwrap();
+    <span class="kw">let </span>rows = converter.convert_columns(arrays).unwrap();
+    <span class="kw">let </span><span class="kw-2">mut </span>sort: Vec&lt;<span class="kw">_</span>&gt; = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(<span class="kw">_</span>, a), (<span class="kw">_</span>, b)| a.cmp(b));
+    UInt32Array::from_iter_values(sort.iter().map(|(i, <span class="kw">_</span>)| <span class="kw-2">*</span>i <span class="kw">as </span>u32))
+}</code></pre></div>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="fixed/index.html" title="mod arrow_row::fixed">fixed</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="list/index.html" title="mod arrow_row::list">list</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="variable/index.html" title="mod arrow_row::variable">variable</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="macros" class="section-header">Macros<a href="#macros" class="anchor">§</a></h2><dl class="item-table"><dt><a class="macro" href="macro.decode_primitive_helper.html" title="macro arrow_row::decode_primitive_helper">decode_<wbr>primitive_<wbr>helper</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.OwnedRow.html" title="struct arrow_row::OwnedRow">Owned<wbr>Row</a></dt><dd>Owned version of a <a href="struct.Row.html" title="struct arrow_row::Row"><code>Row</code></a> that can be moved/cloned freely.</dd><dt><a class="struct" href="struct.Row.html" title="struct arrow_row::Row">Row</a></dt><dd>A comparable representation of a row.</dd><dt><a class="struct" href="struct.RowConfig.html" title="struct arrow_row::RowConfig">RowConfig</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>The config of a given set of <a href="struct.Row.html" title="struct arrow_row::Row"><code>Row</code></a></dd><dt><a class="struct" href="struct.RowConverter.html" title="struct arrow_row::RowConverter">RowConverter</a></dt><dd>Converts [<code>ArrayRef</code>] columns into a <a href="index.html" title="mod arrow_row">row-oriented</a> format.</dd><dt><a class="struct" href="struct.RowParser.html" title="struct arrow_row::RowParser">RowParser</a></dt><dd>A <a href="struct.RowParser.html" title="struct arrow_row::RowParser"><code>RowParser</code></a> can be created from a <a href="struct.RowConverter.html" title="struct arrow_row::RowConverter"><code>RowConverter</code></a> and used to parse bytes to <a href="struct.Row.html" title="struct arrow_row::Row"><code>Row</code></a></dd><dt><a class="struct" href="struct.Rows.html" title="struct arrow_row::Rows">Rows</a></dt><dd>A row-oriented representation of arrow data, that is normalized for comparison.</dd><dt><a class="struct" href="struct.RowsIter.html" title="struct arrow_row::RowsIter">Rows<wbr>Iter</a></dt><dd>An iterator over <a href="struct.Rows.html" title="struct arrow_row::Rows"><code>Rows</code></a></dd><dt><a class="struct" href="struct.SortField.html" title="struct arrow_row::SortField">Sort<wbr>Field</a></dt><dd>Configure the data type and sort order for a given column</dd></dl><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.Codec.html" title="enum arrow_row::Codec">Codec</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="enum" href="enum.Encoder.html" title="enum arrow_row::Encoder">Encoder</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.decode_column.html" title="fn arrow_row::decode_column">decode_<wbr>column</a><span title="Restricted Visibility">&nbsp;🔒</span> <sup title="unsafe function">⚠</sup></dt><dd>Decodes a the provided <code>field</code> from <code>rows</code></dd><dt><a class="fn" href="fn.encode_column.html" title="fn arrow_row::encode_column">encode_<wbr>column</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Encodes a column to the provided <a href="struct.Rows.html" title="struct arrow_row::Rows"><code>Rows</code></a> incrementing the offsets as it progresses</dd><dt><a class="fn" href="fn.encode_dictionary_values.html" title="fn arrow_row::encode_dictionary_values">encode_<wbr>dictionary_<wbr>values</a></dt><dd>Encode dictionary values not preserving the dictionary encoding</dd><dt><a class="fn" href="fn.null_sentinel.html" title="fn arrow_row::null_sentinel">null_<wbr>sentinel</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Returns the null sentinel, negated if <code>invert</code> is true</dd><dt><a class="fn" href="fn.row_lengths.html" title="fn arrow_row::row_lengths">row_<wbr>lengths</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Computes the length of each encoded <a href="struct.Rows.html" title="struct arrow_row::Rows"><code>Rows</code></a> and returns an empty <a href="struct.Rows.html" title="struct arrow_row::Rows"><code>Rows</code></a></dd></dl></section></div></main></body></html>
