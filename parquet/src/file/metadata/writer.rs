@@ -17,18 +17,23 @@
 
 #[cfg(feature = "encryption")]
 use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties};
+#[cfg(feature = "encryption")]
+use crate::encryption::modules::create_footer_aad;
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
-use crate::format::{AesGcmV1, ColumnIndex, EncryptionAlgorithm, OffsetIndex, RowGroup};
+#[cfg(feature = "encryption")]
+use crate::format::{
+    AesGcmV1, ColumnChunk, ColumnCryptoMetaData, EncryptionAlgorithm, EncryptionWithFooterKey,
+};
+use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
-use crate::encryption::modules::create_footer_aad;
 
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
@@ -145,9 +150,17 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // But for simplicity we always set this field.
         let column_orders = Some(column_orders);
 
+        let row_groups = match self.file_encryption_properties {
+            #[cfg(feature = "encryption")]
+            Some(file_encryption_properties) => {
+                Self::encrypt_row_groups(self.row_groups, file_encryption_properties)?
+            }
+            _ => self.row_groups,
+        };
+
         let file_metadata = crate::format::FileMetaData {
             num_rows,
-            row_groups: self.row_groups,
+            row_groups,
             key_value_metadata: self.key_value_metadata.clone(),
             version: self.writer_version,
             schema: types::to_thrift(self.schema.as_ref())?,
@@ -175,8 +188,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     &mut self.buf,
                     &aad,
                 )?;
-            },
-            _ =>  {
+            }
+            _ => {
                 let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
                 file_metadata.write_to_out_protocol(&mut protocol)?;
             }
@@ -243,7 +256,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     #[cfg(feature = "encryption")]
-    fn file_crypto_metadata(file_encryption_properties: &FileEncryptionProperties) -> Result<crate::format::FileCryptoMetaData> {
+    fn file_crypto_metadata(
+        file_encryption_properties: &FileEncryptionProperties,
+    ) -> Result<crate::format::FileCryptoMetaData> {
         let supply_aad_prefix = match file_encryption_properties.aad_prefix() {
             Some(_) => Some(!file_encryption_properties.store_aad_prefix()),
             None => None,
@@ -256,8 +271,41 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         Ok(crate::format::FileCryptoMetaData {
             encryption_algorithm: EncryptionAlgorithm::AESGCMV1(encryption_algorithm),
-            key_metadata: file_encryption_properties.footer_key_metadata().cloned()
+            key_metadata: file_encryption_properties.footer_key_metadata().cloned(),
         })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn encrypt_row_groups(
+        row_groups: Vec<RowGroup>,
+        file_encryption_properties: &FileEncryptionProperties,
+    ) -> Result<Vec<RowGroup>> {
+        row_groups
+            .into_iter()
+            .map(|mut rg| {
+                let cols: Result<Vec<ColumnChunk>> = rg
+                    .columns
+                    .into_iter()
+                    .map(|c| Self::encrypt_column_chunk(c, file_encryption_properties))
+                    .collect();
+                rg.columns = cols?;
+                Ok(rg)
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "encryption")]
+    fn encrypt_column_chunk(
+        mut column_chunk: ColumnChunk,
+        file_encryption_properties: &FileEncryptionProperties,
+    ) -> Result<ColumnChunk> {
+        // TODO: Replace metadata with encrypted metadata for non-uniform encryption.
+        // In plaintext footer mode, the plaintext metadata is retained but with statistics stripped out.
+        // When uniform encryption is used the footer is already encrypted so the column chunk does not need additional encryption.
+        column_chunk.crypto_metadata = Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(
+            EncryptionWithFooterKey::new(),
+        ));
+        Ok(column_chunk)
     }
 }
 
@@ -460,5 +508,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 struct DisabledFileEncryptionProperties {}
 
 impl Default for DisabledFileEncryptionProperties {
-    fn default() -> Self { Self {} }
+    fn default() -> Self {
+        Self {}
+    }
 }

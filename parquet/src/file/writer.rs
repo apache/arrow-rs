@@ -285,7 +285,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         // todo: check if all columns in properties.file_encryption_properties.column_keys
         // are present in the schema
 
-
         buf.write_all(magic)?;
         Ok(())
     }
@@ -319,10 +318,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
-        // todo: check
-        // #[cfg(feature = "encryption")]
-        let binding = self.props.clone().file_encryption_properties.clone();
-        encoder = encoder.with_file_encryption_properties(binding.as_ref());
+
+        #[cfg(feature = "encryption")]
+        {
+            let encryption_properties = self.props.file_encryption_properties.as_ref();
+            encoder = encoder.with_file_encryption_properties(encryption_properties);
+        }
+
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
@@ -827,12 +829,14 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 /// Get the magic bytes at the start and end of the file that identify this
 /// as a Parquet file.
 #[cfg(feature = "encryption")]
-pub(crate) fn get_file_magic(file_encryption_properties: Option<&FileEncryptionProperties>) -> &'static [u8; 4] {
+pub(crate) fn get_file_magic(
+    file_encryption_properties: Option<&FileEncryptionProperties>,
+) -> &'static [u8; 4] {
     match file_encryption_properties.as_ref() {
         Some(encryption_properties) if encryption_properties.encrypt_footer() => {
             &PARQUET_MAGIC_ENCR_FOOTER
-        },
-        _ => &PARQUET_MAGIC
+        }
+        _ => &PARQUET_MAGIC,
     }
 }
 
