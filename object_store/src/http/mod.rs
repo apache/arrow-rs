@@ -237,7 +237,9 @@ impl HttpBuilder {
         self
     }
 
-    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    /// The [`HttpConnector`] to use
+    ///
+    /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
     pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
         self.http_connector = Some(Arc::new(connector));
         self

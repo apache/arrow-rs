@@ -205,6 +205,8 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           target: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Install clag
+        run: apt-get update && apt-get install -y clang
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1

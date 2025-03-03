@@ -809,7 +809,7 @@ mod cloud {
     use crate::client::token::{TemporaryToken, TokenCache};
     use crate::RetryConfig;
 
-    /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
+    /// A [`CredentialProvider`] that uses [`HttpClient`] to fetch temporary tokens
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
