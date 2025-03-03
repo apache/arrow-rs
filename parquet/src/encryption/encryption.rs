@@ -155,21 +155,21 @@ impl<'a> FileEncryptor<'a> {
 pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
     object: T,
     file_encryption_properties: &FileEncryptionProperties,
-    sink: &mut TrackedWrite<W>,
+    sink: &mut W,
+    module_aad: &[u8],
 ) -> Result<()> {
-    // todo: encrypt
     let mut buffer: Vec<u8> = vec![];
     {
-        let mut sink = TrackedWrite::new(&mut buffer);
-        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut sink);
+        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
         object.write_to_out_protocol(&mut unencrypted_protocol)?;
     }
 
     let encryptor = FileEncryptor::new(file_encryption_properties);
+    // TODO: Get correct encryptor (footer vs column, data vs metadata)
     let encrypted_buffer = encryptor
         .get_footer_encryptor()
-        .encrypt(buffer.as_ref(), file_encryption_properties.file_aad());
+        .encrypt(buffer.as_ref(), module_aad);
 
-    sink.write_all(encrypted_buffer.as_ref())?;
+    sink.write_all(&encrypted_buffer)?;
     Ok(())
 }
