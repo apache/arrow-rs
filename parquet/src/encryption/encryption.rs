@@ -63,8 +63,24 @@ impl FileEncryptionProperties {
         self.encrypt_footer
     }
 
+    pub fn footer_key_metadata(&self) -> Option<&Vec<u8>> {
+        self.footer_key.key_metadata.as_ref()
+    }
+
     pub fn file_aad(&self) -> &[u8] {
         &self.file_aad
+    }
+
+    pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
+        self.aad_prefix.as_ref()
+    }
+
+    pub fn aad_file_unique(&self) -> &Vec<u8> {
+        &self.aad_file_unique
+    }
+
+    pub fn store_aad_prefix(&self) -> bool {
+        self.store_aad_prefix && self.aad_prefix.is_some()
     }
 }
 
