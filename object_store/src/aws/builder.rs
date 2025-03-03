@@ -23,7 +23,7 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
+use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::prelude::BASE64_STANDARD;
@@ -896,9 +896,7 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let http = self
-            .http_connector
-            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
+        let http = http_connector(self.http_connector)?;
 
         let bucket = self.bucket_name.ok_or(Error::MissingBucketName)?;
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());

@@ -208,7 +208,7 @@ jobs:
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1
-        run: cargo build --target wasm32-wasip1
+        run: cargo build --all-features --target wasm32-wasip1
 
   windows:
     name: cargo test LocalFileSystem (win64)
