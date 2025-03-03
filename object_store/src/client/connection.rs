@@ -84,9 +84,14 @@ impl HttpError {
     }
 
     pub(crate) fn reqwest(e: reqwest::Error) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let is_connect = || e.is_connect();
+        #[cfg(target_arch = "wasm32")]
+        let is_connect = || false;
+
         let mut kind = if e.is_timeout() {
             HttpErrorKind::Timeout
-        } else if e.is_connect() {
+        } else if is_connect() {
             HttpErrorKind::Connect
         } else if e.is_decode() {
             HttpErrorKind::Decode
@@ -200,6 +205,7 @@ impl HttpClient {
 }
 
 #[async_trait]
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpService for reqwest::Client {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
         let (parts, body) = req.into_parts();
@@ -227,11 +233,37 @@ pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
 /// [`HttpConnector`] using [`reqwest::Client`]
 #[derive(Debug, Default)]
 #[allow(missing_copy_implementations)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct ReqwestConnector {}
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpConnector for ReqwestConnector {
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
         let client = options.client()?;
         Ok(HttpClient::new(client))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn http_connector(
+    custom: Option<Arc<dyn HttpConnector>>,
+) -> crate::Result<Arc<dyn HttpConnector>> {
+    match custom {
+        Some(x) => Ok(x),
+        None => Err(crate::Error::NotSupported {
+            source: "WASM32 architectures must provide an HTTPConnector"
+                .to_string()
+                .into(),
+        }),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn http_connector(
+    custom: Option<Arc<dyn HttpConnector>>,
+) -> crate::Result<Arc<dyn HttpConnector>> {
+    match custom {
+        Some(x) => Ok(x),
+        None => Ok(Arc::new(ReqwestConnector {})),
     }
 }

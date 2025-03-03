@@ -21,7 +21,7 @@ use crate::azure::credential::{
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
-use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
+use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
@@ -889,7 +889,9 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    /// The [`HttpConnector`] to use
+    ///
+    /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
     pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
         self.http_connector = Some(Arc::new(connector));
         self
@@ -907,9 +909,7 @@ impl MicrosoftAzureBuilder {
             Arc::new(StaticCredentialProvider::new(credential))
         };
 
-        let http = self
-            .http_connector
-            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
+        let http = http_connector(self.http_connector)?;
 
         let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self

@@ -201,7 +201,13 @@ where
             let url = &url[..url::Position::BeforePath];
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
-        #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
+        #[cfg(not(all(
+            feature = "aws",
+            feature = "azure",
+            feature = "gcp",
+            feature = "http",
+            not(target_arch = "wasm32")
+        )))]
         s => {
             return Err(super::Error::Generic {
                 store: "parse_url",

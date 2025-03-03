@@ -39,6 +39,7 @@ impl HttpRequestBody {
         Self(Inner::Bytes(Bytes::new()))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn into_reqwest(self) -> reqwest::Body {
         match self.0 {
             Inner::Bytes(b) => b.into(),
