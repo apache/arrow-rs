@@ -39,7 +39,7 @@ use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties, Fi
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
-use crate::file::{metadata::*, PARQUET_MAGIC};
+use crate::file::{metadata::*, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -187,17 +187,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None
         };
 
-        #[cfg(feature = "encryption")]
-        if properties.file_encryption_properties.is_some() {
-            // todo: check if all columns in properties.file_encryption_properties.column_keys
-            // are present in the schema
-            let _fep = properties.file_encryption_properties.clone().unwrap();
-            Self::start_encrypted_file(&mut buf)?;
-        } else {
-            Self::start_file(&mut buf)?;
-        }
-        #[cfg(not(feature = "encryption"))]
-        Self::start_file(&mut buf)?;
+        Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
             schema: schema.clone(),
@@ -295,13 +285,17 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Writes magic bytes at the beginning of the file.
-    fn start_file(buf: &mut TrackedWrite<W>) -> Result<()> {
-        buf.write_all(&PARQUET_MAGIC)?;
-        Ok(())
-    }
+    fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        #[cfg(feature = "encryption")]
+        let magic = get_file_magic(properties.file_encryption_properties.as_ref());
+        #[cfg(not(feature = "encryption"))]
+        let magic = get_file_magic();
 
-    fn start_encrypted_file(buf: &mut TrackedWrite<W>) -> Result<()> {
-        buf.write_all(&PARQUET_MAGIC)?;
+        // todo: check if all columns in properties.file_encryption_properties.column_keys
+        // are present in the schema
+
+
+        buf.write_all(magic)?;
         Ok(())
     }
 
@@ -835,6 +829,23 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         self.sink.flush()?;
         Ok(())
     }
+}
+
+/// Get the magic bytes at the start and end of the file that identify this
+/// as a Parquet file.
+#[cfg(feature = "encryption")]
+pub(crate) fn get_file_magic(file_encryption_properties: Option<&FileEncryptionProperties>) -> &'static [u8; 4] {
+    match file_encryption_properties.as_ref() {
+        Some(encryption_properties) if encryption_properties.encrypt_footer() => {
+            &PARQUET_MAGIC_ENCR_FOOTER
+        },
+        _ => &PARQUET_MAGIC
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+pub(crate) fn get_file_magic() -> &'static [u8; 4] {
+    &PARQUET_MAGIC
 }
 
 #[cfg(test)]
