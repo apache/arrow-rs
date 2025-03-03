@@ -35,7 +35,7 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
-use crate::encryption::encryption::{FileEncryptionProperties, FileEncryptor};
+use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties, FileEncryptor};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -180,11 +180,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let file_encryptor = if properties.file_encryption_properties.is_some() {
             let file_aad = properties.file_aad.clone();
             Some(FileEncryptor::new(
-                properties
-                    .file_encryption_properties
-                    .as_ref()
-                    .unwrap()
-                    .clone(),
+                properties.file_encryption_properties.clone().unwrap(),
                 file_aad,
             ))
         } else {
@@ -338,6 +334,10 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
+        // todo: check
+        // #[cfg(feature = "encryption")]
+        let binding = self.props.clone().file_encryption_properties.clone();
+        encoder = encoder.with_file_encryption_properties(binding.as_ref());
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
@@ -774,36 +774,15 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        #[cfg(not(feature = "encryption"))]
-        {
+        if self.file_encryption_properties.is_some() {
+            encrypt_object(
+                header,
+                &self.file_encryption_properties.as_ref().unwrap(),
+                &mut self.sink,
+            )?;
+        } else {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
-        }
-        {
-            #[cfg(feature = "encryption")]
-            if self.file_encryption_properties.is_some() {
-                let mut buffer: Vec<u8> = vec![];
-                {
-                    let mut sink = TrackedWrite::new(&mut buffer);
-                    let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut sink);
-                    header.write_to_out_protocol(&mut unencrypted_protocol)?;
-                }
-                let file_encryption_properties = self.file_encryption_properties.clone().unwrap();
-                // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
-                let aad_prefix = file_encryption_properties
-                    .aad_prefix
-                    .clone()
-                    .unwrap_or(Vec::new());
-                let encryptor =
-                    FileEncryptor::new(file_encryption_properties, Some(aad_prefix.clone()));
-                let encrypted_buffer = encryptor
-                    .get_footer_encryptor()
-                    .encrypt(buffer.as_slice(), aad_prefix.as_slice());
-                self.sink.write_all(encrypted_buffer.as_ref())?;
-            } else {
-                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-                header.write_to_out_protocol(&mut protocol)?;
-            }
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
@@ -821,6 +800,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let header_size = self.serialize_page_header(page_header)?;
         #[cfg(feature = "encryption")]
         if self.file_encryption_properties.is_some() {
+            // todo: encrypt page data with encrypt_object
             let mut buffer: Vec<u8> = vec![];
             let file_encryption_properties = self.file_encryption_properties.clone().unwrap();
             // todo: concat aad components e.g. let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
