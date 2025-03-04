@@ -1521,6 +1521,7 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    #[cfg(feature = "encryption")]
     /// Set the encryption metadata for an encrypted column
     pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
         self.0.column_crypto_metadata = value;

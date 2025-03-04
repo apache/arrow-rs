@@ -1523,6 +1523,7 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::{
         ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
     };
@@ -1544,6 +1545,8 @@ mod tests {
         file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
         schema::parser::parse_message_type,
     };
+
+    #[cfg(feature = "encryption")]
     use arrow_array::cast::AsArray;
     use core::str;
     use rand::distributions::uniform::SampleUniform;
@@ -3460,7 +3463,7 @@ mod tests {
             let string_col = batch.column(0).as_string_opt::<i32>().unwrap();
 
             let mut valid_count = 0;
-            for (i, x) in string_col.iter().enumerate() {
+            for (_i, x) in string_col.iter().enumerate() {
                 if let Some(x) = x {
                     valid_count += 1;
                     assert_eq!(x, "parquet");
