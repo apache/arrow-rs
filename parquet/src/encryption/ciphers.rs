@@ -124,7 +124,7 @@ impl RingGcmBlockEncryptor {
         let rng = SystemRandom::new();
 
         // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes.as_ref()).unwrap();
+        let key = UnboundKey::new(&AES_128_GCM, key_bytes).unwrap();
         let nonce = CounterNonce::new(&rng);
 
         Self {
@@ -139,7 +139,7 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
         let mut ciphertext = Vec::with_capacity(plaintext.len() + TAG_LEN);
         ciphertext.extend(plaintext);
         let nonce = self.nonce_sequence.advance().unwrap();
-        let nonce_bytes = nonce.as_ref().clone();
+        let nonce_bytes = *nonce.as_ref();
         self.key.seal_in_place_append_tag(nonce, Aad::from(aad), &mut ciphertext).unwrap();
 
         let mut out = Vec::with_capacity(ciphertext.len() + SIZE_LEN + NONCE_LEN);
