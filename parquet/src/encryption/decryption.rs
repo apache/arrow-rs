@@ -31,6 +31,7 @@ pub fn read_and_decrypt<T: Read>(
     input.read_exact(&mut len_bytes)?;
     let ciphertext_len = u32::from_le_bytes(len_bytes) as usize;
     let mut ciphertext = vec![0; 4 + ciphertext_len];
+    ciphertext[0..4].copy_from_slice(&len_bytes);
     input.read_exact(&mut ciphertext[4..])?;
 
     decryptor.decrypt(&ciphertext, aad.as_ref())
