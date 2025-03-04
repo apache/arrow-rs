@@ -266,6 +266,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         self
     }
 
+    #[cfg(feature = "encryption")]
     pub fn with_file_encryptor(mut self, file_encryptor: Option<Arc<FileEncryptor>>) -> Self {
         self.file_encryptor = file_encryptor;
         self

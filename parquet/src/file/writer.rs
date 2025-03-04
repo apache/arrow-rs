@@ -19,6 +19,7 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
+#[cfg(feature = "encryption")]
 use crate::encryption::ciphers::BlockEncryptor;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex};
@@ -36,11 +37,14 @@ use crate::column::{
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
 use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties, FileEncryptor};
+#[cfg(feature = "encryption")]
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
-use crate::file::{metadata::*, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
+use crate::file::{metadata::*, PARQUET_MAGIC};
+#[cfg(feature = "encryption")]
+use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -573,7 +577,10 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 #[cfg(feature = "encryption")]
                 let file_encryptor = self.file_encryptor.clone();
                 let (buf, on_close) = self.get_on_close();
+                #[cfg(feature = "encryption")]
                 let mut page_writer = SerializedPageWriter::new(buf);
+                #[cfg(not(feature = "encryption"))]
+                let page_writer = SerializedPageWriter::new(buf);
 
                 #[cfg(feature = "encryption")]
                 page_writer.with_file_encryptor(file_encryptor);
@@ -783,6 +790,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
+        #[cfg(feature = "encryption")]
         if let Some(file_encryptor) = self.file_encryptor.as_ref() {
             // TODO: Compute correct AAD with page ordinal
             let aad = create_module_aad(
@@ -794,6 +802,11 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
             )?;
             encrypt_object(header, file_encryptor, &mut self.sink, &aad)?;
         } else {
+            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
+            header.write_to_out_protocol(&mut protocol)?;
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
         }
@@ -810,7 +823,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let start_pos = self.sink.bytes_written() as u64;
 
         #[cfg(not(feature = "encryption"))]
-        let page_data = page.data()?;
+        let page_data = page.data();
 
         #[cfg(feature = "encryption")]
         let encrypted_buffer;
