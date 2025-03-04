@@ -756,6 +756,8 @@ pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
+    #[cfg(feature = "encryption")]
+    page_ordinal: usize,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -765,6 +767,8 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
             sink,
             #[cfg(feature = "encryption")]
             file_encryptor: None,
+            #[cfg(feature = "encryption")]
+            page_ordinal: 0,
         }
     }
 
@@ -813,14 +817,17 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         #[cfg(feature = "encryption")]
         let page_data = match self.file_encryptor.as_ref() {
             Some(encryptor) => {
-                let aad =
-                    create_module_aad(encryptor.file_aad(), ModuleType::DataPage, 0, 0, Some(0))?;
+                let aad = create_module_aad(
+                    encryptor.file_aad(),
+                    ModuleType::DataPage,
+                    0,
+                    0,
+                    Some(self.page_ordinal),
+                )?;
                 encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
                 &encrypted_buffer
             }
-            None => {
-                page.data()
-            }
+            None => page.data(),
         };
 
         let mut page_header = page.to_thrift_header();
