@@ -3396,7 +3396,7 @@ mod tests {
             }
         ";
         let schema = Arc::new(parse_message_type(message_type).unwrap());
-        let data = vec![ByteArray::from(vec![128u8; 32]); 7];
+        let data = vec![ByteArray::from(b"parquet".to_vec()); 7];
         let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
 
         let file: File = tempfile::tempfile().unwrap();
@@ -3457,18 +3457,19 @@ mod tests {
             let batch = batch.unwrap();
             row_count += batch.num_rows();
 
-            let binary_col = batch.column(0).as_binary::<i32>();
+            let string_col = batch.column(0).as_string_opt::<i32>().unwrap();
 
-            for (i, x) in binary_col.iter().enumerate() {
-                assert_eq!(x.is_some(), i % 2 == 0);
+            let mut valid_count = 0;
+            for (i, x) in string_col.iter().enumerate() {
                 if let Some(x) = x {
-                    assert_eq!(&x[0..7], b"parquet");
+                    valid_count += 1;
+                    assert_eq!(x, "parquet");
                 }
             }
+            assert_eq!(valid_count, 7);
         }
 
         assert_eq!(row_count, file_metadata.num_rows() as usize);
-        todo!("add tests")
     }
 
     #[test]
