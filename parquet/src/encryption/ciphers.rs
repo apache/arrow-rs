@@ -143,7 +143,7 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
         self.key.seal_in_place_append_tag(nonce, Aad::from(aad), &mut ciphertext).unwrap();
 
         let mut out = Vec::with_capacity(ciphertext.len() + SIZE_LEN + NONCE_LEN);
-        out.extend((ciphertext.len() as u32).to_le_bytes());
+        out.extend(((ciphertext.len() + NONCE_LEN) as u32).to_le_bytes());
         out.extend(nonce_bytes);
         out.extend_from_slice(ciphertext.as_ref());
         out
