@@ -22,7 +22,7 @@ use crate::bloom_filter::Sbbf;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::BlockEncryptor;
 use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex};
+use crate::format::{ColumnIndex, OffsetIndex, PageHeader, PageType};
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -575,22 +575,22 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
+
                 #[cfg(feature = "encryption")]
-                let file_encryptor = self.file_encryptor.clone();
-                #[cfg(feature = "encryption")]
-                let row_group_index = self.row_group_index as usize;
-                #[cfg(feature = "encryption")]
-                let column_ordinal = self.column_index;
+                let page_encryptor = match self.file_encryptor.as_ref() {
+                    None => None,
+                    Some(file_encryptor) => Some(PageEncryptor::new(
+                        file_encryptor.clone(),
+                        self.row_group_index,
+                        self.column_index,
+                    )),
+                };
 
                 let (buf, on_close) = self.get_on_close();
+
                 #[cfg(feature = "encryption")]
-                let mut page_writer = SerializedPageWriter::new(buf);
-                #[cfg(feature = "encryption")]
-                {
-                    page_writer.with_row_group_ordinal(row_group_index);
-                    page_writer.with_column_ordinal(column_ordinal);
-                    page_writer.with_file_encryptor(file_encryptor);
-                }
+                let page_writer =
+                    SerializedPageWriter::new(buf).with_page_encryptor(page_encryptor);
 
                 #[cfg(not(feature = "encryption"))]
                 let page_writer = SerializedPageWriter::new(buf);
@@ -772,13 +772,7 @@ impl<'a> SerializedColumnWriter<'a> {
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
     #[cfg(feature = "encryption")]
-    file_encryptor: Option<Arc<FileEncryptor>>,
-    #[cfg(feature = "encryption")]
-    page_ordinal: usize,
-    #[cfg(feature = "encryption")]
-    column_ordinal: usize,
-    #[cfg(feature = "encryption")]
-    row_group_ordinal: usize,
+    page_encryptor: Option<PageEncryptor>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -787,32 +781,15 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
         Self {
             sink,
             #[cfg(feature = "encryption")]
-            file_encryptor: None,
-            #[cfg(feature = "encryption")]
-            page_ordinal: 0,
-            #[cfg(feature = "encryption")]
-            column_ordinal: 0,
-            #[cfg(feature = "encryption")]
-            row_group_ordinal: 0,
+            page_encryptor: None,
         }
     }
 
     #[cfg(feature = "encryption")]
-    /// Set the file encryptor to use to encrypt page data
-    fn with_file_encryptor(&mut self, file_encryptor: Option<Arc<FileEncryptor>>) {
-        self.file_encryptor = file_encryptor;
-    }
-
-    #[cfg(feature = "encryption")]
-    /// Set the column ordinal for this page writer
-    fn with_column_ordinal(&mut self, column_ordinal: usize) {
-        self.column_ordinal = column_ordinal;
-    }
-
-    #[cfg(feature = "encryption")]
-    /// Set the row group ordinal for this page writer
-    fn with_row_group_ordinal(&mut self, row_group_ordinal: usize) {
-        self.row_group_ordinal = row_group_ordinal;
+    /// Set the encryptor to use to encrypt page data
+    fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
+        self.page_encryptor = page_encryptor;
+        self
     }
 
     /// Serializes page header into Thrift.
@@ -821,16 +798,8 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         #[cfg(feature = "encryption")]
-        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
-            // TODO: Compute correct AAD with page ordinal
-            let aad = create_module_aad(
-                file_encryptor.file_aad(),
-                ModuleType::DataPageHeader,
-                self.row_group_ordinal,
-                self.column_ordinal,
-                Some(self.page_ordinal),
-            )?;
-            encrypt_object(header, file_encryptor, &mut self.sink, &aad)?;
+        if let Some(page_encryptor) = self.page_encryptor.as_ref() {
+            page_encryptor.encrypt_page_header(header, &mut self.sink)?;
         } else {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
@@ -846,9 +815,6 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        // todo: encrypt
-        // todo!("encrypt page");
-
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
@@ -858,16 +824,9 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         #[cfg(feature = "encryption")]
         let encrypted_buffer;
         #[cfg(feature = "encryption")]
-        let page_data = match self.file_encryptor.as_ref() {
+        let page_data = match self.page_encryptor.as_ref() {
             Some(encryptor) => {
-                let aad = create_module_aad(
-                    encryptor.file_aad(),
-                    ModuleType::DataPage,
-                    self.row_group_ordinal,
-                    self.column_ordinal,
-                    Some(self.page_ordinal),
-                )?;
-                encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
+                encrypted_buffer = encryptor.encrypt_page(&page)?;
                 &encrypted_buffer
             }
             None => page.data(),
@@ -889,6 +848,11 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
+
+        #[cfg(feature = "encryption")]
+        if let Some(page_encryptor) = self.page_encryptor.as_mut() {
+            page_encryptor.increment_page();
+        }
 
         Ok(spec)
     }
@@ -916,6 +880,81 @@ pub(crate) fn get_file_magic(
 #[cfg(not(feature = "encryption"))]
 pub(crate) fn get_file_magic() -> &'static [u8; 4] {
     &PARQUET_MAGIC
+}
+
+#[cfg(feature = "encryption")]
+#[derive(Debug)]
+struct PageEncryptor {
+    file_encryptor: Arc<FileEncryptor>,
+    row_group_index: i16,
+    column_index: usize,
+    page_index: usize,
+}
+
+#[cfg(feature = "encryption")]
+impl PageEncryptor {
+    pub fn new(
+        file_encryptor: Arc<FileEncryptor>,
+        row_group_index: i16,
+        column_index: usize,
+    ) -> Self {
+        Self {
+            file_encryptor,
+            row_group_index,
+            column_index,
+            page_index: 0,
+        }
+    }
+
+    pub fn increment_page(&mut self) {
+        self.page_index += 1;
+    }
+
+    pub fn encrypt_page(&self, page: &CompressedPage) -> Result<Vec<u8>> {
+        let module_type = if page.compressed_page().is_data_page() {
+            ModuleType::DataPage
+        } else {
+            ModuleType::DictionaryPage
+        };
+        let aad = create_module_aad(
+            self.file_encryptor.file_aad(),
+            module_type,
+            self.row_group_index as usize,
+            self.column_index,
+            Some(self.page_index),
+        )?;
+        let mut encryptor = self.file_encryptor.get_footer_encryptor();
+        let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
+
+        Ok(encrypted_buffer)
+    }
+
+    pub fn encrypt_page_header<W: Write>(
+        &self,
+        page_header: PageHeader,
+        sink: &mut W,
+    ) -> Result<()> {
+        let module_type = match page_header.type_ {
+            PageType::DATA_PAGE => ModuleType::DataPageHeader,
+            PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
+            PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
+            _ => {
+                return Err(general_err!(
+                    "Unsupported page type for page header encryption: {:?}",
+                    page_header.type_
+                ))
+            }
+        };
+        let aad = create_module_aad(
+            self.file_encryptor.file_aad(),
+            module_type,
+            self.row_group_index as usize,
+            self.column_index,
+            Some(self.page_index),
+        )?;
+
+        encrypt_object(page_header, &self.file_encryptor, sink, &aad)
+    }
 }
 
 #[cfg(test)]

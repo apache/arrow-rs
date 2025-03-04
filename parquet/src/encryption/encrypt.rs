@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::io::Write;
-use ring::rand::{SecureRandom, SystemRandom};
-use thrift::protocol::TCompactOutputProtocol;
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::Result;
 use crate::thrift::TSerializable;
+use ring::rand::{SecureRandom, SystemRandom};
+use std::collections::HashMap;
+use std::io::Write;
+use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncryptionKey {
