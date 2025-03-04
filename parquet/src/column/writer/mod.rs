@@ -1545,7 +1545,6 @@ mod tests {
         schema::parser::parse_message_type,
     };
     use arrow_array::cast::AsArray;
-    use arrow_array::types;
     use core::str;
     use rand::distributions::uniform::SampleUniform;
     use std::{fs::File, sync::Arc};
@@ -3411,6 +3410,7 @@ mod tests {
                 .with_file_encryption_properties(file_encryption_properties)
                 // Temporarily test without dictionary pages
                 .set_dictionary_enabled(false)
+                .set_data_page_size_limit(1)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
@@ -3423,7 +3423,7 @@ mod tests {
             .unwrap();
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
-        let file_metadata = writer.close().unwrap();
+        let _file_metadata = writer.close().unwrap();
 
         let footer_key = "0123456789012345".as_bytes(); // 128bit/16
                                                         // let column_1_key = "1234567890123450".as_bytes();

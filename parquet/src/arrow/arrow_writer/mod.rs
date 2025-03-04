@@ -3571,8 +3571,8 @@ mod tests {
 
         writer.close().unwrap();
 
-        let footer_key = "0123456789012345".as_bytes();
-        let column_key = "1234567890123450".as_bytes();
+        // let footer_key = "0123456789012345".as_bytes();
+        // let column_key = "1234567890123450".as_bytes();
         let false_key = "1234567890123451".as_bytes();
 
         let decryption_properties = FileDecryptionProperties::builder(false_key.to_vec())
