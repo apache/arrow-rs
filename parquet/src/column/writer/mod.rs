@@ -1533,7 +1533,7 @@ mod tests {
     };
     #[cfg(feature = "encryption")]
     use crate::encryption::{
-        decryption::FileDecryptionProperties, encryption::FileEncryptionProperties,
+        decryption::FileDecryptionProperties, encrypt::FileEncryptionProperties,
     };
     use crate::file::writer::TrackedWrite;
     use crate::file::{
