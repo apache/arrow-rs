@@ -42,9 +42,9 @@ use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
-use crate::file::{metadata::*, PARQUET_MAGIC};
 #[cfg(feature = "encryption")]
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
+use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -576,14 +576,23 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 let props = self.props.clone();
                 #[cfg(feature = "encryption")]
                 let file_encryptor = self.file_encryptor.clone();
+                #[cfg(feature = "encryption")]
+                let row_group_index = self.row_group_index as usize;
+                #[cfg(feature = "encryption")]
+                let column_index = self.column_index - 1;
+
                 let (buf, on_close) = self.get_on_close();
                 #[cfg(feature = "encryption")]
                 let mut page_writer = SerializedPageWriter::new(buf);
+                #[cfg(feature = "encryption")]
+                {
+                    page_writer.with_row_group_ordinal(row_group_index);
+                    page_writer.with_column_ordinal(column_index);
+                    page_writer.with_file_encryptor(file_encryptor);
+                }
+
                 #[cfg(not(feature = "encryption"))]
                 let page_writer = SerializedPageWriter::new(buf);
-
-                #[cfg(feature = "encryption")]
-                page_writer.with_file_encryptor(file_encryptor);
 
                 Some(factory(
                     column,
@@ -765,6 +774,10 @@ pub struct SerializedPageWriter<'a, W: Write> {
     file_encryptor: Option<Arc<FileEncryptor>>,
     #[cfg(feature = "encryption")]
     page_ordinal: usize,
+    #[cfg(feature = "encryption")]
+    column_ordinal: usize,
+    #[cfg(feature = "encryption")]
+    row_group_ordinal: usize,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -776,6 +789,10 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
             file_encryptor: None,
             #[cfg(feature = "encryption")]
             page_ordinal: 0,
+            #[cfg(feature = "encryption")]
+            column_ordinal: 1,
+            #[cfg(feature = "encryption")]
+            row_group_ordinal: 0,
         }
     }
 
@@ -783,6 +800,18 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Set the file encryptor to use to encrypt page data
     fn with_file_encryptor(&mut self, file_encryptor: Option<Arc<FileEncryptor>>) {
         self.file_encryptor = file_encryptor;
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the column ordinal for this page writer
+    fn with_column_ordinal(&mut self, column_ordinal: usize) {
+        self.column_ordinal = column_ordinal;
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the row group ordinal for this page writer
+    fn with_row_group_ordinal(&mut self, row_group_ordinal: usize) {
+        self.row_group_ordinal = row_group_ordinal;
     }
 
     /// Serializes page header into Thrift.
@@ -796,9 +825,9 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 ModuleType::DataPageHeader,
-                0,
-                0,
-                Some(0),
+                self.row_group_ordinal,
+                self.column_ordinal,
+                Some(self.page_ordinal),
             )?;
             encrypt_object(header, file_encryptor, &mut self.sink, &aad)?;
         } else {
@@ -833,8 +862,8 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
                 let aad = create_module_aad(
                     encryptor.file_aad(),
                     ModuleType::DataPage,
-                    0,
-                    0,
+                    self.row_group_ordinal,
+                    self.column_ordinal,
                     Some(self.page_ordinal),
                 )?;
                 encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
