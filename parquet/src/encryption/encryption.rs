@@ -21,7 +21,6 @@ use ring::rand::{SecureRandom, SystemRandom};
 use thrift::protocol::TCompactOutputProtocol;
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::Result;
-use crate::file::writer::TrackedWrite;
 use crate::thrift::TSerializable;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,8 +48,6 @@ pub struct FileEncryptionProperties {
     footer_key: EncryptionKey,
     column_keys: HashMap<Vec<u8>, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
-    aad_file_unique: Vec<u8>,
-    file_aad: Vec<u8>,
     store_aad_prefix: bool,
 }
 
@@ -67,16 +64,8 @@ impl FileEncryptionProperties {
         self.footer_key.key_metadata.as_ref()
     }
 
-    pub fn file_aad(&self) -> &[u8] {
-        &self.file_aad
-    }
-
     pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
         self.aad_prefix.as_ref()
-    }
-
-    pub fn aad_file_unique(&self) -> &Vec<u8> {
-        &self.aad_file_unique
     }
 
     pub fn store_aad_prefix(&self) -> bool {
@@ -118,41 +107,55 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
-    pub fn build(self) -> Result<FileEncryptionProperties> {
+    pub fn build(self) -> FileEncryptionProperties {
+        FileEncryptionProperties {
+            encrypt_footer: self.encrypt_footer,
+            footer_key: self.footer_key,
+            column_keys: self.column_keys,
+            aad_prefix: self.aad_prefix,
+            store_aad_prefix: self.store_aad_prefix,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FileEncryptor {
+    properties: FileEncryptionProperties,
+    aad_file_unique: Vec<u8>,
+    file_aad: Vec<u8>,
+}
+
+impl FileEncryptor {
+    pub(crate) fn new(
+        properties: FileEncryptionProperties,
+    ) -> Result<Self> {
         // Generate unique AAD for file
         let rng = SystemRandom::new();
         let mut aad_file_unique = vec![0u8; 8];
         rng.fill(&mut aad_file_unique)?;
 
-        let file_aad = match self.aad_prefix.as_ref() {
+        let file_aad = match properties.aad_prefix.as_ref() {
             None => aad_file_unique.clone(),
             Some(aad_prefix) => [aad_prefix.clone(), aad_file_unique.clone()].concat(),
         };
 
-        Ok(FileEncryptionProperties {
-            encrypt_footer: self.encrypt_footer,
-            footer_key: self.footer_key,
-            column_keys: self.column_keys,
-            aad_prefix: self.aad_prefix,
+        Ok(Self {
+            properties,
             aad_file_unique,
             file_aad,
-            store_aad_prefix: self.store_aad_prefix,
         })
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct FileEncryptor<'a> {
-    file_encryption_properties: &'a FileEncryptionProperties,
-}
+    pub fn properties(&self) -> &FileEncryptionProperties {
+        &self.properties
+    }
 
-impl<'a> FileEncryptor<'a> {
-    pub(crate) fn new(
-        file_encryption_properties: &'a FileEncryptionProperties,
-    ) -> Self {
-        Self {
-            file_encryption_properties,
-        }
+    pub fn file_aad(&self) -> &[u8] {
+        &self.file_aad
+    }
+
+    pub fn aad_file_unique(&self) -> &Vec<u8> {
+        &self.aad_file_unique
     }
 
     // let footer_encryptor = RingGcmBlockEncryptor::new(&encryption_properties.footer_key.clone());
@@ -164,13 +167,13 @@ impl<'a> FileEncryptor<'a> {
     // }
     // }
     pub(crate) fn get_footer_encryptor(&self) -> RingGcmBlockEncryptor {
-        RingGcmBlockEncryptor::new(&self.file_encryption_properties.footer_key.key.clone())
+        RingGcmBlockEncryptor::new(&self.properties.footer_key.key.clone())
     }
 }
 
 pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
     object: T,
-    file_encryption_properties: &FileEncryptionProperties,
+    encryptor: &FileEncryptor,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
@@ -180,7 +183,6 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
         object.write_to_out_protocol(&mut unencrypted_protocol)?;
     }
 
-    let encryptor = FileEncryptor::new(file_encryption_properties);
     // TODO: Get correct encryptor (footer vs column, data vs metadata)
     let encrypted_buffer = encryptor
         .get_footer_encryptor()
