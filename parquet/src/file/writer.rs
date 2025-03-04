@@ -579,7 +579,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 #[cfg(feature = "encryption")]
                 let row_group_index = self.row_group_index as usize;
                 #[cfg(feature = "encryption")]
-                let column_index = self.column_index - 1;
+                let column_ordinal = self.column_index;
 
                 let (buf, on_close) = self.get_on_close();
                 #[cfg(feature = "encryption")]
@@ -587,7 +587,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 #[cfg(feature = "encryption")]
                 {
                     page_writer.with_row_group_ordinal(row_group_index);
-                    page_writer.with_column_ordinal(column_index);
+                    page_writer.with_column_ordinal(column_ordinal);
                     page_writer.with_file_encryptor(file_encryptor);
                 }
 
@@ -790,7 +790,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
             #[cfg(feature = "encryption")]
             page_ordinal: 0,
             #[cfg(feature = "encryption")]
-            column_ordinal: 1,
+            column_ordinal: 0,
             #[cfg(feature = "encryption")]
             row_group_ordinal: 0,
         }
