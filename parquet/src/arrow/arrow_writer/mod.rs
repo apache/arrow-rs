@@ -3553,9 +3553,8 @@ mod tests {
 
         // todo: add encryption
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
-            .build()
-            .unwrap();
+        let file_encryption_properties =
+            FileEncryptionProperties::builder(key_code.to_vec()).build();
 
         let props = WriterProperties::builder()
             .set_max_row_group_size(200)

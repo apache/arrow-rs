@@ -3402,14 +3402,12 @@ mod tests {
 
         let builder = WriterProperties::builder();
         let key_code: &[u8] = "0123456789012345".as_bytes();
-        let file_encryption_properties = FileEncryptionProperties::builder(key_code.to_vec())
-            .build()
-            .unwrap();
+        let file_encryption_properties =
+            FileEncryptionProperties::builder(key_code.to_vec()).build();
 
         let props = Arc::new(
             builder
                 .with_file_encryption_properties(file_encryption_properties)
-                .with_file_aad(Some("test_aad".as_bytes().to_vec()))
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
