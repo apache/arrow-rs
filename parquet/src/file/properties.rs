@@ -173,8 +173,6 @@ pub struct WriterProperties {
     coerce_types: bool,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<FileEncryptionProperties>,
-    #[cfg(feature = "encryption")]
-    pub(crate) file_aad: Option<Vec<u8>>,
 }
 
 impl Default for WriterProperties {
@@ -400,8 +398,6 @@ pub struct WriterPropertiesBuilder {
     coerce_types: bool,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<FileEncryptionProperties>,
-    #[cfg(feature = "encryption")]
-    file_aad: Option<Vec<u8>>,
 }
 
 impl WriterPropertiesBuilder {
@@ -426,8 +422,6 @@ impl WriterPropertiesBuilder {
             coerce_types: DEFAULT_COERCE_TYPES,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
-            #[cfg(feature = "encryption")]
-            file_aad: Some(Vec::new()),
         }
     }
 
@@ -452,8 +446,6 @@ impl WriterPropertiesBuilder {
             coerce_types: self.coerce_types,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
-            #[cfg(feature = "encryption")]
-            file_aad: self.file_aad,
         }
     }
 
@@ -834,13 +826,6 @@ impl WriterPropertiesBuilder {
         file_encryption_properties: FileEncryptionProperties,
     ) -> Self {
         self.file_encryption_properties = Some(file_encryption_properties);
-        self
-    }
-
-    /// Sets file aad.
-    #[cfg(feature = "encryption")]
-    pub fn with_file_aad(mut self, file_aad: Option<Vec<u8>>) -> Self {
-        self.file_aad = file_aad;
         self
     }
 }
