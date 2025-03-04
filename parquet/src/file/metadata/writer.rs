@@ -16,7 +16,7 @@
 // under the License.
 
 #[cfg(feature = "encryption")]
-use crate::encryption::encryption::{encrypt_object, FileEncryptor};
+use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
 #[cfg(feature = "encryption")]
 use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::Result;
@@ -524,18 +524,12 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
 // Empty type to make matching on encryption properties more ergonomic
 #[cfg(not(feature = "encryption"))]
+#[derive(Default)]
 struct DisabledFileEncryptor {}
 
 #[cfg(not(feature = "encryption"))]
 impl DisabledFileEncryptor {
     fn as_ref(&self) -> &Self {
         self
-    }
-}
-
-#[cfg(not(feature = "encryption"))]
-impl Default for DisabledFileEncryptor {
-    fn default() -> Self {
-        Self {}
     }
 }

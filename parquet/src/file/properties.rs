@@ -19,7 +19,7 @@
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
-use crate::encryption::encryption::FileEncryptionProperties;
+use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;

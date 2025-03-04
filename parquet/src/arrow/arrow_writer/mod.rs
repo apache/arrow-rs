@@ -1145,7 +1145,7 @@ mod tests {
     use crate::data_type::AsBytes;
     #[cfg(feature = "encryption")]
     use crate::encryption::{
-        decryption::FileDecryptionProperties, encryption::FileEncryptionProperties,
+        decryption::FileDecryptionProperties, encrypt::FileEncryptionProperties,
     };
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;

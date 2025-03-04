@@ -36,7 +36,7 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
-use crate::encryption::encryption::{encrypt_object, FileEncryptionProperties, FileEncryptor};
+use crate::encryption::encrypt::{encrypt_object, FileEncryptionProperties, FileEncryptor};
 #[cfg(feature = "encryption")]
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
@@ -288,6 +288,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.finish()
     }
 
+    #[allow(unused_variables)]
     /// Writes magic bytes at the beginning of the file.
     fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
         #[cfg(feature = "encryption")]
