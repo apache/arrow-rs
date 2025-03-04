@@ -20,6 +20,23 @@
 # Historical Changelog
 
 
+## [53.4.0](https://github.com/apache/arrow-rs/tree/53.4.0) (2025-01-14)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/53.3.0...53.4.0)
+
+**Merged pull requests:**
+
+* fix clippy (#6791) (#6940)
+* fix: decimal conversion looses value on lower precision (#6836) (#6936)
+* perf: Use Cow in get_format_string in FFI_ArrowSchema (#6853) (#6937)
+* fix: Encoding of List offsets was incorrect when slice offsets begin …
+* [arrow-cast] Support cast numeric to string view (alternate) (#6816) (#…
+* Enable matching temporal as from_type to Utf8View (#6872) (#6956)
+* [arrow-cast] Support cast boolean from/to string view (#6822) (#6957)
+* [53.0.0_maintenance] Fix CI (#6964)
+* Add Array::shrink_to_fit(&mut self) to 53.4.0 (#6790) (#6817)
+* 
+
 ## [53.3.0](https://github.com/apache/arrow-rs/tree/53.3.0) (2024-11-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/53.2.0...53.3.0)
