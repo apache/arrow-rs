@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [53.4.1](https://github.com/apache/arrow-rs/tree/53.4.0) (2025-03-04)
+## [53.4.1](https://github.com/apache/arrow-rs/tree/53.4.1) (2025-03-04)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/53.4.0...54.1.0)
 
