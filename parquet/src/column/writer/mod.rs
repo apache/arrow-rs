@@ -1530,9 +1530,10 @@ mod tests {
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
-    use crate::encryption::decryption::FileDecryptionProperties;
     #[cfg(feature = "encryption")]
-    use crate::encryption::encryption::FileEncryptionProperties;
+    use crate::encryption::{
+        decryption::FileDecryptionProperties, encryption::FileEncryptionProperties,
+    };
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
@@ -3408,6 +3409,8 @@ mod tests {
         let props = Arc::new(
             builder
                 .with_file_encryption_properties(file_encryption_properties)
+                // Temporarily test without dictionary pages
+                .set_dictionary_enabled(false)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();

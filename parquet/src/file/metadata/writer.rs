@@ -18,7 +18,7 @@
 #[cfg(feature = "encryption")]
 use crate::encryption::encryption::{encrypt_object, FileEncryptor};
 #[cfg(feature = "encryption")]
-use crate::encryption::modules::create_footer_aad;
+use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
@@ -72,12 +72,18 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     match self.file_encryptor.as_ref() {
                         #[cfg(feature = "encryption")]
                         Some(file_encryptor) => {
-                            let aad = file_encryptor.file_aad(); // TODO: Use correct AAD
+                            let aad = create_module_aad(
+                                file_encryptor.file_aad(),
+                                ModuleType::OffsetIndex,
+                                row_group_idx,
+                                column_idx,
+                                None,
+                            )?;
                             encrypt_object(
                                 offset_index.clone(),
                                 file_encryptor,
                                 &mut self.buf,
-                                aad,
+                                &aad,
                             )?;
                         }
                         _ => {
@@ -112,12 +118,18 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     match self.file_encryptor.as_ref() {
                         #[cfg(feature = "encryption")]
                         Some(file_encryptor) => {
-                            let aad = file_encryptor.file_aad(); // TODO: Correct AAD
+                            let aad = create_module_aad(
+                                file_encryptor.file_aad(),
+                                ModuleType::ColumnIndex,
+                                row_group_idx,
+                                column_idx,
+                                None,
+                            )?;
                             encrypt_object(
                                 column_index.clone(),
                                 file_encryptor,
                                 &mut self.buf,
-                                aad,
+                                &aad,
                             )?;
                         }
                         _ => {

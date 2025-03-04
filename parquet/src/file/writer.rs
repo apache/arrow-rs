@@ -505,6 +505,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     }
 
     #[cfg(feature = "encryption")]
+    /// Set the file encryptor to use for encrypting row group data and metadata
     pub fn with_file_encryptor(mut self, file_encryptor: Option<Arc<FileEncryptor>>) -> Self {
         self.file_encryptor = file_encryptor;
         self
@@ -767,6 +768,8 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
         }
     }
 
+    #[cfg(feature = "encryption")]
+    /// Set the file encryptor to use to encrypt page data
     fn with_file_encryptor(&mut self, file_encryptor: Option<Arc<FileEncryptor>>) {
         self.file_encryptor = file_encryptor;
     }
@@ -777,13 +780,13 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         if let Some(file_encryptor) = self.file_encryptor.as_ref() {
-            // TODO: Compute correct AAD
+            // TODO: Compute correct AAD with page ordinal
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 ModuleType::DataPageHeader,
                 0,
                 0,
-                None,
+                Some(0),
             )?;
             encrypt_object(header, file_encryptor, &mut self.sink, &aad)?;
         } else {
@@ -805,17 +808,16 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
         #[cfg(feature = "encryption")]
-        if let Some(encryptor) = self.file_encryptor.as_ref() {
-            // todo: encrypt page data with encrypt_object
-            // todo: compute correct aad
-            let aad = encryptor.file_aad();
-            let mut buffer: Vec<u8> = vec![];
-            let encrypted_buffer = encryptor
-                .get_footer_encryptor()
-                .encrypt(buffer.as_slice(), aad);
-            self.sink.write_all(encrypted_buffer.as_slice())?;
-        } else {
-            self.sink.write_all(page.data())?;
+        match self.file_encryptor.as_ref() {
+            Some(encryptor) => {
+                let aad =
+                    create_module_aad(encryptor.file_aad(), ModuleType::DataPage, 0, 0, Some(0))?;
+                let encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
+                self.sink.write_all(&encrypted_buffer)?;
+            }
+            None => {
+                self.sink.write_all(page.data())?;
+            }
         }
         #[cfg(not(feature = "encryption"))]
         self.sink.write_all(page.data())?;

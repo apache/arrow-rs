@@ -26,7 +26,7 @@ use crate::thrift::TSerializable;
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncryptionKey {
     key: Vec<u8>,
-    key_metadata: Option<Vec<u8>>
+    key_metadata: Option<Vec<u8>>,
 }
 
 impl EncryptionKey {
@@ -126,9 +126,7 @@ pub struct FileEncryptor {
 }
 
 impl FileEncryptor {
-    pub(crate) fn new(
-        properties: FileEncryptionProperties,
-    ) -> Result<Self> {
+    pub(crate) fn new(properties: FileEncryptionProperties) -> Result<Self> {
         // Generate unique AAD for file
         let rng = SystemRandom::new();
         let mut aad_file_unique = vec![0u8; 8];
