@@ -805,27 +805,37 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
-        let page_header = page.to_thrift_header();
-        let header_size = self.serialize_page_header(page_header)?;
+        #[cfg(not(feature = "encryption"))]
+        let page_data = page.data()?;
+
         #[cfg(feature = "encryption")]
-        match self.file_encryptor.as_ref() {
+        let encrypted_buffer;
+        #[cfg(feature = "encryption")]
+        let page_data = match self.file_encryptor.as_ref() {
             Some(encryptor) => {
                 let aad =
                     create_module_aad(encryptor.file_aad(), ModuleType::DataPage, 0, 0, Some(0))?;
-                let encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
-                self.sink.write_all(&encrypted_buffer)?;
+                encrypted_buffer = encryptor.get_footer_encryptor().encrypt(page.data(), &aad);
+                &encrypted_buffer
             }
             None => {
-                self.sink.write_all(page.data())?;
+                page.data()
             }
-        }
-        #[cfg(not(feature = "encryption"))]
-        self.sink.write_all(page.data())?;
+        };
+
+        let mut page_header = page.to_thrift_header();
+        // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
+        // before they are written so the compressed page size is correct.
+        page_header.compressed_page_size = page_data.len() as i32;
+
+        let header_size = self.serialize_page_header(page_header)?;
+
+        self.sink.write_all(page_data)?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
         spec.uncompressed_size = page.uncompressed_size() + header_size;
-        spec.compressed_size = page.compressed_size() + header_size;
+        spec.compressed_size = page_data.len() + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
