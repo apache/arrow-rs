@@ -172,11 +172,11 @@ impl FileEncryptor {
 
     pub(crate) fn get_column_encryptor(&self, column_path: &Vec<u8>) -> RingGcmBlockEncryptor {
         if self.properties.column_keys.is_empty() {
-            return RingGcmBlockEncryptor::new(&self.properties.footer_key.key());
+            return RingGcmBlockEncryptor::new(self.properties.footer_key.key());
         }
         match self.properties.column_keys.get(column_path) {
             None => todo!("Handle unencrypted columns"),
-            Some(column_key) => RingGcmBlockEncryptor::new(&column_key.key())
+            Some(column_key) => RingGcmBlockEncryptor::new(column_key.key())
         }
     }
 }
