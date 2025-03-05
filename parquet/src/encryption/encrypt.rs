@@ -37,8 +37,13 @@ impl EncryptionKey {
         }
     }
 
-    pub fn set_metadata(&mut self, metadata: Vec<u8>) {
+    pub fn with_metadata(mut self, metadata: Vec<u8>) -> Self {
         self.key_metadata = Some(metadata);
+        self
+    }
+
+    pub fn key(&self) -> &Vec<u8> {
+        &self.key
     }
 }
 
@@ -98,7 +103,12 @@ impl EncryptionPropertiesBuilder {
     }
 
     pub fn with_footer_key_metadata(mut self, metadata: Vec<u8>) -> Self {
-        self.footer_key.set_metadata(metadata);
+        self.footer_key = self.footer_key.with_metadata(metadata);
+        self
+    }
+
+    pub fn with_column_key(mut self, column_name: Vec<u8>, encryption_key: EncryptionKey) -> Self {
+        self.column_keys.insert(column_name, encryption_key);
         self
     }
 
@@ -155,17 +165,19 @@ impl FileEncryptor {
     pub fn aad_file_unique(&self) -> &Vec<u8> {
         &self.aad_file_unique
     }
-
-    // let footer_encryptor = RingGcmBlockEncryptor::new(&encryption_properties.footer_key.clone());
-    // let mut column_encryptors: HashMap<Vec<u8>, Arc<dyn BlockEncryptor>> = HashMap::new();
-    // if let Some(column_keys) = encryption_properties.column_keys.clone() {
-    // for (column_name, key) in column_keys.iter() {
-    // let column_encryptor = Arc::new(RingGcmBlockEncryptor::new(key));
-    // column_encryptors.insert(column_name.clone(), column_encryptor);
-    // }
-    // }
+    
     pub(crate) fn get_footer_encryptor(&self) -> RingGcmBlockEncryptor {
-        RingGcmBlockEncryptor::new(&self.properties.footer_key.key.clone())
+        RingGcmBlockEncryptor::new(&self.properties.footer_key.key)
+    }
+
+    pub(crate) fn get_column_encryptor(&self, column_path: &Vec<u8>) -> RingGcmBlockEncryptor {
+        if self.properties.column_keys.is_empty() {
+            return RingGcmBlockEncryptor::new(&self.properties.footer_key.key());
+        }
+        match self.properties.column_keys.get(column_path) {
+            None => todo!("Handle unencrypted columns"),
+            Some(column_key) => RingGcmBlockEncryptor::new(&column_key.key())
+        }
     }
 }
 
