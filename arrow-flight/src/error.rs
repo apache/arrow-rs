@@ -27,7 +27,7 @@ pub enum FlightError {
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
     /// Error from the underlying tonic library
-    Tonic(tonic::Status),
+    Tonic(Box<tonic::Status>),
     /// Some unexpected message was received
     ProtocolError(String),
     /// An error occurred during decoding
@@ -74,7 +74,7 @@ impl Error for FlightError {
 
 impl From<tonic::Status> for FlightError {
     fn from(status: tonic::Status) -> Self {
-        Self::Tonic(status)
+        Self::Tonic(Box::new(status))
     }
 }
 
@@ -91,7 +91,7 @@ impl From<FlightError> for tonic::Status {
         match value {
             FlightError::Arrow(e) => tonic::Status::internal(e.to_string()),
             FlightError::NotYetImplemented(e) => tonic::Status::internal(e),
-            FlightError::Tonic(status) => status,
+            FlightError::Tonic(status) => *status,
             FlightError::ProtocolError(e) => tonic::Status::internal(e),
             FlightError::DecodeError(e) => tonic::Status::internal(e),
             FlightError::ExternalError(e) => tonic::Status::internal(e.to_string()),
