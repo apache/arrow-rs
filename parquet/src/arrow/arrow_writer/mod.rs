@@ -863,6 +863,20 @@ impl ArrowColumnWriterFactory {
         self
     }
 
+    #[cfg(feature = "encryption")]
+    fn create_page_writer(&self, column_index: usize) -> Box<ArrowPageWriter> {
+        let page_encryptor = self
+            .file_encryptor
+            .as_ref()
+            .map(|fe| PageEncryptor::new(fe.clone(), self.row_group_index, column_index));
+        Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn create_page_writer(&self, _column_index: usize) -> Box<ArrowPageWriter> {
+        Box::<ArrowPageWriter>::default()
+    }
+
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
@@ -871,17 +885,7 @@ impl ArrowColumnWriterFactory {
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
         let col = |desc: &ColumnDescPtr| {
-            #[cfg(feature = "encryption")]
-            let page_writer = {
-                let col_idx = out.len();
-                let page_encryptor = self
-                    .file_encryptor
-                    .as_ref()
-                    .map(|fe| PageEncryptor::new(fe.clone(), self.row_group_index, col_idx));
-                Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
-            };
-            #[cfg(not(feature = "encryption"))]
-            let page_writer = Box::<ArrowPageWriter>::default();
+            let page_writer = self.create_page_writer(out.len());
             let chunk = page_writer.buffer.clone();
             let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
             ArrowColumnWriter {
@@ -891,7 +895,7 @@ impl ArrowColumnWriterFactory {
         };
 
         let bytes = |desc: &ColumnDescPtr| {
-            let page_writer = Box::<ArrowPageWriter>::default();
+            let page_writer = self.create_page_writer(out.len());
             let chunk = page_writer.buffer.clone();
             let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
             ArrowColumnWriter {
