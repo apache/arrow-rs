@@ -277,10 +277,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         file_encryptor: &Arc<FileEncryptor>,
     ) -> Result<crate::format::FileCryptoMetaData> {
         let properties = file_encryptor.properties();
-        let supply_aad_prefix = match properties.aad_prefix() {
-            Some(_) => Some(!properties.store_aad_prefix()),
-            None => None,
-        };
+        let supply_aad_prefix = properties.aad_prefix().map(|_| !properties.store_aad_prefix());
         let encryption_algorithm = AesGcmV1 {
             aad_prefix: properties.aad_prefix().cloned(),
             aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
