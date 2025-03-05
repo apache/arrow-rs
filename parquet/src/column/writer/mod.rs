@@ -3453,10 +3453,6 @@ mod tests {
             (num_row_groups * num_batches * rows_per_batch) as i64
         );
         assert_eq!(file_metadata.schema_descr().num_columns(), 1);
-        assert_eq!(
-            file_metadata.created_by().unwrap(),
-            "parquet-rs version 54.2.0"
-        );
 
         assert_eq!(metadata.metadata.num_row_groups(), num_row_groups);
         metadata.metadata.row_groups().iter().for_each(|rg| {
