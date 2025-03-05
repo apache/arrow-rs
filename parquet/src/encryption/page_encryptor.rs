@@ -68,16 +68,14 @@ impl PageEncryptor {
         let mut encryptor = self
             .file_encryptor
             .get_column_encryptor(&self.column_path)?;
-        // todo: use column encryptor when needed
-        // self.file_encryptor.get_column_encryptor(self.column_path.as_ref())
-        let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
+        let encrypted_buffer = encryptor.encrypt(page.data(), &aad)?;
 
         Ok(encrypted_buffer)
     }
 
     pub fn encrypt_page_header<W: Write>(
         &self,
-        page_header: PageHeader,
+        page_header: &PageHeader,
         sink: &mut W,
     ) -> crate::errors::Result<()> {
         let module_type = match page_header.type_ {
@@ -99,6 +97,10 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
 
-        encrypt_object(page_header, &self.file_encryptor, sink, &aad)
+        let mut encryptor = self
+            .file_encryptor
+            .get_column_encryptor(&self.column_path)?;
+
+        encrypt_object(page_header, &mut encryptor, sink, &aad)
     }
 }
