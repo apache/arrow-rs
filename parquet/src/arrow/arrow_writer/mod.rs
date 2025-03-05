@@ -533,6 +533,13 @@ impl PageWriter for ArrowPageWriter {
         buf.data.push(header);
         buf.data.push(data);
 
+        #[cfg(feature = "encryption")]
+        if let Some(encryptor) = self.page_encryptor.as_mut() {
+            if page.compressed_page().is_data_page() {
+                encryptor.increment_page();
+            }
+        }
+
         Ok(spec)
     }
 
@@ -3717,7 +3724,11 @@ mod tests {
             FileEncryptionProperties::builder(footer_key.to_vec()).build();
 
         let props = WriterProperties::builder()
+            // Ensure multiple row groups
             .set_max_row_group_size(50)
+            // Ensure multiple pages per row group
+            .set_write_batch_size(20)
+            .set_data_page_row_count_limit(20)
             .with_file_encryption_properties(file_encryption_properties)
             .build();
 
