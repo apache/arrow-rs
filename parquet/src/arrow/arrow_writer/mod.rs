@@ -1280,11 +1280,12 @@ mod tests {
     #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::tests::verify_encryption_test_file_read;
     #[cfg(feature = "encryption")]
+    use crate::arrow::arrow_reader::ArrowReaderMetadata;
+    #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::ArrowReaderOptions;
-    use crate::arrow::arrow_reader::{
-        ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
-    };
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    #[cfg(feature = "encryption")]
     use crate::encryption::encrypt::EncryptionKey;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
