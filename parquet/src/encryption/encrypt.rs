@@ -176,6 +176,7 @@ impl FileEncryptor {
         }
         match self.properties.column_keys.get(column_path) {
             None => todo!("Handle unencrypted columns"),
+            // None => RingGcmBlockEncryptor::new(self.properties.footer_key.key()),
             Some(column_key) => RingGcmBlockEncryptor::new(column_key.key()),
         }
     }

@@ -821,8 +821,11 @@ fn get_column_writers_with_encryptor(
 ) -> Result<Vec<ArrowColumnWriter>> {
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
-    let column_factory =
-        ArrowColumnWriterFactory::new().with_file_encryptor(row_group_index, file_encryptor);
+    let column_factory = ArrowColumnWriterFactory::new().with_file_encryptor(
+        row_group_index,
+        file_encryptor,
+        arrow.clone(),
+    );
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
@@ -840,6 +843,8 @@ struct ArrowColumnWriterFactory {
     row_group_index: usize,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
+    #[cfg(feature = "encryption")]
+    schema_ref: Option<SchemaRef>,
 }
 
 impl ArrowColumnWriterFactory {
@@ -849,6 +854,8 @@ impl ArrowColumnWriterFactory {
             row_group_index: 0,
             #[cfg(feature = "encryption")]
             file_encryptor: None,
+            #[cfg(feature = "encryption")]
+            schema_ref: None,
         }
     }
 
@@ -857,9 +864,11 @@ impl ArrowColumnWriterFactory {
         mut self,
         row_group_index: usize,
         file_encryptor: Option<Arc<FileEncryptor>>,
+        schema_ref: SchemaRef,
     ) -> Self {
         self.row_group_index = row_group_index;
         self.file_encryptor = file_encryptor;
+        self.schema_ref = Some(schema_ref);
         self
     }
 
@@ -867,12 +876,10 @@ impl ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     fn create_page_writer(&self, column_index: usize) -> Box<ArrowPageWriter> {
         let page_encryptor = self.file_encryptor.as_ref().map(|fe| {
-            PageEncryptor::new(
-                fe.clone(),
-                self.row_group_index,
-                column_index,
-                b"b".to_vec(),
-            )
+            let binding = self.schema_ref.clone().unwrap();
+            let column_path = binding.field(column_index).name().as_bytes().to_vec();
+
+            PageEncryptor::new(fe.clone(), self.row_group_index, column_index, column_path)
         });
         Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
     }

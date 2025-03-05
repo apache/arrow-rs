@@ -67,6 +67,8 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
         let mut encryptor = self.file_encryptor.get_footer_encryptor();
+        // todo: use column encryptor when needed
+        // self.file_encryptor.get_column_encryptor(self.column_path.as_ref())
         let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
 
         Ok(encrypted_buffer)
