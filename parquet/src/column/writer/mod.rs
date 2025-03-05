@@ -3472,7 +3472,7 @@ mod tests {
             let string_col = batch.column(0).as_string_opt::<i32>().unwrap();
 
             let mut valid_count = 0;
-            for (_i, x) in string_col.iter().enumerate() {
+            for x in string_col.iter() {
                 if let Some(x) = x {
                     valid_count += 1;
                     assert_eq!(x, "parquet");
