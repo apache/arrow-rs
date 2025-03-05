@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::column::page::CompressedPage;
-use crate::encryption::ciphers::BlockEncryptor;
 use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::ParquetError;
@@ -66,7 +65,9 @@ impl PageEncryptor {
             self.column_index,
             Some(self.page_index),
         )?;
-        let mut encryptor = self.file_encryptor.get_column_encryptor(&self.column_path);
+        let mut encryptor = self
+            .file_encryptor
+            .get_column_encryptor(&self.column_path)?;
         // todo: use column encryptor when needed
         // self.file_encryptor.get_column_encryptor(self.column_path.as_ref())
         let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
