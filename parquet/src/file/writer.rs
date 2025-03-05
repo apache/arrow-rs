@@ -44,6 +44,8 @@ use crate::file::reader::ChunkReader;
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
 use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
+#[cfg(not(feature = "encryption"))]
+use crate::util::never::Never;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
@@ -776,6 +778,8 @@ pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
     #[cfg(feature = "encryption")]
     page_encryptor: Option<PageEncryptor>,
+    #[cfg(not(feature = "encryption"))]
+    page_encryptor: Option<Never>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -783,7 +787,6 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
         Self {
             sink,
-            #[cfg(feature = "encryption")]
             page_encryptor: None,
         }
     }
@@ -800,17 +803,15 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        #[cfg(feature = "encryption")]
-        if let Some(page_encryptor) = self.page_encryptor.as_ref() {
-            page_encryptor.encrypt_page_header(header, &mut self.sink)?;
-        } else {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            header.write_to_out_protocol(&mut protocol)?;
-        }
-        #[cfg(not(feature = "encryption"))]
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            header.write_to_out_protocol(&mut protocol)?;
+        match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(page_encryptor) => {
+                page_encryptor.encrypt_page_header(header, &mut self.sink)?;
+            }
+            _ => {
+                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
+                header.write_to_out_protocol(&mut protocol)?;
+            }
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
@@ -821,18 +822,15 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
-        #[cfg(not(feature = "encryption"))]
-        let page_data = page.data();
-
         #[cfg(feature = "encryption")]
         let encrypted_buffer;
-        #[cfg(feature = "encryption")]
         let page_data = match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
             Some(encryptor) => {
                 encrypted_buffer = encryptor.encrypt_page(&page)?;
                 &encrypted_buffer
             }
-            None => page.data(),
+            _ => page.data(),
         };
 
         let mut page_header = page.to_thrift_header();

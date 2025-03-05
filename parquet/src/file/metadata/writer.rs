@@ -31,6 +31,8 @@ use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
+#[cfg(not(feature = "encryption"))]
+use crate::util::never::Never;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
@@ -51,7 +53,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
     #[cfg(not(feature = "encryption"))]
-    file_encryptor: DisabledFileEncryptor,
+    file_encryptor: Option<Never>,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -518,17 +520,5 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                 .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
                 .collect()
         }
-    }
-}
-
-// Empty type to make matching on encryption properties more ergonomic
-#[cfg(not(feature = "encryption"))]
-#[derive(Default)]
-struct DisabledFileEncryptor {}
-
-#[cfg(not(feature = "encryption"))]
-impl DisabledFileEncryptor {
-    fn as_ref(&self) -> &Self {
-        self
     }
 }

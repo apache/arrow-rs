@@ -49,6 +49,8 @@ use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
+#[cfg(not(feature = "encryption"))]
+use crate::util::never::Never;
 use levels::{calculate_array_levels, ArrayLevels};
 
 mod byte_array;
@@ -476,6 +478,8 @@ struct ArrowPageWriter {
     buffer: SharedColumnChunk,
     #[cfg(feature = "encryption")]
     page_encryptor: Option<PageEncryptor>,
+    #[cfg(not(feature = "encryption"))]
+    page_encryptor: Option<Never>,
 }
 
 #[cfg(feature = "encryption")]
@@ -490,35 +494,28 @@ impl PageWriter for ArrowPageWriter {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let mut buf = self.buffer.try_lock().unwrap();
 
-        #[cfg(feature = "encryption")]
         let data = match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
             Some(encryptor) => {
                 let encrypted_buffer = encryptor.encrypt_page(&page)?;
                 Bytes::from(encrypted_buffer)
             }
-            None => page.compressed_page().buffer().clone(),
+            _ => page.compressed_page().buffer().clone(),
         };
-        #[cfg(not(feature = "encryption"))]
-        let data = page.compressed_page().buffer().clone();
 
         let mut page_header = page.to_thrift_header();
         page_header.compressed_page_size = data.len() as i32;
 
         let mut header = Vec::with_capacity(1024);
-        #[cfg(feature = "encryption")]
         match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
             Some(encryptor) => {
                 encryptor.encrypt_page_header(page_header, &mut header)?;
             }
-            None => {
+            _ => {
                 let mut protocol = TCompactOutputProtocol::new(&mut header);
                 page_header.write_to_out_protocol(&mut protocol)?;
             }
-        };
-        #[cfg(not(feature = "encryption"))]
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut header);
-            page_header.write_to_out_protocol(&mut protocol)?;
         };
 
         let header = Bytes::from(header);
