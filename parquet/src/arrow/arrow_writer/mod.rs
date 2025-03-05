@@ -863,12 +863,17 @@ impl ArrowColumnWriterFactory {
         self
     }
 
+    // todo: add column path
     #[cfg(feature = "encryption")]
     fn create_page_writer(&self, column_index: usize) -> Box<ArrowPageWriter> {
-        let page_encryptor = self
-            .file_encryptor
-            .as_ref()
-            .map(|fe| PageEncryptor::new(fe.clone(), self.row_group_index, column_index));
+        let page_encryptor = self.file_encryptor.as_ref().map(|fe| {
+            PageEncryptor::new(
+                fe.clone(),
+                self.row_group_index,
+                column_index,
+                b"b".to_vec(),
+            )
+        });
         Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
     }
 
@@ -1273,9 +1278,14 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "encryption")]
+    use crate::arrow::arrow_reader::tests::verify_encryption_test_file_read;
+    #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::ArrowReaderOptions;
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_reader::{
+        ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    };
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::encryption::encrypt::EncryptionKey;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -3773,5 +3783,81 @@ mod tests {
 
         let expected_x1_values: Vec<_> = [100..200, 200..250].into_iter().flatten().collect();
         assert_eq!(&x1_values, &expected_x1_values);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_non_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+        let temp_file = tempfile::tempfile().unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        // read example data
+        let (batches, schema) = read_encrypted_file(&path, decryption_properties.clone());
+
+        // write example data
+        let column_1_key = EncryptionKey::new(column_1_key.as_bytes().to_vec());
+        let column_2_key = EncryptionKey::new(column_2_key.as_bytes().to_vec());
+        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field".as_bytes().to_vec(), column_1_key)
+            .with_column_key("float_field".as_bytes().to_vec(), column_2_key)
+            .build();
+
+        let temp_file =
+            write_batches_to_encrypted_file(temp_file, file_encryption_properties, batches, schema);
+
+        // check re-written example data
+        verify_encryption_test_file_read(temp_file, decryption_properties);
+    }
+
+    #[cfg(feature = "encryption")]
+    fn write_batches_to_encrypted_file(
+        temp_file: File,
+        file_encryption_properties: FileEncryptionProperties,
+        batches: Vec<RecordBatch>,
+        schema: SchemaRef,
+    ) -> File {
+        let props = WriterProperties::builder()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(temp_file.try_clone().unwrap(), schema, Some(props)).unwrap();
+        for batch in batches {
+            writer.write(&batch).unwrap();
+        }
+
+        writer.close().unwrap();
+        temp_file
+    }
+
+    #[cfg(feature = "encryption")]
+    fn read_encrypted_file(
+        path: &str,
+        decryption_properties: FileDecryptionProperties,
+    ) -> (Vec<RecordBatch>, SchemaRef) {
+        let file = File::open(path).unwrap();
+        let options =
+            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let batch_reader = builder.build().unwrap();
+        (
+            batch_reader
+                .collect::<Result<Vec<RecordBatch>, _>>()
+                .unwrap(),
+            metadata.schema,
+        )
     }
 }

@@ -1546,14 +1546,14 @@ mod tests {
         schema::parser::parse_message_type,
     };
 
+    use super::*;
+    #[cfg(feature = "encryption")]
+    use crate::encryption::encrypt::EncryptionKey;
     #[cfg(feature = "encryption")]
     use arrow_array::cast::AsArray;
     use core::str;
     use rand::distributions::uniform::SampleUniform;
     use std::{fs::File, sync::Arc};
-    #[cfg(feature = "encryption")]
-    use crate::encryption::encrypt::EncryptionKey;
-    use super::*;
 
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
@@ -3504,9 +3504,9 @@ mod tests {
         let builder = WriterProperties::builder();
         let footer_key: &[u8] = "0123456789012345".as_bytes();
         let column_key = EncryptionKey::new(b"1234567890123450".to_vec());
-        let file_encryption_properties =
-            FileEncryptionProperties::builder(footer_key.to_vec())
-                .with_column_key(b"a".to_vec(), column_key.clone()).build();
+        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+            .with_column_key(b"a".to_vec(), column_key.clone())
+            .build();
 
         let props = Arc::new(
             builder
