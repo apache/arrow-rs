@@ -22,3 +22,4 @@ pub(crate) mod ciphers;
 pub mod decrypt;
 pub mod encrypt;
 pub(crate) mod modules;
+pub(crate) mod page_encryptor;
