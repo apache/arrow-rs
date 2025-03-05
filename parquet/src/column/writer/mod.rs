@@ -3391,7 +3391,7 @@ mod tests {
 
     #[cfg(feature = "encryption")]
     #[test]
-    fn test_encryption_writer() {
+    fn test_write_encrypted_column() {
         let message_type = "
             message test_schema {
                 OPTIONAL BYTE_ARRAY a (UTF8);
@@ -3401,39 +3401,43 @@ mod tests {
         let data = vec![ByteArray::from(b"parquet".to_vec()); 7];
         let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
 
+        let num_row_groups = 3;
+        let num_batches = 3;
+        let rows_per_batch = def_levels.len();
+        let valid_rows_per_batch = def_levels.iter().filter(|&level| *level > 0).count();
+
         let file: File = tempfile::tempfile().unwrap();
 
         let builder = WriterProperties::builder();
-        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let footer_key: &[u8] = "0123456789012345".as_bytes();
         let file_encryption_properties =
-            FileEncryptionProperties::builder(key_code.to_vec()).build();
+            FileEncryptionProperties::builder(footer_key.to_vec()).build();
 
         let props = Arc::new(
             builder
                 .with_file_encryption_properties(file_encryption_properties)
-                // Temporarily test without dictionary pages
-                .set_dictionary_enabled(false)
+                .set_data_page_row_count_limit(rows_per_batch)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
+        for _ in 0..num_row_groups {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
 
-        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
-        col_writer
-            .typed::<ByteArrayType>()
-            .write_batch(&data, Some(&def_levels), None)
-            .unwrap();
-        col_writer.close().unwrap();
-        row_group_writer.close().unwrap();
+            for _ in 0..num_batches {
+                col_writer
+                    .typed::<ByteArrayType>()
+                    .write_batch(&data, Some(&def_levels), None)
+                    .unwrap();
+            }
+
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+
         let _file_metadata = writer.close().unwrap();
 
-        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-                                                        // let column_1_key = "1234567890123450".as_bytes();
-                                                        // let column_2_key = "1234567890123451".as_bytes();
-
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            // .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            // .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
             .build()
             .unwrap();
         let options = ArrowReaderOptions::default()
@@ -3444,16 +3448,22 @@ mod tests {
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
         let record_reader = builder.build().unwrap();
 
-        assert_eq!(file_metadata.num_rows(), 10);
+        assert_eq!(
+            file_metadata.num_rows(),
+            (num_row_groups * num_batches * rows_per_batch) as i64
+        );
         assert_eq!(file_metadata.schema_descr().num_columns(), 1);
         assert_eq!(
             file_metadata.created_by().unwrap(),
             "parquet-rs version 54.2.0"
         );
+
+        assert_eq!(metadata.metadata.num_row_groups(), num_row_groups);
         metadata.metadata.row_groups().iter().for_each(|rg| {
             assert_eq!(rg.num_columns(), 1);
-            assert_eq!(rg.num_rows(), 10);
+            assert_eq!(rg.num_rows(), (num_batches * rows_per_batch) as i64);
         });
+
         let mut row_count = 0;
         for batch in record_reader {
             let batch = batch.unwrap();
@@ -3468,7 +3478,10 @@ mod tests {
                     assert_eq!(x, "parquet");
                 }
             }
-            assert_eq!(valid_count, 7);
+            assert_eq!(
+                valid_count,
+                valid_rows_per_batch * num_batches * num_row_groups
+            );
         }
 
         assert_eq!(row_count, file_metadata.num_rows() as usize);

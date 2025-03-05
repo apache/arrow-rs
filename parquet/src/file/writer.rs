@@ -22,7 +22,9 @@ use crate::bloom_filter::Sbbf;
 #[cfg(feature = "encryption")]
 use crate::encryption::ciphers::BlockEncryptor;
 use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex, PageHeader, PageType};
+use crate::format::{ColumnIndex, OffsetIndex};
+#[cfg(feature = "encryption")]
+use crate::format::{PageHeader, PageType};
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -572,20 +574,19 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     {
         self.assert_previous_writer_closed()?;
 
+        #[cfg(feature = "encryption")]
+        let page_encryptor = match self.file_encryptor.as_ref() {
+            None => None,
+            Some(file_encryptor) => Some(PageEncryptor::new(
+                file_encryptor.clone(),
+                self.row_group_index,
+                self.column_index,
+            )),
+        };
+
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
-
-                #[cfg(feature = "encryption")]
-                let page_encryptor = match self.file_encryptor.as_ref() {
-                    None => None,
-                    Some(file_encryptor) => Some(PageEncryptor::new(
-                        file_encryptor.clone(),
-                        self.row_group_index,
-                        self.column_index - 1,
-                    )),
-                };
-
                 let (buf, on_close) = self.get_on_close();
 
                 #[cfg(feature = "encryption")]
@@ -851,7 +852,9 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 
         #[cfg(feature = "encryption")]
         if let Some(page_encryptor) = self.page_encryptor.as_mut() {
-            page_encryptor.increment_page();
+            if page.compressed_page().is_data_page() {
+                page_encryptor.increment_page();
+            }
         }
 
         Ok(spec)
