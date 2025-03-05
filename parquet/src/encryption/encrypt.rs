@@ -17,6 +17,8 @@
 
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::Result;
+use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
+use crate::schema::types::ColumnDescPtr;
 use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
@@ -51,7 +53,7 @@ impl EncryptionKey {
 pub struct FileEncryptionProperties {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
-    column_keys: HashMap<Vec<u8>, EncryptionKey>,
+    column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     store_aad_prefix: bool,
 }
@@ -80,7 +82,7 @@ impl FileEncryptionProperties {
 
 pub struct EncryptionPropertiesBuilder {
     footer_key: EncryptionKey,
-    column_keys: HashMap<Vec<u8>, EncryptionKey>,
+    column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     encrypt_footer: bool,
     store_aad_prefix: bool,
@@ -107,8 +109,8 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
-    pub fn with_column_key(mut self, column_name: Vec<u8>, encryption_key: EncryptionKey) -> Self {
-        self.column_keys.insert(column_name, encryption_key);
+    pub fn with_column_key(mut self, column_path: String, encryption_key: EncryptionKey) -> Self {
+        self.column_keys.insert(column_path, encryption_key);
         self
     }
 
@@ -179,8 +181,6 @@ impl FileEncryptor {
         if self.properties.column_keys.is_empty() {
             return self.get_footer_encryptor();
         }
-        // TODO: Column paths should be stored as String
-        let column_path = column_path.as_bytes();
         match self.properties.column_keys.get(column_path) {
             None => todo!("Handle unencrypted columns"),
             Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
@@ -188,9 +188,10 @@ impl FileEncryptor {
     }
 }
 
+/// Encrypt a Thrift serializable object
 pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
-    object: T,
-    encryptor: &FileEncryptor,
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
@@ -200,11 +201,45 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
         object.write_to_out_protocol(&mut unencrypted_protocol)?;
     }
 
-    // TODO: Get correct encryptor (footer vs column, data vs metadata)
-    let encrypted_buffer = encryptor
-        .get_footer_encryptor()?
-        .encrypt(buffer.as_ref(), module_aad);
+    let encrypted_buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
 
     sink.write_all(&encrypted_buffer)?;
     Ok(())
+}
+
+/// Encrypt a Thrift serializable object
+pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
+    module_aad: &[u8],
+) -> Result<Vec<u8>> {
+    let mut buffer: Vec<u8> = vec![];
+    {
+        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
+        object.write_to_out_protocol(&mut unencrypted_protocol)?;
+    }
+
+    encryptor.encrypt(buffer.as_ref(), module_aad)
+}
+
+/// Get the crypto metadata for a column from the file encryption properties
+pub fn get_column_crypto_metadata(
+    properties: &FileEncryptionProperties,
+    column: &ColumnDescPtr,
+) -> Option<ColumnCryptoMetaData> {
+    if properties.column_keys.is_empty() {
+        // Uniform encryption
+        Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+    } else {
+        properties
+            .column_keys
+            .get(&column.path().string())
+            .map(|encryption_key| {
+                // Column is encrypted with a column specific key
+                ColumnCryptoMetaData::EncryptionWithColumnKey(EncryptionWithColumnKey {
+                    path_in_schema: column.path().parts().to_vec(),
+                    key_metadata: encryption_key.key_metadata.clone(),
+                })
+            })
+    }
 }

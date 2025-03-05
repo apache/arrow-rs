@@ -510,7 +510,7 @@ impl PageWriter for ArrowPageWriter {
         match self.page_encryptor.as_ref() {
             #[cfg(feature = "encryption")]
             Some(encryptor) => {
-                encryptor.encrypt_page_header(page_header, &mut header)?;
+                encryptor.encrypt_page_header(&page_header, &mut header)?;
             }
             _ => {
                 let mut protocol = TCompactOutputProtocol::new(&mut header);
@@ -3824,8 +3824,8 @@ mod tests {
         let column_1_key = EncryptionKey::new(column_1_key.as_bytes().to_vec());
         let column_2_key = EncryptionKey::new(column_2_key.as_bytes().to_vec());
         let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key)
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key)
+            .with_column_key("double_field".into(), column_1_key)
+            .with_column_key("float_field".into(), column_2_key)
             .build();
 
         let temp_file =

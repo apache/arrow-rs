@@ -65,7 +65,7 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
 }
 
 pub trait BlockEncryptor: Debug + Send + Sync {
-    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
+    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -134,20 +134,28 @@ impl RingGcmBlockEncryptor {
 }
 
 impl BlockEncryptor for RingGcmBlockEncryptor {
-    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8> {
-        let mut ciphertext = Vec::with_capacity(plaintext.len() + TAG_LEN);
-        ciphertext.extend(plaintext);
-        let nonce = self.nonce_sequence.advance().unwrap();
-        let nonce_bytes = *nonce.as_ref();
-        self.key
-            .seal_in_place_append_tag(nonce, Aad::from(aad), &mut ciphertext)
-            .unwrap();
+    fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+        // Create encrypted buffer.
+        // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
+        let ciphertext_length = NONCE_LEN + plaintext.len() + TAG_LEN;
+        let mut ciphertext = Vec::with_capacity(SIZE_LEN + ciphertext_length);
+        ciphertext.extend((ciphertext_length as u32).to_le_bytes());
 
-        let mut out = Vec::with_capacity(ciphertext.len() + SIZE_LEN + NONCE_LEN);
-        out.extend(((ciphertext.len() + NONCE_LEN) as u32).to_le_bytes());
-        out.extend(nonce_bytes);
-        out.extend_from_slice(ciphertext.as_ref());
-        out
+        let nonce = self.nonce_sequence.advance()?;
+        ciphertext.extend(nonce.as_ref());
+        ciphertext.extend(plaintext);
+
+        let tag = self.key.seal_in_place_separate_tag(
+            nonce,
+            Aad::from(aad),
+            &mut ciphertext[SIZE_LEN + NONCE_LEN..],
+        )?;
+
+        ciphertext.extend(tag.as_ref());
+
+        debug_assert_eq!(SIZE_LEN + ciphertext_length, ciphertext.len());
+
+        Ok(ciphertext)
     }
 }
 
@@ -164,7 +172,7 @@ mod tests {
         let plaintext = b"hello, world!";
         let aad = b"some aad";
 
-        let ciphertext = encryptor.encrypt(plaintext, aad);
+        let ciphertext = encryptor.encrypt(plaintext, aad).unwrap();
         let decrypted = decryptor.decrypt(&ciphertext, aad).unwrap();
 
         assert_eq!(plaintext, decrypted.as_slice());
