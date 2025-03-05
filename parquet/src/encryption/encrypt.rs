@@ -166,19 +166,24 @@ impl FileEncryptor {
         &self.aad_file_unique
     }
 
-    pub(crate) fn get_footer_encryptor(&self) -> RingGcmBlockEncryptor {
-        RingGcmBlockEncryptor::new(&self.properties.footer_key.key)
+    pub(crate) fn get_footer_encryptor(&self) -> Result<Box<dyn BlockEncryptor>> {
+        Ok(Box::new(RingGcmBlockEncryptor::new(
+            &self.properties.footer_key.key,
+        )?))
     }
 
-    pub(crate) fn get_column_encryptor(&self, column_path: &str) -> RingGcmBlockEncryptor {
+    pub(crate) fn get_column_encryptor(
+        &self,
+        column_path: &str,
+    ) -> Result<Box<dyn BlockEncryptor>> {
         if self.properties.column_keys.is_empty() {
-            return RingGcmBlockEncryptor::new(self.properties.footer_key.key());
+            return self.get_footer_encryptor();
         }
         // TODO: Column paths should be stored as String
         let column_path = column_path.as_bytes();
         match self.properties.column_keys.get(column_path) {
             None => todo!("Handle unencrypted columns"),
-            Some(column_key) => RingGcmBlockEncryptor::new(column_key.key()),
+            Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
         }
     }
 }
@@ -197,7 +202,7 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
 
     // TODO: Get correct encryptor (footer vs column, data vs metadata)
     let encrypted_buffer = encryptor
-        .get_footer_encryptor()
+        .get_footer_encryptor()?
         .encrypt(buffer.as_ref(), module_aad);
 
     sink.write_all(&encrypted_buffer)?;

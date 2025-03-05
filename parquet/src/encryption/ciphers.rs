@@ -64,7 +64,7 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
     }
 }
 
-pub trait BlockEncryptor: Debug + Send + Sync + Clone {
+pub trait BlockEncryptor: Debug + Send + Sync {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Vec<u8>;
 }
 
@@ -75,19 +75,19 @@ struct CounterNonce {
 }
 
 impl CounterNonce {
-    pub fn new(rng: &SystemRandom) -> Self {
+    pub fn new(rng: &SystemRandom) -> Result<Self> {
         let mut buf = [0; 16];
-        rng.fill(&mut buf).unwrap();
+        rng.fill(&mut buf)?;
 
-        // Since this is a random seed value, endianess doesn't matter at all,
+        // Since this is a random seed value, endianness doesn't matter at all,
         // and we can use whatever is platform-native.
         let start = u128::from_ne_bytes(buf) & RIGHT_TWELVE;
         let counter = start.wrapping_add(1);
 
-        Self { start, counter }
+        Ok(Self { start, counter })
     }
 
-    /// One accessor for the nonce bytes to avoid potentially flipping endianess
+    /// One accessor for the nonce bytes to avoid potentially flipping endianness
     #[inline]
     pub fn get_bytes(&self) -> [u8; NONCE_LEN] {
         self.counter.to_le_bytes()[0..NONCE_LEN].try_into().unwrap()
@@ -115,22 +115,21 @@ pub(crate) struct RingGcmBlockEncryptor {
 }
 
 impl RingGcmBlockEncryptor {
-    // todo TBD: some KMS systems produce data keys, need to be able to pass them to Encryptor.
-    // todo TBD: for other KMSs, we will create data keys inside arrow-rs, making sure to use SystemRandom
     /// Create a new `RingGcmBlockEncryptor` with a given key and random nonce.
     /// The nonce will advance appropriately with each block encryption and
     /// return an error if it wraps around.
-    pub(crate) fn new(key_bytes: &[u8]) -> Self {
+    pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         let rng = SystemRandom::new();
 
         // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes).unwrap();
-        let nonce = CounterNonce::new(&rng);
+        let key = UnboundKey::new(&AES_128_GCM, key_bytes)
+            .map_err(|e| general_err!("Error creating AES key: {}", e))?;
+        let nonce = CounterNonce::new(&rng)?;
 
-        Self {
+        Ok(Self {
             key: LessSafeKey::new(key),
             nonce_sequence: nonce,
-        }
+        })
     }
 }
 
@@ -159,7 +158,7 @@ mod tests {
     #[test]
     fn test_round_trip() {
         let key = [0u8; 16];
-        let mut encryptor = RingGcmBlockEncryptor::new(&key);
+        let mut encryptor = RingGcmBlockEncryptor::new(&key).unwrap();
         let decryptor = RingGcmBlockDecryptor::new(&key);
 
         let plaintext = b"hello, world!";
