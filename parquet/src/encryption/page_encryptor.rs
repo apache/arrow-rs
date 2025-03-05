@@ -30,6 +30,7 @@ pub struct PageEncryptor {
     row_group_index: usize,
     column_index: usize,
     page_index: usize,
+    column_path: Vec<u8>,
 }
 
 impl PageEncryptor {
@@ -37,12 +38,14 @@ impl PageEncryptor {
         file_encryptor: Arc<FileEncryptor>,
         row_group_index: usize,
         column_index: usize,
+        column_path: Vec<u8>,
     ) -> Self {
         Self {
             file_encryptor,
             row_group_index,
             column_index,
             page_index: 0,
+            column_path,
         }
     }
 
