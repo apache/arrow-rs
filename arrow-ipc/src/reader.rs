@@ -1571,12 +1571,14 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+    use crate::convert::fb_to_schema;
+    use crate::writer::{
+        unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
+    };
 
     use super::*;
 
-    use crate::convert::fb_to_schema;
-    use crate::{root_as_footer, root_as_message};
+    use crate::{root_as_footer, root_as_message, size_prefixed_root_as_message};
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::{NullBuffer, OffsetBuffer};
@@ -2818,5 +2820,44 @@ mod tests {
         read_ipc_with_decoder_skip_validation(buf.clone()).unwrap();
         let err = read_ipc_with_decoder(buf).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
+    }
+
+    #[test]
+    fn test_roundtrip_schema() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+
+        let options = IpcWriteOptions::default();
+        let data_gen = IpcDataGenerator::default();
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let encoded_data =
+            data_gen.schema_to_bytes_with_dictionary_tracker(&schema, &mut dict_tracker, &options);
+        let mut schema_bytes = vec![];
+        write_message(&mut schema_bytes, encoded_data, &options).expect("write_message");
+
+        let begin_offset: usize = if schema_bytes[0..4].eq(&CONTINUATION_MARKER) {
+            4
+        } else {
+            0
+        };
+
+        size_prefixed_root_as_message(&schema_bytes[begin_offset..])
+            .expect_err("size_prefixed_root_as_message");
+
+        let msg = parse_message(&schema_bytes).expect("parse_message");
+        let ipc_schema = msg.header_as_schema().expect("header_as_schema");
+        let new_schema = fb_to_schema(ipc_schema);
+
+        assert_eq!(schema, new_schema);
     }
 }

@@ -28,7 +28,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::writer::DictionaryTracker;
-use crate::{size_prefixed_root_as_message, KeyValue, Message, CONTINUATION_MARKER};
+use crate::{KeyValue, Message, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Low level Arrow [Schema] to IPC bytes converter
@@ -255,32 +255,43 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
-    if buffer.len() >= 4 {
-        // check continuation marker
-        let continuation_marker = &buffer[0..4];
-        let begin_offset: usize = if continuation_marker.eq(&CONTINUATION_MARKER) {
-            // 4 bytes: CONTINUATION_MARKER
-            // 4 bytes: length
-            // buffer
-            4
-        } else {
-            // backward compatibility for buffer without the continuation marker
-            // 4 bytes: length
-            // buffer
-            0
-        };
-        let msg = size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to convert flight info to a message: {err}"))
-        })?;
-        let ipc_schema = msg.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError("Unable to convert flight info to a schema".to_string())
-        })?;
-        Ok(fb_to_schema(ipc_schema))
-    } else {
-        Err(ArrowError::ParseError(
+    if buffer.len() < 4 {
+        return Err(ArrowError::ParseError(
             "The buffer length is less than 4 and missing the continuation marker or length of buffer".to_string()
-        ))
+        ));
     }
+
+    let (len, buffer) = if buffer[..4] == CONTINUATION_MARKER {
+        if buffer.len() < 8 {
+            return Err(ArrowError::ParseError(
+                "The buffer length is less than 8 and missing the length of buffer".to_string(),
+            ));
+        }
+        buffer[4..].split_at(4)
+    } else {
+        buffer.split_at(4)
+    };
+
+    let len = <i32>::from_le_bytes(len.try_into().unwrap());
+    if len < 0 {
+        return Err(ArrowError::ParseError(format!(
+            "The encapsulated message's reported length is negative ({len})"
+        )));
+    }
+
+    if buffer.len() < len as usize {
+        let actual_len = buffer.len();
+        return Err(ArrowError::ParseError(
+            format!("The buffer length ({actual_len}) is less than the encapsulated message's reported length ({len})")
+        ));
+    }
+
+    let msg = crate::root_as_message(buffer)
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
+    let ipc_schema = msg.header_as_schema().ok_or_else(|| {
+        ArrowError::ParseError("Unable to convert flight info to a schema".to_string())
+    })?;
+    Ok(fb_to_schema(ipc_schema))
 }
 
 /// Get the Arrow data type from the flatbuffer Field table
