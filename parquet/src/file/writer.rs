@@ -19,12 +19,8 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
-#[cfg(feature = "encryption")]
-use crate::encryption::ciphers::BlockEncryptor;
 use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex};
-#[cfg(feature = "encryption")]
-use crate::format::{PageHeader, PageType};
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -38,9 +34,9 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
-use crate::encryption::encrypt::{encrypt_object, FileEncryptionProperties, FileEncryptor};
+use crate::encryption::encrypt::{FileEncryptionProperties, FileEncryptor};
 #[cfg(feature = "encryption")]
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::page_encryptor::PageEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -400,6 +396,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     pub fn bytes_written(&self) -> usize {
         self.buf.bytes_written()
     }
+
+    /// Get the file encryptor used by this instance to encrypt data
+    #[cfg(feature = "encryption")]
+    pub(crate) fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
+        self.file_encryptor.clone()
+    }
 }
 
 /// Serialize all the bloom filters of the given row group to the given buffer,
@@ -579,7 +581,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             None => None,
             Some(file_encryptor) => Some(PageEncryptor::new(
                 file_encryptor.clone(),
-                self.row_group_index,
+                self.row_group_index as usize,
                 self.column_index,
             )),
         };
@@ -883,81 +885,6 @@ pub(crate) fn get_file_magic(
 #[cfg(not(feature = "encryption"))]
 pub(crate) fn get_file_magic() -> &'static [u8; 4] {
     &PARQUET_MAGIC
-}
-
-#[cfg(feature = "encryption")]
-#[derive(Debug)]
-struct PageEncryptor {
-    file_encryptor: Arc<FileEncryptor>,
-    row_group_index: i16,
-    column_index: usize,
-    page_index: usize,
-}
-
-#[cfg(feature = "encryption")]
-impl PageEncryptor {
-    pub fn new(
-        file_encryptor: Arc<FileEncryptor>,
-        row_group_index: i16,
-        column_index: usize,
-    ) -> Self {
-        Self {
-            file_encryptor,
-            row_group_index,
-            column_index,
-            page_index: 0,
-        }
-    }
-
-    pub fn increment_page(&mut self) {
-        self.page_index += 1;
-    }
-
-    pub fn encrypt_page(&self, page: &CompressedPage) -> Result<Vec<u8>> {
-        let module_type = if page.compressed_page().is_data_page() {
-            ModuleType::DataPage
-        } else {
-            ModuleType::DictionaryPage
-        };
-        let aad = create_module_aad(
-            self.file_encryptor.file_aad(),
-            module_type,
-            self.row_group_index as usize,
-            self.column_index,
-            Some(self.page_index),
-        )?;
-        let mut encryptor = self.file_encryptor.get_footer_encryptor();
-        let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
-
-        Ok(encrypted_buffer)
-    }
-
-    pub fn encrypt_page_header<W: Write>(
-        &self,
-        page_header: PageHeader,
-        sink: &mut W,
-    ) -> Result<()> {
-        let module_type = match page_header.type_ {
-            PageType::DATA_PAGE => ModuleType::DataPageHeader,
-            PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
-            PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
-            _ => {
-                return Err(general_err!(
-                    "Unsupported page type for page header encryption: {:?}",
-                    page_header.type_
-                ))
-            }
-        };
-        let aad = create_module_aad(
-            self.file_encryptor.file_aad(),
-            module_type,
-            self.row_group_index as usize,
-            self.column_index,
-            Some(self.page_index),
-        )?;
-
-        encrypt_object(page_header, &self.file_encryptor, sink, &aad)
-    }
 }
 
 #[cfg(test)]
