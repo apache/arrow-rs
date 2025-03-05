@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [object_store_0.12.0](https://github.com/apache/arrow-rs/tree/object_store_0.12.0) (2025-03-04)
+## [object_store_0.12.0](https://github.com/apache/arrow-rs/tree/object_store_0.12.0) (2025-03-05)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.11.2...object_store_0.12.0)
 
@@ -33,6 +33,7 @@
 - Use `u64` range instead of `usize`, for better wasm32 support [\#6961](https://github.com/apache/arrow-rs/pull/6961) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([XiangpengHao](https://github.com/XiangpengHao))
 - object\_store: Add enabled-by-default "fs" feature [\#6636](https://github.com/apache/arrow-rs/pull/6636) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Turbo87](https://github.com/Turbo87))
 - Return `BoxStream` with `'static` lifetime from `ObjectStore::list` [\#6619](https://github.com/apache/arrow-rs/pull/6619) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylebarron](https://github.com/kylebarron))
+- object\_store: Migrate from snafu to thiserror [\#6266](https://github.com/apache/arrow-rs/pull/6266) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Turbo87](https://github.com/Turbo87))
 
 **Implemented enhancements:**
 
