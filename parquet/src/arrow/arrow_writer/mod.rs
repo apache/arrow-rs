@@ -821,11 +821,8 @@ fn get_column_writers_with_encryptor(
 ) -> Result<Vec<ArrowColumnWriter>> {
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
-    let column_factory = ArrowColumnWriterFactory::new().with_file_encryptor(
-        row_group_index,
-        file_encryptor,
-        arrow.clone(),
-    );
+    let column_factory =
+        ArrowColumnWriterFactory::new().with_file_encryptor(row_group_index, file_encryptor);
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
@@ -843,8 +840,6 @@ struct ArrowColumnWriterFactory {
     row_group_index: usize,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
-    #[cfg(feature = "encryption")]
-    schema_ref: Option<SchemaRef>,
 }
 
 impl ArrowColumnWriterFactory {
@@ -854,8 +849,6 @@ impl ArrowColumnWriterFactory {
             row_group_index: 0,
             #[cfg(feature = "encryption")]
             file_encryptor: None,
-            #[cfg(feature = "encryption")]
-            schema_ref: None,
         }
     }
 
@@ -864,28 +857,31 @@ impl ArrowColumnWriterFactory {
         mut self,
         row_group_index: usize,
         file_encryptor: Option<Arc<FileEncryptor>>,
-        schema_ref: SchemaRef,
     ) -> Self {
         self.row_group_index = row_group_index;
         self.file_encryptor = file_encryptor;
-        self.schema_ref = Some(schema_ref);
         self
     }
 
-    // todo: add column path
     #[cfg(feature = "encryption")]
-    fn create_page_writer(&self, column_index: usize) -> Box<ArrowPageWriter> {
+    fn create_page_writer(
+        &self,
+        column_descriptor: &ColumnDescPtr,
+        column_index: usize,
+    ) -> Box<ArrowPageWriter> {
         let page_encryptor = self.file_encryptor.as_ref().map(|fe| {
-            let binding = self.schema_ref.clone().unwrap();
-            let column_path = binding.field(column_index).name().as_bytes().to_vec();
-
+            let column_path = column_descriptor.path().string();
             PageEncryptor::new(fe.clone(), self.row_group_index, column_index, column_path)
         });
         Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn create_page_writer(&self, _column_index: usize) -> Box<ArrowPageWriter> {
+    fn create_page_writer(
+        &self,
+        _column_descriptor: &ColumnDescPtr,
+        _column_index: usize,
+    ) -> Box<ArrowPageWriter> {
         Box::<ArrowPageWriter>::default()
     }
 
@@ -897,7 +893,7 @@ impl ArrowColumnWriterFactory {
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
         let col = |desc: &ColumnDescPtr| {
-            let page_writer = self.create_page_writer(out.len());
+            let page_writer = self.create_page_writer(desc, out.len());
             let chunk = page_writer.buffer.clone();
             let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
             ArrowColumnWriter {
@@ -907,7 +903,7 @@ impl ArrowColumnWriterFactory {
         };
 
         let bytes = |desc: &ColumnDescPtr| {
-            let page_writer = self.create_page_writer(out.len());
+            let page_writer = self.create_page_writer(desc, out.len());
             let chunk = page_writer.buffer.clone();
             let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
             ArrowColumnWriter {

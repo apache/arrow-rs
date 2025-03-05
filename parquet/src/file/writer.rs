@@ -596,7 +596,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                         file_encryptor,
                         row_group_index,
                         column_index,
-                        column.path().string().into_bytes(),
+                        column.path().string(),
                     )
                 });
 

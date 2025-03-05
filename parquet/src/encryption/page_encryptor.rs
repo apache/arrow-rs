@@ -29,8 +29,8 @@ pub struct PageEncryptor {
     file_encryptor: Arc<FileEncryptor>,
     row_group_index: usize,
     column_index: usize,
+    column_path: String,
     page_index: usize,
-    column_path: Vec<u8>,
 }
 
 impl PageEncryptor {
@@ -38,14 +38,14 @@ impl PageEncryptor {
         file_encryptor: Arc<FileEncryptor>,
         row_group_index: usize,
         column_index: usize,
-        column_path: Vec<u8>,
+        column_path: String,
     ) -> Self {
         Self {
             file_encryptor,
             row_group_index,
             column_index,
-            page_index: 0,
             column_path,
+            page_index: 0,
         }
     }
 
@@ -66,7 +66,7 @@ impl PageEncryptor {
             self.column_index,
             Some(self.page_index),
         )?;
-        let mut encryptor = self.file_encryptor.get_footer_encryptor();
+        let mut encryptor = self.file_encryptor.get_column_encryptor(&self.column_path);
         // todo: use column encryptor when needed
         // self.file_encryptor.get_column_encryptor(self.column_path.as_ref())
         let encrypted_buffer = encryptor.encrypt(page.data(), &aad);
