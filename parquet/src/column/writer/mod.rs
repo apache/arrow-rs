@@ -32,6 +32,8 @@ use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
@@ -1197,6 +1199,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 .set_definition_level_histogram(
                     self.column_metrics.definition_level_histogram.take(),
                 );
+        }
+
+        #[cfg(feature = "encryption")]
+        if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
+            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                encryption_properties,
+                &self.descr,
+            ));
         }
 
         let metadata = builder.build()?;
@@ -3505,7 +3515,7 @@ mod tests {
         let footer_key: &[u8] = "0123456789012345".as_bytes();
         let column_key = EncryptionKey::new(b"1234567890123450".to_vec());
         let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-            .with_column_key(b"a".to_vec(), column_key.clone())
+            .with_column_key("a".into(), column_key.clone())
             .build();
 
         let props = Arc::new(

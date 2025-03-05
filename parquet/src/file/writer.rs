@@ -34,7 +34,9 @@ use crate::column::{
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
-use crate::encryption::encrypt::{FileEncryptionProperties, FileEncryptor};
+use crate::encryption::encrypt::{
+    get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
+};
 #[cfg(feature = "encryption")]
 use crate::encryption::page_encryptor::PageEncryptor;
 use crate::errors::{ParquetError, Result};
@@ -689,6 +691,13 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        #[cfg(feature = "encryption")]
+        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
+            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                file_encryptor.properties(),
+                &metadata.column_descr_ptr(),
+            ));
+        }
         close.metadata = builder.build()?;
 
         if let Some(offsets) = close.offset_index.as_mut() {
@@ -813,7 +822,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
         match self.page_encryptor.as_ref() {
             #[cfg(feature = "encryption")]
             Some(page_encryptor) => {
-                page_encryptor.encrypt_page_header(header, &mut self.sink)?;
+                page_encryptor.encrypt_page_header(&header, &mut self.sink)?;
             }
             _ => {
                 let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
