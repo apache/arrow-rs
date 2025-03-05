@@ -579,19 +579,27 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         self.assert_previous_writer_closed()?;
 
         #[cfg(feature = "encryption")]
-        let page_encryptor = match self.file_encryptor.as_ref() {
-            None => None,
-            Some(file_encryptor) => Some(PageEncryptor::new(
-                file_encryptor.clone(),
-                self.row_group_index as usize,
-                self.column_index,
-            )),
-        };
+        let file_encryptor = self.file_encryptor.clone();
+        #[cfg(feature = "encryption")]
+        let row_group_index = self.row_group_index as usize;
+        #[cfg(feature = "encryption")]
+        let column_index = self.column_index;
 
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
                 let (buf, on_close) = self.get_on_close();
+
+                #[cfg(feature = "encryption")]
+                let page_encryptor = match file_encryptor {
+                    None => None,
+                    Some(file_encryptor) => Some(PageEncryptor::new(
+                        file_encryptor,
+                        row_group_index,
+                        column_index,
+                        column.path().string().into_bytes(),
+                    )),
+                };
 
                 #[cfg(feature = "encryption")]
                 let page_writer =
