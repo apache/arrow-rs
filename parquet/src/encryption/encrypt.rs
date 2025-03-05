@@ -165,7 +165,7 @@ impl FileEncryptor {
     pub fn aad_file_unique(&self) -> &Vec<u8> {
         &self.aad_file_unique
     }
-    
+
     pub(crate) fn get_footer_encryptor(&self) -> RingGcmBlockEncryptor {
         RingGcmBlockEncryptor::new(&self.properties.footer_key.key)
     }
@@ -176,7 +176,7 @@ impl FileEncryptor {
         }
         match self.properties.column_keys.get(column_path) {
             None => todo!("Handle unencrypted columns"),
-            Some(column_key) => RingGcmBlockEncryptor::new(column_key.key())
+            Some(column_key) => RingGcmBlockEncryptor::new(column_key.key()),
         }
     }
 }
