@@ -3413,7 +3413,6 @@ mod tests {
                 .with_file_encryption_properties(file_encryption_properties)
                 // Temporarily test without dictionary pages
                 .set_dictionary_enabled(false)
-                .set_data_page_size_limit(1)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();

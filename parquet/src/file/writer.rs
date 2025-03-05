@@ -582,7 +582,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                     Some(file_encryptor) => Some(PageEncryptor::new(
                         file_encryptor.clone(),
                         self.row_group_index,
-                        self.column_index,
+                        self.column_index - 1,
                     )),
                 };
 
