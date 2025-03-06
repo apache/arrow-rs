@@ -26,6 +26,34 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Builder for [`DictionaryArray`] of [`FixedSizeBinaryArray`]
+///
+/// The output array has a dictionary of unique, fixed-size binary values. The
+/// builder handles deduplication.
+///
+/// # Example
+/// ```
+/// # use arrow_array::builder::{FixedSizeBinaryDictionaryBuilder};
+/// # use arrow_array::array::{Array, FixedSizeBinaryArray};
+/// # use arrow_array::DictionaryArray;
+/// # use arrow_array::types::Int8Type;
+/// // Build 3 byte FixedBinaryArrays
+/// let byte_width = 3;
+/// let mut builder = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
+/// builder.append("abc").unwrap();
+/// builder.append_null();
+/// builder.append(b"def").unwrap();
+/// builder.append(b"def").unwrap(); // duplicate value
+/// // Result is a Dictionary Array
+/// let array = builder.finish();
+/// let dict_array = array.as_any().downcast_ref::<DictionaryArray<Int8Type>>().unwrap();
+/// // The array represents "abc", null, "def", "def"
+/// assert_eq!(array.keys().len(), 4);
+/// // but there are only 2 unique values
+/// assert_eq!(array.values().len(), 2);
+/// let values = dict_array.values().as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
+/// assert_eq!(values.value(0), "abc".as_bytes());
+/// assert_eq!(values.value(1), "def".as_bytes());
+/// ```
 #[derive(Debug)]
 pub struct FixedSizeBinaryDictionaryBuilder<K>
 where
