@@ -830,6 +830,21 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_struct_array() {
+        assert!(StructArray::try_new(Fields::empty(), vec![], None).is_err());
+
+        let arr = StructArray::new_empty_fields(10, None);
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 0);
+        assert_eq!(arr.num_columns(), 0);
+
+        let arr = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 10);
+        assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
     #[should_panic(expected = "Found unmasked nulls for non-nullable StructArray field \\\"c\\\"")]
     fn test_struct_array_from_mismatched_nullability() {
         drop(StructArray::from(vec![(
