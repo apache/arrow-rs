@@ -46,6 +46,8 @@ serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { workspace = true }
 lexical-core = { version = "1.0", default-features = false}
+memchr = "2.7.4"
+simdutf8 = "0.1.5"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -54,8 +56,9 @@ futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
 criterion = { version = "0.5", default-features = false }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 
 [[bench]]
 name = "serde"
 harness = false
+

@@ -23,7 +23,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use reqwest::{Response, StatusCode};
+use http::{Method, StatusCode};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -31,8 +31,8 @@ use crate::aws::client::S3Client;
 use crate::aws::credential::CredentialExt;
 use crate::aws::{AwsAuthorizer, AwsCredential};
 use crate::client::get::GetClientExt;
-use crate::client::retry::Error as RetryError;
 use crate::client::retry::RetryExt;
+use crate::client::retry::{RequestError, RetryError};
 use crate::path::Path;
 use crate::{Error, GetOptions, Result};
 
@@ -317,20 +317,20 @@ impl DynamoCommit {
         cred: Option<&AwsCredential>,
         target: &str,
         req: R,
-    ) -> Result<Response, RetryError> {
+    ) -> Result<HttpResponse, RetryError> {
         let region = &s3.config.region;
         let authorizer = cred.map(|x| AwsAuthorizer::new(x, "dynamodb", region));
 
         let builder = match &s3.config.endpoint {
-            Some(e) => s3.client.post(e),
+            Some(e) => s3.client.request(Method::POST, e),
             None => {
                 let url = format!("https://dynamodb.{region}.amazonaws.com");
-                s3.client.post(url)
+                s3.client.request(Method::POST, url)
             }
         };
 
+        // TODO: Timeout
         builder
-            .timeout(Duration::from_millis(self.timeout))
             .json(&req)
             .header("X-Amz-Target", target)
             .with_aws_sigv4(authorizer, None)
@@ -383,8 +383,8 @@ async fn check_precondition(client: &S3Client, path: &Path, etag: Option<&str>) 
 
 /// Parses the error response if any
 fn parse_error_response(e: &RetryError) -> Option<ErrorResponse<'_>> {
-    match e {
-        RetryError::Client {
+    match e.inner() {
+        RequestError::Status {
             status: StatusCode::BAD_REQUEST,
             body: Some(b),
         } => serde_json::from_str(b).ok(),
@@ -518,6 +518,7 @@ mod number {
     }
 }
 
+use crate::client::HttpResponse;
 /// Re-export integration_test to be called by s3_test
 #[cfg(test)]
 pub(crate) use tests::integration_test;
@@ -527,8 +528,8 @@ mod tests {
     use super::*;
     use crate::aws::AmazonS3;
     use crate::ObjectStore;
-    use rand::distr::Alphanumeric;
-    use rand::{rng, Rng};
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_attribute_serde() {
@@ -571,7 +572,7 @@ mod tests {
             _ => panic!("Should conflict"),
         }
 
-        let rng = rng();
+        let rng = thread_rng();
         let etag = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
         let t = Some(etag.as_str());
 

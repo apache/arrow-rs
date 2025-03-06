@@ -58,12 +58,16 @@ mod client;
 mod credential;
 mod dynamo;
 mod precondition;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use resolve::resolve_bucket_region;
 
 /// This struct is used to maintain the URI path encoding
@@ -140,7 +144,7 @@ impl Signer for AmazonS3 {
             .with_request_payer(self.client.config.request_payer);
 
         let path_url = self.path_url(path);
-        let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
+        let mut url = path_url.parse().map_err(|e| Error::Generic {
             store: STORE,
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
@@ -159,18 +163,26 @@ impl ObjectStore for AmazonS3 {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let request = self
             .client
             .request(Method::PUT, location)
             .with_payload(payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .with_encryption_headers();
 
-        match (opts.mode, &self.client.config.conditional_put) {
+        match (mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
-            (PutMode::Create | PutMode::Update(_), None) => Err(Error::NotImplemented),
-            (PutMode::Create, Some(S3ConditionalPut::ETagMatch)) => {
+            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
@@ -184,11 +196,11 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
-            (PutMode::Create, Some(S3ConditionalPut::Dynamo(d))) => {
+            (PutMode::Create, S3ConditionalPut::Dynamo(d)) => {
                 d.conditional_op(&self.client, location, None, move || request.do_put())
                     .await
             }
-            (PutMode::Update(v), Some(put)) => {
+            (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
@@ -221,6 +233,7 @@ impl ObjectStore for AmazonS3 {
                         })
                         .await
                     }
+                    S3ConditionalPut::Disabled => Err(Error::NotImplemented),
                 }
             }
         }
@@ -489,7 +502,7 @@ mod tests {
     use crate::ClientOptions;
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
-    use hyper::HeaderMap;
+    use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -561,7 +574,7 @@ mod tests {
         let integration = config.build().unwrap();
         let config = &integration.client.config;
         let test_not_exists = config.copy_if_not_exists.is_some();
-        let test_conditional_put = config.conditional_put.is_some();
+        let test_conditional_put = config.conditional_put != S3ConditionalPut::Disabled;
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;

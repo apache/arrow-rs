@@ -99,10 +99,10 @@ fn decimal_benchmark(c: &mut Criterion) {
     // bench decimal128 array
     // create option<i128> array
     let size: usize = 1 << 15;
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     let mut array = vec![];
     for _ in 0..size {
-        array.push(Some(rng.random_range::<i128, _>(0..9999999999)));
+        array.push(Some(rng.gen_range::<i128, _>(0..9999999999)));
     }
     c.bench_function("decimal128_array_from_vec 32768", |b| {
         b.iter(|| decimal128_array_from_vec(array.as_slice()))
@@ -112,9 +112,9 @@ fn decimal_benchmark(c: &mut Criterion) {
     // create option<into<decimal256>> array
     let size = 1 << 10;
     let mut array = vec![];
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     for _ in 0..size {
-        let decimal = i256::from_i128(rng.random_range::<i128, _>(0..9999999999999));
+        let decimal = i256::from_i128(rng.gen_range::<i128, _>(0..9999999999999));
         array.push(Some(decimal));
     }
 

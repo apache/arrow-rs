@@ -22,6 +22,7 @@ use crate::aws::{
     AwsAuthorizer, AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, COPY_SOURCE_HEADER,
     STORE, STRICT_PATH_ENCODE_SET, TAGS_HEADER,
 };
+use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::get::GetClient;
 use crate::client::header::{get_etag, HeaderConfig};
 use crate::client::header::{get_put_result, get_version};
@@ -31,7 +32,7 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
-use crate::client::GetOptionsExt;
+use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::{
@@ -42,17 +43,15 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::{Buf, Bytes};
-use hyper::header::{
+use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use hyper::http::HeaderName;
-use hyper::{http, HeaderMap};
+use http::{HeaderMap, HeaderName, Method};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
-use reqwest::{Client as ReqwestClient, Method, RequestBuilder, Response};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
@@ -67,7 +66,9 @@ const ALGORITHM: &str = "x-amz-checksum-algorithm";
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error("Error performing DeleteObjects request: {}", source)]
-    DeleteObjectsRequest { source: crate::client::retry::Error },
+    DeleteObjectsRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error(
         "DeleteObjects request failed for key {}: {} (code: {})",
@@ -82,7 +83,7 @@ pub(crate) enum Error {
     },
 
     #[error("Error getting DeleteObjects response body: {}", source)]
-    DeleteObjectsResponse { source: reqwest::Error },
+    DeleteObjectsResponse { source: HttpError },
 
     #[error("Got invalid DeleteObjects response: {}", source)]
     InvalidDeleteObjectsResponse {
@@ -90,22 +91,24 @@ pub(crate) enum Error {
     },
 
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
-    ListResponseBody { source: reqwest::Error },
+    ListResponseBody { source: HttpError },
 
     #[error("Error getting create multipart response body: {}", source)]
-    CreateMultipartResponseBody { source: reqwest::Error },
+    CreateMultipartResponseBody { source: HttpError },
 
     #[error("Error performing complete multipart request: {}: {}", path, source)]
     CompleteMultipartRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error getting complete multipart response body: {}", source)]
-    CompleteMultipartResponseBody { source: reqwest::Error },
+    CompleteMultipartResponseBody { source: HttpError },
 
     #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
@@ -201,7 +204,7 @@ pub(crate) struct S3Config {
     pub disable_tagging: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
-    pub conditional_put: Option<S3ConditionalPut>,
+    pub conditional_put: S3ConditionalPut,
     pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
 }
@@ -272,7 +275,7 @@ pub enum RequestError {
 
     #[error("Retry")]
     Retry {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 }
@@ -290,7 +293,7 @@ impl From<RequestError> for crate::Error {
 pub(crate) struct Request<'a> {
     path: &'a Path,
     config: &'a S3Config,
-    builder: RequestBuilder,
+    builder: HttpRequestBuilder,
     payload_sha256: Option<digest::Digest>,
     payload: Option<PutPayload>,
     use_session_creds: bool,
@@ -307,8 +310,8 @@ impl Request<'_> {
 
     pub(crate) fn header<K>(self, k: K, v: &str) -> Self
     where
-        HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        K: TryInto<HeaderName>,
+        K::Error: Into<RequestBuilderError>,
     {
         let builder = self.builder.header(k, v);
         Self { builder, ..self }
@@ -386,6 +389,11 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
+    pub(crate) fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()
@@ -408,7 +416,7 @@ impl Request<'_> {
         self
     }
 
-    pub(crate) async fn send(self) -> Result<Response, RequestError> {
+    pub(crate) async fn send(self) -> Result<HttpResponse, RequestError> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
             false => SessionCredential {
@@ -446,13 +454,12 @@ impl Request<'_> {
 #[derive(Debug)]
 pub(crate) struct S3Client {
     pub config: S3Config,
-    pub client: ReqwestClient,
+    pub client: HttpClient,
 }
 
 impl S3Client {
-    pub(crate) fn new(config: S3Config) -> Result<Self> {
-        let client = config.client_options.client()?;
-        Ok(Self { config, client })
+    pub(crate) fn new(config: S3Config, client: HttpClient) -> Self {
+        Self { config, client }
     }
 
     pub(crate) fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
@@ -544,6 +551,7 @@ impl S3Client {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::DeleteObjectsRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::DeleteObjectsResponse { source })?;
@@ -625,6 +633,12 @@ impl S3Client {
         location: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
+        let PutMultipartOpts {
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let mut request = self.request(Method::POST, location);
         if let Some(algorithm) = self.config.checksum {
             match algorithm {
@@ -636,11 +650,13 @@ impl S3Client {
         let response = request
             .query(&[("uploads", "")])
             .with_encryption_headers()
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .idempotent(true)
             .send()
             .await?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::CreateMultipartResponseBody { source })?;
@@ -683,17 +699,17 @@ impl S3Client {
             // If SSE-C is used, we must include the encryption headers in every upload request.
             request = request.with_encryption_headers();
         }
-        let response = request.send().await?;
-        let checksum_sha256 = response
-            .headers()
+        let (parts, body) = request.send().await?.into_parts();
+        let checksum_sha256 = parts
+            .headers
             .get(SHA256_CHECKSUM)
             .and_then(|v| v.to_str().ok())
             .map(|v| v.to_string());
 
         let e_tag = match is_copy {
-            false => get_etag(response.headers()).map_err(|source| Error::Metadata { source })?,
+            false => get_etag(&parts.headers).map_err(|source| Error::Metadata { source })?,
             true => {
-                let response = response
+                let response = body
                     .bytes()
                     .await
                     .map_err(|source| Error::CreateMultipartResponseBody { source })?;
@@ -756,7 +772,7 @@ impl S3Client {
 
         let request = self
             .client
-            .request(Method::POST, url)
+            .post(url)
             .query(&[("uploadId", upload_id)])
             .body(body)
             .with_aws_sigv4(credential.authorizer(), None);
@@ -781,6 +797,7 @@ impl S3Client {
             .map_err(|source| Error::Metadata { source })?;
 
         let data = response
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -795,7 +812,7 @@ impl S3Client {
     }
 
     #[cfg(test)]
-    pub(crate) async fn get_object_tagging(&self, path: &Path) -> Result<Response> {
+    pub(crate) async fn get_object_tagging(&self, path: &Path) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
         let url = format!("{}?tagging", self.config.path_url(path));
         let response = self
@@ -821,7 +838,7 @@ impl GetClient for S3Client {
     };
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {
@@ -895,6 +912,7 @@ impl ListClient for Arc<S3Client> {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;

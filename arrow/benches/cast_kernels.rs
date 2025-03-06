@@ -18,7 +18,7 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::distr::{Distribution, StandardUniform, Uniform};
+use rand::distributions::{Distribution, Standard, Uniform};
 use rand::Rng;
 
 use chrono::DateTime;
@@ -34,7 +34,7 @@ use arrow::util::test_util::seedable_rng;
 
 fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
 where
-    StandardUniform: Distribution<T::Native>,
+    Standard: Distribution<T::Native>,
 {
     let array = create_primitive_array::<T>(size, 0.1);
     Arc::new(array)
@@ -46,10 +46,10 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
     let mut builder = StringBuilder::new();
-    let range = Uniform::new(0, 737776).unwrap();
+    let range = Uniform::new(0, 737776);
 
     for _ in 0..size {
-        if with_nulls && rng.random::<f32>() > 0.8 {
+        if with_nulls && rng.gen::<f32>() > 0.8 {
             builder.append_null();
         } else {
             let string = NaiveDate::from_num_days_from_ce_opt(rng.sample(range))
@@ -66,10 +66,10 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
     let mut builder = StringBuilder::new();
-    let range = Uniform::new(0, 1608071414123).unwrap();
+    let range = Uniform::new(0, 1608071414123);
 
     for _ in 0..size {
-        if with_nulls && rng.random::<f32>() > 0.8 {
+        if with_nulls && rng.gen::<f32>() > 0.8 {
             builder.append_null();
         } else {
             let string = DateTime::from_timestamp(rng.sample(range), 0)
@@ -87,7 +87,7 @@ fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut builder = Decimal128Builder::with_capacity(size);
 
     for _ in 0..size {
-        builder.append_value(rng.random_range::<i128, _>(0..1000000000));
+        builder.append_value(rng.gen_range::<i128, _>(0..1000000000));
     }
     Arc::new(
         builder
@@ -102,7 +102,7 @@ fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut builder = Decimal256Builder::with_capacity(size);
     let mut bytes = [0; 32];
     for _ in 0..size {
-        let num = rng.random_range::<i128, _>(0..1000000000);
+        let num = rng.gen_range::<i128, _>(0..1000000000);
         bytes[0..16].clone_from_slice(&num.to_le_bytes());
         builder.append_value(i256::from_le_bytes(bytes));
     }
@@ -266,6 +266,12 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast decimal128 to decimal128 512 with same scale", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 3)))
     });
+
+    c.bench_function(
+        "cast decimal128 to decimal128 512 with lower scale (infallible)",
+        |b| b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(7, -1))),
+    );
+
     c.bench_function("cast decimal256 to decimal256 512 with same scale", |b| {
         b.iter(|| cast_array(&decimal256_array, DataType::Decimal256(60, 3)))
     });

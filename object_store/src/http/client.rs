@@ -18,29 +18,29 @@
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
-use crate::client::GetOptionsExt;
+use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
 use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use hyper::header::{
+use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
 use percent_encoding::percent_decode_str;
-use reqwest::{Method, Response, StatusCode};
+use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Request error: {}", source)]
-    Request { source: retry::Error },
+    Request { source: retry::RetryError },
 
     #[error("Request error: {}", source)]
-    Reqwest { source: reqwest::Error },
+    Reqwest { source: HttpError },
 
     #[error("Range request not supported by {}", href)]
     RangeNotSupported { href: String },
@@ -86,7 +86,7 @@ impl From<Error> for crate::Error {
 #[derive(Debug)]
 pub(crate) struct Client {
     url: Url,
-    client: reqwest::Client,
+    client: HttpClient,
     retry_config: RetryConfig,
     client_options: ClientOptions,
 }
@@ -94,26 +94,26 @@ pub(crate) struct Client {
 impl Client {
     pub(crate) fn new(
         url: Url,
+        client: HttpClient,
         client_options: ClientOptions,
         retry_config: RetryConfig,
-    ) -> Result<Self> {
-        let client = client_options.client()?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             url,
             retry_config,
             client_options,
             client,
-        })
+        }
     }
 
     pub(crate) fn base_url(&self) -> &Url {
         &self.url
     }
 
-    fn path_url(&self, location: &Path) -> Url {
+    fn path_url(&self, location: &Path) -> String {
         let mut url = self.url.clone();
         url.path_segments_mut().unwrap().extend(location.parts());
-        url
+        url.to_string()
     }
 
     /// Create a directory with `path` using MKCOL
@@ -125,7 +125,7 @@ impl Client {
             .extend(path.split(DELIMITER));
 
         self.client
-            .request(method, url)
+            .request(method, String::from(url))
             .send_retry(&self.retry_config)
             .await
             .map_err(|source| Error::Request { source })?;
@@ -167,7 +167,7 @@ impl Client {
         location: &Path,
         payload: PutPayload,
         attributes: Attributes,
-    ) -> Result<Response> {
+    ) -> Result<HttpResponse> {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
@@ -222,7 +222,7 @@ impl Client {
     pub(crate) async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
         let url = location
             .map(|path| self.path_url(path))
-            .unwrap_or_else(|| self.url.clone());
+            .unwrap_or_else(|| self.url.to_string());
 
         let method = Method::from_bytes(b"PROPFIND").unwrap();
         let result = self
@@ -236,6 +236,7 @@ impl Client {
 
         let response = match result {
             Ok(result) => result
+                .into_body()
                 .bytes()
                 .await
                 .map_err(|source| Error::Reqwest { source })?,
@@ -332,7 +333,7 @@ impl GetClient for Client {
         user_defined_metadata_prefix: None,
     };
 
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
         let url = self.path_url(path);
         let method = match options.head {
             true => Method::HEAD,

@@ -378,9 +378,7 @@ impl RleDecoder {
                 let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
                 let repeated_value =
                     T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
-                for i in 0..num_values {
-                    buffer[values_read + i] = repeated_value.clone();
-                }
+                buffer[values_read..values_read + num_values].fill(repeated_value);
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
@@ -455,9 +453,10 @@ impl RleDecoder {
             if self.rle_left > 0 {
                 let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                for i in 0..num_values {
-                    buffer[values_read + i].clone_from(&dict[dict_idx]);
-                }
+                let dict_value = dict[dict_idx].clone();
+
+                buffer[values_read..values_read + num_values].fill(dict_value);
+
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
@@ -480,9 +479,10 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    for i in 0..num_values {
-                        buffer[values_read + i].clone_from(&dict[index_buf[i] as usize])
-                    }
+                    buffer[values_read..values_read + num_values]
+                        .iter_mut()
+                        .zip(index_buf[..num_values].iter())
+                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
@@ -528,7 +528,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, distr::StandardUniform, rng, Rng, SeedableRng};
+    use rand::{self, distributions::Standard, thread_rng, Rng, SeedableRng};
 
     const MAX_WIDTH: usize = 32;
 
@@ -938,7 +938,7 @@ mod tests {
 
         // bit-packed header
         let run_bytes = ceil(num_values * bit_width, 8) as u64;
-        writer.put_vlq_int(run_bytes << 1 | 1);
+        writer.put_vlq_int((run_bytes << 1) | 1);
         for _ in 0..run_bytes {
             writer.put_aligned(0xFF_u8, 1);
         }
@@ -1019,18 +1019,15 @@ mod tests {
 
         for _ in 0..niters {
             values.clear();
-            let rng = rng();
-            let seed_vec: Vec<u8> = rng
-                .sample_iter::<u8, _>(&StandardUniform)
-                .take(seed_len)
-                .collect();
+            let rng = thread_rng();
+            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
             let mut gen = rand::rngs::StdRng::from_seed(seed);
 
             let mut parity = false;
             for _ in 0..ngroups {
-                let mut group_size = gen.random_range(1..20);
+                let mut group_size = gen.gen_range(1..20);
                 if group_size > max_group_size {
                     group_size = 1;
                 }

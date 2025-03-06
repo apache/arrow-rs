@@ -44,13 +44,6 @@ impl PutPayload {
         s.into()
     }
 
-    #[cfg(feature = "cloud")]
-    pub(crate) fn body(&self) -> reqwest::Body {
-        reqwest::Body::wrap_stream(futures::stream::iter(
-            self.clone().into_iter().map(Ok::<_, crate::Error>),
-        ))
-    }
-
     /// Returns the total length of the [`Bytes`] in this payload
     pub fn content_length(&self) -> usize {
         self.0.iter().map(|b| b.len()).sum()

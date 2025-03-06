@@ -18,7 +18,7 @@
 use arrow_json::ReaderBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use criterion::*;
-use rand::{rng, Rng};
+use rand::{thread_rng, Rng};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -35,28 +35,26 @@ fn do_bench<R: Serialize>(c: &mut Criterion, name: &str, rows: &[R], schema: &Sc
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut rng = rng();
+    let mut rng = thread_rng();
     let schema = Schema::new(vec![Field::new("i32", DataType::Int32, false)]);
-    let v: Vec<i32> = (0..2048).map(|_| rng.random_range(0..10000)).collect();
+    let v: Vec<i32> = (0..2048).map(|_| rng.gen_range(0..10000)).collect();
 
     do_bench(c, "small_i32", &v, &schema);
-    let v: Vec<i32> = (0..2048).map(|_| rng.random()).collect();
+    let v: Vec<i32> = (0..2048).map(|_| rng.gen()).collect();
     do_bench(c, "large_i32", &v, &schema);
 
     let schema = Schema::new(vec![Field::new("i64", DataType::Int64, false)]);
-    let v: Vec<i64> = (0..2048).map(|_| rng.random_range(0..10000)).collect();
+    let v: Vec<i64> = (0..2048).map(|_| rng.gen_range(0..10000)).collect();
     do_bench(c, "small_i64", &v, &schema);
-    let v: Vec<i64> = (0..2048)
-        .map(|_| rng.random_range(0..i32::MAX as _))
-        .collect();
+    let v: Vec<i64> = (0..2048).map(|_| rng.gen_range(0..i32::MAX as _)).collect();
     do_bench(c, "medium_i64", &v, &schema);
-    let v: Vec<i64> = (0..2048).map(|_| rng.random()).collect();
+    let v: Vec<i64> = (0..2048).map(|_| rng.gen()).collect();
     do_bench(c, "large_i64", &v, &schema);
 
     let schema = Schema::new(vec![Field::new("f32", DataType::Float32, false)]);
-    let v: Vec<f32> = (0..2048).map(|_| rng.random_range(0.0..10000.)).collect();
+    let v: Vec<f32> = (0..2048).map(|_| rng.gen_range(0.0..10000.)).collect();
     do_bench(c, "small_f32", &v, &schema);
-    let v: Vec<f32> = (0..2048).map(|_| rng.random_range(0.0..f32::MAX)).collect();
+    let v: Vec<f32> = (0..2048).map(|_| rng.gen_range(0.0..f32::MAX)).collect();
     do_bench(c, "large_f32", &v, &schema);
 }
 

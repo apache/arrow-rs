@@ -35,8 +35,8 @@ use crate::{
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 
 pub(crate) async fn flatten_list_stream(
     storage: &DynObjectStore,
@@ -633,7 +633,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     // As a result each conditional operation will need to wait for the lease to timeout before proceeding
     // One solution would be to clear DynamoDB before each test, but this would require non-trivial additional code
     // so we instead just generate a random suffix for the filenames
-    let rng = rng();
+    let rng = thread_rng();
     let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
 
     delete_fixtures(storage).await;
@@ -742,10 +742,10 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
 /// Returns a chunk of length `chunk_length`
 fn get_chunk(chunk_length: usize) -> Bytes {
     let mut data = vec![0_u8; chunk_length];
-    let mut rng = rng();
+    let mut rng = thread_rng();
     // Set a random selection of bytes
     for _ in 0..1000 {
-        data[rng.random_range(0..chunk_length)] = rng.random();
+        data[rng.gen_range(0..chunk_length)] = rng.gen();
     }
     data.into()
 }

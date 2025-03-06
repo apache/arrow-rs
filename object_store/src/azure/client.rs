@@ -18,11 +18,12 @@
 use super::credential::AzureCredential;
 use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
+use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
-use crate::client::GetOptionsExt;
+use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
@@ -35,12 +36,11 @@ use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
-use hyper::http::HeaderName;
-use rand::Rng as _;
-use reqwest::{
+use http::{
     header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
-    Client as ReqwestClient, Method, RequestBuilder, Response,
+    HeaderName, Method,
 };
+use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -63,27 +63,29 @@ static TAGS_HEADER: HeaderName = HeaderName::from_static("x-ms-tags");
 pub(crate) enum Error {
     #[error("Error performing get request {}: {}", path, source)]
     GetRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing put request {}: {}", path, source)]
     PutRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing delete request {}: {}", path, source)]
     DeleteRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing bulk delete request: {}", source)]
-    BulkDeleteRequest { source: crate::client::retry::Error },
+    BulkDeleteRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error receiving bulk delete request body: {}", source)]
-    BulkDeleteRequestBody { source: reqwest::Error },
+    BulkDeleteRequestBody { source: HttpError },
 
     #[error(
         "Bulk delete request failed due to invalid input: {} (code: {})",
@@ -108,10 +110,12 @@ pub(crate) enum Error {
     },
 
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
-    ListResponseBody { source: reqwest::Error },
+    ListResponseBody { source: HttpError },
 
     #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
@@ -125,10 +129,12 @@ pub(crate) enum Error {
     MissingETag,
 
     #[error("Error requesting user delegation key: {}", source)]
-    DelegationKeyRequest { source: crate::client::retry::Error },
+    DelegationKeyRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting user delegation key response body: {}", source)]
-    DelegationKeyResponseBody { source: reqwest::Error },
+    DelegationKeyResponseBody { source: HttpError },
 
     #[error("Got invalid user delegation key response: {}", source)]
     DelegationKeyResponse { source: quick_xml::de::DeError },
@@ -194,7 +200,7 @@ struct PutRequest<'a> {
     path: &'a Path,
     config: &'a AzureConfig,
     payload: PutPayload,
-    builder: RequestBuilder,
+    builder: HttpRequestBuilder,
     idempotent: bool,
 }
 
@@ -251,7 +257,12 @@ impl PutRequest<'_> {
         Self { builder, ..self }
     }
 
-    async fn send(self) -> Result<Response> {
+    fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
+    async fn send(self) -> Result<HttpResponse> {
         let credential = self.config.get_credential().await?;
         let sensitive = credential
             .as_deref()
@@ -317,7 +328,7 @@ fn serialize_part_delete_request(
     dst: &mut Vec<u8>,
     boundary: &str,
     idx: usize,
-    request: reqwest::Request,
+    request: HttpRequest,
     relative_url: String,
 ) {
     // Encode start marker for part
@@ -349,7 +360,7 @@ fn serialize_part_delete_request(
     extend(dst, b"\r\n");
 }
 
-fn parse_multipart_response_boundary(response: &Response) -> Result<String> {
+fn parse_multipart_response_boundary(response: &HttpResponse) -> Result<String> {
     let invalid_response = |msg: &str| Error::InvalidBulkDeleteResponse {
         reason: msg.to_string(),
     };
@@ -496,14 +507,13 @@ async fn parse_blob_batch_delete_body(
 #[derive(Debug)]
 pub(crate) struct AzureClient {
     config: AzureConfig,
-    client: ReqwestClient,
+    client: HttpClient,
 }
 
 impl AzureClient {
     /// create a new instance of [AzureClient]
-    pub(crate) fn new(config: AzureConfig) -> Result<Self> {
-        let client = config.client_options.client()?;
-        Ok(Self { config, client })
+    pub(crate) fn new(config: AzureConfig, client: HttpClient) -> Self {
+        Self { config, client }
     }
 
     /// Returns the config
@@ -517,7 +527,7 @@ impl AzureClient {
 
     fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
         let url = self.config.path_url(path);
-        let builder = self.client.request(Method::PUT, url);
+        let builder = self.client.request(Method::PUT, url.as_str());
 
         PutRequest {
             path,
@@ -535,12 +545,20 @@ impl AzureClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let builder = self
             .put_request(path, payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags);
+            .with_attributes(attributes)
+            .with_extensions(extensions)
+            .with_tags(tags);
 
-        let builder = match &opts.mode {
+        let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
             PutMode::Update(v) => {
@@ -561,7 +579,7 @@ impl AzureClient {
         _part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let part_idx = u128::from_be_bytes(rand::rng().random());
+        let part_idx = u128::from_be_bytes(rand::thread_rng().gen());
         let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
@@ -581,6 +599,12 @@ impl AzureClient {
         parts: Vec<PartId>,
         opts: PutMultipartOpts,
     ) -> Result<PutResult> {
+        let PutMultipartOpts {
+            tags,
+            attributes,
+            extensions,
+        } = opts;
+
         let blocks = parts
             .into_iter()
             .map(|part| BlockId::from(part.content_id))
@@ -589,8 +613,9 @@ impl AzureClient {
         let payload = BlockList { blocks }.to_xml().into();
         let response = self
             .put_request(path, payload)
-            .with_attributes(opts.attributes)
-            .with_tags(opts.tags)
+            .with_attributes(attributes)
+            .with_tags(tags)
+            .with_extensions(extensions)
             .query(&[("comp", "blocklist")])
             .idempotent(true)
             .send()
@@ -614,7 +639,7 @@ impl AzureClient {
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
         self.client
-            .request(Method::DELETE, url)
+            .delete(url.as_str())
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
             .with_azure_authorization(&credential, &self.config.account)
@@ -644,17 +669,20 @@ impl AzureClient {
             // Build subrequest with proper authorization
             let request = self
                 .client
-                .request(Method::DELETE, url)
+                .delete(url.as_str())
                 .header(CONTENT_LENGTH, HeaderValue::from(0))
                 // Each subrequest must be authorized individually [1] and we use
                 // the CredentialExt for this.
                 // [1]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#request-body
                 .with_azure_authorization(credential, &self.config.account)
-                .build()
+                .into_parts()
+                .1
                 .unwrap();
 
+            let url: Url = request.uri().to_string().parse().unwrap();
+
             // Url for part requests must be relative and without base
-            let relative_url = self.config.service.make_relative(request.url()).unwrap();
+            let relative_url = self.config.service.make_relative(&url).unwrap();
 
             serialize_part_delete_request(&mut body_bytes, boundary, idx, request, relative_url)
         }
@@ -684,7 +712,7 @@ impl AzureClient {
         let url = self.config.path_url(&Path::from("/"));
         let batch_response = self
             .client
-            .request(Method::POST, url)
+            .post(url.as_str())
             .query(&[("restype", "container"), ("comp", "batch")])
             .header(
                 CONTENT_TYPE,
@@ -701,6 +729,7 @@ impl AzureClient {
         let boundary = parse_multipart_response_boundary(&batch_response)?;
 
         let batch_body = batch_response
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::BulkDeleteRequestBody { source })?;
@@ -724,7 +753,7 @@ impl AzureClient {
 
         let mut builder = self
             .client
-            .request(Method::PUT, url)
+            .request(Method::PUT, url.as_str())
             .header(&COPY_SOURCE, source.to_string())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"));
 
@@ -772,9 +801,10 @@ impl AzureClient {
             .as_deref()
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
+
         let response = self
             .client
-            .request(Method::POST, url)
+            .post(url.as_str())
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
             .with_azure_authorization(&credential, &self.config.account)
@@ -784,6 +814,7 @@ impl AzureClient {
             .send()
             .await
             .map_err(|source| Error::DelegationKeyRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::DelegationKeyResponseBody { source })?;
@@ -829,7 +860,7 @@ impl AzureClient {
     }
 
     #[cfg(test)]
-    pub(crate) async fn get_blob_tagging(&self, path: &Path) -> Result<Response> {
+    pub(crate) async fn get_blob_tagging(&self, path: &Path) -> Result<HttpResponse> {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(path);
         let sensitive = credential
@@ -838,7 +869,7 @@ impl AzureClient {
             .unwrap_or_default();
         let response = self
             .client
-            .request(Method::GET, url)
+            .get(url.as_str())
             .query(&[("comp", "tags")])
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
@@ -868,7 +899,7 @@ impl GetClient for AzureClient {
     /// Make an Azure GET request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
         // As of 2024-01-02, Azure does not support suffix requests,
         // so we should fail fast here rather than sending one
         if let Some(GetRange::Suffix(_)) = options.range.as_ref() {
@@ -886,7 +917,7 @@ impl GetClient for AzureClient {
 
         let mut builder = self
             .client
-            .request(method, url)
+            .request(method, url.as_str())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
             .body(Bytes::new());
 
@@ -961,7 +992,7 @@ impl ListClient for Arc<AzureClient> {
             .unwrap_or_default();
         let response = self
             .client
-            .request(Method::GET, url)
+            .get(url.as_str())
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
@@ -969,6 +1000,7 @@ impl ListClient for Arc<AzureClient> {
             .send()
             .await
             .map_err(|source| Error::ListRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -1147,11 +1179,11 @@ pub(crate) struct UserDelegationKey {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use regex::bytes::Regex;
-
     use super::*;
     use crate::StaticCredentialProvider;
+    use bytes::Bytes;
+    use regex::bytes::Regex;
+    use reqwest::Client;
 
     #[test]
     fn deserde_azure() {
@@ -1360,7 +1392,7 @@ mod tests {
             client_options: Default::default(),
         };
 
-        let client = AzureClient::new(config).unwrap();
+        let client = AzureClient::new(config, HttpClient::new(Client::new()));
 
         let credential = client.get_credential().await.unwrap();
         let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];
@@ -1454,7 +1486,7 @@ RequestId:778fdc83-801e-0000-62ff-0334671e2852
 Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
 --batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed--\r\n";
 
-        let response: reqwest::Response = http::Response::builder()
+        let response: HttpResponse = http::Response::builder()
             .status(202)
             .header("Transfer-Encoding", "chunked")
             .header(
@@ -1463,12 +1495,11 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
             )
             .header("x-ms-request-id", "778fdc83-801e-0000-62ff-033467000000")
             .header("x-ms-version", "2018-11-09")
-            .body(Bytes::from(response_body.as_slice()))
-            .unwrap()
-            .into();
+            .body(Bytes::from(response_body.as_slice()).into())
+            .unwrap();
 
         let boundary = parse_multipart_response_boundary(&response).unwrap();
-        let body = response.bytes().await.unwrap();
+        let body = response.into_body().bytes().await.unwrap();
 
         let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];
 
