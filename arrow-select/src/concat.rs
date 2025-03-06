@@ -223,30 +223,35 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
-        // Get all the unique data types
-        let input_data_types = {
-            let unique = arrays
-                .iter()
-                .map(|array| array.data_type())
-                .collect::<HashSet<&DataType>>();
+        // Create error message with up to 10 unique data types in the order they appear
+        let error_message = {
+            // 10 max unique data types to print and another 1 to know if there are more
+            let mut unique_data_types = HashSet::with_capacity(11);
 
-            // Allow unused mut as we need it for tests
-            #[allow(unused_mut)]
-            let mut names = unique
-                .into_iter()
-                .map(|dt| format!("{dt}"))
-                .collect::<Vec<_>>();
+            let mut error_message =
+                format!("It is not possible to concatenate arrays of different data types ({d}");
+            unique_data_types.insert(d);
 
-            // Only sort in tests to make the error message is deterministic
-            #[cfg(test)]
-            names.sort();
+            for array in arrays {
+                let is_unique = unique_data_types.insert(array.data_type());
 
-            names.join(", ")
+                if unique_data_types.len() == 11 {
+                    error_message.push_str(", ...");
+                    break;
+                }
+
+                if is_unique {
+                    error_message.push_str(", ");
+                    error_message.push_str(&array.data_type().to_string());
+                }
+            }
+
+            error_message.push_str(").");
+
+            error_message
         };
 
-        return Err(ArrowError::InvalidArgumentError(
-            format!("It is not possible to concatenate arrays of different data types ({input_data_types})."),
-        ));
+        return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
     match d {
@@ -368,7 +373,7 @@ mod tests {
             &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Int64, Utf8).");
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
     }
 
     #[test]
