@@ -18,16 +18,13 @@
 use crate::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
-use crate::arrow::ParquetRecordBatchStreamBuilder;
-use crate::encryption::decrypt::FileDecryptionProperties;
-use crate::errors::ParquetError;
-use crate::file::metadata::FileMetaData;
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
-use futures::TryStreamExt;
+
 use std::fs::File;
 use crate::arrow::ArrowWriter;
 use crate::encryption::encrypt::FileEncryptionProperties;
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::file::properties::WriterProperties;
 
 /// Tests reading an encrypted file from the parquet-testing repository
@@ -139,18 +136,24 @@ fn verify_encryption_test_data(
 }
 
 #[cfg(feature = "encryption")]
-pub fn read_and_roundtrip_to_encrypted_file(path: &str, decryption_properties: FileDecryptionProperties, encryption_properties: FileEncryptionProperties) {
+pub fn read_and_roundtrip_to_encrypted_file(
+    path: &str,
+    decryption_properties: FileDecryptionProperties,
+    encryption_properties: FileEncryptionProperties,
+) {
     let temp_file = tempfile::tempfile().unwrap();
 
     // read example data
     let file = File::open(path).unwrap();
-    let options =
-        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties.clone());
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
     let batch_reader = builder.build().unwrap();
-    let batches = batch_reader.collect::<crate::errors::Result<Vec<RecordBatch>, _>>().unwrap();
+    let batches = batch_reader
+        .collect::<crate::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
 
     // write example data
     let props = WriterProperties::builder()
