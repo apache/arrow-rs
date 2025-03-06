@@ -220,8 +220,8 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
 mod tests {
     use super::*;
 
-    use crate::{FixedSizeBinaryArray, Int8Array};
     use crate::types::Int8Type;
+    use crate::{FixedSizeBinaryArray, Int8Array};
 
     #[test]
     fn test_fixed_size_dictionary_builder() {

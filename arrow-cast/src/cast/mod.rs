@@ -4854,7 +4854,7 @@ mod tests {
         let bytes_1 = "Hiiii".as_bytes();
         let bytes_2 = "Hello".as_bytes();
 
-        let binary_data = vec![Some(bytes_1), Some(bytes_2), None];
+        let binary_data = vec![Some(bytes_1), Some(bytes_2), Some(bytes_1), None];
         let a1 = Arc::new(FixedSizeBinaryArray::from(binary_data.clone())) as ArrayRef;
 
         let cast_type = DataType::Dictionary(
@@ -4865,8 +4865,14 @@ mod tests {
         assert_eq!(cast_array.data_type(), &cast_type);
         assert_eq!(
             array_to_strings(&cast_array),
-            vec!["4869696969", "48656c6c6f", "null"]
+            vec!["4869696969", "48656c6c6f", "4869696969", "null"]
         );
+        // dictionary should only have two distinct values
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().len(), 2);
     }
 
     #[test]
@@ -4874,6 +4880,7 @@ mod tests {
         let mut builder = GenericBinaryBuilder::<i32>::new();
         builder.append_value(b"hello");
         builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
         builder.append_null();
         builder.append_value(b"rustt");
 
@@ -4887,8 +4894,20 @@ mod tests {
         assert_eq!(cast_array.data_type(), &cast_type);
         assert_eq!(
             array_to_strings(&cast_array),
-            vec!["68656c6c6f", "6869696969", "null", "7275737474"]
+            vec![
+                "68656c6c6f",
+                "6869696969",
+                "6869696969",
+                "null",
+                "7275737474"
+            ]
         );
+        // dictionary should only have three distinct values
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().len(), 3);
     }
 
     #[test]
