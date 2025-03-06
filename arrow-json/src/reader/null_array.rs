@@ -21,12 +21,21 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
 #[derive(Default)]
-pub struct NullArrayDecoder {}
+pub struct NullArrayDecoder {
+    ignore_type_conflicts: bool,
+}
+impl NullArrayDecoder {
+    pub fn new(ignore_type_conflicts: bool) -> Self {
+        Self {
+            ignore_type_conflicts,
+        }
+    }
+}
 
 impl ArrayDecoder for NullArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         for p in pos {
-            if !matches!(tape.get(*p), TapeElement::Null) {
+            if !matches!(tape.get(*p), TapeElement::Null) && !self.ignore_type_conflicts {
                 return Err(tape.error(*p, "null"));
             }
         }

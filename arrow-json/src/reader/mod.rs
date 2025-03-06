@@ -143,6 +143,7 @@ use serde::Serialize;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::builder::PrimitiveBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
@@ -168,7 +169,7 @@ mod schema;
 mod serializer;
 mod string_array;
 mod struct_array;
-mod tape;
+pub mod tape;
 mod timestamp_array;
 
 /// A builder for [`Reader`] and [`Decoder`]
@@ -176,6 +177,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
     strict_mode: bool,
+    ignore_type_conflicts: bool,
     is_field: bool,
     struct_mode: StructMode,
 
@@ -196,6 +198,7 @@ impl ReaderBuilder {
             batch_size: 1024,
             coerce_primitive: false,
             strict_mode: false,
+            ignore_type_conflicts: false,
             is_field: false,
             struct_mode: Default::default(),
             schema,
@@ -237,6 +240,7 @@ impl ReaderBuilder {
             batch_size: 1024,
             coerce_primitive: false,
             strict_mode: false,
+            ignore_type_conflicts: false,
             is_field: true,
             struct_mode: Default::default(),
             schema: Arc::new(Schema::new([field.into()])),
@@ -279,6 +283,15 @@ impl ReaderBuilder {
         }
     }
 
+    /// Sets if the decoder should produce NULL instead of returning an error if it encounters a
+    /// type conflict on a nullable column.
+    pub fn with_ignore_type_conflicts(self, ignore_type_conflicts: bool) -> Self {
+        Self {
+            ignore_type_conflicts,
+            ..self
+        }
+    }
+
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         Ok(Reader {
@@ -301,6 +314,7 @@ impl ReaderBuilder {
             data_type,
             self.coerce_primitive,
             self.strict_mode,
+            self.ignore_type_conflicts,
             nullable,
             self.struct_mode,
         )?;
@@ -672,8 +686,11 @@ trait ArrayDecoder: Send {
 }
 
 macro_rules! primitive_decoder {
-    ($t:ty, $data_type:expr) => {
-        Ok(Box::new(PrimitiveArrayDecoder::<$t>::new($data_type)))
+    ($t:ty, $data_type:expr, $ignore_type_conflicts:expr) => {
+        Ok(Box::new(PrimitiveArrayDecoder::<$t>::new(
+            $data_type,
+            $ignore_type_conflicts,
+        )))
     };
 }
 
@@ -681,67 +698,89 @@ fn make_decoder(
     data_type: DataType,
     coerce_primitive: bool,
     strict_mode: bool,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
     struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
-        data_type => (primitive_decoder, data_type),
-        DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
-        DataType::Float16 => primitive_decoder!(Float16Type, data_type),
-        DataType::Float32 => primitive_decoder!(Float32Type, data_type),
-        DataType::Float64 => primitive_decoder!(Float64Type, data_type),
+        data_type => (primitive_decoder, data_type, ignore_type_conflicts),
+        DataType::Null => Ok(Box::new(NullArrayDecoder::new(ignore_type_conflicts))),
+        DataType::Float16 => primitive_decoder!(Float16Type, data_type, ignore_type_conflicts),
+        DataType::Float32 => primitive_decoder!(Float32Type, data_type, ignore_type_conflicts),
+        DataType::Float64 => primitive_decoder!(Float64Type, data_type, ignore_type_conflicts),
         DataType::Timestamp(TimeUnit::Second, None) => {
-            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, Utc)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, Utc, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Millisecond, None) => {
-            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, Utc)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, Utc, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
-            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, Utc)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, Utc, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, Utc)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, Utc, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Second, Some(ref tz)) => {
             let tz: Tz = tz.parse()?;
-            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, tz)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampSecondType, _>::new(data_type, tz, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Millisecond, Some(ref tz)) => {
             let tz: Tz = tz.parse()?;
-            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, tz)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMillisecondType, _>::new(data_type, tz, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Microsecond, Some(ref tz)) => {
             let tz: Tz = tz.parse()?;
-            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, tz)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampMicrosecondType, _>::new(data_type, tz, ignore_type_conflicts)))
         },
         DataType::Timestamp(TimeUnit::Nanosecond, Some(ref tz)) => {
             let tz: Tz = tz.parse()?;
-            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, tz)))
+            Ok(Box::new(TimestampArrayDecoder::<TimestampNanosecondType, _>::new(data_type, tz, ignore_type_conflicts)))
         },
-        DataType::Date32 => primitive_decoder!(Date32Type, data_type),
-        DataType::Date64 => primitive_decoder!(Date64Type, data_type),
-        DataType::Time32(TimeUnit::Second) => primitive_decoder!(Time32SecondType, data_type),
-        DataType::Time32(TimeUnit::Millisecond) => primitive_decoder!(Time32MillisecondType, data_type),
-        DataType::Time64(TimeUnit::Microsecond) => primitive_decoder!(Time64MicrosecondType, data_type),
-        DataType::Time64(TimeUnit::Nanosecond) => primitive_decoder!(Time64NanosecondType, data_type),
-        DataType::Duration(TimeUnit::Nanosecond) => primitive_decoder!(DurationNanosecondType, data_type),
-        DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
-        DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
-        DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
-        DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
-        DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
-        DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
-        DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
-        DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::Date32 => primitive_decoder!(Date32Type, data_type, ignore_type_conflicts),
+        DataType::Date64 => primitive_decoder!(Date64Type, data_type, ignore_type_conflicts),
+        DataType::Time32(TimeUnit::Second) => primitive_decoder!(Time32SecondType, data_type, ignore_type_conflicts),
+        DataType::Time32(TimeUnit::Millisecond) => primitive_decoder!(Time32MillisecondType, data_type, ignore_type_conflicts),
+        DataType::Time64(TimeUnit::Microsecond) => primitive_decoder!(Time64MicrosecondType, data_type, ignore_type_conflicts),
+        DataType::Time64(TimeUnit::Nanosecond) => primitive_decoder!(Time64NanosecondType, data_type, ignore_type_conflicts),
+        DataType::Duration(TimeUnit::Nanosecond) => primitive_decoder!(DurationNanosecondType, data_type, ignore_type_conflicts),
+        DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type, ignore_type_conflicts),
+        DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type, ignore_type_conflicts),
+        DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type, ignore_type_conflicts),
+        DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s, ignore_type_conflicts))),
+        DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s, ignore_type_conflicts))),
+        DataType::Boolean => Ok(Box::new(BooleanArrayDecoder::new(ignore_type_conflicts))),
+        DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive, ignore_type_conflicts))),
+        DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive, ignore_type_conflicts))),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, ignore_type_conflicts, is_nullable, struct_mode)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, ignore_type_conflicts, is_nullable, struct_mode)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, ignore_type_conflicts, is_nullable, struct_mode)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, ignore_type_conflicts, is_nullable, struct_mode)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
+}
+
+/// Attempts to append a value to the builder, if valid. Otherwise, returns the error.
+fn try_append_value<P: ArrowPrimitiveType>(
+    builder: &mut PrimitiveBuilder<P>,
+    value: Result<P::Native, ArrowError>,
+) -> Result<(), ArrowError> {
+    builder.append_value(value?);
+    Ok(())
+}
+
+/// Attempts to append a value to the builder, if valid. Otherwise, appends NULL.
+fn append_value_or_null<P: ArrowPrimitiveType>(
+    builder: &mut PrimitiveBuilder<P>,
+    value: Result<P::Native, ArrowError>,
+) -> Result<(), ArrowError> {
+    match value {
+        Ok(value) => builder.append_value(value),
+        Err(_) => builder.append_null(),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2665,5 +2704,153 @@ mod tests {
                 .to_string(),
             "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
         );
+    }
+
+    #[test]
+    fn test_type_conflict_nulls() {
+        use arrow_array::{BooleanArray, Int32Array, MapArray, NullArray};
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+        let json = vec![
+            json!({"null": null, "bool": true, "numeric": 1.234, "string": "hi", "array": [1, "hi", 3], "map": {"k": "value"}, "struct": {"a": 1}}),
+            json!({"bool": null, "numeric": true, "string": 1.234, "array": "hi", "map": [1, "hi", 3], "struct": {"k": "value"}, "null": {"a": 1}}),
+            json!({"numeric": null, "string": true, "array": 1.234, "map": "hi", "struct": [1, "hi", 3], "null": {"k": "value"}, "bool": {"a": 1}}),
+            json!({"string": null, "array": true, "map": 1.234, "struct": "hi", "null": [1, "hi", 3], "bool": {"k": "value"}, "numeric": {"a": 1}}),
+            json!({"array": null, "map": true, "struct": 1.234, "null": "hi", "bool": [1, "hi", 3], "numeric": {"k": "value"}, "string": {"a": 1}}),
+            json!({"map": null, "struct": true, "null": 1.234, "bool": "hi", "numeric": [1, "hi", 3], "string": {"k": "value"}, "array": {"a": 1}}),
+            json!({"struct": null, "null": true, "bool": 1.234, "numeric": "hi", "string": [1, "hi", 3], "array": {"k": "value"}, "map": {"a": 1}}),
+        ];
+        let schema = Schema::new(vec![
+            Field::new("null", DataType::Null, true),
+            Field::new("bool", DataType::Boolean, true),
+            Field::new("numeric", DataType::Decimal128(10, 3), true),
+            Field::new("string", DataType::Utf8, true),
+            Field::new(
+                "array",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "map",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
+                        ])),
+                        false, // not nullable
+                    )),
+                    false, // not sorted
+                ),
+                true, // nullable
+            ),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                true,
+            ),
+        ]);
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .with_ignore_type_conflicts(true)
+            .with_coerce_primitive(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&json).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 7);
+        assert_eq!(batch.num_columns(), 7);
+
+        let _ = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<NullArray>()
+            .unwrap();
+        // NOTE: NullArray doesn't materialize any values (they're all NULL by definition)
+
+        let bools = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(bools
+            .iter()
+            .eq([Some(true), None, None, None, None, None, None]));
+
+        let numbers = batch.column(2).as_primitive::<Decimal128Type>();
+        assert!(numbers
+            .iter()
+            .eq([Some(1234), None, None, None, None, None, None]));
+
+        let strings = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(strings.iter().eq([
+            Some("hi"),
+            Some("1.234"),
+            Some("true"),
+            None,
+            None,
+            None,
+            None
+        ]));
+
+        let arrays = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(
+            arrays.nulls(),
+            Some(&NullBuffer::from(
+                &[true, false, false, false, false, false, false][..]
+            ))
+        );
+        assert_eq!(arrays.offsets()[1], 3);
+        let array_values = arrays
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(
+            array_values.iter().eq([Some(1), None, Some(3)]),
+            "{array_values:?}"
+        );
+
+        let maps = batch.column(5).as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(
+            maps.nulls(),
+            Some(&NullBuffer::from(
+                &[true, false, false, false, false, false, true][..]
+            ))
+        );
+        let map_keys = maps.keys().as_any().downcast_ref::<StringArray>().unwrap();
+        assert!(map_keys.iter().eq([Some("k"), Some("a")]));
+        let map_values = maps
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(map_values.iter().eq([Some("value"), Some("1")]));
+
+        let structs = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(
+            structs.nulls(),
+            Some(&NullBuffer::from(
+                &[true, true, false, false, false, false, false][..]
+            ))
+        );
+        let struct_fields = structs
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert!(struct_fields.slice(0, 2).iter().eq([Some(1), None]));
     }
 }
