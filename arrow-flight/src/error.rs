@@ -147,4 +147,10 @@ mod test {
         let source = root_error.downcast_ref::<FlightError>().unwrap();
         assert!(matches!(source, FlightError::DecodeError(_)));
     }
+
+    #[test]
+    fn test_error_size() {
+        // use Box in variants to keep this size down
+        assert_eq!(std::mem::size_of::<FlightError>(), 32);
+    }
 }
