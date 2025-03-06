@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
 use crate::schema::types::ColumnDescPtr;
 use crate::thrift::TSerializable;
@@ -168,12 +168,24 @@ impl FileEncryptor {
         &self.aad_file_unique
     }
 
+    /// Returns whether data for the specified column is encrypted
+    pub fn is_column_encrypted(&self, column_path: &str) -> bool {
+        if self.properties.column_keys.is_empty() {
+            // Uniform encryption
+            true
+        } else {
+            self.properties.column_keys.contains_key(column_path)
+        }
+    }
+
     pub(crate) fn get_footer_encryptor(&self) -> Result<Box<dyn BlockEncryptor>> {
         Ok(Box::new(RingGcmBlockEncryptor::new(
             &self.properties.footer_key.key,
         )?))
     }
 
+    /// Get the encryptor for a column.
+    /// Will return an error if the column is not an encrypted column.
     pub(crate) fn get_column_encryptor(
         &self,
         column_path: &str,
@@ -182,7 +194,7 @@ impl FileEncryptor {
             return self.get_footer_encryptor();
         }
         match self.properties.column_keys.get(column_path) {
-            None => todo!("Handle unencrypted columns"),
+            None => Err(general_err!("Column '{}' is not encrypted", column_path)),
             Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
         }
     }
@@ -223,7 +235,7 @@ pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
 }
 
 /// Get the crypto metadata for a column from the file encryption properties
-pub fn get_column_crypto_metadata(
+pub(crate) fn get_column_crypto_metadata(
     properties: &FileEncryptionProperties,
     column: &ColumnDescPtr,
 ) -> Option<ColumnCryptoMetaData> {

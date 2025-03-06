@@ -876,10 +876,13 @@ impl ArrowColumnWriterFactory {
         column_descriptor: &ColumnDescPtr,
         column_index: usize,
     ) -> Box<ArrowPageWriter> {
-        let page_encryptor = self.file_encryptor.as_ref().map(|fe| {
-            let column_path = column_descriptor.path().string();
-            PageEncryptor::new(fe.clone(), self.row_group_index, column_index, column_path)
-        });
+        let column_path = column_descriptor.path().string();
+        let page_encryptor = PageEncryptor::create_if_column_encrypted(
+            &self.file_encryptor,
+            self.row_group_index,
+            column_index,
+            column_path,
+        );
         Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
     }
 
