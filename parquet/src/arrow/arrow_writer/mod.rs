@@ -1291,8 +1291,6 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "encryption")]
-    use crate::arrow::arrow_reader::tests::verify_encryption_test_file_read;
-    #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::ArrowReaderMetadata;
     #[cfg(feature = "encryption")]
     use crate::arrow::arrow_reader::ArrowReaderOptions;
@@ -1300,6 +1298,8 @@ mod tests {
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     #[cfg(feature = "encryption")]
     use crate::encryption::encrypt::EncryptionKey;
+    #[cfg(feature = "encryption")]
+    use crate::util::test_common::encryption_util::verify_encryption_test_file_read;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
