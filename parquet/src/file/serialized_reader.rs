@@ -325,8 +325,6 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
             self.metadata.num_rows() as usize,
             page_locations,
             props,
-            #[cfg(feature = "encryption")]
-            None,
         )?))
     }
 
@@ -568,18 +566,16 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         meta: &ColumnChunkMetaData,
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
-        #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(
-            reader,
-            meta,
-            total_rows,
-            page_locations,
-            props,
-            #[cfg(feature = "encryption")]
-            crypto_context,
-        )
+        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
+    }
+
+    #[allow(missing_docs)]
+    #[cfg(feature = "encryption")]
+    pub fn with_crypto_context(mut self, crypto_context: Arc<CryptoContext>) -> Self {
+        self.crypto_context = Some(crypto_context);
+        self
     }
 
     /// Creates a new serialized page with custom options.
@@ -589,7 +585,6 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
-        #[cfg(feature = "encryption")] crypto_context: Option<Arc<CryptoContext>>,
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();
@@ -625,7 +620,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             state,
             physical_type: meta.column_type(),
             #[cfg(feature = "encryption")]
-            crypto_context,
+            crypto_context: None,
         })
     }
 
@@ -1317,8 +1312,6 @@ mod tests {
             row_group.metadata.num_rows() as usize,
             page_locations,
             props,
-            #[cfg(feature = "encryption")]
-            None,
         )
     }
 

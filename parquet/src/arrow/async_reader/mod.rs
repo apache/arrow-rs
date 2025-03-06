@@ -108,12 +108,16 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
-    fn get_metadata<'a>(
-        &'a mut self,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &'a FileDecryptionProperties,
-        >,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
+    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
+
+    #[cfg(feature = "encryption")]
+    fn with_file_decryption_properties(
+        &mut self,
+        file_decryption_properties: FileDecryptionProperties,
+    );
+
+    #[cfg(feature = "encryption")]
+    fn read_encrypted(&self) -> bool;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -126,16 +130,22 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
-    fn get_metadata<'a>(
-        &'a mut self,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &'a FileDecryptionProperties,
-        >,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        self.as_mut().get_metadata(
-            #[cfg(feature = "encryption")]
-            file_decryption_properties,
-        )
+    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        self.as_mut().get_metadata()
+    }
+
+    #[cfg(feature = "encryption")]
+    fn with_file_decryption_properties(
+        &mut self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) {
+        self.as_mut()
+            .with_file_decryption_properties(file_decryption_properties);
+    }
+
+    #[cfg(feature = "encryption")]
+    fn read_encrypted(&self) -> bool {
+        self.as_ref().read_encrypted()
     }
 }
 
@@ -156,12 +166,20 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         .boxed()
     }
 
-    fn get_metadata<'a>(
-        &'a mut self,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &'a FileDecryptionProperties,
-        >,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    #[cfg(feature = "encryption")]
+    fn with_file_decryption_properties(
+        &mut self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) {
+        self.with_file_decryption_properties(file_decryption_properties);
+    }
+
+    #[cfg(feature = "encryption")]
+    fn read_encrypted(&self) -> bool {
+        self.read_encrypted()
+    }
+
+    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
@@ -177,12 +195,14 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(
-                &buf,
-                footer.is_encrypted_footer(),
-                #[cfg(feature = "encryption")]
-                file_decryption_properties,
-            )?))
+            // todo: decrypt
+            if self.read_encrypted() {
+                todo!();
+            }
+            let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata(&buf)?;
+            // #[cfg(feature = "encryption")]
+            // parquet_metadata_reader.with_file_decryptor(file_decryption_properties)
+            Ok(Arc::new(parquet_metadata_reader))
         }
         .boxed()
     }
@@ -204,12 +224,7 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input
-            .get_metadata(
-                #[cfg(feature = "encryption")]
-                options.file_decryption_properties.as_ref(),
-            )
-            .await?;
+        let mut metadata = input.get_metadata().await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -1044,14 +1059,17 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-                let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
+                let page_reader = SerializedPageReader::new(
                     data.clone(),
                     self.metadata.column(i),
                     self.row_count,
                     page_locations,
-                    #[cfg(feature = "encryption")]
-                    crypto_context,
-                )?);
+                )?;
+
+                #[cfg(feature = "encryption")]
+                let page_reader = page_reader.with_crypto_context(crypto_context.unwrap());
+
+                let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),
@@ -1172,13 +1190,21 @@ mod tests {
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
 
-        fn get_metadata<'a>(
-            &'a mut self,
-            #[cfg(feature = "encryption")] _file_decryption_properties: Option<
-                &'a FileDecryptionProperties,
-            >,
-        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
+        }
+
+        #[cfg(feature = "encryption")]
+        fn with_file_decryption_properties(
+            &mut self,
+            file_decryption_properties: FileDecryptionProperties,
+        ) {
+            todo!("we don't test for decryption yet");
+        }
+
+        #[cfg(feature = "encryption")]
+        fn read_encrypted(&self) -> bool {
+            todo!("we don't test for decryption yet");
         }
     }
 

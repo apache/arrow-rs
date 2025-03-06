@@ -189,19 +189,21 @@ pub struct ParquetMetaData {
 impl ParquetMetaData {
     /// Creates Parquet metadata from file metadata and a list of row
     /// group metadata
-    pub fn new(
-        file_metadata: FileMetaData,
-        row_groups: Vec<RowGroupMetaData>,
-        #[cfg(feature = "encryption")] file_decryptor: Option<FileDecryptor>,
-    ) -> Self {
+    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
             #[cfg(feature = "encryption")]
-            file_decryptor,
+            file_decryptor: None,
             column_index: None,
             offset_index: None,
         }
+    }
+
+    #[allow(missing_docs)]
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
+        self.file_decryptor = file_decryptor;
     }
 
     /// Creates Parquet metadata from file metadata, a list of row
@@ -347,12 +349,7 @@ pub struct ParquetMetaDataBuilder(ParquetMetaData);
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(
-            file_meta_data,
-            vec![],
-            #[cfg(feature = "encryption")]
-            None,
-        ))
+        Self(ParquetMetaData::new(file_meta_data, vec![]))
     }
 
     /// Create a new builder from an existing ParquetMetaData
@@ -626,11 +623,10 @@ impl RowGroupMetaData {
         self.file_offset
     }
 
-    /// Method to convert from Thrift.
-    pub fn from_thrift(
+    pub fn from_encrypted_thrift(
         schema_descr: SchemaDescPtr,
         mut rg: RowGroup,
-        #[cfg(feature = "encryption")] decryptor: Option<&FileDecryptor>,
+        decryptor: Option<&FileDecryptor>,
     ) -> Result<RowGroupMetaData> {
         if schema_descr.num_columns() != rg.columns.len() {
             return Err(general_err!(
@@ -642,11 +638,6 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
-
-        #[cfg(not(feature = "encryption"))]
-        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
-        }
 
         #[cfg(feature = "encryption")]
         for (i, (mut c, d)) in rg
@@ -690,6 +681,36 @@ impl RowGroupMetaData {
             }
             columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
         }
+
+        let sorting_columns = rg.sorting_columns;
+        Ok(RowGroupMetaData {
+            columns,
+            num_rows,
+            sorting_columns,
+            total_byte_size,
+            schema_descr,
+            file_offset: rg.file_offset,
+            ordinal: rg.ordinal,
+        })
+    }
+
+    /// Method to convert from Thrift.
+    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
+        if schema_descr.num_columns() != rg.columns.len() {
+            return Err(general_err!(
+                "Column count mismatch. Schema has {} columns while Row Group has {}",
+                schema_descr.num_columns(),
+                rg.columns.len()
+            ));
+        }
+        let total_byte_size = rg.total_byte_size;
+        let num_rows = rg.num_rows;
+        let mut columns = vec![];
+
+        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
+            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
+        }
+
         let sorting_columns = rg.sorting_columns;
         Ok(RowGroupMetaData {
             columns,
@@ -1680,14 +1701,9 @@ mod tests {
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(
-            schema_descr,
-            row_group_exp.clone(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .unwrap()
-        .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
+            .unwrap()
+            .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1766,14 +1782,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = RowGroupMetaData::from_thrift(
-            schema_descr_3cols,
-            row_group_meta_2cols.to_thrift(),
-            #[cfg(feature = "encryption")]
-            None,
-        )
-        .unwrap_err()
-        .to_string();
+        let err =
+            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
+                .unwrap_err()
+                .to_string();
         assert_eq!(
             err,
             "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"

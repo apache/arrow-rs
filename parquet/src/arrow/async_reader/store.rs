@@ -60,6 +60,8 @@ pub struct ParquetObjectReader {
     preload_column_index: bool,
     preload_offset_index: bool,
     runtime: Option<Handle>,
+    #[cfg(feature = "encryption")]
+    file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ParquetObjectReader {
@@ -74,6 +76,8 @@ impl ParquetObjectReader {
             preload_column_index: false,
             preload_offset_index: false,
             runtime: None,
+            #[cfg(feature = "encryption")]
+            file_decryption_properties: None,
         }
     }
 
@@ -165,12 +169,7 @@ impl AsyncFileReader for ParquetObjectReader {
     // an `impl MetadataFetch` and calls those methods to get data from it. Due to `Self`'s impl of
     // `AsyncFileReader`, the calls to `MetadataFetch::fetch` are just delegated to
     // `Self::get_bytes`.
-    fn get_metadata<'a>(
-        &'a mut self,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &'a FileDecryptionProperties,
-        >,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let file_size = self.meta.size;
             let metadata = ParquetMetaDataReader::new()
@@ -178,11 +177,26 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint);
             #[cfg(feature = "encryption")]
-            let metadata = metadata.with_decryption_properties(file_decryption_properties);
+            let file_decryption_properties = self.file_decryption_properties.clone().unwrap();
+            #[cfg(feature = "encryption")]
+            let metadata = metadata.with_decryption_properties(Some(&file_decryption_properties));
 
             let metadata = metadata.load_and_finish(self, file_size).await?;
             Ok(Arc::new(metadata))
         })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn with_file_decryption_properties(
+        &mut self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) {
+        self.file_decryption_properties = Some(file_decryption_properties);
+    }
+
+    #[cfg(feature = "encryption")]
+    fn read_encrypted(&self) -> bool {
+        self.file_decryption_properties.is_some()
     }
 }
 

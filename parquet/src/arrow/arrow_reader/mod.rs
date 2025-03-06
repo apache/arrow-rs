@@ -400,10 +400,8 @@ impl ArrowReaderMetadata {
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
         #[cfg(feature = "encryption")]
-        let metadata = metadata
-            .with_decryption_properties(options.file_decryption_properties.as_ref())
-            .parse_and_finish(reader)?;
-        #[cfg(not(feature = "encryption"))]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
         let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
@@ -728,14 +726,14 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
             None
         };
 
-        let ret = SerializedPageReader::new(
-            reader,
-            meta,
-            total_rows,
-            page_locations,
-            #[cfg(feature = "encryption")]
-            crypto_context,
-        );
+        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+
+        #[cfg(feature = "encryption")]
+        if crypto_context.is_some() {
+            let ret = Ok(ret.unwrap().with_crypto_context(crypto_context.unwrap()));
+            return Some(ret.map(|x| Box::new(x) as _));
+        }
+
         Some(ret.map(|x| Box::new(x) as _))
     }
 }

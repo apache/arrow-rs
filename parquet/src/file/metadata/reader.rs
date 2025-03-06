@@ -168,6 +168,11 @@ impl ParquetMetaDataReader {
         self
     }
 
+    #[cfg(feature = "encryption")]
+    fn read_encrypted(&self) -> bool {
+        self.file_decryption_properties.is_some()
+    }
+
     /// Indicates whether this reader has a [`ParquetMetaData`] internally.
     pub fn has_metadata(&self) -> bool {
         self.metadata.is_some()
@@ -568,12 +573,15 @@ impl ParquetMetaDataReader {
         }
 
         let start = file_size - footer_metadata_len as u64;
-        Self::decode_metadata(
-            chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-            footer.is_encrypted_footer(),
-            #[cfg(feature = "encryption")]
-            self.file_decryption_properties.as_ref(),
-        )
+        if self.read_encrypted() {
+            Self::decrypt_metadata(
+                chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
+                true,
+                self.file_decryption_properties.as_ref(),
+            )
+        } else {
+            Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
+        }
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -639,9 +647,9 @@ impl ParquetMetaDataReader {
             Ok((
                 Self::decode_metadata(
                     &meta,
-                    footer.is_encrypted_footer(),
-                    #[cfg(feature = "encryption")]
-                    file_decryption_properties,
+                    // footer.is_encrypted_footer(),
+                    // #[cfg(feature = "encryption")]
+                    // file_decryption_properties,
                 )?,
                 None,
             ))
@@ -651,9 +659,9 @@ impl ParquetMetaDataReader {
             Ok((
                 Self::decode_metadata(
                     slice,
-                    footer.is_encrypted_footer(),
-                    #[cfg(feature = "encryption")]
-                    file_decryption_properties,
+                    // footer.is_encrypted_footer(),
+                    // #[cfg(feature = "encryption")]
+                    // file_decryption_properties,
                 )?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             ))
@@ -695,14 +703,7 @@ impl ParquetMetaDataReader {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
 
-    /// Decodes [`ParquetMetaData`] from the provided bytes.
-    ///
-    /// Typically this is used to decode the metadata from the end of a parquet
-    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
-    /// by the [Parquet Spec].
-    ///
-    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-    pub fn decode_metadata(
+    pub fn decrypt_metadata(
         buf: &[u8],
         encrypted_footer: bool,
         #[cfg(feature = "encryption")] file_decryption_properties: Option<
@@ -723,7 +724,6 @@ impl ParquetMetaDataReader {
         #[cfg(feature = "encryption")]
         let decrypted_fmd_buf;
 
-        #[cfg(feature = "encryption")]
         if encrypted_footer {
             if let Some(file_decryption_properties) = file_decryption_properties {
                 let t_file_crypto_metadata: TFileCryptoMetaData =
@@ -751,7 +751,6 @@ impl ParquetMetaDataReader {
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
-        #[cfg(feature = "encryption")]
         if let (Some(algo), Some(file_decryption_properties)) = (
             t_file_metadata.encryption_algorithm,
             file_decryption_properties,
@@ -762,12 +761,7 @@ impl ParquetMetaDataReader {
 
         let mut row_groups = Vec::new();
         for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_thrift(
-                schema_descr.clone(),
-                rg,
-                #[cfg(feature = "encryption")]
-                file_decryptor.as_ref(),
-            )?;
+            let r = RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?;
             row_groups.push(r);
         }
         let column_orders =
@@ -781,12 +775,46 @@ impl ParquetMetaDataReader {
             schema_descr,
             column_orders,
         );
-        Ok(ParquetMetaData::new(
-            file_metadata,
-            row_groups,
-            #[cfg(feature = "encryption")]
-            file_decryptor,
-        ))
+        let mut metadata = ParquetMetaData::new(file_metadata, row_groups);
+
+        metadata.with_file_decryptor(file_decryptor);
+
+        Ok(metadata)
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Typically this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec].
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
+        let mut prot = TCompactSliceInputProtocol::new(buf);
+
+        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
+        let schema = types::from_thrift(&t_file_metadata.schema)?;
+        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
+
+        let mut row_groups = Vec::new();
+        for rg in t_file_metadata.row_groups {
+            let r = RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?;
+            row_groups.push(r);
+        }
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
+
+        let file_metadata = FileMetaData::new(
+            t_file_metadata.version,
+            t_file_metadata.num_rows,
+            t_file_metadata.created_by,
+            t_file_metadata.key_value_metadata,
+            schema_descr,
+            column_orders,
+        );
+
+        Ok(ParquetMetaData::new(file_metadata, row_groups))
     }
 
     /// Parses column orders from Thrift definition.
