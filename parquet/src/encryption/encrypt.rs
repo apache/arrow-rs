@@ -200,26 +200,19 @@ impl FileEncryptor {
     }
 }
 
-/// Encrypt a Thrift serializable object
+/// Write an encrypted Thrift serializable object
 pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
-    let mut buffer: Vec<u8> = vec![];
-    {
-        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
-        object.write_to_out_protocol(&mut unencrypted_protocol)?;
-    }
-
-    let encrypted_buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
-
+    let encrypted_buffer = encrypt_object_to_vec(object, encryptor, module_aad)?;
     sink.write_all(&encrypted_buffer)?;
     Ok(())
 }
 
-/// Encrypt a Thrift serializable object
+/// Encrypt a Thrift serializable object to a byte vector
 pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
