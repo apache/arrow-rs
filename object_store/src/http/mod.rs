@@ -41,7 +41,7 @@ use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
-use crate::client::{HttpConnector, ReqwestConnector};
+use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -237,7 +237,9 @@ impl HttpBuilder {
         self
     }
 
-    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    /// The [`HttpConnector`] to use
+    ///
+    /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
     pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
         self.http_connector = Some(Arc::new(connector));
         self
@@ -248,10 +250,7 @@ impl HttpBuilder {
         let url = self.url.ok_or(Error::MissingUrl)?;
         let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
 
-        let client = match self.http_connector {
-            None => ReqwestConnector::default().connect(&self.client_options)?,
-            Some(x) => x.connect(&self.client_options)?,
-        };
+        let client = http_connector(self.http_connector)?.connect(&self.client_options)?;
 
         Ok(HttpStore {
             client: Arc::new(Client::new(

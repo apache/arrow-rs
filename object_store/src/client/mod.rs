@@ -19,6 +19,7 @@
 
 pub(crate) mod backoff;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod dns;
 
 #[cfg(test)]
@@ -48,21 +49,24 @@ pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
 pub(crate) mod builder;
 
 mod connection;
-pub use connection::{
-    HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService, ReqwestConnector,
-};
+pub(crate) use connection::http_connector;
+#[cfg(not(target_arch = "wasm32"))]
+pub use connection::ReqwestConnector;
+pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
 
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::{NoProxy, Proxy};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
@@ -195,8 +199,10 @@ impl FromStr for ClientConfigKey {
 /// This is used to configure the client to trust a specific certificate. See
 /// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Certificate(reqwest::tls::Certificate);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Certificate {
     /// Create a `Certificate` from a PEM encoded certificate.
     ///
@@ -243,6 +249,7 @@ impl Certificate {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
+    #[cfg(not(target_arch = "wasm32"))]
     root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
@@ -276,6 +283,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
+            #[cfg(not(target_arch = "wasm32"))]
             root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
@@ -402,6 +410,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self
@@ -614,8 +623,9 @@ impl ClientOptions {
             .with_connect_timeout(Duration::from_secs(1))
     }
 
-    pub(crate) fn client(&self) -> Result<Client> {
-        let mut builder = ClientBuilder::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn client(&self) -> Result<reqwest::Client> {
+        let mut builder = reqwest::ClientBuilder::new();
 
         match &self.user_agent {
             Some(user_agent) => builder = builder.user_agent(user_agent.get()?),
@@ -799,7 +809,7 @@ mod cloud {
     use crate::client::token::{TemporaryToken, TokenCache};
     use crate::RetryConfig;
 
-    /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
+    /// A [`CredentialProvider`] that uses [`HttpClient`] to fetch temporary tokens
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,

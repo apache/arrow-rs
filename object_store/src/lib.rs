@@ -497,12 +497,6 @@
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 
-#[cfg(all(
-    target_arch = "wasm32",
-    any(feature = "gcp", feature = "aws", feature = "azure", feature = "http")
-))]
-compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm.");
-
 #[cfg(feature = "aws")]
 pub mod aws;
 #[cfg(feature = "azure")]
@@ -530,9 +524,12 @@ pub mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, Certificate, ClientConfigKey, ClientOptions,
-    CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
+    StaticCredentialProvider,
 };
+
+#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+pub use client::Certificate;
 
 #[cfg(feature = "cloud")]
 mod config;
@@ -1083,8 +1080,6 @@ impl GetResult {
                 .await
             }
             GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
-            #[cfg(target_arch = "wasm32")]
-            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 
@@ -1110,8 +1105,6 @@ impl GetResult {
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
             GetResultPayload::Stream(s) => s,
-            #[cfg(target_arch = "wasm32")]
-            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 }
