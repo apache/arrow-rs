@@ -20,8 +20,8 @@
 use crate::path::Path;
 use crate::ObjectMeta;
 use chrono::{DateTime, TimeZone, Utc};
-use hyper::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
-use hyper::HeaderMap;
+use http::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
+use http::HeaderMap;
 
 #[derive(Debug, Copy, Clone)]
 /// Configuration for header extraction

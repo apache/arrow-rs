@@ -28,7 +28,6 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::data::private::UnsafeFlag;
 use crate::{equal, validate_binary_view, validate_string_view};
 
 #[inline]
@@ -1781,33 +1780,62 @@ impl PartialEq for ArrayData {
     }
 }
 
-mod private {
-    /// A boolean flag that cannot be mutated outside of unsafe code.
-    ///
-    /// Defaults to a value of false.
-    ///
-    /// This structure is used to enforce safety in the [`ArrayDataBuilder`]
-    ///
-    /// [`ArrayDataBuilder`]: super::ArrayDataBuilder
-    #[derive(Debug)]
-    pub struct UnsafeFlag(bool);
+/// A boolean flag that cannot be mutated outside of unsafe code.
+///
+/// Defaults to a value of false.
+///
+/// This structure is used to enforce safety in the [`ArrayDataBuilder`]
+///
+/// [`ArrayDataBuilder`]: super::ArrayDataBuilder
+///
+/// # Example
+/// ```rust
+/// use arrow_data::UnsafeFlag;
+/// assert!(!UnsafeFlag::default().get()); // default is false
+/// let mut flag = UnsafeFlag::new();
+/// assert!(!flag.get()); // defaults to false
+/// // can only set it to true in unsafe code
+/// unsafe { flag.set(true) };
+/// assert!(flag.get()); // now true
+/// ```
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub struct UnsafeFlag(bool);
 
-    impl UnsafeFlag {
-        /// Creates a new `UnsafeFlag` with the value set to `false`
-        #[inline]
-        pub const fn new() -> Self {
-            Self(false)
-        }
+impl UnsafeFlag {
+    /// Creates a new `UnsafeFlag` with the value set to `false`.
+    ///
+    /// See examples on [`Self::new`]
+    #[inline]
+    pub const fn new() -> Self {
+        Self(false)
+    }
 
-        #[inline]
-        pub unsafe fn set(&mut self, val: bool) {
-            self.0 = val;
-        }
+    /// Sets the value of the flag to the given value
+    ///
+    /// Note this can purposely only be done in `unsafe` code
+    ///
+    /// # Safety
+    ///
+    /// If set, the flag will be set to the given value. There is nothing
+    /// immediately unsafe about doing so, however, the flag can be used to
+    /// subsequently bypass safety checks in the [`ArrayDataBuilder`].
+    #[inline]
+    pub unsafe fn set(&mut self, val: bool) {
+        self.0 = val;
+    }
 
-        #[inline]
-        pub fn get(&self) -> bool {
-            self.0
-        }
+    /// Returns the value of the flag
+    #[inline]
+    pub fn get(&self) -> bool {
+        self.0
+    }
+}
+
+// Manual impl to make it clear you can not construct unsafe with true
+impl Default for UnsafeFlag {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1929,7 +1957,13 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
-    /// Note: This is shorthand for `self.skip_validation(true).build().unwrap()`
+    /// Note: This is shorthand for
+    /// ```rust
+    /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
+    /// # let _ = unsafe {
+    /// builder.skip_validation(true).build().unwrap()
+    /// # };
+    /// ```
     ///
     /// # Safety
     ///

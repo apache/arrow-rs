@@ -16,18 +16,18 @@
 // under the License.
 
 use crate::aws::{AwsCredentialProvider, STORE, STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET};
+use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::client::TokenProvider;
+use crate::client::{HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::util::{hex_digest, hex_encode, hmac_sha256};
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use hyper::header::HeaderName;
+use http::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
+use http::{Method, StatusCode};
 use percent_encoding::utf8_percent_encode;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use reqwest::{Client, Method, Request, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -39,10 +39,12 @@ use url::Url;
 #[allow(clippy::enum_variant_names)]
 enum Error {
     #[error("Error performing CreateSession request: {source}")]
-    CreateSessionRequest { source: crate::client::retry::Error },
+    CreateSessionRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting CreateSession response: {source}")]
-    CreateSessionResponse { source: reqwest::Error },
+    CreateSessionResponse { source: HttpError },
 
     #[error("Invalid CreateSessionOutput response: {source}")]
     CreateSessionOutput { source: quick_xml::DeError },
@@ -89,7 +91,7 @@ impl AwsCredential {
     }
 }
 
-/// Authorize a [`Request`] with an [`AwsCredential`] using [AWS SigV4]
+/// Authorize a [`HttpRequest`] with an [`AwsCredential`] using [AWS SigV4]
 ///
 /// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
 #[derive(Debug)]
@@ -158,14 +160,16 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub fn authorize(&self, request: &mut Request, pre_calculated_digest: Option<&[u8]>) {
+    pub fn authorize(&self, request: &mut HttpRequest, pre_calculated_digest: Option<&[u8]>) {
+        let url = Url::parse(&request.uri().to_string()).unwrap();
+
         if let Some(ref token) = self.credential.token {
             let token_val = HeaderValue::from_str(token).unwrap();
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
             request.headers_mut().insert(header, token_val);
         }
 
-        let host = &request.url()[url::Position::BeforeHost..url::Position::AfterPort];
+        let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
         let host_val = HeaderValue::from_str(host).unwrap();
         request.headers_mut().insert("host", host_val);
 
@@ -178,9 +182,9 @@ impl<'a> AwsAuthorizer<'a> {
             false => UNSIGNED_PAYLOAD.to_string(),
             true => match pre_calculated_digest {
                 Some(digest) => hex_encode(digest),
-                None => match request.body() {
-                    None => EMPTY_SHA256_HASH.to_string(),
-                    Some(body) => match body.as_bytes() {
+                None => match request.body().is_empty() {
+                    true => EMPTY_SHA256_HASH.to_string(),
+                    false => match request.body().as_bytes() {
                         Some(bytes) => hex_digest(bytes),
                         None => STREAMING_PAYLOAD.to_string(),
                     },
@@ -208,7 +212,7 @@ impl<'a> AwsAuthorizer<'a> {
             date,
             &scope,
             request.method(),
-            request.url(),
+            &url,
             &canonical_headers,
             &signed_headers,
             &digest,
@@ -350,7 +354,7 @@ pub(crate) trait CredentialExt {
     ) -> Self;
 }
 
-impl CredentialExt for RequestBuilder {
+impl CredentialExt for HttpRequestBuilder {
     fn with_aws_sigv4(
         self,
         authorizer: Option<AwsAuthorizer<'_>>,
@@ -358,7 +362,7 @@ impl CredentialExt for RequestBuilder {
     ) -> Self {
         match authorizer {
             Some(authorizer) => {
-                let (client, request) = self.build_split();
+                let (client, request) = self.into_parts();
                 let mut request = request.expect("request valid");
                 authorizer.authorize(&mut request, payload_sha256);
 
@@ -461,7 +465,7 @@ impl TokenProvider for InstanceCredentialProvider {
 
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
         instance_creds(client, retry, &self.metadata_endpoint, self.imdsv1_fallback)
@@ -490,7 +494,7 @@ impl TokenProvider for WebIdentityProvider {
 
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
         web_identity(
@@ -530,7 +534,7 @@ impl From<InstanceCredentials> for AwsCredential {
 
 /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials>
 async fn instance_creds(
-    client: &Client,
+    client: &HttpClient,
     retry_config: &RetryConfig,
     endpoint: &str,
     imdsv1_fallback: bool,
@@ -549,7 +553,7 @@ async fn instance_creds(
         .await;
 
     let token = match token_result {
-        Ok(t) => Some(t.text().await?),
+        Ok(t) => Some(t.into_body().text().await?),
         Err(e) if imdsv1_fallback && matches!(e.status(), Some(StatusCode::FORBIDDEN)) => {
             warn!("received 403 from metadata endpoint, falling back to IMDSv1");
             None
@@ -564,7 +568,12 @@ async fn instance_creds(
         role_request = role_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let role = role_request.send_retry(retry_config).await?.text().await?;
+    let role = role_request
+        .send_retry(retry_config)
+        .await?
+        .into_body()
+        .text()
+        .await?;
 
     let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
     let mut creds_request = client.request(Method::GET, creds_url);
@@ -572,7 +581,12 @@ async fn instance_creds(
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let creds: InstanceCredentials = creds_request.send_retry(retry_config).await?.json().await?;
+    let creds: InstanceCredentials = creds_request
+        .send_retry(retry_config)
+        .await?
+        .into_body()
+        .json()
+        .await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -615,7 +629,7 @@ impl From<SessionCredentials> for AwsCredential {
 
 /// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 async fn web_identity(
-    client: &Client,
+    client: &HttpClient,
     retry_config: &RetryConfig,
     token_path: &str,
     role_arn: &str,
@@ -626,7 +640,7 @@ async fn web_identity(
         .map_err(|e| format!("Failed to read token file '{token_path}': {e}"))?;
 
     let bytes = client
-        .request(Method::POST, endpoint)
+        .post(endpoint)
         .query(&[
             ("Action", "AssumeRoleWithWebIdentity"),
             ("DurationSeconds", "3600"),
@@ -640,6 +654,7 @@ async fn web_identity(
         .sensitive(true)
         .send()
         .await?
+        .into_body()
         .bytes()
         .await?;
 
@@ -663,7 +678,7 @@ async fn web_identity(
 pub(crate) struct TaskCredentialProvider {
     pub url: String,
     pub retry: RetryConfig,
-    pub client: Client,
+    pub client: HttpClient,
     pub cache: TokenCache<Arc<AwsCredential>>,
 }
 
@@ -684,11 +699,17 @@ impl CredentialProvider for TaskCredentialProvider {
 
 /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
 async fn task_credential(
-    client: &Client,
+    client: &HttpClient,
     retry: &RetryConfig,
     url: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let creds: InstanceCredentials = client.get(url).send_retry(retry).await?.json().await?;
+    let creds: InstanceCredentials = client
+        .get(url)
+        .send_retry(retry)
+        .await?
+        .into_body()
+        .json()
+        .await?;
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
@@ -714,7 +735,7 @@ impl TokenProvider for SessionProvider {
 
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<Arc<Self::Credential>>> {
         let creds = self.credentials.get_credential().await?;
@@ -726,6 +747,7 @@ impl TokenProvider for SessionProvider {
             .send_retry(retry)
             .await
             .map_err(|source| Error::CreateSessionRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::CreateSessionResponse { source })?;
@@ -752,14 +774,15 @@ struct CreateSessionOutput {
 mod tests {
     use super::*;
     use crate::client::mock_server::MockServer;
-    use hyper::Response;
+    use crate::client::HttpClient;
+    use http::Response;
     use reqwest::{Client, Method};
     use std::env;
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[test]
     fn test_sign_with_signed_payload() {
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
 
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
@@ -780,7 +803,8 @@ mod tests {
 
         let mut request = client
             .request(Method::GET, "https://ec2.amazon.com/")
-            .build()
+            .into_parts()
+            .1
             .unwrap();
 
         let signer = AwsAuthorizer {
@@ -799,7 +823,7 @@ mod tests {
 
     #[test]
     fn test_sign_with_signed_payload_request_payer() {
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
 
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
@@ -820,7 +844,8 @@ mod tests {
 
         let mut request = client
             .request(Method::GET, "https://ec2.amazon.com/")
-            .build()
+            .into_parts()
+            .1
             .unwrap();
 
         let signer = AwsAuthorizer {
@@ -839,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_sign_with_unsigned_payload() {
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
 
         // Test credentials from https://docs.aws.amazon.com/AmazonS3/latest/userguide/RESTAuthentication.html
         let credential = AwsCredential {
@@ -860,7 +885,8 @@ mod tests {
 
         let mut request = client
             .request(Method::GET, "https://ec2.amazon.com/")
-            .build()
+            .into_parts()
+            .1
             .unwrap();
 
         let authorizer = AwsAuthorizer {
@@ -962,7 +988,7 @@ mod tests {
 
     #[test]
     fn test_sign_port() {
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
 
         let credential = AwsCredential {
             key_id: "H20ABqCkLZID4rLe".to_string(),
@@ -982,7 +1008,8 @@ mod tests {
                 ("list-type", "2"),
                 ("prefix", ""),
             ])
-            .build()
+            .into_parts()
+            .1
             .unwrap();
 
         let authorizer = AwsAuthorizer {
@@ -1008,15 +1035,15 @@ mod tests {
 
         // For example https://github.com/aws/amazon-ec2-metadata-mock
         let endpoint = env::var("EC2_METADATA_ENDPOINT").unwrap();
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
         let retry_config = RetryConfig::default();
 
         // Verify only allows IMDSv2
-        let resp = client
+        let (client, req) = client
             .request(Method::GET, format!("{endpoint}/latest/meta-data/ami-id"))
-            .send()
-            .await
-            .unwrap();
+            .into_parts();
+
+        let resp = client.execute(req.unwrap()).await.unwrap();
 
         assert_eq!(
             resp.status(),
@@ -1048,7 +1075,7 @@ mod tests {
         let token = "TOKEN";
 
         let endpoint = server.url();
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
         let retry_config = RetryConfig::default();
 
         // Test IMDSv2
