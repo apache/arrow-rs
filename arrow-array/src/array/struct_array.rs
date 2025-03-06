@@ -114,7 +114,8 @@ impl StructArray {
                 arrays.len()
             )));
         }
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
+
+        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::new_empty_fields to create a struct array with no fields so that the length can be set correctly".to_string()))?;
 
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
@@ -193,7 +194,11 @@ impl StructArray {
             return Self::new(fields, arrays, nulls);
         }
 
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
+        let len = arrays
+            .first()
+            .map(|x| x.len())
+            .expect("cannot use new_unchecked if there are no fields, length is unknown");
+
         Self {
             len,
             data_type: DataType::Struct(fields),
@@ -817,9 +822,11 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "use StructArray::new_empty_fields")]
     fn test_struct_array_from_empty() {
-        let sa = StructArray::from(vec![]);
-        assert!(sa.is_empty())
+        // This can't work because we don't know how many rows the array should have.  Previously we inferred 0 but
+        // that often led to bugs.
+        let _ = StructArray::from(vec![]);
     }
 
     #[test]
