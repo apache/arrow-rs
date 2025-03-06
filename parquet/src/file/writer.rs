@@ -593,14 +593,12 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                 let (buf, on_close) = self.get_on_close();
 
                 #[cfg(feature = "encryption")]
-                let page_encryptor = file_encryptor.map(|file_encryptor| {
-                    PageEncryptor::new(
-                        file_encryptor,
-                        row_group_index,
-                        column_index,
-                        column.path().string(),
-                    )
-                });
+                let page_encryptor = PageEncryptor::create_if_column_encrypted(
+                    &file_encryptor,
+                    row_group_index,
+                    column_index,
+                    column.path().string(),
+                );
 
                 #[cfg(feature = "encryption")]
                 let page_writer =
