@@ -73,7 +73,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     match self.file_encryptor.as_ref() {
                         #[cfg(feature = "encryption")]
                         Some(file_encryptor) => {
-                            write_encrypted_column_object(
+                            write_column_object_with_encryption(
                                 offset_index,
                                 &mut self.buf,
                                 file_encryptor,
@@ -114,7 +114,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     match self.file_encryptor.as_ref() {
                         #[cfg(feature = "encryption")]
                         Some(file_encryptor) => {
-                            write_encrypted_column_object(
+                            write_column_object_with_encryption(
                                 column_index,
                                 &mut self.buf,
                                 file_encryptor,
@@ -546,7 +546,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 }
 
 #[cfg(feature = "encryption")]
-fn write_encrypted_column_object<T, W>(
+fn write_column_object_with_encryption<T, W>(
     object: &T,
     sink: &mut W,
     file_encryptor: &FileEncryptor,
@@ -559,13 +559,6 @@ where
     T: TSerializable,
     W: Write,
 {
-    let aad = create_module_aad(
-        file_encryptor.file_aad(),
-        module_type,
-        row_group_index,
-        column_index,
-        None,
-    )?;
     let column_path = column_metadata
         .meta_data
         .as_ref()
@@ -577,6 +570,19 @@ where
         })?
         .path_in_schema
         .join(".");
-    let mut encryptor = file_encryptor.get_column_encryptor(&column_path)?;
-    encrypt_object(object, &mut encryptor, sink, &aad)
+    if file_encryptor.is_column_encrypted(&column_path) {
+        let aad = create_module_aad(
+            file_encryptor.file_aad(),
+            module_type,
+            row_group_index,
+            column_index,
+            None,
+        )?;
+        let mut encryptor = file_encryptor.get_column_encryptor(&column_path)?;
+        encrypt_object(object, &mut encryptor, sink, &aad)
+    } else {
+        let mut protocol = TCompactOutputProtocol::new(sink);
+        object.write_to_out_protocol(&mut protocol)?;
+        Ok(())
+    }
 }

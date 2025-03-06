@@ -33,18 +33,23 @@ pub struct PageEncryptor {
 }
 
 impl PageEncryptor {
-    pub fn new(
-        file_encryptor: Arc<FileEncryptor>,
+    pub fn create_if_column_encrypted(
+        file_encryptor: &Option<Arc<FileEncryptor>>,
         row_group_index: usize,
         column_index: usize,
         column_path: String,
-    ) -> Self {
-        Self {
-            file_encryptor,
-            row_group_index,
-            column_index,
-            column_path,
-            page_index: 0,
+    ) -> Option<Self> {
+        match file_encryptor {
+            Some(file_encryptor) if file_encryptor.is_column_encrypted(&column_path) => {
+                Some(Self {
+                    file_encryptor: file_encryptor.clone(),
+                    row_group_index,
+                    column_index,
+                    column_path,
+                    page_index: 0,
+                })
+            }
+            _ => None,
         }
     }
 
