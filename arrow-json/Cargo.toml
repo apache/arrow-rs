@@ -50,6 +50,9 @@ memchr = "2.7.4"
 simdutf8 = "0.1.5"
 
 [dev-dependencies]
+bytebuffer = "2.3"
+num_enum = "0.7"
+static_assertions = "1.1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 futures = "0.3"
