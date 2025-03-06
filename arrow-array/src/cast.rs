@@ -103,8 +103,8 @@ macro_rules! downcast_integer {
     };
 }
 
-/// Downcast an [`Array`] to an integer [`PrimitiveArray`] based on its [`DataType`]
-/// accepts a number of subsequent patterns to match the data type
+/// Given one or more expressions evaluating to an integer [`PrimitiveArray`] invokes the provided macro
+/// with the corresponding array, along with match statements for any non integer array types
 ///
 /// ```
 /// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array};
