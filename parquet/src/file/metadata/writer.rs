@@ -317,7 +317,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         column_index: usize,
     ) -> Result<ColumnChunk> {
         // Column crypto metadata should have already been set when the column was created.
-        // Here we apply the encryption by encrypted the column metadata if required.
+        // Here we apply the encryption by encrypting the column metadata if required.
         match column_chunk.crypto_metadata.as_ref() {
             None => {}
             Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
