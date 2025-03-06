@@ -27,6 +27,7 @@ use arrow_array::{types, RecordBatch};
 use futures::TryStreamExt;
 use std::fs::File;
 
+/// Tests reading an encrypted file from the parquet-testing repository
 pub(crate) fn verify_encryption_test_file_read(
     file: File,
     decryption_properties: FileDecryptionProperties,
