@@ -217,6 +217,7 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
     &values[start..end]
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -225,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_dictionary_builder() {
-        let values = vec!["abc", "def"];
+        let values = ["abc", "def"];
 
         let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
         assert_eq!(b.append(values[0]).unwrap(), 0);
@@ -253,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_dictionary_builder_finish_cloned() {
-        let values = vec!["abc", "def", "ghi"];
+        let values = ["abc", "def", "ghi"];
 
         let mut builder = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
 
