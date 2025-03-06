@@ -15,17 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-pub mod bit_util;
-mod bit_pack;
-pub(crate) mod interner;
-
-pub(crate) mod never;
-#[cfg(any(test, feature = "test_common"))]
-pub(crate) mod test_common;
-pub mod utf8;
-
-#[cfg(any(test, feature = "test_common"))]
-pub use self::test_common::page_util::{
-    DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
-};
+// Type that can never be instantiated, to make working with features more ergonomic.
+// An Option containing this type has zero size.
+#[cfg(not(feature = "encryption"))]
+pub type Never = core::convert::Infallible;
