@@ -1004,35 +1004,35 @@ impl RowGroups for InMemoryRowGroup<'_> {
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
-        let crypto_context =
-            if let Some(file_decryptor) = &self.parquet_metadata.clone().file_decryptor().clone() {
-                let column_name = &self
-                    .parquet_metadata
-                    .clone()
-                    .file_metadata()
-                    .schema_descr()
-                    .column(i);
+        let crypto_context = if let Some(file_decryptor) =
+            &self.parquet_metadata.clone().file_decryptor().clone()
+        {
+            let column_name = &self
+                .parquet_metadata
+                .clone()
+                .file_metadata()
+                .schema_descr()
+                .column(i);
 
-                if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
-                    let data_decryptor =
-                        file_decryptor.get_column_data_decryptor(column_name.name().as_bytes());
-                    let metadata_decryptor =
-                        file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
+            if file_decryptor.is_column_encrypted(column_name.name()) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
+                let metadata_decryptor =
+                    file_decryptor.get_column_metadata_decryptor(column_name.name());
 
-                    let crypto_context = CryptoContext::new(
-                        self.row_group_ordinal,
-                        i,
-                        data_decryptor,
-                        metadata_decryptor,
-                        file_decryptor.file_aad().clone(),
-                    );
-                    Some(Arc::new(crypto_context))
-                } else {
-                    None
-                }
+                let crypto_context = CryptoContext::new(
+                    self.row_group_ordinal,
+                    i,
+                    data_decryptor,
+                    metadata_decryptor,
+                    file_decryptor.file_aad().clone(),
+                );
+                Some(Arc::new(crypto_context))
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -2524,13 +2524,13 @@ mod tests {
 
         // There is always a footer key even with a plaintext footer,
         // but this is used for signing the footer.
-        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-        let column_1_key = "1234567890123450".as_bytes();
-        let column_2_key = "1234567890123451".as_bytes();
+        let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes().to_vec();
+        let column_2_key = "1234567890123451".as_bytes().to_vec();
 
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+        let decryption_properties = FileDecryptionProperties::builder(footer_key)
+            .with_column_key("double_field", column_1_key)
+            .with_column_key("float_field", column_2_key)
             .build()
             .unwrap();
 
@@ -2604,13 +2604,13 @@ mod tests {
         let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
         let mut file = File::open(&path).await.unwrap();
 
-        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-        let column_1_key = "1234567890123450".as_bytes();
-        let column_2_key = "1234567890123451".as_bytes();
+        let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes().to_vec();
+        let column_2_key = "1234567890123451".as_bytes().to_vec();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_column_key("double_field", column_1_key)
+            .with_column_key("float_field", column_2_key)
             .build()
             .unwrap();
 
@@ -2639,13 +2639,13 @@ mod tests {
         let path = format!("{testdata}/encrypt_columns_and_footer_ctr.parquet.encrypted");
         let mut file = File::open(&path).await.unwrap();
 
-        let footer_key = "0123456789012345".as_bytes();
-        let column_1_key = "1234567890123450".as_bytes();
-        let column_2_key = "1234567890123451".as_bytes();
+        let footer_key = "0123456789012345".as_bytes().to_vec();
+        let column_1_key = "1234567890123450".as_bytes().to_vec();
+        let column_2_key = "1234567890123451".as_bytes().to_vec();
 
-        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+        let decryption_properties = FileDecryptionProperties::builder(footer_key)
+            .with_column_key("double_field", column_1_key)
+            .with_column_key("float_field", column_2_key)
             .build()
             .unwrap();
 

@@ -666,7 +666,7 @@ impl RowGroupMetaData {
                     }
                     Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
                         let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(column_name.as_bytes())
+                        decryptor.get_column_metadata_decryptor(column_name.as_str())
                     }
                     Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()

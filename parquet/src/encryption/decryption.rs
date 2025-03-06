@@ -142,7 +142,7 @@ impl CryptoContext {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     footer_key: Vec<u8>,
-    column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
+    column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
 }
 
@@ -155,7 +155,7 @@ impl FileDecryptionProperties {
 
 pub struct DecryptionPropertiesBuilder {
     footer_key: Vec<u8>,
-    column_keys: Option<HashMap<Vec<u8>, Vec<u8>>>,
+    column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
 }
 
@@ -163,7 +163,7 @@ impl DecryptionPropertiesBuilder {
     pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
             footer_key,
-            column_keys: None,
+            column_keys: HashMap::default(),
             aad_prefix: None,
         }
     }
@@ -181,10 +181,9 @@ impl DecryptionPropertiesBuilder {
         self
     }
 
-    pub fn with_column_key(mut self, column_name: Vec<u8>, decryption_key: Vec<u8>) -> Self {
-        let mut column_keys = self.column_keys.unwrap_or_default();
-        column_keys.insert(column_name, decryption_key);
-        self.column_keys = Some(column_keys);
+    pub fn with_column_key(mut self, column_name: &str, decryption_key: Vec<u8>) -> Self {
+        self.column_keys
+            .insert(column_name.to_string(), decryption_key);
         self
     }
 }
@@ -209,10 +208,10 @@ impl FileDecryptor {
         aad_prefix: Vec<u8>,
     ) -> Self {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
+        // todo decr: if no key available yet (not set in properties, should be retrieved from metadata)
         let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key);
 
         Self {
-            // todo decr: if no key available yet (not set in properties, will be retrieved from metadata)
             footer_decryptor: Some(Arc::new(footer_decryptor)),
             decryption_properties: decryption_properties.clone(),
             file_aad,
@@ -223,19 +222,16 @@ impl FileDecryptor {
         self.footer_decryptor.clone().unwrap()
     }
 
-    pub(crate) fn get_column_data_decryptor(&self, column_name: &[u8]) -> Arc<dyn BlockDecryptor> {
-        match self.decryption_properties.column_keys.as_ref() {
+    pub(crate) fn get_column_data_decryptor(&self, column_name: &str) -> Arc<dyn BlockDecryptor> {
+        match self.decryption_properties.column_keys.get(column_name) {
+            Some(column_key) => Arc::new(RingGcmBlockDecryptor::new(column_key)),
             None => self.get_footer_decryptor(),
-            Some(column_keys) => match column_keys.get(column_name) {
-                None => self.get_footer_decryptor(),
-                Some(column_key) => Arc::new(RingGcmBlockDecryptor::new(column_key)),
-            },
         }
     }
 
     pub(crate) fn get_column_metadata_decryptor(
         &self,
-        column_name: &[u8],
+        column_name: &str,
     ) -> Arc<dyn BlockDecryptor> {
         // Once GCM CTR mode is implemented, data and metadata decryptors may be different
         self.get_column_data_decryptor(column_name)
@@ -245,11 +241,14 @@ impl FileDecryptor {
         &self.file_aad
     }
 
-    pub(crate) fn is_column_encrypted(&self, column_name: &[u8]) -> bool {
+    pub(crate) fn is_column_encrypted(&self, column_name: &str) -> bool {
         // Column is encrypted if either uniform encryption is used or an encryption key is set for the column
-        match self.decryption_properties.column_keys.as_ref() {
-            None => true,
-            Some(keys) => keys.contains_key(column_name),
+        match self.decryption_properties.column_keys.is_empty() {
+            false => self
+                .decryption_properties
+                .column_keys
+                .contains_key(column_name),
+            true => true,
         }
     }
 }

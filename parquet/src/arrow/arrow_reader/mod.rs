@@ -708,11 +708,10 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
                 .schema_descr()
                 .column(self.column_idx);
 
-            if file_decryptor.is_column_encrypted(column_name.name().as_bytes()) {
-                let data_decryptor =
-                    file_decryptor.get_column_data_decryptor(column_name.name().as_bytes());
+            if file_decryptor.is_column_encrypted(column_name.name()) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
                 let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name().as_bytes());
+                    file_decryptor.get_column_metadata_decryptor(column_name.name());
 
                 let crypto_context = CryptoContext::new(
                     rg_idx,
@@ -1864,8 +1863,8 @@ mod tests {
         let column_2_key = "1234567890123451".as_bytes();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
             .build()
             .unwrap();
 
@@ -1941,8 +1940,8 @@ mod tests {
         let column_2_key = "1234567890123451".as_bytes();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
             .build()
             .unwrap();
 
@@ -1976,8 +1975,8 @@ mod tests {
         let column_2_key = "1234567890123451".as_bytes();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
             .build()
             .unwrap();
 

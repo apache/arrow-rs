@@ -45,8 +45,7 @@ impl RingGcmBlockDecryptor {
 
 impl BlockDecryptor for RingGcmBlockDecryptor {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-        let mut result =
-            Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN);
+        let mut result = Vec::with_capacity(length_and_ciphertext.len() - SIZE_LEN - NONCE_LEN);
         result.extend_from_slice(&length_and_ciphertext[SIZE_LEN + NONCE_LEN..]);
 
         let nonce = ring::aead::Nonce::try_assume_unique_for_key(
