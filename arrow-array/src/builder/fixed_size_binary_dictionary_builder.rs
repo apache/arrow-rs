@@ -54,6 +54,8 @@ use std::sync::Arc;
 /// assert_eq!(values.value(0), "abc".as_bytes());
 /// assert_eq!(values.value(1), "def".as_bytes());
 /// ```
+///
+/// [`FixedSizeBinaryArray`]: crate::FixedSizeBinaryArray
 #[derive(Debug)]
 pub struct FixedSizeBinaryDictionaryBuilder<K>
 where
