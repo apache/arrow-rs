@@ -172,10 +172,11 @@ where
     /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<[u8]>) -> Result<K::Native, ArrowError> {
         if self.byte_width != value.as_ref().len() as i32 {
-            Err(ArrowError::InvalidArgumentError(
-                "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
-                    .to_string(),
-            ))
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
+                self.byte_width,
+                value.as_ref().len()
+            )))
         } else {
             let key = self.get_or_insert_key(value)?;
             self.keys_builder.append_value(key);
@@ -278,6 +279,15 @@ mod tests {
 
         assert_eq!(ava.value(0), values[0].as_bytes());
         assert_eq!(ava.value(1), values[1].as_bytes());
+    }
+
+    #[test]
+    fn test_fixed_size_dictionary_builder_wrong_size() {
+        let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
+        let err = b.append(b"too long").unwrap_err().to_string();
+        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8");
+        let err = b.append("").unwrap_err().to_string();
+        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0");
     }
 
     #[test]
