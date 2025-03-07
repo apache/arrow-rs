@@ -577,9 +577,9 @@ impl ParquetMetaDataReader {
         if self.file_decryption_properties.is_some() {
             return Self::decrypt_metadata(
                 chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-                true,
-                self.file_decryption_properties.as_ref()
-            )
+                footer.is_encrypted_footer(),
+                self.file_decryption_properties.as_ref(),
+            );
         }
         Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
     }
@@ -644,25 +644,12 @@ impl ParquetMetaDataReader {
         if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            Ok((
-                Self::decode_metadata(
-                    &meta,
-                    // footer.is_encrypted_footer(),
-                    // #[cfg(feature = "encryption")]
-                    // file_decryption_properties,
-                )?,
-                None,
-            ))
+            Ok((Self::decode_metadata(&meta)?, None))
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             Ok((
-                Self::decode_metadata(
-                    slice,
-                    // footer.is_encrypted_footer(),
-                    // #[cfg(feature = "encryption")]
-                    // file_decryption_properties,
-                )?,
+                Self::decode_metadata(slice)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             ))
         }
@@ -703,15 +690,15 @@ impl ParquetMetaDataReader {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
 
+    #[cfg(feature = "encryption")]
     pub fn decrypt_metadata(
         buf: &[u8],
         encrypted_footer: bool,
-        #[cfg(feature = "encryption")] file_decryption_properties: Option<
-            &FileDecryptionProperties,
-        >,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
 
+        // todo: move to decode_metadata
         #[cfg(not(feature = "encryption"))]
         if encrypted_footer {
             return Err(general_err!(
@@ -719,9 +706,7 @@ impl ParquetMetaDataReader {
             ));
         }
 
-        #[cfg(feature = "encryption")]
         let mut file_decryptor = None;
-        #[cfg(feature = "encryption")]
         let decrypted_fmd_buf;
 
         if encrypted_footer {
@@ -761,7 +746,11 @@ impl ParquetMetaDataReader {
 
         let mut row_groups = Vec::new();
         for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_encrypted_thrift(schema_descr.clone(), rg, file_decryptor.as_ref())?;
+            let r = RowGroupMetaData::from_encrypted_thrift(
+                schema_descr.clone(),
+                rg,
+                file_decryptor.as_ref(),
+            )?;
             row_groups.push(r);
         }
         let column_orders =

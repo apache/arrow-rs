@@ -623,6 +623,7 @@ impl RowGroupMetaData {
         self.file_offset
     }
 
+    #[cfg(feature = "encryption")]
     pub fn from_encrypted_thrift(
         schema_descr: SchemaDescPtr,
         mut rg: RowGroup,
@@ -639,7 +640,6 @@ impl RowGroupMetaData {
         let num_rows = rg.num_rows;
         let mut columns = vec![];
 
-        #[cfg(feature = "encryption")]
         for (i, (mut c, d)) in rg
             .columns
             .drain(0..)
