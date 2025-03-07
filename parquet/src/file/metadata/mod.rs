@@ -623,6 +623,7 @@ impl RowGroupMetaData {
         self.file_offset
     }
 
+    /// Method to convert from encrypted Thrift.
     #[cfg(feature = "encryption")]
     pub fn from_encrypted_thrift(
         schema_descr: SchemaDescPtr,

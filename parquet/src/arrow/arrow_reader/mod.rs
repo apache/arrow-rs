@@ -731,7 +731,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         #[cfg(feature = "encryption")]
         {
             let ret = Ok(ret.unwrap().with_crypto_context(crypto_context));
-            return Some(ret.map(|x| Box::new(x) as _));
+            Some(ret.map(|x| Box::new(x) as _))
         }
 
         #[cfg(not(feature = "encryption"))]

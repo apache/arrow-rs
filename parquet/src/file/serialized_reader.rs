@@ -579,7 +579,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
     }
 
-    // #[allow(missing_docs)]
+    /// Adds cryptographical information to the reader.
     #[cfg(feature = "encryption")]
     pub fn with_crypto_context(mut self, crypto_context: Option<Arc<CryptoContext>>) -> Self {
         self.crypto_context = crypto_context;
@@ -793,8 +793,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let buffer: Vec<u8> = if let Some(crypto_context) = crypto_context {
                         let decryptor = crypto_context.data_decryptor();
                         let aad = crypto_context.create_page_aad()?;
-                        let decrypted = decryptor.decrypt(buffer.as_ref(), &aad)?;
-                        decrypted
+                        decryptor.decrypt(buffer.as_ref(), &aad)?
                     } else {
                         buffer
                     };

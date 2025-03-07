@@ -196,20 +196,13 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint)
-                .with_decryption_properties(self.file_decryption_properties.clone().as_ref());
+                .with_decryption_properties(file_decryption_properties.as_ref())
+                .load_and_finish(self, file_size)
+                .await?;
 
-            let metadata = metadata.load_and_finish(self, file_size).await?;
             Ok(Arc::new(metadata))
         })
     }
-
-    // #[cfg(feature = "encryption")]
-    // fn with_file_decryption_properties(
-    //     &mut self,
-    //     file_decryption_properties: FileDecryptionProperties,
-    // ) {
-    //     self.file_decryption_properties = Some(file_decryption_properties);
-    // }
 }
 
 #[cfg(test)]

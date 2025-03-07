@@ -415,13 +415,8 @@ impl ParquetMetaDataReader {
         file_size: usize,
     ) -> Result<()> {
         #[cfg(feature = "encryption")]
-        let (metadata, remainder) = Self::load_encrypted_metadata(
-            &mut fetch,
-            file_size,
-            self.get_prefetch_size(),
-            self.file_decryption_properties.as_ref(),
-        )
-        .await?;
+        let (metadata, remainder) =
+            Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
 
         #[cfg(not(feature = "encryption"))]
         let (metadata, remainder) =
@@ -602,62 +597,6 @@ impl ParquetMetaDataReader {
         FOOTER_SIZE
     }
 
-    #[cfg(all(feature = "async", feature = "arrow", feature = "encryption"))]
-    async fn load_encrypted_metadata<F: MetadataFetch>(
-        fetch: &mut F,
-        file_size: usize,
-        prefetch: usize,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
-    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
-        if file_size < FOOTER_SIZE {
-            return Err(eof_err!("file size of {} is less than footer", file_size));
-        }
-
-        // If a size hint is provided, read more than the minimum size
-        // to try and avoid a second fetch.
-        // Note: prefetch > file_size is ok since we're using saturating_sub.
-        let footer_start = file_size.saturating_sub(prefetch);
-
-        let suffix = fetch.fetch(footer_start..file_size).await?;
-        let suffix_len = suffix.len();
-        let fetch_len = file_size - footer_start;
-        if suffix_len < fetch_len {
-            return Err(eof_err!(
-                "metadata requires {} bytes, but could only read {}",
-                fetch_len,
-                suffix_len
-            ));
-        }
-
-        let mut footer = [0; FOOTER_SIZE];
-        footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
-
-        let footer = Self::decode_footer_tail(&footer)?;
-        let length = footer.metadata_length();
-
-        if file_size < length + FOOTER_SIZE {
-            return Err(eof_err!(
-                "file size of {} is less than footer + metadata {}",
-                file_size,
-                length + FOOTER_SIZE
-            ));
-        }
-
-        // Did not fetch the entire file metadata in the initial read, need to make a second request
-        if length > suffix_len - FOOTER_SIZE {
-            let metadata_start = file_size - length - FOOTER_SIZE;
-            let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            Ok((Self::decode_metadata(&meta)?, None))
-        } else {
-            let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
-            let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
-            Ok((
-                Self::decode_metadata(slice)?,
-                Some((footer_start, suffix.slice(..metadata_start))),
-            ))
-        }
-    }
-
     #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_metadata<F: MetadataFetch>(
         fetch: &mut F,
@@ -748,6 +687,15 @@ impl ParquetMetaDataReader {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
 
+    /// Decodes [`ParquetMetaData`] from the provided encrypted bytes.
+    ///
+    /// Typically this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec]. Buffer can is encrypted with AES GCM or AES CTR
+    /// ciphers as specfied in the [Parquet Encryption Spec].
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
     #[cfg(feature = "encryption")]
     pub fn decrypt_metadata(
         buf: &[u8],
@@ -837,8 +785,7 @@ impl ParquetMetaDataReader {
 
         let mut row_groups = Vec::new();
         for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?;
-            row_groups.push(r);
+            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
         }
         let column_orders =
             Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;

@@ -36,6 +36,8 @@ pub fn read_and_decrypt<T: Read>(
     decryptor.decrypt(&ciphertext, aad.as_ref())
 }
 
+// CryptoContext is a data structure that holds the context required to
+// decrypt parquet modules (data pages, dictionary pages, etc.).
 #[derive(Debug, Clone)]
 pub struct CryptoContext {
     pub(crate) row_group_ordinal: usize,

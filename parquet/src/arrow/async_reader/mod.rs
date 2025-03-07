@@ -108,6 +108,8 @@ pub trait AsyncFileReader: Send {
     /// for caching, pre-fetching, catalog metadata, etc...
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 
+    /// Provides asynchronous access to the [`ParquetMetaData`] of encrypted parquet
+    /// files, like get_metadata does for unencrypted ones.
     #[cfg(feature = "encryption")]
     fn get_encrypted_metadata(
         &mut self,
@@ -560,8 +562,6 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -604,9 +604,6 @@ struct ReaderFactory<T> {
     limit: Option<usize>,
 
     offset: Option<usize>,
-
-    #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl<T> ReaderFactory<T>
@@ -1192,6 +1189,7 @@ mod tests {
     use tempfile::tempfile;
     use tokio::fs::File;
 
+    #[allow(dead_code)]
     #[derive(Clone)]
     struct TestReader {
         data: Bytes,
@@ -1214,7 +1212,7 @@ mod tests {
         #[cfg(feature = "encryption")]
         fn get_encrypted_metadata(
             &mut self,
-            file_decryption_properties: Option<FileDecryptionProperties>,
+            _file_decryption_properties: Option<FileDecryptionProperties>,
         ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
             todo!("we don't test for decryption yet");
         }
@@ -1957,8 +1955,6 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let mut skip = true;
