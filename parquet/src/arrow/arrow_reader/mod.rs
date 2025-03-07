@@ -729,8 +729,8 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
 
         #[cfg(feature = "encryption")]
-        if crypto_context.is_some() {
-            let ret = Ok(ret.unwrap().with_crypto_context(crypto_context.unwrap()));
+        {
+            let ret = Ok(ret.unwrap().with_crypto_context(crypto_context));
             return Some(ret.map(|x| Box::new(x) as _));
         }
 

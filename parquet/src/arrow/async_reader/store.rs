@@ -177,9 +177,8 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint);
             #[cfg(feature = "encryption")]
-            let file_decryption_properties = self.file_decryption_properties.clone().unwrap();
-            #[cfg(feature = "encryption")]
-            let metadata = metadata.with_decryption_properties(Some(&file_decryption_properties));
+            let metadata = metadata
+                .with_decryption_properties(self.file_decryption_properties.clone().as_ref());
 
             let metadata = metadata.load_and_finish(self, file_size).await?;
             Ok(Arc::new(metadata))
@@ -187,12 +186,30 @@ impl AsyncFileReader for ParquetObjectReader {
     }
 
     #[cfg(feature = "encryption")]
-    fn with_file_decryption_properties(
+    fn get_encrypted_metadata(
         &mut self,
-        file_decryption_properties: FileDecryptionProperties,
-    ) {
-        self.file_decryption_properties = Some(file_decryption_properties);
+        file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
+            let file_size = self.meta.size;
+            let metadata = ParquetMetaDataReader::new()
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index)
+                .with_prefetch_hint(self.metadata_size_hint)
+                .with_decryption_properties(self.file_decryption_properties.clone().as_ref());
+
+            let metadata = metadata.load_and_finish(self, file_size).await?;
+            Ok(Arc::new(metadata))
+        })
     }
+
+    // #[cfg(feature = "encryption")]
+    // fn with_file_decryption_properties(
+    //     &mut self,
+    //     file_decryption_properties: FileDecryptionProperties,
+    // ) {
+    //     self.file_decryption_properties = Some(file_decryption_properties);
+    // }
 }
 
 #[cfg(test)]

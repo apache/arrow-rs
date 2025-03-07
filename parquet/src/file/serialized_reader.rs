@@ -358,7 +358,6 @@ pub(crate) fn read_encrypted_page_header<T: Read>(
     Ok(PageHeader::read_from_in_protocol(&mut prot)?)
 }
 
-// todo: decrypt
 /// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read.
 /// If the page header is encrypted [`CryptoContext`] must be provided.
 #[cfg(feature = "encryption")]
@@ -582,8 +581,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
     // #[allow(missing_docs)]
     #[cfg(feature = "encryption")]
-    pub fn with_crypto_context(mut self, crypto_context: Arc<CryptoContext>) -> Self {
-        self.crypto_context = Some(crypto_context);
+    pub fn with_crypto_context(mut self, crypto_context: Option<Arc<CryptoContext>>) -> Self {
+        self.crypto_context = crypto_context;
         self
     }
 

@@ -70,6 +70,7 @@ mod store;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "encryption")]
 use crate::encryption::decryption::CryptoContext;
+use crate::encryption::decryption::FileDecryptor;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -111,10 +112,10 @@ pub trait AsyncFileReader: Send {
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 
     #[cfg(feature = "encryption")]
-    fn with_file_decryption_properties(
+    fn get_encrypted_metadata(
         &mut self,
-        file_decryption_properties: FileDecryptionProperties,
-    );
+        file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -131,13 +132,12 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_metadata()
     }
 
-    #[cfg(feature = "encryption")]
-    fn with_file_decryption_properties(
+    fn get_encrypted_metadata(
         &mut self,
-        file_decryption_properties: FileDecryptionProperties,
-    ) {
+        file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         self.as_mut()
-            .with_file_decryption_properties(file_decryption_properties);
+            .get_encrypted_metadata(file_decryption_properties)
     }
 }
 
@@ -159,11 +159,33 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     #[cfg(feature = "encryption")]
-    fn with_file_decryption_properties(
+    fn get_encrypted_metadata(
         &mut self,
-        file_decryption_properties: FileDecryptionProperties,
-    ) {
-        self.with_file_decryption_properties(file_decryption_properties);
+        file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
+        async move {
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
+
+            let mut buf = [0_u8; FOOTER_SIZE];
+            self.read_exact(&mut buf).await?;
+
+            let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
+            let metadata_len = footer.metadata_length();
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
+                .await?;
+
+            let mut buf = Vec::with_capacity(metadata_len);
+            self.take(metadata_len as _).read_to_end(&mut buf).await?;
+
+            let parquet_metadata_reader = ParquetMetaDataReader::decrypt_metadata(
+                &buf,
+                footer.is_encrypted_footer(),
+                file_decryption_properties.as_ref(),
+            )?;
+            Ok(Arc::new(parquet_metadata_reader))
+        }
+        .boxed()
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
@@ -182,11 +204,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            // todo: decrypt
-
             let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata(&buf)?;
-            // #[cfg(feature = "encryption")]
-            // parquet_metadata_reader.with_file_decryptor(file_decryption_properties)
             Ok(Arc::new(parquet_metadata_reader))
         }
         .boxed()
@@ -209,7 +227,15 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input.get_metadata().await?;
+        #[cfg(feature = "encryption")]
+        let mut metadata = if options.file_decryption_properties.is_some() {
+            input
+                .get_encrypted_metadata(options.file_decryption_properties.clone())
+                .await?
+        } else {
+            input.get_metadata().await?
+        };
+        // let mut metadata = input.get_metadata().await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -535,6 +561,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            file_decryption_properties: None,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -577,6 +604,8 @@ struct ReaderFactory<T> {
     limit: Option<usize>,
 
     offset: Option<usize>,
+
+    file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl<T> ReaderFactory<T>
@@ -1052,7 +1081,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 )?;
 
                 #[cfg(feature = "encryption")]
-                let page_reader = page_reader.with_crypto_context(crypto_context.unwrap());
+                let page_reader = page_reader.with_crypto_context(crypto_context);
 
                 let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 
@@ -1167,6 +1196,7 @@ mod tests {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
         requests: Arc<Mutex<Vec<Range<usize>>>>,
+        file_decryption_properties: Option<FileDecryptionProperties>,
     }
 
     impl AsyncFileReader for TestReader {
@@ -1180,10 +1210,10 @@ mod tests {
         }
 
         #[cfg(feature = "encryption")]
-        fn with_file_decryption_properties(
+        fn get_encrypted_metadata(
             &mut self,
-            file_decryption_properties: FileDecryptionProperties,
-        ) {
+            file_decryption_properties: Option<FileDecryptionProperties>,
+        ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
             todo!("we don't test for decryption yet");
         }
     }
@@ -1205,6 +1235,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -1262,6 +1293,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -1327,6 +1359,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1395,6 +1428,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -1441,6 +1475,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1524,6 +1559,7 @@ mod tests {
                 data: data.clone(),
                 metadata: metadata.clone(),
                 requests: Default::default(),
+                file_decryption_properties: None,
             };
 
             let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1595,6 +1631,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1645,6 +1682,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
         let requests = test.requests.clone();
 
@@ -1722,6 +1760,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
@@ -1814,6 +1853,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let a_filter =
@@ -1882,6 +1922,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -1903,6 +1944,7 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            file_decryption_properties: None,
         };
 
         let mut skip = true;
@@ -1958,6 +2000,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -2103,6 +2146,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -2140,6 +2184,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
 
         let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -2277,6 +2322,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            file_decryption_properties: None,
         };
         let requests = test.requests.clone();
 
