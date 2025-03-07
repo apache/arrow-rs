@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 //! Decoder for [`Header`]
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
@@ -74,17 +73,18 @@ impl Header {
         self.sync
     }
 
-    /// Returns the [`CompressionCodec`] if any
+    /// Returns the [`CompressionCodec`] if any.
     pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
         let v = self.get(CODEC_METADATA_KEY);
-
         match v {
             None | Some(b"null") => Ok(None),
             Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
             Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
             Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
+            Some(b"bzip2") => Ok(Some(CompressionCodec::Bzip2)),
+            Some(b"xz") => Ok(Some(CompressionCodec::Xz)),
             Some(v) => Err(ArrowError::ParseError(format!(
-                "Unrecognized compression codec \'{}\'",
+                "Unrecognized compression codec '{}'",
                 String::from_utf8_lossy(v)
             ))),
         }
@@ -146,8 +146,6 @@ impl HeaderDecoder {
     ///
     /// This method can be called multiple times with consecutive chunks of data, allowing
     /// integration with chunked IO systems like [`BufRead::fill_buf`]
-    ///
-    /// All errors should be considered fatal, and decoding aborted
     ///
     /// Once the entire [`Header`] has been decoded this method will not read any further
     /// input bytes, and the header can be obtained with [`Self::flush`]
@@ -264,13 +262,13 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use crate::reader::read_header;
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use std::fs::File;
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
 
     #[test]
     fn test_header_decode() {
