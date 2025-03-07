@@ -193,11 +193,6 @@ impl AsyncFileReader for ParquetObjectReader {
     ) {
         self.file_decryption_properties = Some(file_decryption_properties);
     }
-
-    #[cfg(feature = "encryption")]
-    fn read_encrypted(&self) -> bool {
-        self.file_decryption_properties.is_some()
-    }
 }
 
 #[cfg(test)]

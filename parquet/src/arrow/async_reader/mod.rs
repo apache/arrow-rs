@@ -115,9 +115,6 @@ pub trait AsyncFileReader: Send {
         &mut self,
         file_decryption_properties: FileDecryptionProperties,
     );
-
-    #[cfg(feature = "encryption")]
-    fn read_encrypted(&self) -> bool;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -141,11 +138,6 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     ) {
         self.as_mut()
             .with_file_decryption_properties(file_decryption_properties);
-    }
-
-    #[cfg(feature = "encryption")]
-    fn read_encrypted(&self) -> bool {
-        self.as_ref().read_encrypted()
     }
 }
 
@@ -174,11 +166,6 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         self.with_file_decryption_properties(file_decryption_properties);
     }
 
-    #[cfg(feature = "encryption")]
-    fn read_encrypted(&self) -> bool {
-        self.read_encrypted()
-    }
-
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
@@ -196,9 +183,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
             // todo: decrypt
-            if self.read_encrypted() {
-                todo!();
-            }
+
             let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata(&buf)?;
             // #[cfg(feature = "encryption")]
             // parquet_metadata_reader.with_file_decryptor(file_decryption_properties)
@@ -1199,11 +1184,6 @@ mod tests {
             &mut self,
             file_decryption_properties: FileDecryptionProperties,
         ) {
-            todo!("we don't test for decryption yet");
-        }
-
-        #[cfg(feature = "encryption")]
-        fn read_encrypted(&self) -> bool {
             todo!("we don't test for decryption yet");
         }
     }

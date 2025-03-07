@@ -573,15 +573,15 @@ impl ParquetMetaDataReader {
         }
 
         let start = file_size - footer_metadata_len as u64;
-        if self.read_encrypted() {
-            Self::decrypt_metadata(
+        #[cfg(feature = "encryption")]
+        if self.file_decryption_properties.is_some() {
+            return Self::decrypt_metadata(
                 chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
                 true,
-                self.file_decryption_properties.as_ref(),
+                self.file_decryption_properties.as_ref()
             )
-        } else {
-            Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
         }
+        Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -761,7 +761,7 @@ impl ParquetMetaDataReader {
 
         let mut row_groups = Vec::new();
         for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?;
+            let r = RowGroupMetaData::from_encrypted_thrift(schema_descr.clone(), rg, file_decryptor.as_ref())?;
             row_groups.push(r);
         }
         let column_orders =
