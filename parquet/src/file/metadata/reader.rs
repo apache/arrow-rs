@@ -570,6 +570,12 @@ impl ParquetMetaDataReader {
         if footer_metadata_len > file_size as usize {
             return Err(ParquetError::NeedMoreData(footer_metadata_len));
         }
+        #[cfg(not(feature = "encryption"))]
+        if footer.encrypted_footer {
+            return Err(general_err!(
+                "Parquet file has an encrypted footer but the encryption feature is disabled"
+            ));
+        }
 
         let start = file_size - footer_metadata_len as u64;
         #[cfg(feature = "encryption")]
@@ -749,15 +755,6 @@ impl ParquetMetaDataReader {
         file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
-
-        // todo: move to decode_metadata
-        #[cfg(not(feature = "encryption"))]
-        if encrypted_footer {
-            return Err(general_err!(
-                "Parquet file has an encrypted footer but the encryption feature is disabled"
-            ));
-        }
-
         let mut file_decryptor = None;
         let decrypted_fmd_buf;
 

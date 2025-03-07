@@ -734,6 +734,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
             return Some(ret.map(|x| Box::new(x) as _));
         }
 
+        #[cfg(not(feature = "encryption"))]
         Some(ret.map(|x| Box::new(x) as _))
     }
 }

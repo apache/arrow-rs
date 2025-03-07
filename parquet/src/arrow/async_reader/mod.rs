@@ -62,15 +62,12 @@ mod metadata;
 pub use metadata::*;
 
 #[cfg(feature = "encryption")]
-use crate::encryption::decryption::FileDecryptionProperties;
+use crate::encryption::decryption::{CryptoContext, FileDecryptionProperties};
 
 #[cfg(feature = "object_store")]
 mod store;
 
 use crate::arrow::schema::ParquetField;
-#[cfg(feature = "encryption")]
-use crate::encryption::decryption::CryptoContext;
-use crate::encryption::decryption::FileDecryptor;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -132,6 +129,7 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_metadata()
     }
 
+    #[cfg(feature = "encryption")]
     fn get_encrypted_metadata(
         &mut self,
         file_decryption_properties: Option<FileDecryptionProperties>,
@@ -235,7 +233,8 @@ impl ArrowReaderMetadata {
         } else {
             input.get_metadata().await?
         };
-        // let mut metadata = input.get_metadata().await?;
+        #[cfg(not(feature = "encryption"))]
+        let mut metadata = input.get_metadata().await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -561,6 +560,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -605,6 +605,7 @@ struct ReaderFactory<T> {
 
     offset: Option<usize>,
 
+    #[cfg(feature = "encryption")]
     file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
@@ -1196,6 +1197,7 @@ mod tests {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
         requests: Arc<Mutex<Vec<Range<usize>>>>,
+        #[cfg(feature = "encryption")]
         file_decryption_properties: Option<FileDecryptionProperties>,
     }
 
@@ -1235,6 +1237,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1293,6 +1296,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1359,6 +1363,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1428,6 +1433,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1475,6 +1481,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1559,6 +1566,7 @@ mod tests {
                 data: data.clone(),
                 metadata: metadata.clone(),
                 requests: Default::default(),
+                #[cfg(feature = "encryption")]
                 file_decryption_properties: None,
             };
 
@@ -1631,6 +1639,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1682,6 +1691,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
         let requests = test.requests.clone();
@@ -1760,6 +1770,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1853,6 +1864,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1922,6 +1934,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -1944,6 +1957,7 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -2000,6 +2014,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -2146,6 +2161,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -2184,6 +2200,7 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
 
@@ -2322,6 +2339,7 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
+            #[cfg(feature = "encryption")]
             file_decryption_properties: None,
         };
         let requests = test.requests.clone();
