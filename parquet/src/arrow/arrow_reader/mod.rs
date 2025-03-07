@@ -952,8 +952,8 @@ mod tests {
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
-        BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96Type,
+        AsBytes, BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
+        FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -1463,6 +1463,31 @@ mod tests {
                 Arc::new(TimestampNanosecondArray::from_iter(
                     vals.iter().map(|x| x.map(|x| x.to_nanos())),
                 )) as _
+            },
+            encodings,
+        );
+    }
+
+    #[test]
+    fn test_int96_single_column_reader_as_bytes() {
+        let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
+        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+            2,
+            ConvertedType::NONE,
+            Some(ArrowDataType::FixedSizeBinary(12)),
+            |vals| {
+                let mut builder = FixedSizeBinaryBuilder::with_capacity(vals.len(), 12);
+
+                for val in vals {
+                    match *val {
+                        None => builder.append_null(),
+                        Some(ts) => {
+                            builder.append_value(ts.as_bytes()).unwrap();
+                        }
+                    }
+                }
+
+                Arc::new(builder.finish()) as _
             },
             encodings,
         );
