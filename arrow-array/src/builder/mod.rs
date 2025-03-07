@@ -243,6 +243,8 @@ mod fixed_size_binary_builder;
 pub use fixed_size_binary_builder::*;
 mod fixed_size_list_builder;
 pub use fixed_size_list_builder::*;
+mod fixed_size_binary_dictionary_builder;
+pub use fixed_size_binary_dictionary_builder::*;
 mod generic_bytes_builder;
 pub use generic_bytes_builder::*;
 mod generic_list_builder;

@@ -498,12 +498,6 @@
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 
-#[cfg(all(
-    target_arch = "wasm32",
-    any(feature = "gcp", feature = "aws", feature = "azure", feature = "http")
-))]
-compile_error!("Features 'gcp', 'aws', 'azure', 'http' are not supported on wasm.");
-
 #[cfg(feature = "aws")]
 pub mod aws;
 #[cfg(feature = "azure")]
@@ -527,13 +521,16 @@ pub mod signer;
 pub mod throttle;
 
 #[cfg(feature = "cloud")]
-mod client;
+pub mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, Certificate, ClientConfigKey, ClientOptions,
-    CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
+    StaticCredentialProvider,
 };
+
+#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+pub use client::Certificate;
 
 #[cfg(feature = "cloud")]
 mod config;
@@ -968,6 +965,11 @@ pub struct GetOptions {
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-head>
     pub head: bool,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub extensions: ::http::Extensions,
 }
 
 impl GetOptions {
@@ -1079,8 +1081,6 @@ impl GetResult {
                 .await
             }
             GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
-            #[cfg(target_arch = "wasm32")]
-            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 
@@ -1106,8 +1106,6 @@ impl GetResult {
                 local::chunked_stream(file, path, self.range, CHUNK_SIZE)
             }
             GetResultPayload::Stream(s) => s,
-            #[cfg(target_arch = "wasm32")]
-            _ => unimplemented!("File IO not implemented on wasm32."),
         }
     }
 }
@@ -1150,7 +1148,7 @@ impl From<PutResult> for UpdateVersion {
 }
 
 /// Options for a put request
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PutOptions {
     /// Configure the [`PutMode`] for this operation
     pub mode: PutMode,
@@ -1162,7 +1160,34 @@ pub struct PutOptions {
     ///
     /// Implementations that don't support an attribute should return an error
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    pub extensions: ::http::Extensions,
 }
+
+impl PartialEq<Self> for PutOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            mode,
+            tags,
+            attributes,
+            extensions: _,
+        } = self;
+        let Self {
+            mode: other_mode,
+            tags: other_tags,
+            attributes: other_attributes,
+            extensions: _,
+        } = other;
+        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes)
+    }
+}
+
+impl Eq for PutOptions {}
 
 impl From<PutMode> for PutOptions {
     fn from(mode: PutMode) -> Self {
@@ -1192,7 +1217,7 @@ impl From<Attributes> for PutOptions {
 }
 
 /// Options for [`ObjectStore::put_multipart_opts`]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PutMultipartOpts {
     /// Provide a [`TagSet`] for this object
     ///
@@ -1202,7 +1227,32 @@ pub struct PutMultipartOpts {
     ///
     /// Implementations that don't support an attribute should return an error
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    pub extensions: ::http::Extensions,
 }
+
+impl PartialEq<Self> for PutMultipartOpts {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            tags,
+            attributes,
+            extensions: _,
+        } = self;
+        let Self {
+            tags: other_tags,
+            attributes: other_attributes,
+            extensions: _,
+        } = other;
+        (tags == other_tags) && (attributes == other_attributes)
+    }
+}
+
+impl Eq for PutMultipartOpts {}
 
 impl From<TagSet> for PutMultipartOpts {
     fn from(tags: TagSet) -> Self {
@@ -1412,7 +1462,7 @@ mod tests {
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
-        Fut: std::future::Future<Output = Result<reqwest::Response>> + Send,
+        Fut: std::future::Future<Output = Result<client::HttpResponse>> + Send,
     {
         use bytes::Buf;
         use serde::Deserialize;
@@ -1478,7 +1528,7 @@ mod tests {
 
         for path in [path, multi_path, buf_path] {
             let resp = get_tags(path.clone()).await.unwrap();
-            let body = resp.bytes().await.unwrap();
+            let body = resp.into_body().bytes().await.unwrap();
 
             let mut resp: Tagging = quick_xml::de::from_reader(body.reader()).unwrap();
             resp.list.tags.sort_by(|a, b| a.key.cmp(&b.key));

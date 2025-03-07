@@ -93,6 +93,11 @@ impl FixedSizeBinaryBuilder {
         self.null_buffer_builder.append_null();
     }
 
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[u8] {
+        self.values_builder.as_slice()
+    }
+
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
