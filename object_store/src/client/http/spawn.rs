@@ -131,11 +131,15 @@ mod tests {
         let (send, recv) = tokio::sync::oneshot::channel();
 
         let mock = MockServer::new().await;
+        mock.push(Response::new("BANANAS".to_string()));
+
         let url = mock.url().to_string();
         let thread = std::thread::spawn(|| {
             futures::executor::block_on(async move {
                 let retry = RetryConfig::default();
-                let _ = client.get(url).send_retry(&retry).await.unwrap();
+                let ret = client.get(url).send_retry(&retry).await.unwrap();
+                let payload = ret.into_body().bytes().await.unwrap();
+                assert_eq!(payload.as_ref(), b"BANANAS");
                 let _ = send.send(());
             })
         });
