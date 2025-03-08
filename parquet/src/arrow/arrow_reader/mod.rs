@@ -708,8 +708,17 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
             if file_decryptor.is_column_encrypted(column_name.name()) {
                 let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
+                let data_decryptor = match data_decryptor {
+                    Ok(data_decryptor) => data_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
+
                 let metadata_decryptor =
                     file_decryptor.get_column_metadata_decryptor(column_name.name());
+                let metadata_decryptor = match metadata_decryptor {
+                    Ok(metadata_decryptor) => metadata_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
 
                 let crypto_context = CryptoContext::new(
                     rg_idx,

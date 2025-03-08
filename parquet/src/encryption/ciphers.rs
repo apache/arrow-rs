@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::ParquetError::General;
 use crate::errors::Result;
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM};
 use std::fmt::Debug;
@@ -33,13 +34,14 @@ pub(crate) struct RingGcmBlockDecryptor {
 }
 
 impl RingGcmBlockDecryptor {
-    pub(crate) fn new(key_bytes: &[u8]) -> Self {
+    pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
         // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes).unwrap();
+        let key = UnboundKey::new(&AES_128_GCM, key_bytes)
+            .map_err(|_| General("Failed to create AES key".to_string()))?;
 
-        Self {
+        Ok(Self {
             key: LessSafeKey::new(key),
-        }
+        })
     }
 }
 

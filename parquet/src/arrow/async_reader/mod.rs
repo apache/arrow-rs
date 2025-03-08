@@ -1031,35 +1031,35 @@ impl RowGroups for InMemoryRowGroup<'_> {
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
-        let crypto_context = if let Some(file_decryptor) =
-            &self.parquet_metadata.clone().file_decryptor().clone()
-        {
-            let column_name = &self
-                .parquet_metadata
-                .clone()
-                .file_metadata()
-                .schema_descr()
-                .column(i);
+        let crypto_context =
+            if let Some(file_decryptor) = &self.parquet_metadata.clone().file_decryptor().clone() {
+                let column_name = &self
+                    .parquet_metadata
+                    .clone()
+                    .file_metadata()
+                    .schema_descr()
+                    .column(i);
 
-            if file_decryptor.is_column_encrypted(column_name.name()) {
-                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
-                let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name());
+                if file_decryptor.is_column_encrypted(column_name.name()) {
+                    let data_decryptor =
+                        file_decryptor.get_column_data_decryptor(column_name.name())?;
+                    let metadata_decryptor =
+                        file_decryptor.get_column_metadata_decryptor(column_name.name())?;
 
-                let crypto_context = CryptoContext::new(
-                    self.row_group_ordinal,
-                    i,
-                    data_decryptor,
-                    metadata_decryptor,
-                    file_decryptor.file_aad().clone(),
-                );
-                Some(Arc::new(crypto_context))
+                    let crypto_context = CryptoContext::new(
+                        self.row_group_ordinal,
+                        i,
+                        data_decryptor,
+                        metadata_decryptor,
+                        file_decryptor.file_aad().clone(),
+                    );
+                    Some(Arc::new(crypto_context))
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -2514,7 +2514,100 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
+    async fn test_misspecified_encryption_keys() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+
+        // There is always a footer key even with a plaintext footer,
+        // but this is used for signing the footer.
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        // read file with keys and check for expected error message
+        async fn check_for_error(
+            expected_message: &str,
+            path: &String,
+            footer_key: &[u8],
+            column_1_key: &[u8],
+            column_2_key: &[u8],
+        ) {
+            let mut file = File::open(&path).await.unwrap();
+
+            let mut decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec());
+
+            if column_1_key.is_empty() {
+                decryption_properties =
+                    decryption_properties.with_column_key("double_field", column_1_key.to_vec());
+            }
+
+            if column_2_key.is_empty() {
+                decryption_properties =
+                    decryption_properties.with_column_key("float_field", column_2_key.to_vec());
+            }
+
+            let decryption_properties = decryption_properties.build().unwrap();
+
+            match verify_encryption_test_file_read_async(&mut file, decryption_properties).await {
+                Ok(_) => {
+                    panic!("did not get expected error")
+                }
+                Err(e) => {
+                    assert_eq!(e.to_string(), expected_message);
+                }
+            }
+        }
+
+        // Too short footer key
+        check_for_error(
+            "Parquet error: Invalid footer key. Failed to create AES key",
+            &path,
+            "bad_pwd".as_bytes(),
+            column_1_key,
+            column_2_key,
+        )
+        .await;
+
+        // Wrong footer key
+        check_for_error(
+            "Parquet error: Provided footer key was unable to decrypt parquet footer",
+            &path,
+            "1123456789012345".as_bytes(),
+            column_1_key,
+            column_2_key,
+        )
+        .await;
+
+        // todo: should this be double_field?
+        // Missing column key
+        check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+                        &path, footer_key, "".as_bytes(), column_2_key).await;
+
+        // Too short column key
+        check_for_error(
+            // todo: should report key length error
+            // "Parquet error: Failed to create AES key",
+            "Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+            &path,
+            footer_key,
+            "abc".as_bytes(),
+            column_2_key,
+        )
+        .await;
+
+        // todo: should this be double_field?
+        // Wrong column key
+        check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+                        &path, footer_key, "1123456789012345".as_bytes(), column_2_key).await;
+
+        // Mixed up keys
+        check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+                        &path, footer_key, column_2_key, column_1_key).await;
     }
 
     #[tokio::test]
@@ -2594,7 +2687,7 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
     }
 
     #[tokio::test]
@@ -2609,7 +2702,7 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
     }
 
     #[tokio::test]
