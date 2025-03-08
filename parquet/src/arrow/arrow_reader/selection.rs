@@ -162,8 +162,8 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<usize>> {
-        let mut ranges = vec![];
+    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<u64>> {
+        let mut ranges:Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
 
         let mut pages = page_locations.iter().peekable();
@@ -175,8 +175,8 @@ impl RowSelection {
 
         while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
             if !(selector.skip || current_page_included) {
-                let start = page.offset as usize;
-                let end = start + page.compressed_page_size as usize;
+                let start = page.offset as u64;
+                let end = start + page.compressed_page_size as u64;
                 ranges.push(start..end);
                 current_page_included = true;
             }
@@ -202,7 +202,7 @@ impl RowSelection {
                 if !(selector.skip || current_page_included) {
                     let start = page.offset as usize;
                     let end = start + page.compressed_page_size as usize;
-                    ranges.push(start..end);
+                    ranges.push(start as u64..end as u64);
                 }
                 current_selector = selectors.next()
             }

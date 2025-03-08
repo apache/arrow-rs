@@ -83,10 +83,10 @@ pub use store::*;
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
 
     /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
@@ -108,11 +108,11 @@ pub trait AsyncFileReader: Send {
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
 impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
@@ -122,14 +122,14 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         async move {
-            self.seek(SeekFrom::Start(range.start as u64)).await?;
+            self.seek(SeekFrom::Start(range.start)).await?;
 
             let to_read = range.end - range.start;
-            let mut buffer = Vec::with_capacity(to_read);
-            let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
-            if read != to_read {
+            let mut buffer = Vec::with_capacity(to_read as usize);
+            let read = self.take(to_read).read_to_end(&mut buffer).await?;
+            if read != to_read as usize {
                 return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
             }
 
@@ -412,7 +412,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let metadata = self.metadata.row_group(row_group_idx);
         let column_metadata = metadata.column(column_idx);
 
-        let offset: usize = if let Some(offset) = column_metadata.bloom_filter_offset() {
+        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
             offset
                 .try_into()
                 .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
@@ -421,16 +421,16 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         };
 
         let buffer = match column_metadata.bloom_filter_length() {
-            Some(length) => self.input.0.get_bytes(offset..offset + length as usize),
+            Some(length) => self.input.0.get_bytes(offset..offset + length as u64),
             None => self
                 .input
                 .0
-                .get_bytes(offset..offset + SBBF_HEADER_SIZE_ESTIMATE),
+                .get_bytes(offset..offset + SBBF_HEADER_SIZE_ESTIMATE as u64),
         }
         .await?;
 
         let (header, bitset_offset) =
-            chunk_read_bloom_filter_header_and_offset(offset as u64, buffer.clone())?;
+            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
             BloomFilterAlgorithm::BLOCK(_) => {
@@ -449,14 +449,14 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice((bitset_offset as usize - offset)..),
+            Some(_) => buffer.slice((bitset_offset as usize - offset as  usize)..),
             None => {
-                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
                 })?;
                 self.input
                     .0
-                    .get_bytes(bitset_offset as usize..bitset_offset as usize + bitset_length)
+                    .get_bytes(bitset_offset ..bitset_offset  + bitset_length)
                     .await?
             }
         };
@@ -866,7 +866,7 @@ impl InMemoryRowGroup<'_> {
         if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
-            let mut page_start_offsets: Vec<Vec<usize>> = vec![];
+            let mut page_start_offsets: Vec<Vec<u64>> = vec![];
 
             let fetch_ranges = self
                 .column_chunks
@@ -879,11 +879,11 @@ impl InMemoryRowGroup<'_> {
                 .flat_map(|(idx, (_chunk, chunk_meta))| {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
-                    let mut ranges = vec![];
+                    let mut ranges: Vec<Range<u64>> = vec![];
                     let (start, _len) = chunk_meta.byte_range();
                     match offset_index[idx].page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
-                            ranges.push(start as usize..first.offset as usize);
+                            ranges.push(start..first.offset as u64);
                         }
                         _ => (),
                     }
@@ -911,7 +911,7 @@ impl InMemoryRowGroup<'_> {
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
                         length: self.metadata.column(idx).byte_range().1 as usize,
-                        data: offsets.into_iter().zip(chunks.into_iter()).collect(),
+                        data: offsets.into_iter().map(|x| {x as usize}).zip(chunks.into_iter()).collect(),
                     }))
                 }
             }
@@ -924,7 +924,7 @@ impl InMemoryRowGroup<'_> {
                 .map(|(idx, _chunk)| {
                     let column = self.metadata.column(idx);
                     let (start, length) = column.byte_range();
-                    start as usize..(start + length) as usize
+                    start..(start + length)
                 })
                 .collect();
 
@@ -1083,9 +1083,10 @@ mod tests {
     }
 
     impl AsyncFileReader for TestReader {
-        fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-            self.requests.lock().unwrap().push(range.clone());
-            futures::future::ready(Ok(self.data.slice(range))).boxed()
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+            let range = range.clone();
+            self.requests.lock().unwrap().push(range.start as usize..range.end as usize);
+            futures::future::ready(Ok(self.data.slice(range.start as usize..range.end as usize))).boxed()
         }
 
         fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
