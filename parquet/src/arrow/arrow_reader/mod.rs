@@ -1020,6 +1020,8 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
+    #[cfg(feature = "encryption")]
+    use crate::util::test_common::encryption_util::verify_encryption_test_file_read;
     use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
@@ -1991,85 +1993,6 @@ mod tests {
                 panic!("Expected ParquetError::NYI");
             }
         };
-    }
-
-    #[cfg(feature = "encryption")]
-    fn verify_encryption_test_file_read(
-        file: File,
-        decryption_properties: FileDecryptionProperties,
-    ) {
-        let options = ArrowReaderOptions::default()
-            .with_file_decryption_properties(decryption_properties.clone());
-        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-        let file_metadata = metadata.metadata.file_metadata();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-        let record_reader = builder.build().unwrap();
-
-        assert_eq!(file_metadata.num_rows(), 50);
-        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-        assert_eq!(
-            file_metadata.created_by().unwrap(),
-            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
-        );
-
-        metadata.metadata.row_groups().iter().for_each(|rg| {
-            assert_eq!(rg.num_columns(), 8);
-            assert_eq!(rg.num_rows(), 50);
-        });
-
-        let mut row_count = 0;
-        for batch in record_reader {
-            let batch = batch.unwrap();
-            row_count += batch.num_rows();
-
-            let bool_col = batch.column(0).as_boolean();
-            let time_col = batch
-                .column(1)
-                .as_primitive::<types::Time32MillisecondType>();
-            let list_col = batch.column(2).as_list::<i32>();
-            let timestamp_col = batch
-                .column(3)
-                .as_primitive::<types::TimestampNanosecondType>();
-            let f32_col = batch.column(4).as_primitive::<types::Float32Type>();
-            let f64_col = batch.column(5).as_primitive::<types::Float64Type>();
-            let binary_col = batch.column(6).as_binary::<i32>();
-            let fixed_size_binary_col = batch.column(7).as_fixed_size_binary();
-
-            for (i, x) in bool_col.iter().enumerate() {
-                assert_eq!(x.unwrap(), i % 2 == 0);
-            }
-            for (i, x) in time_col.iter().enumerate() {
-                assert_eq!(x.unwrap(), i as i32);
-            }
-            for (i, list_item) in list_col.iter().enumerate() {
-                let list_item = list_item.unwrap();
-                let list_item = list_item.as_primitive::<types::Int64Type>();
-                assert_eq!(list_item.len(), 2);
-                assert_eq!(list_item.value(0), ((i * 2) * 1000000000000) as i64);
-                assert_eq!(list_item.value(1), ((i * 2 + 1) * 1000000000000) as i64);
-            }
-            for x in timestamp_col.iter() {
-                assert!(x.is_some());
-            }
-            for (i, x) in f32_col.iter().enumerate() {
-                assert_eq!(x.unwrap(), i as f32 * 1.1f32);
-            }
-            for (i, x) in f64_col.iter().enumerate() {
-                assert_eq!(x.unwrap(), i as f64 * 1.1111111f64);
-            }
-            for (i, x) in binary_col.iter().enumerate() {
-                assert_eq!(x.is_some(), i % 2 == 0);
-                if let Some(x) = x {
-                    assert_eq!(&x[0..7], b"parquet");
-                }
-            }
-            for (i, x) in fixed_size_binary_col.iter().enumerate() {
-                assert_eq!(x.unwrap(), &[i as u8; 10]);
-            }
-        }
-
-        assert_eq!(row_count, file_metadata.num_rows() as usize);
     }
 
     #[test]

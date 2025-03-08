@@ -697,7 +697,7 @@ impl ParquetMetaDataReader {
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
     #[cfg(feature = "encryption")]
-    pub fn decrypt_metadata(
+    pub(crate) fn decrypt_metadata(
         buf: &[u8],
         encrypted_footer: bool,
         file_decryption_properties: Option<&FileDecryptionProperties>,
