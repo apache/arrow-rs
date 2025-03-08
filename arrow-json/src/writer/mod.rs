@@ -367,7 +367,11 @@ where
         ));
 
         let encoder = make_encoder(&field, &array, &self.options)?;
+        // This call has dynamic dispatch, but it's only called once per batch
+        // rather than in the inner loop below
         let nulls = encoder.nulls();
+
+        // Validate that the root is not nullable
         for idx in 0..array.len() {
             assert!(!nulls.is_null(idx), "root cannot be nullable");
         }

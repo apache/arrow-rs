@@ -71,8 +71,8 @@ pub trait Encoder {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>);
 
     /// Returns the nullability buffer for this encoder, if any.
-    /// 
-    /// This replaces the `is_null` and `has_nulls` methods by returning the underlying 
+    ///
+    /// This replaces the `is_null` and `has_nulls` methods by returning the underlying
     /// buffer state directly, avoiding dynamic dispatch for null checks.
     fn nulls(&self) -> Option<NullBuffer>;
 }
@@ -236,9 +236,17 @@ impl Encoder for StructArrayEncoder<'_> {
         let mut is_first = true;
         // Nulls can only be dropped in explicit mode
         let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
-        for field_encoder in &mut self.encoders {
-            let field_nulls = field_encoder.encoder.nulls();
-            let is_null = field_nulls.is_null(idx);
+
+        // Collect all the field nulls buffers up front to avoid dynamic dispatch in the loop
+        // This creates a temporary Vec, but avoids repeated virtual calls which should be a net win
+        let field_nulls: Vec<_> = self
+            .encoders
+            .iter()
+            .map(|field_encoder| field_encoder.encoder.nulls())
+            .collect();
+
+        for (i, field_encoder) in self.encoders.iter_mut().enumerate() {
+            let is_null = field_nulls[i].is_null(idx);
             if is_null && drop_nulls {
                 continue;
             }
@@ -340,21 +348,22 @@ impl PrimitiveEncode for f16 {
 pub trait NullBufferExt {
     /// Check if the value at `idx` is null.
     fn is_null(&self, idx: usize) -> bool;
-    
+
     /// Check if this buffer contains any nulls.
     fn has_nulls(&self) -> bool;
 }
 
 impl NullBufferExt for Option<NullBuffer> {
     fn is_null(&self, idx: usize) -> bool {
-        self.as_ref().map(|nulls| nulls.is_null(idx)).unwrap_or_default()
+        self.as_ref()
+            .map(|nulls| nulls.is_null(idx))
+            .unwrap_or_default()
     }
-    
+
     fn has_nulls(&self) -> bool {
         self.is_some()
     }
 }
-
 
 struct PrimitiveEncoder<N: PrimitiveEncode> {
     values: ScalarBuffer<N>,
@@ -451,11 +460,14 @@ impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
         let end = self.offsets[idx + 1].as_usize();
         let start = self.offsets[idx].as_usize();
         out.push(b'[');
+
+        let item_nulls = self.encoder.nulls();
+
         for idx in start..end {
             if idx != start {
                 out.push(b',')
             }
-            let item_nulls = self.encoder.nulls();
+
             if item_nulls.is_null(idx) {
                 out.extend_from_slice(b"null");
             } else {
@@ -497,11 +509,13 @@ impl Encoder for FixedSizeListEncoder<'_> {
         let start = idx * self.value_length;
         let end = start + self.value_length;
         out.push(b'[');
+
+        let item_nulls = self.encoder.nulls();
+
         for idx in start..end {
             if idx != start {
                 out.push(b',');
             }
-            let item_nulls = self.encoder.nulls();
             if item_nulls.is_null(idx) {
                 out.extend_from_slice(b"null");
             } else {
@@ -660,8 +674,10 @@ impl Encoder for MapEncoder<'_> {
         let mut is_first = true;
 
         out.push(b'{');
+
+        let value_nulls = self.values.nulls();
+
         for idx in start..end {
-            let value_nulls = self.values.nulls();
             let is_null = value_nulls.is_null(idx);
             if is_null && !self.explicit_nulls {
                 continue;
