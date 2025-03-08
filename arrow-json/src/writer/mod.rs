@@ -2093,7 +2093,7 @@ mod tests {
             fn nulls(&self) -> Option<NullBuffer> {
                 if self.array.iter().any(Option::is_none) {
                     let mut builder = NullBufferBuilder::new(self.array.len());
-                    for (_, val) in self.array.iter().enumerate() {
+                    for val in self.array.iter() {
                         builder.append(val.is_some());
                     }
                     builder.finish()
