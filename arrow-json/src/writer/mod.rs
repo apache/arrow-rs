@@ -112,7 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions};
+pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullBufferExt};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -366,11 +366,13 @@ where
             false,
         ));
 
-        let mut encoder = make_encoder(&field, &array, &self.options)?;
+        let encoder = make_encoder(&field, &array, &self.options)?;
+        let nulls = encoder.nulls();
         for idx in 0..array.len() {
-            assert!(!encoder.is_null(idx), "root cannot be nullable");
+            assert!(!nulls.is_null(idx), "root cannot be nullable");
         }
 
+        let mut encoder = make_encoder(&field, &array, &self.options)?;
         for idx in 0..batch.num_rows() {
             self.format.start_row(&mut buffer, is_first_row)?;
             is_first_row = false;
@@ -2084,12 +2086,16 @@ mod tests {
                 }
             }
 
-            fn has_nulls(&self) -> bool {
-                self.array.iter().any(Option::is_none)
-            }
-
-            fn is_null(&self, idx: usize) -> bool {
-                self.array[idx].is_none()
+            fn nulls(&self) -> Option<NullBuffer> {
+                if self.array.iter().any(Option::is_none) {
+                    let mut builder = NullBufferBuilder::new(self.array.len());
+                    for (_, val) in self.array.iter().enumerate() {
+                        builder.append(val.is_some());
+                    }
+                    builder.finish()
+                } else {
+                    None
+                }
             }
         }
 
@@ -2305,12 +2311,8 @@ mod tests {
                 out.push(b']');
             }
 
-            fn has_nulls(&self) -> bool {
-                self.array.is_nullable()
-            }
-
-            fn is_null(&self, idx: usize) -> bool {
-                self.array.is_null(idx)
+            fn nulls(&self) -> Option<NullBuffer> {
+                self.array.nulls().cloned()
             }
         }
 
@@ -2375,25 +2377,19 @@ mod tests {
 
         // No particular reason to choose this example.
         // Just trying to add some variety to the test cases and demonstrate use cases of the encoder factory.
-        struct PaddedInt32Encoder<'a> {
+        struct PaddedInt32Encoder {
             array: Int32Array,
-            nulls: Option<&'a NullBuffer>,
+            nulls: Option<NullBuffer>,
         }
 
-        impl<'a> Encoder for PaddedInt32Encoder<'a> {
+        impl Encoder for PaddedInt32Encoder {
             fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
                 let value = self.array.value(idx);
                 write!(out, "\"{value:0>8}\"").unwrap();
             }
 
-            fn has_nulls(&self) -> bool {
-                self.array.is_nullable()
-            }
-
-            fn is_null(&self, idx: usize) -> bool {
-                self.nulls
-                    .map(|nulls| nulls.is_null(idx))
-                    .unwrap_or_default()
+            fn nulls(&self) -> Option<NullBuffer> {
+                self.nulls.clone()
             }
         }
 
@@ -2419,7 +2415,7 @@ mod tests {
                 match (array.data_type(), padded) {
                     (DataType::Int32, true) => {
                         let array = array.as_primitive::<Int32Type>();
-                        let nulls = array.nulls();
+                        let nulls = array.nulls().cloned();
                         let encoder = PaddedInt32Encoder {
                             array: array.clone(),
                             nulls,

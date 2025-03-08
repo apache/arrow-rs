@@ -70,11 +70,11 @@ pub trait Encoder {
     /// The behaviour is unspecified if `idx` corresponds to a null index.
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>);
 
-    /// Check if the value at `idx` is null.
-    fn is_null(&self, _idx: usize) -> bool;
-
-    /// Short circuiting null checks if there are none.
-    fn has_nulls(&self) -> bool;
+    /// Returns the nullability buffer for this encoder, if any.
+    /// 
+    /// This replaces the `is_null` and `has_nulls` methods by returning the underlying 
+    /// buffer state directly, avoiding dynamic dispatch for null checks.
+    fn nulls(&self) -> Option<NullBuffer>;
 }
 
 /// Creates an encoder for the given array and field.
@@ -237,7 +237,8 @@ impl Encoder for StructArrayEncoder<'_> {
         // Nulls can only be dropped in explicit mode
         let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
         for field_encoder in &mut self.encoders {
-            let is_null = field_encoder.encoder.is_null(idx);
+            let field_nulls = field_encoder.encoder.nulls();
+            let is_null = field_nulls.is_null(idx);
             if is_null && drop_nulls {
                 continue;
             }
@@ -252,9 +253,10 @@ impl Encoder for StructArrayEncoder<'_> {
                 out.push(b':');
             }
 
-            match is_null {
-                true => out.extend_from_slice(b"null"),
-                false => field_encoder.encoder.encode(idx, out),
+            if is_null {
+                out.extend_from_slice(b"null");
+            } else {
+                field_encoder.encoder.encode(idx, out);
             }
         }
         match self.struct_mode {
@@ -263,12 +265,8 @@ impl Encoder for StructArrayEncoder<'_> {
         }
     }
 
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls, idx)
-    }
-
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.cloned()
     }
 }
 
@@ -338,9 +336,25 @@ impl PrimitiveEncode for f16 {
     }
 }
 
-fn is_null_optional_buffer(nulls: Option<&NullBuffer>, idx: usize) -> bool {
-    nulls.map(|nulls| nulls.is_null(idx)).unwrap_or_default()
+/// Extension trait providing null-related methods to `Option<NullBuffer>`
+pub trait NullBufferExt {
+    /// Check if the value at `idx` is null.
+    fn is_null(&self, idx: usize) -> bool;
+    
+    /// Check if this buffer contains any nulls.
+    fn has_nulls(&self) -> bool;
 }
+
+impl NullBufferExt for Option<NullBuffer> {
+    fn is_null(&self, idx: usize) -> bool {
+        self.as_ref().map(|nulls| nulls.is_null(idx)).unwrap_or_default()
+    }
+    
+    fn has_nulls(&self) -> bool {
+        self.is_some()
+    }
+}
+
 
 struct PrimitiveEncoder<N: PrimitiveEncode> {
     values: ScalarBuffer<N>,
@@ -366,12 +380,8 @@ impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
         out.extend_from_slice(self.values[idx].encode(&mut self.buffer));
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls.as_ref(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -385,12 +395,8 @@ impl Encoder for BooleanEncoder<'_> {
         }
     }
 
-    fn has_nulls(&self) -> bool {
-        self.0.is_nullable()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.0.nulls(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
 
@@ -401,12 +407,8 @@ impl<O: OffsetSizeTrait> Encoder for StringEncoder<'_, O> {
         encode_string(self.0.value(idx), out);
     }
 
-    fn has_nulls(&self) -> bool {
-        self.0.is_nullable()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.0.nulls(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
 
@@ -417,12 +419,8 @@ impl Encoder for StringViewEncoder<'_> {
         encode_string(self.0.value(idx), out);
     }
 
-    fn has_nulls(&self) -> bool {
-        self.0.is_nullable()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.0.nulls(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
 
@@ -457,20 +455,18 @@ impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
             if idx != start {
                 out.push(b',')
             }
-            match self.encoder.is_null(idx) {
-                true => out.extend_from_slice(b"null"),
-                false => self.encoder.encode(idx, out),
+            let item_nulls = self.encoder.nulls();
+            if item_nulls.is_null(idx) {
+                out.extend_from_slice(b"null");
+            } else {
+                self.encoder.encode(idx, out);
             }
         }
         out.push(b']');
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls.as_ref(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -505,7 +501,8 @@ impl Encoder for FixedSizeListEncoder<'_> {
             if idx != start {
                 out.push(b',');
             }
-            if self.encoder.is_null(idx) {
+            let item_nulls = self.encoder.nulls();
+            if item_nulls.is_null(idx) {
                 out.extend_from_slice(b"null");
             } else {
                 self.encoder.encode(idx, out);
@@ -514,12 +511,8 @@ impl Encoder for FixedSizeListEncoder<'_> {
         out.push(b']');
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls.as_ref(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -551,12 +544,8 @@ impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
         self.encoder.encode(self.keys[idx].as_usize(), out)
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls.as_ref(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -581,12 +570,8 @@ impl Encoder for JsonArrayFormatter<'_> {
         out.push(b'"')
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls, idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.cloned()
     }
 }
 
@@ -598,12 +583,8 @@ impl Encoder for RawArrayFormatter<'_> {
         let _ = write!(out, "{}", self.0.formatter.value(idx));
     }
 
-    fn has_nulls(&self) -> bool {
-        self.0.has_nulls()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        self.0.is_null(idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls.cloned()
     }
 }
 
@@ -614,12 +595,9 @@ impl Encoder for NullEncoder {
         unreachable!()
     }
 
-    fn is_null(&self, _idx: usize) -> bool {
-        true
-    }
-
-    fn has_nulls(&self) -> bool {
-        true
+    fn nulls(&self) -> Option<NullBuffer> {
+        // Indicate that all values in this encoder are null
+        Some(NullBuffer::new_null(64)) // Create a buffer larger than needed to accommodate any index
     }
 }
 
@@ -652,7 +630,7 @@ impl<'a> MapEncoder<'a> {
         let values = make_encoder(field, values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
-        if keys.has_nulls() {
+        if keys.nulls().is_some() {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray keys".to_string(),
             ));
@@ -683,7 +661,8 @@ impl Encoder for MapEncoder<'_> {
 
         out.push(b'{');
         for idx in start..end {
-            let is_null = self.values.is_null(idx);
+            let value_nulls = self.values.nulls();
+            let is_null = value_nulls.is_null(idx);
             if is_null && !self.explicit_nulls {
                 continue;
             }
@@ -696,20 +675,17 @@ impl Encoder for MapEncoder<'_> {
             self.keys.encode(idx, out);
             out.push(b':');
 
-            match is_null {
-                true => out.extend_from_slice(b"null"),
-                false => self.values.encode(idx, out),
+            if is_null {
+                out.extend_from_slice(b"null");
+            } else {
+                self.values.encode(idx, out);
             }
         }
         out.push(b'}');
     }
 
-    fn has_nulls(&self) -> bool {
-        self.nulls.is_some()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.nulls.as_ref(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -739,11 +715,7 @@ where
         out.push(b'"');
     }
 
-    fn has_nulls(&self) -> bool {
-        self.0.is_nullable()
-    }
-
-    fn is_null(&self, idx: usize) -> bool {
-        is_null_optional_buffer(self.0.nulls(), idx)
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
