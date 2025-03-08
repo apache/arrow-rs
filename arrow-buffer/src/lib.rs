@@ -17,6 +17,11 @@
 
 //! Low-level buffer abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // used by [`buffer::mutable::dangling_ptr`]
 #![cfg_attr(miri, feature(strict_provenance))]
 #![warn(missing_docs)]
