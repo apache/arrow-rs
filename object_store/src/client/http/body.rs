@@ -195,6 +195,18 @@ impl HttpResponseBody {
     }
 }
 
+impl Body for HttpResponseBody {
+    type Data = Bytes;
+    type Error = HttpError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.0).poll_frame(cx)
+    }
+}
+
 impl From<Bytes> for HttpResponseBody {
     fn from(value: Bytes) -> Self {
         Self::new(Full::new(value).map_err(|e| match e {}))

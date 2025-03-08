@@ -18,10 +18,10 @@
 //! Generic HTTP client abstraction
 
 mod body;
-pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
+pub use body::*;
 
 mod connection;
-pub(crate) use connection::http_connector;
-#[cfg(not(target_arch = "wasm32"))]
-pub use connection::ReqwestConnector;
-pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
+pub use connection::*;
+
+mod spawn;
+pub use spawn::*;

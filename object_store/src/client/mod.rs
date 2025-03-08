@@ -851,9 +851,9 @@ mod cloud {
     }
 }
 
+use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
-use crate::client::builder::HttpRequestBuilder;
 
 #[cfg(test)]
 mod tests {
