@@ -53,6 +53,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Determine timezone
         (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
 
+        // Read Timestamp as raw bytes
+        (DataType::Timestamp(TimeUnit::Nanosecond, _), DataType::FixedSizeBinary(12)) => hint,
+
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
         (DataType::Binary, DataType::LargeBinary) => hint,

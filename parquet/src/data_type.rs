@@ -56,6 +56,16 @@ impl Int96 {
         self.value = [elem0, elem1, elem2];
     }
 
+    /// Sets data for this INT96 type.
+    #[inline]
+    pub fn set_bytes(&mut self, bytes: &[u8]) {
+        assert_eq!(bytes.len(), 12);
+        let elem0 = u32::from_ne_bytes(bytes[..4].try_into().unwrap());
+        let elem1 = u32::from_ne_bytes(bytes[4..8].try_into().unwrap());
+        let elem2 = u32::from_ne_bytes(bytes[8..].try_into().unwrap());
+        self.value = [elem0, elem1, elem2];
+    }
+
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
     pub fn to_i64(&self) -> i64 {
         let (seconds, nanoseconds) = self.to_seconds_and_nanos();
@@ -89,6 +99,14 @@ impl From<Vec<u32>> for Int96 {
         assert_eq!(buf.len(), 3);
         let mut result = Self::new();
         result.set_data(buf[0], buf[1], buf[2]);
+        result
+    }
+}
+
+impl From<&[u8]> for Int96 {
+    fn from(bytes: &[u8]) -> Self {
+        let mut result = Self::new();
+        result.set_bytes(bytes);
         result
     }
 }
