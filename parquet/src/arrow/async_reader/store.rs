@@ -23,6 +23,8 @@ use object_store::{path::Path, ObjectMeta, ObjectStore};
 use tokio::runtime::Handle;
 
 use crate::arrow::async_reader::AsyncFileReader;
+#[cfg(feature = "encryption")]
+use crate::encryption::decryption::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
@@ -58,6 +60,8 @@ pub struct ParquetObjectReader {
     preload_column_index: bool,
     preload_offset_index: bool,
     runtime: Option<Handle>,
+    #[cfg(feature = "encryption")]
+    file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ParquetObjectReader {
@@ -72,6 +76,8 @@ impl ParquetObjectReader {
             preload_column_index: false,
             preload_offset_index: false,
             runtime: None,
+            #[cfg(feature = "encryption")]
+            file_decryption_properties: None,
         }
     }
 
@@ -169,9 +175,31 @@ impl AsyncFileReader for ParquetObjectReader {
             let metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
+                .with_prefetch_hint(self.metadata_size_hint);
+            #[cfg(feature = "encryption")]
+            let metadata = metadata
+                .with_decryption_properties(self.file_decryption_properties.clone().as_ref());
+
+            let metadata = metadata.load_and_finish(self, file_size).await?;
+            Ok(Arc::new(metadata))
+        })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn get_encrypted_metadata(
+        &mut self,
+        file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
+            let file_size = self.meta.size;
+            let metadata = ParquetMetaDataReader::new()
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint)
+                .with_decryption_properties(file_decryption_properties.as_ref())
                 .load_and_finish(self, file_size)
                 .await?;
+
             Ok(Arc::new(metadata))
         })
     }
