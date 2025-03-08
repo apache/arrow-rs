@@ -19,8 +19,7 @@
 
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::HttpRequestBuilder;
-use crate::client::connection::HttpErrorKind;
-use crate::client::{HttpClient, HttpError, HttpRequest, HttpResponse};
+use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
 use crate::PutPayload;
 use futures::future::BoxFuture;
 use http::{Method, Uri};

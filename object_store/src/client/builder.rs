@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::connection::HttpErrorKind;
+use crate::client::HttpErrorKind;
 use crate::client::{HttpClient, HttpError, HttpRequest, HttpRequestBody};
 use http::header::{InvalidHeaderName, InvalidHeaderValue};
 use http::uri::InvalidUri;
