@@ -103,6 +103,50 @@ macro_rules! downcast_integer {
     };
 }
 
+/// Given one or more expressions evaluating to an integer [`PrimitiveArray`] invokes the provided macro
+/// with the corresponding array, along with match statements for any non integer array types
+///
+/// ```
+/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array};
+/// # use arrow_schema::DataType;
+///
+/// fn print_integer(array: &dyn Array) {
+///     downcast_integer_array!(
+///         array => {
+///             for v in array {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         DataType::Utf8 => {
+///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         t => println!("Unsupported datatype {}", t)
+///     )
+/// }
+/// ```
+///
+/// [`DataType`]: arrow_schema::DataType
+#[macro_export]
+macro_rules! downcast_integer_array {
+    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!($values => {$e} $($p => $fallback)*)
+    };
+    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!($($values),+ => {$e} $($p => $fallback)*)
+    };
+    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!(($($values),+) => $e $($p => $fallback)*)
+    };
+    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer!{
+            $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
+            $($p => $fallback,)*
+        }
+    };
+}
+
 /// Given one or more expressions evaluating to an integer [`DataType`] invokes the provided macro
 /// `m` with the corresponding integer [`RunEndIndexType`], followed by any additional arguments
 ///
@@ -999,10 +1043,10 @@ impl AsArray for ArrayRef {
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::i256;
-    use std::sync::Arc;
-
     use super::*;
+    use arrow_buffer::i256;
+    use arrow_schema::DataType;
+    use std::sync::Arc;
 
     #[test]
     fn test_as_primitive_array_ref() {
@@ -1034,5 +1078,47 @@ mod tests {
     fn test_decimal256array() {
         let a = Decimal256Array::from_iter_values([1, 2, 4, 5].into_iter().map(i256::from_i128));
         assert!(!as_primitive_array::<Decimal256Type>(&a).is_empty());
+    }
+
+    #[test]
+    fn downcast_integer_array_should_match_only_integers() {
+        let i32_array: ArrayRef = Arc::new(Int32Array::new_null(1));
+        let i32_array_ref = &i32_array;
+        downcast_integer_array!(
+            i32_array_ref => {
+                assert_eq!(i32_array_ref.null_count(), 1);
+            },
+            _ => panic!("unexpected data type")
+        );
+    }
+
+    #[test]
+    fn downcast_integer_array_should_not_match_primitive_that_are_not_integers() {
+        let array: ArrayRef = Arc::new(Float32Array::new_null(1));
+        let array_ref = &array;
+        downcast_integer_array!(
+            array_ref => {
+                panic!("unexpected data type {}", array_ref.data_type())
+            },
+            DataType::Float32 => {
+                assert_eq!(array_ref.null_count(), 1);
+            },
+            _ => panic!("unexpected data type")
+        );
+    }
+
+    #[test]
+    fn downcast_integer_array_should_not_match_non_primitive() {
+        let array: ArrayRef = Arc::new(StringArray::new_null(1));
+        let array_ref = &array;
+        downcast_integer_array!(
+            array_ref => {
+                panic!("unexpected data type {}", array_ref.data_type())
+            },
+            DataType::Utf8 => {
+                assert_eq!(array_ref.null_count(), 1);
+            },
+            _ => panic!("unexpected data type")
+        );
     }
 }
