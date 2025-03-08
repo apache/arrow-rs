@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::connection::{HttpError, HttpErrorKind};
+use crate::client::{HttpError, HttpErrorKind};
 use crate::{collect_bytes, PutPayload};
 use bytes::Bytes;
 use futures::stream::BoxStream;

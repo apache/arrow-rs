@@ -43,19 +43,11 @@ pub(crate) mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) mod s3;
 
-mod body;
-pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
-
 pub(crate) mod builder;
-
-mod connection;
-pub(crate) use connection::http_connector;
-#[cfg(not(target_arch = "wasm32"))]
-pub use connection::ReqwestConnector;
-pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
-
+mod http;
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
+pub use http::*;
 
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -859,9 +851,9 @@ mod cloud {
     }
 }
 
-use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
+use crate::client::builder::HttpRequestBuilder;
 
 #[cfg(test)]
 mod tests {
