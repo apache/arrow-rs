@@ -95,26 +95,35 @@ mod memory;
 pub(crate) mod reader;
 mod writer;
 
-use std::ops::Range;
-use std::sync::Arc;
-
-use crate::format::{
-    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
-    SizeStatistics, SortingColumn,
-};
-
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
+#[cfg(feature = "encryption")]
+use crate::encryption::{
+    decryption::FileDecryptor,
+    modules::{create_module_aad, ModuleType},
+};
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "encryption")]
+use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
+#[cfg(feature = "encryption")]
+use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
+use crate::format::{
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
+    SizeStatistics, SortingColumn,
+};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+#[cfg(feature = "encryption")]
+use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 pub use reader::ParquetMetaDataReader;
+use std::ops::Range;
+use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
 pub(crate) use writer::ThriftMetadataWriter;
 
@@ -174,15 +183,24 @@ pub struct ParquetMetaData {
     column_index: Option<ParquetColumnIndex>,
     /// Offset index for each page in each column chunk
     offset_index: Option<ParquetOffsetIndex>,
+    /// Optional file decryptor
+    #[cfg(feature = "encryption")]
+    file_decryptor: Option<FileDecryptor>,
 }
 
 impl ParquetMetaData {
     /// Creates Parquet metadata from file metadata and a list of row
     /// group metadata
-    pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
+    pub fn new(
+        file_metadata: FileMetaData,
+        row_groups: Vec<RowGroupMetaData>,
+        #[cfg(feature = "encryption")] file_decryptor: Option<FileDecryptor>,
+    ) -> Self {
         ParquetMetaData {
             file_metadata,
             row_groups,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
             column_index: None,
             offset_index: None,
         }
@@ -212,6 +230,12 @@ impl ParquetMetaData {
     /// Returns file metadata as reference.
     pub fn file_metadata(&self) -> &FileMetaData {
         &self.file_metadata
+    }
+
+    /// Returns file decryptor as reference.
+    #[cfg(feature = "encryption")]
+    pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
+        &self.file_decryptor
     }
 
     /// Returns number of row groups in this file.
@@ -325,7 +349,12 @@ pub struct ParquetMetaDataBuilder(ParquetMetaData);
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![]))
+        Self(ParquetMetaData::new(
+            file_meta_data,
+            vec![],
+            #[cfg(feature = "encryption")]
+            None,
+        ))
     }
 
     /// Create a new builder from an existing ParquetMetaData
@@ -600,7 +629,11 @@ impl RowGroupMetaData {
     }
 
     /// Method to convert from Thrift.
-    pub fn from_thrift(schema_descr: SchemaDescPtr, mut rg: RowGroup) -> Result<RowGroupMetaData> {
+    pub fn from_thrift(
+        schema_descr: SchemaDescPtr,
+        mut rg: RowGroup,
+        #[cfg(feature = "encryption")] decryptor: Option<&FileDecryptor>,
+    ) -> Result<RowGroupMetaData> {
         if schema_descr.num_columns() != rg.columns.len() {
             return Err(general_err!(
                 "Column count mismatch. Schema has {} columns while Row Group has {}",
@@ -611,9 +644,53 @@ impl RowGroupMetaData {
         let total_byte_size = rg.total_byte_size;
         let num_rows = rg.num_rows;
         let mut columns = vec![];
+
+        #[cfg(not(feature = "encryption"))]
         for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            let cc = ColumnChunkMetaData::from_thrift(d.clone(), c)?;
-            columns.push(cc);
+            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
+        }
+
+        #[cfg(feature = "encryption")]
+        for (i, (mut c, d)) in rg
+            .columns
+            .drain(0..)
+            .zip(schema_descr.columns())
+            .enumerate()
+        {
+            // Read encrypted metadata if it's present and we have a decryptor.
+            if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
+                let column_decryptor = match c.crypto_metadata.as_ref() {
+                    None => {
+                        return Err(general_err!(
+                            "No crypto_metadata is set for column {}, which has encrypted metadata",
+                            i
+                        ));
+                    }
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
+                        let column_name = crypto_metadata.path_in_schema.join(".");
+                        decryptor.get_column_metadata_decryptor(column_name.as_bytes())
+                    }
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                        decryptor.get_footer_decryptor()
+                    }
+                };
+
+                let column_aad = create_module_aad(
+                    decryptor.file_aad(),
+                    ModuleType::ColumnMetaData,
+                    rg.ordinal.unwrap() as usize,
+                    i,
+                    None,
+                )?;
+
+                let buf = c.encrypted_column_metadata.clone().unwrap();
+                let decrypted_cc_buf =
+                    column_decryptor.decrypt(buf.as_slice(), column_aad.as_ref())?;
+
+                let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
+                c.meta_data = Some(ColumnMetaData::read_from_in_protocol(&mut prot)?);
+            }
+            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
         }
         let sorting_columns = rg.sorting_columns;
         Ok(RowGroupMetaData {
@@ -753,6 +830,8 @@ pub struct ColumnChunkMetaData {
     unencoded_byte_array_data_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
+    #[cfg(feature = "encryption")]
+    column_crypto_metadata: Option<ColumnCryptoMetaData>,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1042,6 +1121,12 @@ impl ColumnChunkMetaData {
         self.definition_level_histogram.as_ref()
     }
 
+    /// Returns the encryption metadata for this column chunk.
+    #[cfg(feature = "encryption")]
+    pub fn crypto_metadata(&self) -> Option<&ColumnCryptoMetaData> {
+        self.column_crypto_metadata.as_ref()
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -1096,6 +1181,13 @@ impl ColumnChunkMetaData {
         let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
         let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
+        #[cfg(feature = "encryption")]
+        let column_crypto_metadata = if let Some(crypto_metadata) = cc.crypto_metadata {
+            Some(column_crypto_metadata::try_from_thrift(&crypto_metadata)?)
+        } else {
+            None
+        };
+
         let result = ColumnChunkMetaData {
             column_descr,
             encodings,
@@ -1119,6 +1211,8 @@ impl ColumnChunkMetaData {
             unencoded_byte_array_data_bytes,
             repetition_level_histogram,
             definition_level_histogram,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata,
         };
         Ok(result)
     }
@@ -1126,6 +1220,14 @@ impl ColumnChunkMetaData {
     /// Method to convert to Thrift.
     pub fn to_thrift(&self) -> ColumnChunk {
         let column_metadata = self.to_column_metadata_thrift();
+
+        #[cfg(feature = "encryption")]
+        let crypto_metadata = self
+            .column_crypto_metadata
+            .as_ref()
+            .map(column_crypto_metadata::to_thrift);
+        #[cfg(not(feature = "encryption"))]
+        let crypto_metadata = None;
 
         ColumnChunk {
             file_path: self.file_path().map(|s| s.to_owned()),
@@ -1135,7 +1237,7 @@ impl ColumnChunkMetaData {
             offset_index_length: self.offset_index_length,
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
-            crypto_metadata: None,
+            crypto_metadata,
             encrypted_column_metadata: None,
         }
     }
@@ -1242,6 +1344,8 @@ impl ColumnChunkMetaDataBuilder {
             unencoded_byte_array_data_bytes: None,
             repetition_level_histogram: None,
             definition_level_histogram: None,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata: None,
         })
     }
 
@@ -1388,6 +1492,13 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional repetition level histogram
     pub fn set_definition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
         self.0.definition_level_histogram = value;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryption metadata for an encrypted column
+    pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
+        self.0.column_crypto_metadata = value;
         self
     }
 
@@ -1605,9 +1716,14 @@ mod tests {
             .unwrap();
 
         let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let row_group_res = RowGroupMetaData::from_thrift(
+            schema_descr,
+            row_group_exp.clone(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .unwrap()
+        .to_thrift();
 
         assert_eq!(row_group_res, row_group_exp);
     }
@@ -1686,10 +1802,14 @@ mod tests {
             .build()
             .unwrap();
 
-        let err =
-            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
-                .unwrap_err()
-                .to_string();
+        let err = RowGroupMetaData::from_thrift(
+            schema_descr_3cols,
+            row_group_meta_2cols.to_thrift(),
+            #[cfg(feature = "encryption")]
+            None,
+        )
+        .unwrap_err()
+        .to_string();
         assert_eq!(
             err,
             "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
@@ -1849,7 +1969,11 @@ mod tests {
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata.clone())
             .set_row_groups(row_group_meta_with_stats)
             .build();
+
+        #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
+        #[cfg(feature = "encryption")]
+        let base_expected_size = 2640;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1876,7 +2000,11 @@ mod tests {
             ]]))
             .build();
 
+        #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2816;
+        #[cfg(feature = "encryption")]
+        let bigger_expected_size = 3144;
+
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
