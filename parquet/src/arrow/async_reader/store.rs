@@ -23,6 +23,8 @@ use object_store::{path::Path, ObjectMeta, ObjectStore};
 use tokio::runtime::Handle;
 
 use crate::arrow::async_reader::AsyncFileReader;
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
@@ -172,6 +174,24 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_prefetch_hint(self.metadata_size_hint)
                 .load_and_finish(self, file_size)
                 .await?;
+            Ok(Arc::new(metadata))
+        })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn get_metadata_with_encryption(
+        &mut self,
+        _file_decryption_properties: Option<FileDecryptionProperties>,
+    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
+            let file_size = self.meta.size;
+            let metadata = ParquetMetaDataReader::new()
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index)
+                .with_prefetch_hint(self.metadata_size_hint)
+                .load_and_finish(self, file_size)
+                .await?;
+
             Ok(Arc::new(metadata))
         })
     }
