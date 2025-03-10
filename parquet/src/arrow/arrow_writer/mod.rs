@@ -1311,9 +1311,7 @@ mod tests {
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
     #[cfg(feature = "encryption")]
-    use crate::encryption::{
-        decryption::FileDecryptionProperties, encrypt::FileEncryptionProperties,
-    };
+    use crate::encryption::{decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties};
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
     use crate::file::page_index::index_reader::read_offset_indexes;
@@ -3812,8 +3810,8 @@ mod tests {
         let column_2_key = "1234567890123451".as_bytes();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key("double_field".as_bytes().to_vec(), column_1_key.to_vec())
-            .with_column_key("float_field".as_bytes().to_vec(), column_2_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
             .build()
             .unwrap();
 

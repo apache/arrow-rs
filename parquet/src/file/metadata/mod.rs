@@ -103,14 +103,17 @@ use crate::encryption::{
 };
 use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
+use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+#[cfg(feature = "encryption")]
+use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
+
+#[cfg(feature = "encryption")]
+use crate::file::column_crypto_metadata;
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
-#[cfg(feature = "encryption")]
-use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SizeStatistics, SortingColumn,
@@ -659,11 +662,11 @@ impl RowGroupMetaData {
                             d.path().string()
                         ));
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
                         let column_name = crypto_metadata.path_in_schema.join(".");
                         decryptor.get_column_metadata_decryptor(column_name.as_str())?
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()?
                     }
                 };

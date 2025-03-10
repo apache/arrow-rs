@@ -18,15 +18,20 @@
 use crate::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use crate::arrow::ParquetRecordBatchStreamBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
 
 use std::fs::File;
 use parquet::file::metadata::ParquetMetaData;
 use crate::arrow::ArrowWriter;
-use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::encryption::decrypt::FileDecryptionProperties;
+use crate::encryption::encrypt::FileEncryptionProperties;
+use crate::errors::ParquetError;
+use crate::file::metadata::FileMetaData;
 use crate::file::properties::WriterProperties;
+use futures::TryStreamExt;
+use std::fs::File;
 
 /// Tests reading an encrypted file from the parquet-testing repository
 pub(crate) fn verify_encryption_test_file_read(

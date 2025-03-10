@@ -141,8 +141,6 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                 row_group.num_rows() as usize,
                 None,
                 Arc::new(properties),
-                #[cfg(feature = "encryption")]
-                None,
             )
             .unwrap();
 
