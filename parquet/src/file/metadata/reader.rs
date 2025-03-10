@@ -721,7 +721,9 @@ impl ParquetMetaDataReader {
                 decrypted_fmd_buf = footer_decryptor?
                     .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
                     .map_err(|_| {
-                        general_err!("Provided footer key was unable to decrypt parquet footer")
+                        general_err!(
+                            "Provided footer key and AAD were unable to decrypt parquet footer"
+                        )
                     })?;
                 prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
 
@@ -847,7 +849,11 @@ fn get_file_decryptor(
             let aad_file_unique = algo
                 .aad_file_unique
                 .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix: Vec<u8> = algo.aad_prefix.unwrap_or_default();
+            let aad_prefix = if file_decryption_properties.aad_prefix.is_some() {
+                file_decryption_properties.aad_prefix.clone().unwrap()
+            } else {
+                algo.aad_prefix.unwrap_or_default()
+            };
 
             FileDecryptor::new(file_decryption_properties, aad_file_unique, aad_prefix)
         }

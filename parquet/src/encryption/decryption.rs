@@ -39,7 +39,7 @@ pub fn read_and_decrypt<T: Read>(
 // CryptoContext is a data structure that holds the context required to
 // decrypt parquet modules (data pages, dictionary pages, etc.).
 #[derive(Debug, Clone)]
-pub struct CryptoContext {
+pub(crate) struct CryptoContext {
     pub(crate) row_group_ordinal: usize,
     pub(crate) column_ordinal: usize,
     pub(crate) page_ordinal: Option<usize>,
@@ -145,7 +145,7 @@ impl CryptoContext {
 pub struct FileDecryptionProperties {
     footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
-    aad_prefix: Option<Vec<u8>>,
+    pub(crate) aad_prefix: Option<Vec<u8>>,
 }
 
 impl FileDecryptionProperties {
@@ -178,8 +178,8 @@ impl DecryptionPropertiesBuilder {
         })
     }
 
-    pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
-        self.aad_prefix = Some(value);
+    pub fn with_aad_prefix(mut self, value: &str) -> Self {
+        self.aad_prefix = Some(value.as_bytes().to_vec());
         self
     }
 
@@ -191,7 +191,7 @@ impl DecryptionPropertiesBuilder {
 }
 
 #[derive(Clone, Debug)]
-pub struct FileDecryptor {
+pub(crate) struct FileDecryptor {
     decryption_properties: FileDecryptionProperties,
     footer_decryptor: Option<Arc<dyn BlockDecryptor>>,
     file_aad: Vec<u8>,
@@ -212,8 +212,12 @@ impl FileDecryptor {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
         // todo decr: if no key available yet (not set in properties, should be retrieved from metadata)
         let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key)
-            .map_err(|e| general_err!("Invalid footer key. {}", e.to_string().replace("Parquet error: ", "")))?;
-
+            .map_err(|e| {
+                general_err!(
+                    "Invalid footer key. {}",
+                    e.to_string().replace("Parquet error: ", "")
+                )
+            })?;
         Ok(Self {
             footer_decryptor: Some(Arc::new(footer_decryptor)),
             decryption_properties: decryption_properties.clone(),

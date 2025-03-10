@@ -1198,8 +1198,21 @@ mod tests {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
         requests: Arc<Mutex<Vec<Range<usize>>>>,
-        #[cfg(feature = "encryption")]
-        file_decryption_properties: Option<FileDecryptionProperties>,
+    }
+
+    #[cfg(feature = "encryption")]
+    impl TestReader {
+        async fn new(
+            data: Bytes,
+            metadata: Arc<ParquetMetaData>,
+            requests: Arc<Mutex<Vec<Range<usize>>>>,
+        ) -> Self {
+            Self {
+                data,
+                metadata,
+                requests,
+            }
+        }
     }
 
     impl AsyncFileReader for TestReader {
@@ -1238,8 +1251,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -1297,8 +1308,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -1364,8 +1373,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1434,8 +1441,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -1482,8 +1487,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1567,8 +1570,6 @@ mod tests {
                 data: data.clone(),
                 metadata: metadata.clone(),
                 requests: Default::default(),
-                #[cfg(feature = "encryption")]
-                file_decryption_properties: None,
             };
 
             let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1640,8 +1641,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let options = ArrowReaderOptions::new().with_page_index(true);
@@ -1692,8 +1691,6 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
         let requests = test.requests.clone();
 
@@ -1771,8 +1768,6 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
@@ -1865,8 +1860,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let a_filter =
@@ -1935,8 +1928,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let requests = async_reader.requests.clone();
@@ -2013,8 +2004,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -2160,8 +2149,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -2199,8 +2186,6 @@ mod tests {
             data: data.clone(),
             metadata: metadata.clone(),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
 
         let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -2338,8 +2323,6 @@ mod tests {
             data,
             metadata: Arc::new(metadata),
             requests: Default::default(),
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         };
         let requests = test.requests.clone();
 
@@ -2514,7 +2497,9 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await.unwrap();
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2575,7 +2560,7 @@ mod tests {
 
         // Wrong footer key
         check_for_error(
-            "Parquet error: Provided footer key was unable to decrypt parquet footer",
+            "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer",
             &path,
             "1123456789012345".as_bytes(),
             column_1_key,
@@ -2687,7 +2672,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
     }
 
     #[tokio::test]
@@ -2702,7 +2687,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
     }
 
     #[tokio::test]

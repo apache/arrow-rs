@@ -1882,6 +1882,64 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "encryption")]
+    fn test_non_uniform_encryption_disabled_aad_storage() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path =
+            format!("{testdata}/encrypt_columns_and_footer_disable_aad_storage.parquet.encrypted");
+        let file = File::open(path.clone()).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        // Provided AAD prefix overrides the one stored in the file
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .with_aad_prefix("tester")
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+
+        // Using wrong AAD prefix should fail
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .with_aad_prefix("wrong_aad_prefix")
+            .build()
+            .unwrap();
+
+        let file = File::open(path.clone()).unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+        );
+
+        // Using wrong AAD prefix stored in the file should fail
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        let file = File::open(path).unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+        );
+    }
+
+    #[test]
     fn test_non_uniform_encryption_plaintext_footer_without_decryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
