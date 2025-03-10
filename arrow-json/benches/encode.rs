@@ -141,23 +141,6 @@ fn crete_list_array(
     RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
 }
 
-
-/// Runs a benchmark with the default writer (skip nulls)
-fn bench_default_writer(record_batch: &RecordBatch) {
-    let mut buffer = std::io::sink();
-    let mut writer = LineDelimitedWriter::new(&mut buffer);
-    writer.write(record_batch).unwrap();
-}
-
-/// Runs a benchmark with explicit nulls
-fn bench_explicit_nulls_writer(record_batch: &RecordBatch) {
-    let mut buffer = std::io::sink();
-    let mut writer = WriterBuilder::new()
-        .with_explicit_nulls(true)
-        .build::<_, LineDelimited>(&mut buffer);
-    writer.write(record_batch).unwrap();
-}
-
 //------------------------------------------------------------------------------
 // Benchmark Definition
 //------------------------------------------------------------------------------
@@ -197,18 +180,36 @@ fn bench_json_encoding(c: &mut Criterion) {
 
     // Run benchmarks for each test case
     for test_case in cases {
-
-        // Set up the benchmark
         group.throughput(Throughput::Elements(test_case.row_count.row_count() as u64));
         group.bench_with_input(
             BenchmarkId::new(test_case.name(), test_case.explicit_nulls),
             &test_case.data,
             |b, batch| {
-                if test_case.explicit_nulls {
-                    b.iter(|| bench_explicit_nulls_writer(batch));
-                } else {
-                    b.iter(|| bench_default_writer(batch));
-                }
+                // Setup: create a new sink and writer for each iteration
+                // Only the write method call is measured
+                b.iter_batched_ref(
+                    || {
+                        // Setup phase - create the writer with a new sink
+                        let sink = std::io::sink();
+                        
+                        if test_case.explicit_nulls {
+                            // Create writer with explicit nulls
+                            let writer = WriterBuilder::new()
+                                .with_explicit_nulls(true)
+                                .build::<_, LineDelimited>(sink);
+                            writer
+                        } else {
+                            // Create default writer
+                            let writer = LineDelimitedWriter::new(sink);
+                            writer
+                        }
+                    },
+                    |writer| {
+                        // Only this part is measured - the write operation
+                        writer.write(batch)
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
             },
         );
     }
