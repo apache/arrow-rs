@@ -111,7 +111,7 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of encrypted parquet
     /// files, like get_metadata does for unencrypted ones.
     #[cfg(feature = "encryption")]
-    fn get_encrypted_metadata(
+    fn get_metadata_with_encryption(
         &mut self,
         file_decryption_properties: Option<FileDecryptionProperties>,
     ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
@@ -132,12 +132,12 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     }
 
     #[cfg(feature = "encryption")]
-    fn get_encrypted_metadata(
+    fn get_metadata_with_encryption(
         &mut self,
         file_decryption_properties: Option<FileDecryptionProperties>,
     ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         self.as_mut()
-            .get_encrypted_metadata(file_decryption_properties)
+            .get_metadata_with_encryption(file_decryption_properties)
     }
 }
 
@@ -159,7 +159,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     #[cfg(feature = "encryption")]
-    fn get_encrypted_metadata(
+    fn get_metadata_with_encryption(
         &mut self,
         file_decryption_properties: Option<FileDecryptionProperties>,
     ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
@@ -178,7 +178,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            let parquet_metadata_reader = ParquetMetaDataReader::decrypt_metadata(
+            let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata_with_encryption(
                 &buf,
                 footer.is_encrypted_footer(),
                 file_decryption_properties.as_ref(),
@@ -198,6 +198,13 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
+            #[cfg(not(feature = "encryption"))]
+            if footer.encrypted_footer {
+                return Err(general_err!(
+                    "Parquet file has an encrypted footer but the encryption feature is disabled"
+                ));
+            }
+
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
 
@@ -228,13 +235,10 @@ impl ArrowReaderMetadata {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
         #[cfg(feature = "encryption")]
-        let mut metadata = if options.file_decryption_properties.is_some() {
-            input
-                .get_encrypted_metadata(options.file_decryption_properties.clone())
-                .await?
-        } else {
-            input.get_metadata().await?
-        };
+        let mut metadata = input
+            .get_metadata_with_encryption(options.file_decryption_properties.clone())
+            .await?;
+
         #[cfg(not(feature = "encryption"))]
         let mut metadata = input.get_metadata().await?;
 
@@ -1210,11 +1214,11 @@ mod tests {
         }
 
         #[cfg(feature = "encryption")]
-        fn get_encrypted_metadata(
+        fn get_metadata_with_encryption(
             &mut self,
             _file_decryption_properties: Option<FileDecryptionProperties>,
         ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-            todo!("we don't test for decryption yet");
+            futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
     }
 
@@ -2703,5 +2707,37 @@ mod tests {
                 panic!("Expected ParquetError::NYI");
             }
         };
+    }
+
+    #[tokio::test]
+    #[cfg(not(feature = "encryption"))]
+    async fn test_decrypting_without_encryption_flag_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        let options = ArrowReaderOptions::new();
+        let result = ArrowReaderMetadata::load_async(&mut file, options).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but the encryption feature is disabled"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
+    async fn test_decrypting_without_decryption_properties_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let mut file = File::open(&path).await.unwrap();
+
+        let options = ArrowReaderOptions::new();
+        let result = ArrowReaderMetadata::load_async(&mut file, options).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but no decryption properties were provided"
+        );
     }
 }

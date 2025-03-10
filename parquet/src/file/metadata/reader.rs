@@ -85,7 +85,7 @@ pub struct ParquetMetaDataReader {
 /// This is parsed from the last 8 bytes of the Parquet file
 pub struct FooterTail {
     metadata_length: usize,
-    encrypted_footer: bool,
+    pub(crate) encrypted_footer: bool,
 }
 
 impl FooterTail {
@@ -569,13 +569,12 @@ impl ParquetMetaDataReader {
 
         let start = file_size - footer_metadata_len as u64;
         #[cfg(feature = "encryption")]
-        if self.file_decryption_properties.is_some() {
-            return Self::decrypt_metadata(
-                chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-                footer.is_encrypted_footer(),
-                self.file_decryption_properties.as_ref(),
-            );
-        }
+        return Self::decode_metadata_with_encryption(
+            chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
+            footer.is_encrypted_footer(),
+            self.file_decryption_properties.as_ref(),
+        );
+        #[cfg(not(feature = "encryption"))]
         Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
     }
 
@@ -692,7 +691,7 @@ impl ParquetMetaDataReader {
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
     #[cfg(feature = "encryption")]
-    pub(crate) fn decrypt_metadata(
+    pub(crate) fn decode_metadata_with_encryption(
         buf: &[u8],
         encrypted_footer: bool,
         file_decryption_properties: Option<&FileDecryptionProperties>,

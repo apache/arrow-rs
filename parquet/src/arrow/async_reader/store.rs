@@ -179,7 +179,7 @@ impl AsyncFileReader for ParquetObjectReader {
     }
 
     #[cfg(feature = "encryption")]
-    fn get_encrypted_metadata(
+    fn get_metadata_with_encryption(
         &mut self,
         _file_decryption_properties: Option<FileDecryptionProperties>,
     ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {

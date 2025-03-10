@@ -2028,6 +2028,38 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "encryption"))]
+    fn test_decrypting_without_encryption_flag_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let options = ArrowReaderOptions::default();
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but the encryption feature is disabled"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_decrypting_without_decryption_properties_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let options = ArrowReaderOptions::default();
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but no decryption properties were provided"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "encryption")]
     fn test_aes_ctr_encryption() {
         let testdata = arrow::util::test_util::parquet_test_data();
