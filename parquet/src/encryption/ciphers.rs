@@ -20,6 +20,7 @@ use crate::errors::Result;
 use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
+use crate::errors::ParquetError;
 
 const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
 const NONCE_LEN: usize = 12;
@@ -167,7 +168,7 @@ mod tests {
     fn test_round_trip() {
         let key = [0u8; 16];
         let mut encryptor = RingGcmBlockEncryptor::new(&key).unwrap();
-        let decryptor = RingGcmBlockDecryptor::new(&key);
+        let decryptor = RingGcmBlockDecryptor::new(&key).unwrap();
 
         let plaintext = b"hello, world!";
         let aad = b"some aad";
