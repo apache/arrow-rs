@@ -108,13 +108,15 @@ pub trait AsyncFileReader: Send {
     /// for caching, pre-fetching, catalog metadata, etc...
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 
-    /// Provides asynchronous access to the [`ParquetMetaData`] of encrypted parquet
-    /// files, like get_metadata does for unencrypted ones.
-    #[cfg(feature = "encryption")]
-    fn get_metadata_with_encryption(
-        &mut self,
-        file_decryption_properties: Option<FileDecryptionProperties>,
-    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
+    /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
+    /// allowing fine-grained control over how metadata is sourced, in particular allowing
+    /// for caching, pre-fetching, catalog metadata, decrypting, etc...
+    ///
+    /// By default calls `get_metadata()`
+    fn get_metadata_with_options<'a>(
+        &'a mut self,
+        options: &'a ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -131,13 +133,14 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_metadata()
     }
 
-    #[cfg(feature = "encryption")]
-    fn get_metadata_with_encryption(
-        &mut self,
-        file_decryption_properties: Option<FileDecryptionProperties>,
-    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        self.as_mut()
-            .get_metadata_with_encryption(file_decryption_properties)
+    fn get_metadata_with_options<'a>(
+        &'a mut self,
+        options: &'a ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        #[cfg(feature = "encryption")]
+        return self.as_mut().get_metadata_with_options(options);
+        #[cfg(not(feature = "encryption"))]
+        self.as_mut().get_metadata()
     }
 }
 
@@ -159,10 +162,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     #[cfg(feature = "encryption")]
-    fn get_metadata_with_encryption(
-        &mut self,
-        file_decryption_properties: Option<FileDecryptionProperties>,
-    ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+    fn get_metadata_with_options<'a>(
+        &'a mut self,
+        options: &'a ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
@@ -181,7 +184,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata_with_encryption(
                 &buf,
                 footer.is_encrypted_footer(),
-                file_decryption_properties.as_ref(),
+                options.file_decryption_properties.as_ref(),
             )?;
             Ok(Arc::new(parquet_metadata_reader))
         }
@@ -235,9 +238,7 @@ impl ArrowReaderMetadata {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
         #[cfg(feature = "encryption")]
-        let mut metadata = input
-            .get_metadata_with_encryption(options.file_decryption_properties.clone())
-            .await?;
+        let mut metadata = input.get_metadata_with_options(&options).await?;
 
         #[cfg(not(feature = "encryption"))]
         let mut metadata = input.get_metadata().await?;
@@ -1214,10 +1215,10 @@ mod tests {
         }
 
         #[cfg(feature = "encryption")]
-        fn get_metadata_with_encryption(
-            &mut self,
-            _file_decryption_properties: Option<FileDecryptionProperties>,
-        ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        fn get_metadata_with_options<'a>(
+            &'a mut self,
+            options: &'a ArrowReaderOptions,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
     }
