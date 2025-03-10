@@ -372,6 +372,16 @@ impl StructBuilder {
         self.field_builders[i].as_any_mut().downcast_mut::<T>()
     }
 
+    /// Returns a reference to field builders
+    pub fn field_builders(&self) -> &[Box<dyn ArrayBuilder>] {
+        &self.field_builders
+    }
+
+    /// Returns a mutable reference to field builders
+    pub fn field_builders_mut(&mut self) -> &mut [Box<dyn ArrayBuilder>] {
+        &mut self.field_builders
+    }
+
     /// Returns the number of fields for the struct this builder is building.
     pub fn num_fields(&self) -> usize {
         self.field_builders.len()
