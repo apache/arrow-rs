@@ -32,11 +32,51 @@ use serde::Serializer;
 #[derive(Debug, Clone, Default)]
 pub struct EncoderOptions {
     /// Whether to include nulls in the output or elide them.
-    pub explicit_nulls: bool,
+    explicit_nulls: bool,
     /// Whether to encode structs as JSON objects or JSON arrays of their values.
-    pub struct_mode: StructMode,
+    struct_mode: StructMode,
     /// An optional hook for customizing encoding behavior.
-    pub encoder_factory: Option<Arc<dyn EncoderFactory>>,
+    encoder_factory: Option<Arc<dyn EncoderFactory>>,
+}
+
+impl EncoderOptions {
+    /// Create a new EncoderOptions with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether to include nulls in the output or elide them.
+    pub fn with_explicit_nulls(mut self, explicit_nulls: bool) -> Self {
+        self.explicit_nulls = explicit_nulls;
+        self
+    }
+
+    /// Set whether to encode structs as JSON objects or JSON arrays of their values.
+    pub fn with_struct_mode(mut self, struct_mode: StructMode) -> Self {
+        self.struct_mode = struct_mode;
+        self
+    }
+
+    /// Set an optional hook for customizing encoding behavior.
+    pub fn with_encoder_factory(mut self, encoder_factory: Arc<dyn EncoderFactory>) -> Self {
+        self.encoder_factory = Some(encoder_factory);
+        self
+    }
+    
+    /// Get whether to include nulls in the output or elide them.
+    pub fn explicit_nulls(&self) -> bool {
+        self.explicit_nulls
+    }
+    
+    /// Get whether to encode structs as JSON objects or JSON arrays of their values.
+    pub fn struct_mode(&self) -> StructMode {
+        self.struct_mode
+    }
+    
+    /// Get the optional hook for customizing encoding behavior.
+    pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
+        self.encoder_factory.as_ref()
+    }
 }
 
 /// A trait to create custom encoders for specific data types.
@@ -93,7 +133,7 @@ pub fn make_encoder<'a>(
         }};
     }
 
-    if let Some(factory) = &options.encoder_factory {
+    if let Some(factory) = options.encoder_factory() {
         if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
             return Ok(encoder);
         }
@@ -172,8 +212,8 @@ pub fn make_encoder<'a>(
             let encoder = StructArrayEncoder{
                 encoders,
                 nulls: array.nulls(),
-                explicit_nulls: options.explicit_nulls,
-                struct_mode: options.struct_mode,
+                explicit_nulls: options.explicit_nulls(),
+                struct_mode: options.struct_mode(),
             };
             Box::new(encoder) as _
         }
@@ -653,7 +693,7 @@ impl<'a> MapEncoder<'a> {
             offsets: array.offsets().clone(),
             keys,
             values,
-            explicit_nulls: options.explicit_nulls,
+            explicit_nulls: options.explicit_nulls(),
             nulls,
         })
     }

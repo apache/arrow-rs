@@ -226,7 +226,7 @@ impl WriterBuilder {
 
     /// Returns `true` if this writer is configured to keep keys with null values.
     pub fn explicit_nulls(&self) -> bool {
-        self.0.explicit_nulls
+        self.0.explicit_nulls()
     }
 
     /// Set whether to keep keys with null values, or to omit writing them.
@@ -252,13 +252,13 @@ impl WriterBuilder {
     /// Default is to skip nulls (set to `false`). If `struct_mode == ListOnly`,
     /// nulls will be written explicitly regardless of this setting.
     pub fn with_explicit_nulls(mut self, explicit_nulls: bool) -> Self {
-        self.0.explicit_nulls = explicit_nulls;
+        self.0 = self.0.with_explicit_nulls(explicit_nulls);
         self
     }
 
     /// Returns if this writer is configured to write structs as JSON Objects or Arrays.
     pub fn struct_mode(&self) -> StructMode {
-        self.0.struct_mode
+        self.0.struct_mode()
     }
 
     /// Set the [`StructMode`] for the writer, which determines whether structs
@@ -267,7 +267,7 @@ impl WriterBuilder {
     /// `ListOnly`, nulls will be written explicitly regardless of the
     /// `explicit_nulls` setting.
     pub fn with_struct_mode(mut self, struct_mode: StructMode) -> Self {
-        self.0.struct_mode = struct_mode;
+        self.0 = self.0.with_struct_mode(struct_mode);
         self
     }
 
@@ -276,7 +276,7 @@ impl WriterBuilder {
     /// This can be used to override how some types are encoded or to provide
     /// a fallback for types that are not supported by the default encoder.
     pub fn with_encoder_factory(mut self, factory: Arc<dyn EncoderFactory>) -> Self {
-        self.0.encoder_factory = Some(factory);
+        self.0 = self.0.with_encoder_factory(factory);
         self
     }
 
