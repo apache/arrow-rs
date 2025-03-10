@@ -1192,27 +1192,11 @@ mod tests {
     use tempfile::tempfile;
     use tokio::fs::File;
 
-    #[allow(dead_code)]
     #[derive(Clone)]
     struct TestReader {
         data: Bytes,
         metadata: Arc<ParquetMetaData>,
         requests: Arc<Mutex<Vec<Range<usize>>>>,
-    }
-
-    #[cfg(feature = "encryption")]
-    impl TestReader {
-        async fn new(
-            data: Bytes,
-            metadata: Arc<ParquetMetaData>,
-            requests: Arc<Mutex<Vec<Range<usize>>>>,
-        ) -> Self {
-            Self {
-                data,
-                metadata,
-                requests,
-            }
-        }
     }
 
     impl AsyncFileReader for TestReader {
@@ -2526,12 +2510,12 @@ mod tests {
 
             let mut decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec());
 
-            if column_1_key.is_empty() {
+            if !column_1_key.is_empty() {
                 decryption_properties =
                     decryption_properties.with_column_key("double_field", column_1_key.to_vec());
             }
 
-            if column_2_key.is_empty() {
+            if !column_2_key.is_empty() {
                 decryption_properties =
                     decryption_properties.with_column_key("float_field", column_2_key.to_vec());
             }
@@ -2568,16 +2552,13 @@ mod tests {
         )
         .await;
 
-        // todo: should this be double_field?
         // Missing column key
-        check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+        check_for_error("Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong or missing?",
                         &path, footer_key, "".as_bytes(), column_2_key).await;
 
         // Too short column key
         check_for_error(
-            // todo: should report key length error
-            // "Parquet error: Failed to create AES key",
-            "Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+            "Parquet error: Failed to create AES key",
             &path,
             footer_key,
             "abc".as_bytes(),
@@ -2585,9 +2566,8 @@ mod tests {
         )
         .await;
 
-        // todo: should this be double_field?
         // Wrong column key
-        check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
+        check_for_error("Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong or missing?",
                         &path, footer_key, "1123456789012345".as_bytes(), column_2_key).await;
 
         // Mixed up keys
@@ -2672,7 +2652,9 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2687,7 +2669,9 @@ mod tests {
             .build()
             .unwrap();
 
-        verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        verify_encryption_test_file_read_async(&mut file, decryption_properties)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

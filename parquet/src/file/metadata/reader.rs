@@ -414,11 +414,6 @@ impl ParquetMetaDataReader {
         mut fetch: F,
         file_size: usize,
     ) -> Result<()> {
-        #[cfg(feature = "encryption")]
-        let (metadata, remainder) =
-            Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
-
-        #[cfg(not(feature = "encryption"))]
         let (metadata, remainder) =
             Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
 

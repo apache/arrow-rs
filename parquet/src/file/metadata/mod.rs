@@ -200,9 +200,10 @@ impl ParquetMetaData {
         }
     }
 
-    #[allow(missing_docs)]
+    /// Adds [`FileDecryptor`] to this metadata instance to enable decryption of
+    /// encrypted data.
     #[cfg(feature = "encryption")]
-    pub fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
+    pub(crate) fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
         self.file_decryptor = file_decryptor;
     }
 
@@ -234,7 +235,7 @@ impl ParquetMetaData {
 
     /// Returns file decryptor as reference.
     #[cfg(feature = "encryption")]
-    pub fn file_decryptor(&self) -> Option<&FileDecryptor> {
+    pub(crate) fn file_decryptor(&self) -> Option<&FileDecryptor> {
         self.file_decryptor.as_ref()
     }
 
@@ -625,7 +626,7 @@ impl RowGroupMetaData {
 
     /// Method to convert from encrypted Thrift.
     #[cfg(feature = "encryption")]
-    pub fn from_encrypted_thrift(
+    fn from_encrypted_thrift(
         schema_descr: SchemaDescPtr,
         mut rg: RowGroup,
         decryptor: Option<&FileDecryptor>,

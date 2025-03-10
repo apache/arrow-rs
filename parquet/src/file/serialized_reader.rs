@@ -581,7 +581,10 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
     /// Adds cryptographical information to the reader.
     #[cfg(feature = "encryption")]
-    pub fn with_crypto_context(mut self, crypto_context: Option<Arc<CryptoContext>>) -> Self {
+    pub(crate) fn with_crypto_context(
+        mut self,
+        crypto_context: Option<Arc<CryptoContext>>,
+    ) -> Self {
         self.crypto_context = crypto_context;
         self
     }

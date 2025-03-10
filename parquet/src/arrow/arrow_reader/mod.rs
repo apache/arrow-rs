@@ -738,12 +738,8 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
 
         #[cfg(feature = "encryption")]
-        {
-            let ret = Ok(ret.unwrap().with_crypto_context(crypto_context));
-            Some(ret.map(|x| Box::new(x) as _))
-        }
+        let ret = ret.map(|reader| reader.with_crypto_context(crypto_context));
 
-        #[cfg(not(feature = "encryption"))]
         Some(ret.map(|x| Box::new(x) as _))
     }
 }

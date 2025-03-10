@@ -53,7 +53,7 @@ pub(crate) struct CryptoContext {
 }
 
 impl CryptoContext {
-    pub fn new(
+    pub(crate) fn new(
         row_group_ordinal: usize,
         column_ordinal: usize,
         data_decryptor: Arc<dyn BlockDecryptor>,
@@ -71,7 +71,7 @@ impl CryptoContext {
         }
     }
 
-    pub fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
+    pub(crate) fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
         Self {
             row_group_ordinal: self.row_group_ordinal,
             column_ordinal: self.column_ordinal,
@@ -115,7 +115,7 @@ impl CryptoContext {
         )
     }
 
-    pub fn for_dictionary_page(&self) -> Self {
+    pub(crate) fn for_dictionary_page(&self) -> Self {
         Self {
             row_group_ordinal: self.row_group_ordinal,
             column_ordinal: self.column_ordinal,
@@ -127,15 +127,11 @@ impl CryptoContext {
         }
     }
 
-    pub fn data_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
+    pub(crate) fn data_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
         &self.data_decryptor
     }
 
-    pub fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
-        &self.metadata_decryptor
-    }
-
-    pub fn file_aad(&self) -> &Vec<u8> {
+    pub(crate) fn file_aad(&self) -> &Vec<u8> {
         &self.file_aad
     }
 }

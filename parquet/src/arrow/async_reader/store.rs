@@ -60,8 +60,6 @@ pub struct ParquetObjectReader {
     preload_column_index: bool,
     preload_offset_index: bool,
     runtime: Option<Handle>,
-    #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ParquetObjectReader {
@@ -76,8 +74,6 @@ impl ParquetObjectReader {
             preload_column_index: false,
             preload_offset_index: false,
             runtime: None,
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
         }
     }
 
@@ -185,7 +181,7 @@ impl AsyncFileReader for ParquetObjectReader {
     #[cfg(feature = "encryption")]
     fn get_encrypted_metadata(
         &mut self,
-        file_decryption_properties: Option<FileDecryptionProperties>,
+        _file_decryption_properties: Option<FileDecryptionProperties>,
     ) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let file_size = self.meta.size;
@@ -193,7 +189,6 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint)
-                .with_decryption_properties(file_decryption_properties.as_ref())
                 .load_and_finish(self, file_size)
                 .await?;
 
