@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::RecordBatch;
-use arrow_json::{LineDelimitedWriter, WriterBuilder};
 use arrow_json::writer::LineDelimited;
+use arrow_json::{LineDelimitedWriter, WriterBuilder};
 use arrow_schema::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 
 #[derive(Debug, Clone, Copy)]
@@ -86,10 +86,7 @@ impl TestCase {
     }
 }
 
-fn create_int32_array(
-    nulls: TestCaseNulls,
-    num_rows: TestCaseNumRows,
-) -> RecordBatch {
+fn create_int32_array(nulls: TestCaseNulls, num_rows: TestCaseNumRows) -> RecordBatch {
     let mut builder = Int32Builder::new();
     for _ in 0..num_rows.row_count() {
         match nulls {
@@ -98,14 +95,15 @@ fn create_int32_array(
         }
     }
     let array = builder.finish();
-    let schema = Arc::new(Schema::new(vec![Field::new("int", DataType::Int32, nulls.is_nullable())]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "int",
+        DataType::Int32,
+        nulls.is_nullable(),
+    )]));
     RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
 }
 
-fn create_string_array(
-    nulls: TestCaseNulls,
-    num_rows: TestCaseNumRows,
-) -> RecordBatch {
+fn create_string_array(nulls: TestCaseNulls, num_rows: TestCaseNumRows) -> RecordBatch {
     let mut rng = rand::thread_rng();
     let mut builder = StringBuilder::new();
     for _ in 0..num_rows.row_count() {
@@ -115,17 +113,18 @@ fn create_string_array(
         }
     }
     let array = builder.finish();
-    let schema = Arc::new(Schema::new(vec![Field::new("string", DataType::Utf8, nulls.is_nullable())]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "string",
+        DataType::Utf8,
+        nulls.is_nullable(),
+    )]));
     RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
 }
 
-fn crete_list_array(
-    nulls: TestCaseNulls,
-    num_rows: TestCaseNumRows,
-) -> RecordBatch {
+fn crete_list_array(nulls: TestCaseNulls, num_rows: TestCaseNumRows) -> RecordBatch {
     // create a list aray with 1-100 elements per row
     let mut rng = rand::thread_rng();
-    let mut builder= ListBuilder::new(Int32Builder::new());
+    let mut builder = ListBuilder::new(Int32Builder::new());
     for _ in 0..num_rows.row_count() {
         let len = rng.gen_range(1..100);
         for _ in 0..len {
@@ -137,7 +136,11 @@ fn crete_list_array(
         builder.append(true);
     }
     let array = builder.finish();
-    let schema = Arc::new(Schema::new(vec![Field::new_list("list", Field::new("item", DataType::Int32, true), nulls.is_nullable())]));
+    let schema = Arc::new(Schema::new(vec![Field::new_list(
+        "list",
+        Field::new("item", DataType::Int32, true),
+        nulls.is_nullable(),
+    )]));
     RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
 }
 
@@ -191,17 +194,17 @@ fn bench_json_encoding(c: &mut Criterion) {
                     || {
                         // Setup phase - create the writer with a new sink
                         let sink = std::io::sink();
-                        
+
                         if test_case.explicit_nulls {
                             // Create writer with explicit nulls
-                            let writer = WriterBuilder::new()
+                            
+                            WriterBuilder::new()
                                 .with_explicit_nulls(true)
-                                .build::<_, LineDelimited>(sink);
-                            writer
+                                .build::<_, LineDelimited>(sink)
                         } else {
                             // Create default writer
-                            let writer = LineDelimitedWriter::new(sink);
-                            writer
+                            
+                            LineDelimitedWriter::new(sink)
                         }
                     },
                     |writer| {
