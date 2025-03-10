@@ -96,3 +96,7 @@ arrow-string = { version = "54.3.0", path = "./arrow-string" }
 parquet = { version = "54.3.0", path = "./parquet", default-features = false }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
+
+[profile.profiling]
+inherits = "release"
+debug = true
