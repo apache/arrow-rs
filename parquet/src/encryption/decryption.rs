@@ -212,10 +212,7 @@ impl FileDecryptor {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
         // todo decr: if no key available yet (not set in properties, should be retrieved from metadata)
         let footer_decryptor = RingGcmBlockDecryptor::new(&decryption_properties.footer_key)
-            .map_err(|e| {
-                let msg = String::from("Invalid footer key. ")
-                    + e.to_string().replace("Parquet error: ", "").as_str();
-                ParquetError::General(msg)
+            .map_err(|e| general_err!("Invalid footer key. {}", e.to_string().replace("Parquet error: ", "")))?;
             })?;
 
         Ok(Self {

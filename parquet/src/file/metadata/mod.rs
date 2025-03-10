@@ -234,8 +234,8 @@ impl ParquetMetaData {
 
     /// Returns file decryptor as reference.
     #[cfg(feature = "encryption")]
-    pub fn file_decryptor(&self) -> &Option<FileDecryptor> {
-        &self.file_decryptor
+    pub fn file_decryptor(&self) -> Option<&FileDecryptor> {
+        self.file_decryptor.as_ref()
     }
 
     /// Returns number of row groups in this file.
