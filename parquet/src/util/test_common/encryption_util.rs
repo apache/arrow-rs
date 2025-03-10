@@ -19,7 +19,7 @@ use crate::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
 use crate::arrow::ParquetRecordBatchStreamBuilder;
-use crate::encryption::decryption::FileDecryptionProperties;
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::ParquetError;
 use crate::file::metadata::FileMetaData;
 use arrow_array::cast::AsArray;

@@ -24,7 +24,7 @@ use tokio::runtime::Handle;
 
 use crate::arrow::async_reader::AsyncFileReader;
 #[cfg(feature = "encryption")]
-use crate::encryption::decryption::FileDecryptionProperties;
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 

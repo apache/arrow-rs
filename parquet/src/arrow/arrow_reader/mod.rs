@@ -33,7 +33,7 @@ use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
-use crate::encryption::decryption::{CryptoContext, FileDecryptionProperties};
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -1019,7 +1019,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96Type,
     };
     #[cfg(feature = "encryption")]
-    use crate::encryption::decryption::FileDecryptionProperties;
+    use crate::encryption::decrypt::FileDecryptionProperties;
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;

@@ -62,7 +62,7 @@ mod metadata;
 pub use metadata::*;
 
 #[cfg(feature = "encryption")]
-use crate::encryption::decryption::{CryptoContext, FileDecryptionProperties};
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 
 #[cfg(feature = "object_store")]
 mod store;

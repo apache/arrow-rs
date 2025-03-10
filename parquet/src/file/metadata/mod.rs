@@ -98,7 +98,7 @@ mod writer;
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    decryption::FileDecryptor,
+    decrypt::FileDecryptor,
     modules::{create_module_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
