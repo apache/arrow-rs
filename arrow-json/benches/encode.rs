@@ -144,10 +144,6 @@ fn crete_list_array(nulls: TestCaseNulls, num_rows: TestCaseNumRows) -> RecordBa
     RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
 }
 
-//------------------------------------------------------------------------------
-// Benchmark Definition
-//------------------------------------------------------------------------------
-
 fn bench_json_encoding(c: &mut Criterion) {
     // Define all test cases
     let mut cases = vec![];
