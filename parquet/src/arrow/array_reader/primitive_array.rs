@@ -23,11 +23,10 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::Decimal256Array;
 use arrow_array::{
     builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array,
-    UInt64Array,
+    Decimal256Array, Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
 use arrow_data::ArrayDataBuilder;
@@ -210,7 +209,29 @@ where
         // These are:
         // - date64: cast int32 to date32, then date32 to date64.
         // - decimal: cast int32 to decimal, int64 to decimal
+        //
+        // Some Parquet writers do not properly write UINT_8 and UINT_16 types
+        // (they will emit a negative 32-bit integer in some cases). To handle
+        // these incorrect files, we need to do some explicit casting to unsigned,
+        // rather than relying on num::cast::cast as used by arrow-cast (it will not
+        // cast a negative INT32 to UINT8 or UINT16).
         let array = match target_type {
+            ArrowType::UInt8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u8) as UInt8Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u16) as UInt16Array;
+                Arc::new(array) as ArrayRef
+            }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
