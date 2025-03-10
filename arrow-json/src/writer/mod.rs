@@ -112,7 +112,8 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullBufferExt};
+use encoder::NullBufferExt;
+pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -367,8 +368,6 @@ where
         ));
 
         let encoder = make_encoder(&field, &array, &self.options)?;
-        // This call has dynamic dispatch, but it's only called once per batch
-        // rather than in the inner loop below
         let nulls = encoder.nulls();
 
         // Validate that the root is not nullable
