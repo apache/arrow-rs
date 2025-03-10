@@ -40,11 +40,6 @@ pub struct EncoderOptions {
 }
 
 impl EncoderOptions {
-    /// Create a new EncoderOptions with default values.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set whether to include nulls in the output or elide them.
     pub fn with_explicit_nulls(mut self, explicit_nulls: bool) -> Self {
         self.explicit_nulls = explicit_nulls;
