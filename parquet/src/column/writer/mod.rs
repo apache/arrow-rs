@@ -1542,9 +1542,7 @@ mod tests {
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
     #[cfg(feature = "encryption")]
-    use crate::encryption::{
-        decryption::FileDecryptionProperties, encrypt::FileEncryptionProperties,
-    };
+    use crate::encryption::{decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties};
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
@@ -2126,8 +2124,6 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
-            #[cfg(feature = "encryption")]
-            None,
         )
         .unwrap();
 
@@ -2180,8 +2176,6 @@ mod tests {
             r.rows_written as usize,
             None,
             Arc::new(props),
-            #[cfg(feature = "encryption")]
-            None,
         )
         .unwrap();
 
@@ -2317,8 +2311,6 @@ mod tests {
                 r.rows_written as usize,
                 None,
                 Arc::new(props),
-                #[cfg(feature = "encryption")]
-                None,
             )
             .unwrap(),
         );
@@ -3543,7 +3535,7 @@ mod tests {
         let _file_metadata = writer.close().unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_key(b"a".to_vec(), column_key.key().clone())
+            .with_column_key("a", column_key.key().clone())
             .build()
             .unwrap();
         let options = ArrowReaderOptions::default()
@@ -3955,8 +3947,6 @@ mod tests {
                 result.rows_written as usize,
                 None,
                 Arc::new(props),
-                #[cfg(feature = "encryption")]
-                None,
             )
             .unwrap(),
         );
