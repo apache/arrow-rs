@@ -14,6 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use std::io::Write;
+use std::sync::Arc;
 
 use crate::StructMode;
 use arrow_array::cast::AsArray;
@@ -25,43 +27,76 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use half::f16;
 use lexical_core::FormattedSize;
 use serde::Serializer;
-use std::io::Write;
 
+/// Configuration options for the JSON encoder.
 #[derive(Debug, Clone, Default)]
 pub struct EncoderOptions {
+    /// Whether to include nulls in the output or elide them.
     pub explicit_nulls: bool,
+    /// Whether to encode structs as JSON objects or JSON arrays of their values.
     pub struct_mode: StructMode,
+    /// An optional hook for customizing encoding behavior.
+    pub encoder_factory: Option<Arc<dyn EncoderFactory>>,
+}
+
+/// A trait to create custom encoders for specific data types.
+///
+/// This allows overriding the default encoders for specific data types,
+/// or adding new encoders for custom data types.
+pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
+    /// Make an encoder that if returned runs before all of the default encoders.
+    /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
+    ///
+    /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
+    /// will be called again for the keys and values of the dictionary, at which point the field type will still be the outer dictionary type but the
+    /// array will have a different type.
+    /// For example, `field`` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
+    fn make_default_encoder<'a>(
+        &self,
+        _field: &'a FieldRef,
+        _array: &'a dyn Array,
+        _options: &'a EncoderOptions,
+    ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
+        Ok(None)
+    }
 }
 
 /// A trait to format array values as JSON values
 ///
 /// Nullability is handled by the caller to allow encoding nulls implicitly, i.e. `{}` instead of `{"a": null}`
 pub trait Encoder {
-    /// Encode the non-null value at index `idx` to `out`
+    /// Encode the non-null value at index `idx` to `out`.
     ///
-    /// The behaviour is unspecified if `idx` corresponds to a null index
+    /// The behaviour is unspecified if `idx` corresponds to a null index.
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>);
+
+    /// Returns the nullability buffer for this encoder, if any.
+    ///
+    /// This replaces the `is_null` and `has_nulls` methods by returning the underlying
+    /// buffer state directly, avoiding dynamic dispatch for null checks.
+    fn nulls(&self) -> Option<NullBuffer>;
 }
 
+/// Creates an encoder for the given array and field.
+///
+/// This first calls the EncoderFactory if one is provided, and then falls back to the default encoders.
 pub fn make_encoder<'a>(
+    field: &'a FieldRef,
     array: &'a dyn Array,
-    options: &EncoderOptions,
+    options: &'a EncoderOptions,
 ) -> Result<Box<dyn Encoder + 'a>, ArrowError> {
-    let (encoder, nulls) = make_encoder_impl(array, options)?;
-    assert!(nulls.is_none(), "root cannot be nullable");
-    Ok(encoder)
-}
-
-fn make_encoder_impl<'a>(
-    array: &'a dyn Array,
-    options: &EncoderOptions,
-) -> Result<(Box<dyn Encoder + 'a>, Option<NullBuffer>), ArrowError> {
     macro_rules! primitive_helper {
         ($t:ty) => {{
             let array = array.as_primitive::<$t>();
             let nulls = array.nulls().cloned();
-            (Box::new(PrimitiveEncoder::new(array)) as _, nulls)
+            Box::new(PrimitiveEncoder::new(array, nulls))
         }};
+    }
+
+    if let Some(factory) = &options.encoder_factory {
+        if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
+            return Ok(encoder);
+        }
     }
 
     Ok(downcast_integer! {
@@ -71,80 +106,81 @@ fn make_encoder_impl<'a>(
         DataType::Float64 => primitive_helper!(Float64Type),
         DataType::Boolean => {
             let array = array.as_boolean();
-            (Box::new(BooleanEncoder(array)), array.nulls().cloned())
+            Box::new(BooleanEncoder(array))
         }
-        DataType::Null => (Box::new(NullEncoder), array.logical_nulls()),
+        DataType::Null => Box::new(NullEncoder),
         DataType::Utf8 => {
             let array = array.as_string::<i32>();
-            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
+            Box::new(StringEncoder(array))
         }
         DataType::LargeUtf8 => {
             let array = array.as_string::<i64>();
-            (Box::new(StringEncoder(array)) as _, array.nulls().cloned())
+            Box::new(StringEncoder(array)) as _
         }
         DataType::Utf8View => {
             let array = array.as_string_view();
-            (Box::new(StringViewEncoder(array)) as _, array.nulls().cloned())
+            Box::new(StringViewEncoder(array)) as _
         }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
-            (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
+            Box::new(ListEncoder::try_new(field, array, options)?) as _
         }
         DataType::LargeList(_) => {
             let array = array.as_list::<i64>();
-            (Box::new(ListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
+            Box::new(ListEncoder::try_new(field, array, options)?) as _
         }
         DataType::FixedSizeList(_, _) => {
             let array = array.as_fixed_size_list();
-            (Box::new(FixedSizeListEncoder::try_new(array, options)?) as _, array.nulls().cloned())
+            Box::new(FixedSizeListEncoder::try_new(field, array, options)?) as _
         }
 
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
-            array => (Box::new(DictionaryEncoder::try_new(array, options)?) as _,  array.logical_nulls()),
+            array => Box::new(DictionaryEncoder::try_new(field, array, options)?) as _,
             _ => unreachable!()
         }
 
         DataType::Map(_, _) => {
             let array = array.as_map();
-            (Box::new(MapEncoder::try_new(array, options)?) as _,  array.nulls().cloned())
+            Box::new(MapEncoder::try_new(field, array, options)?) as _
         }
 
         DataType::FixedSizeBinary(_) => {
             let array = array.as_fixed_size_binary();
-            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+            Box::new(BinaryEncoder::new(array)) as _
         }
 
         DataType::Binary => {
             let array: &BinaryArray = array.as_binary();
-            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+            Box::new(BinaryEncoder::new(array)) as _
         }
 
         DataType::LargeBinary => {
             let array: &LargeBinaryArray = array.as_binary();
-            (Box::new(BinaryEncoder::new(array)) as _, array.nulls().cloned())
+            Box::new(BinaryEncoder::new(array)) as _
         }
 
         DataType::Struct(fields) => {
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
-                let (encoder, nulls) = make_encoder_impl(array, options)?;
+                let encoder = make_encoder(field, array, options)?;
                 Ok(FieldEncoder{
                     field: field.clone(),
-                    encoder, nulls
+                    encoder,
                 })
             }).collect::<Result<Vec<_>, ArrowError>>()?;
 
             let encoder = StructArrayEncoder{
                 encoders,
+                nulls: array.nulls(),
                 explicit_nulls: options.explicit_nulls,
                 struct_mode: options.struct_mode,
             };
-            (Box::new(encoder) as _, array.nulls().cloned())
+            Box::new(encoder) as _
         }
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
             let options = FormatOptions::new().with_display_error(true);
-            let formatter = ArrayFormatter::try_new(array, &options)?;
-            (Box::new(RawArrayFormatter(formatter)) as _, array.nulls().cloned())
+            let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?, array.nulls());
+            Box::new(RawArrayFormatter(formatter))
         }
         d => match d.is_temporal() {
             true => {
@@ -154,9 +190,13 @@ fn make_encoder_impl<'a>(
                 // may need to be revisited
                 let options = FormatOptions::new().with_display_error(true);
                 let formatter = ArrayFormatter::try_new(array, &options)?;
-                (Box::new(formatter) as _, array.nulls().cloned())
+                let formatter = JsonArrayFormatter::new(formatter, array.nulls());
+                Box::new(formatter)
             }
-            false => return Err(ArrowError::InvalidArgumentError(format!("JSON Writer does not support data type: {d}"))),
+            false => return Err(ArrowError::JsonError(format!(
+                "Unsupported data type for JSON encoding: {:?}",
+                d
+            )))
         }
     })
 }
@@ -169,11 +209,11 @@ fn encode_string(s: &str, out: &mut Vec<u8>) {
 struct FieldEncoder<'a> {
     field: FieldRef,
     encoder: Box<dyn Encoder + 'a>,
-    nulls: Option<NullBuffer>,
 }
 
 struct StructArrayEncoder<'a> {
     encoders: Vec<FieldEncoder<'a>>,
+    nulls: Option<&'a NullBuffer>,
     explicit_nulls: bool,
     struct_mode: StructMode,
 }
@@ -196,9 +236,18 @@ impl Encoder for StructArrayEncoder<'_> {
         let mut is_first = true;
         // Nulls can only be dropped in explicit mode
         let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
-        for field_encoder in &mut self.encoders {
-            let is_null = is_some_and(field_encoder.nulls.as_ref(), |n| n.is_null(idx));
-            if drop_nulls && is_null {
+
+        // Collect all the field nulls buffers up front to avoid dynamic dispatch in the loop
+        // This creates a temporary Vec, but avoids repeated virtual calls which should be a net win
+        let field_nulls: Vec<_> = self
+            .encoders
+            .iter()
+            .map(|field_encoder| field_encoder.encoder.nulls())
+            .collect();
+
+        for (i, field_encoder) in self.encoders.iter_mut().enumerate() {
+            let is_null = field_nulls[i].is_null(idx);
+            if is_null && drop_nulls {
                 continue;
             }
 
@@ -212,15 +261,20 @@ impl Encoder for StructArrayEncoder<'_> {
                 out.push(b':');
             }
 
-            match is_null {
-                true => out.extend_from_slice(b"null"),
-                false => field_encoder.encoder.encode(idx, out),
+            if is_null {
+                out.extend_from_slice(b"null");
+            } else {
+                field_encoder.encoder.encode(idx, out);
             }
         }
         match self.struct_mode {
             StructMode::ObjectOnly => out.push(b'}'),
             StructMode::ListOnly => out.push(b']'),
         }
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.cloned()
     }
 }
 
@@ -290,15 +344,41 @@ impl PrimitiveEncode for f16 {
     }
 }
 
+/// Extension trait providing null-related methods to `Option<NullBuffer>`
+pub trait NullBufferExt {
+    /// Check if the value at `idx` is null.
+    fn is_null(&self, idx: usize) -> bool;
+
+    /// Check if this buffer contains any nulls.
+    fn has_nulls(&self) -> bool;
+}
+
+impl NullBufferExt for Option<NullBuffer> {
+    fn is_null(&self, idx: usize) -> bool {
+        self.as_ref()
+            .map(|nulls| nulls.is_null(idx))
+            .unwrap_or_default()
+    }
+
+    fn has_nulls(&self) -> bool {
+        self.is_some()
+    }
+}
+
 struct PrimitiveEncoder<N: PrimitiveEncode> {
     values: ScalarBuffer<N>,
+    nulls: Option<NullBuffer>,
     buffer: N::Buffer,
 }
 
 impl<N: PrimitiveEncode> PrimitiveEncoder<N> {
-    fn new<P: ArrowPrimitiveType<Native = N>>(array: &PrimitiveArray<P>) -> Self {
+    fn new<P: ArrowPrimitiveType<Native = N>>(
+        array: &PrimitiveArray<P>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
         Self {
             values: array.values().clone(),
+            nulls,
             buffer: N::init_buffer(),
         }
     }
@@ -307,6 +387,10 @@ impl<N: PrimitiveEncode> PrimitiveEncoder<N> {
 impl<N: PrimitiveEncode> Encoder for PrimitiveEncoder<N> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.extend_from_slice(self.values[idx].encode(&mut self.buffer));
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -319,6 +403,10 @@ impl Encoder for BooleanEncoder<'_> {
             false => out.extend_from_slice(b"false"),
         }
     }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
+    }
 }
 
 struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
@@ -326,6 +414,10 @@ struct StringEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 impl<O: OffsetSizeTrait> Encoder for StringEncoder<'_, O> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
 
@@ -335,20 +427,26 @@ impl Encoder for StringViewEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
     }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
+    }
 }
 
 struct ListEncoder<'a, O: OffsetSizeTrait> {
     offsets: OffsetBuffer<O>,
-    nulls: Option<NullBuffer>,
     encoder: Box<dyn Encoder + 'a>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a GenericListArray<O>,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
-        let (encoder, nulls) = make_encoder_impl(array.values().as_ref(), options)?;
+        let nulls = array.logical_nulls();
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
             offsets: array.offsets().clone(),
             encoder,
@@ -362,43 +460,46 @@ impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
         let end = self.offsets[idx + 1].as_usize();
         let start = self.offsets[idx].as_usize();
         out.push(b'[');
-        match self.nulls.as_ref() {
-            Some(n) => (start..end).for_each(|idx| {
-                if idx != start {
-                    out.push(b',')
-                }
-                match n.is_null(idx) {
-                    true => out.extend_from_slice(b"null"),
-                    false => self.encoder.encode(idx, out),
-                }
-            }),
-            None => (start..end).for_each(|idx| {
-                if idx != start {
-                    out.push(b',')
-                }
+
+        let item_nulls = self.encoder.nulls();
+
+        for idx in start..end {
+            if idx != start {
+                out.push(b',')
+            }
+
+            if item_nulls.is_null(idx) {
+                out.extend_from_slice(b"null");
+            } else {
                 self.encoder.encode(idx, out);
-            }),
+            }
         }
         out.push(b']');
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
 struct FixedSizeListEncoder<'a> {
     value_length: usize,
-    nulls: Option<NullBuffer>,
     encoder: Box<dyn Encoder + 'a>,
+    nulls: Option<NullBuffer>,
 }
 
 impl<'a> FixedSizeListEncoder<'a> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a FixedSizeListArray,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
-        let (encoder, nulls) = make_encoder_impl(array.values().as_ref(), options)?;
+        let nulls = array.logical_nulls();
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
         Ok(Self {
             encoder,
-            nulls,
             value_length: array.value_length().as_usize(),
+            nulls,
         })
     }
 }
@@ -408,42 +509,45 @@ impl Encoder for FixedSizeListEncoder<'_> {
         let start = idx * self.value_length;
         let end = start + self.value_length;
         out.push(b'[');
-        match self.nulls.as_ref() {
-            Some(n) => (start..end).for_each(|idx| {
-                if idx != start {
-                    out.push(b',');
-                }
-                if n.is_null(idx) {
-                    out.extend_from_slice(b"null");
-                } else {
-                    self.encoder.encode(idx, out);
-                }
-            }),
-            None => (start..end).for_each(|idx| {
-                if idx != start {
-                    out.push(b',');
-                }
+
+        let item_nulls = self.encoder.nulls();
+
+        for idx in start..end {
+            if idx != start {
+                out.push(b',');
+            }
+            if item_nulls.is_null(idx) {
+                out.extend_from_slice(b"null");
+            } else {
                 self.encoder.encode(idx, out);
-            }),
+            }
         }
         out.push(b']');
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
 struct DictionaryEncoder<'a, K: ArrowDictionaryKeyType> {
     keys: ScalarBuffer<K::Native>,
+    nulls: Option<NullBuffer>,
     encoder: Box<dyn Encoder + 'a>,
 }
 
 impl<'a, K: ArrowDictionaryKeyType> DictionaryEncoder<'a, K> {
     fn try_new(
+        field: &'a FieldRef,
         array: &'a DictionaryArray<K>,
-        options: &EncoderOptions,
+        options: &'a EncoderOptions,
     ) -> Result<Self, ArrowError> {
-        let (encoder, _) = make_encoder_impl(array.values().as_ref(), options)?;
+        let nulls = array.logical_nulls();
+        let encoder = make_encoder(field, array.values().as_ref(), options)?;
 
         Ok(Self {
             keys: array.keys().values().clone(),
+            nulls,
             encoder,
         })
     }
@@ -453,24 +557,48 @@ impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(self.keys[idx].as_usize(), out)
     }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
+    }
 }
 
-impl Encoder for ArrayFormatter<'_> {
+/// A newtype wrapper around [`ArrayFormatter`] to keep our usage of it private and not implement `Encoder` for the public type
+struct JsonArrayFormatter<'a> {
+    formatter: ArrayFormatter<'a>,
+    nulls: Option<&'a NullBuffer>,
+}
+
+impl<'a> JsonArrayFormatter<'a> {
+    fn new(formatter: ArrayFormatter<'a>, nulls: Option<&'a NullBuffer>) -> Self {
+        Self { formatter, nulls }
+    }
+}
+
+impl Encoder for JsonArrayFormatter<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         out.push(b'"');
         // Should be infallible
         // Note: We are making an assumption that the formatter does not produce characters that require escaping
-        let _ = write!(out, "{}", self.value(idx));
+        let _ = write!(out, "{}", self.formatter.value(idx));
         out.push(b'"')
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.cloned()
     }
 }
 
-/// A newtype wrapper around [`ArrayFormatter`] that skips surrounding the value with `"`
-struct RawArrayFormatter<'a>(ArrayFormatter<'a>);
+/// A newtype wrapper around [`JsonArrayFormatter`] that skips surrounding the value with `"`
+struct RawArrayFormatter<'a>(JsonArrayFormatter<'a>);
 
 impl Encoder for RawArrayFormatter<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
-        let _ = write!(out, "{}", self.0.value(idx));
+        let _ = write!(out, "{}", self.0.formatter.value(idx));
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls.cloned()
     }
 }
 
@@ -480,20 +608,30 @@ impl Encoder for NullEncoder {
     fn encode(&mut self, _idx: usize, _out: &mut Vec<u8>) {
         unreachable!()
     }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        // Indicate that all values in this encoder are null
+        Some(NullBuffer::new_null(64)) // Create a buffer larger than needed to accommodate any index
+    }
 }
 
 struct MapEncoder<'a> {
     offsets: OffsetBuffer<i32>,
     keys: Box<dyn Encoder + 'a>,
     values: Box<dyn Encoder + 'a>,
-    value_nulls: Option<NullBuffer>,
     explicit_nulls: bool,
+    nulls: Option<NullBuffer>,
 }
 
 impl<'a> MapEncoder<'a> {
-    fn try_new(array: &'a MapArray, options: &EncoderOptions) -> Result<Self, ArrowError> {
+    fn try_new(
+        field: &'a FieldRef,
+        array: &'a MapArray,
+        options: &'a EncoderOptions,
+    ) -> Result<Self, ArrowError> {
         let values = array.values();
         let keys = array.keys();
+        let nulls = array.logical_nulls();
 
         if !matches!(keys.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
             return Err(ArrowError::JsonError(format!(
@@ -502,11 +640,11 @@ impl<'a> MapEncoder<'a> {
             )));
         }
 
-        let (keys, key_nulls) = make_encoder_impl(keys, options)?;
-        let (values, value_nulls) = make_encoder_impl(values, options)?;
+        let keys = make_encoder(field, keys, options)?;
+        let values = make_encoder(field, values, options)?;
 
         // We sanity check nulls as these are currently not enforced by MapArray (#1697)
-        if is_some_and(key_nulls, |x| x.null_count() != 0) {
+        if keys.nulls().is_some() {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray keys".to_string(),
             ));
@@ -522,8 +660,8 @@ impl<'a> MapEncoder<'a> {
             offsets: array.offsets().clone(),
             keys,
             values,
-            value_nulls,
             explicit_nulls: options.explicit_nulls,
+            nulls,
         })
     }
 }
@@ -536,8 +674,11 @@ impl Encoder for MapEncoder<'_> {
         let mut is_first = true;
 
         out.push(b'{');
+
+        let value_nulls = self.values.nulls();
+
         for idx in start..end {
-            let is_null = is_some_and(self.value_nulls.as_ref(), |n| n.is_null(idx));
+            let is_null = value_nulls.is_null(idx);
             if is_null && !self.explicit_nulls {
                 continue;
             }
@@ -550,12 +691,17 @@ impl Encoder for MapEncoder<'_> {
             self.keys.encode(idx, out);
             out.push(b':');
 
-            match is_null {
-                true => out.extend_from_slice(b"null"),
-                false => self.values.encode(idx, out),
+            if is_null {
+                out.extend_from_slice(b"null");
+            } else {
+                self.values.encode(idx, out);
             }
         }
         out.push(b'}');
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.nulls.clone()
     }
 }
 
@@ -583,5 +729,9 @@ where
             write!(out, "{byte:02x}").unwrap();
         }
         out.push(b'"');
+    }
+
+    fn nulls(&self) -> Option<NullBuffer> {
+        self.0.nulls().cloned()
     }
 }
