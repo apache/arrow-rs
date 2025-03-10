@@ -2514,7 +2514,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let _ = verify_encryption_test_file_read_async(&mut file, decryption_properties).await;
+        verify_encryption_test_file_read_async(&mut file, decryption_properties).await.unwrap();
     }
 
     #[tokio::test]
