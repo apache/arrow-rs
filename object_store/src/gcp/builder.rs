@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{HttpConnector, ReqwestConnector, TokenCredentialProvider};
+use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
@@ -427,7 +427,9 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
-    /// Overrides the [`HttpConnector`], by default uses [`ReqwestConnector`]
+    /// The [`HttpConnector`] to use
+    ///
+    /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
     pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
         self.http_connector = Some(Arc::new(connector));
         self
@@ -442,9 +444,7 @@ impl GoogleCloudStorageBuilder {
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
 
-        let http = self
-            .http_connector
-            .unwrap_or_else(|| Arc::new(ReqwestConnector::default()));
+        let http = http_connector(self.http_connector)?;
 
         // First try to initialize from the service account information.
         let service_account_credentials =

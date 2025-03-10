@@ -150,7 +150,7 @@ use super::ByteArrayType;
 /// "CrumpleFacedFish"      │  16  │ Crum │  0   │ 103  │─ ─│─ ─ ─ ┘           │eFa│
 ///                         └──────┴──────┴──────┴──────┘                      │ced│
 ///                         ┌──────┬────────────────────┐   └ ─ ─ ─ ─ ─ ─ ─ ─ ▶│Fis│
-/// "LavaMonster"           │  11  │   LavaMonster\0    │                      │hWa│
+/// "LavaMonster"           │  11  │   LavaMonster      │                      │hWa│
 ///                         └──────┴────────────────────┘               offset │sIn│
 ///                                                                       115  │Tow│
 ///                                                                            │nTo│
@@ -232,6 +232,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         buffers: Vec<Buffer>,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(views, buffers, nulls);
+        }
+
         Self {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),

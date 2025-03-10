@@ -58,12 +58,16 @@ mod client;
 mod credential;
 mod dynamo;
 mod precondition;
+
+#[cfg(not(target_arch = "wasm32"))]
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use resolve::resolve_bucket_region;
 
 /// This struct is used to maintain the URI path encoding

@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_integration_test"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow = { workspace = true }
@@ -40,5 +42,3 @@ hex = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false, features = ["rc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 num = { version = "0.4", default-features = false, features = ["std"] }
-
-[build-dependencies]
