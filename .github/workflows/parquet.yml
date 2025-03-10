@@ -111,6 +111,8 @@ jobs:
         run: cargo check -p parquet --all-targets --all-features
       - name: Check compilation  --all-targets --no-default-features --features json
         run: cargo check -p parquet --all-targets --no-default-features --features json
+      - name: Check compilation --no-default-features --features encryption --features async
+        run: cargo check -p parquet --no-default-features --features encryption --features async
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:

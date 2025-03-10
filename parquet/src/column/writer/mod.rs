@@ -32,6 +32,8 @@ use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
@@ -1199,6 +1201,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
         }
 
+        #[cfg(feature = "encryption")]
+        if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
+            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                encryption_properties,
+                &self.descr,
+            ));
+        }
+
         let metadata = builder.build()?;
         Ok(metadata)
     }
@@ -1523,26 +1533,35 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
-        schema::parser::parse_message_type,
+    #[cfg(feature = "encryption")]
+    use crate::arrow::arrow_reader::{
+        ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
     };
-    use core::str;
-    use rand::distributions::uniform::SampleUniform;
-    use std::{fs::File, sync::Arc};
-
     use crate::column::{
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    #[cfg(feature = "encryption")]
+    use crate::encryption::{decrypt::FileDecryptionProperties, encrypt::FileEncryptionProperties};
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::random_numbers_range;
+    use crate::{
+        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
+        schema::parser::parse_message_type,
+    };
 
     use super::*;
+    #[cfg(feature = "encryption")]
+    use crate::encryption::encrypt::EncryptionKey;
+    #[cfg(feature = "encryption")]
+    use arrow_array::cast::AsArray;
+    use core::str;
+    use rand::distributions::uniform::SampleUniform;
+    use std::{fs::File, sync::Arc};
 
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
@@ -3371,6 +3390,193 @@ mod tests {
             stats.max_value,
             Some([128, 128, 128, 128, 128, 128, 128, 129].to_vec())
         );
+    }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_write_encrypted_column() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = vec![ByteArray::from(b"parquet".to_vec()); 7];
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+
+        let num_row_groups = 3;
+        let num_batches = 3;
+        let rows_per_batch = def_levels.len();
+        let valid_rows_per_batch = def_levels.iter().filter(|&level| *level > 0).count();
+
+        let file: File = tempfile::tempfile().unwrap();
+
+        let builder = WriterProperties::builder();
+        let footer_key: &[u8] = "0123456789012345".as_bytes();
+        let file_encryption_properties =
+            FileEncryptionProperties::builder(footer_key.to_vec()).build();
+
+        let props = Arc::new(
+            builder
+                .with_file_encryption_properties(file_encryption_properties)
+                .set_data_page_row_count_limit(rows_per_batch)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        for _ in 0..num_row_groups {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+
+            for _ in 0..num_batches {
+                col_writer
+                    .typed::<ByteArrayType>()
+                    .write_batch(&data, Some(&def_levels), None)
+                    .unwrap();
+            }
+
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+
+        let _file_metadata = writer.close().unwrap();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let record_reader = builder.build().unwrap();
+
+        assert_eq!(
+            file_metadata.num_rows(),
+            (num_row_groups * num_batches * rows_per_batch) as i64
+        );
+        assert_eq!(file_metadata.schema_descr().num_columns(), 1);
+
+        assert_eq!(metadata.metadata.num_row_groups(), num_row_groups);
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 1);
+            assert_eq!(rg.num_rows(), (num_batches * rows_per_batch) as i64);
+        });
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let string_col = batch.column(0).as_string_opt::<i32>().unwrap();
+
+            let mut valid_count = 0;
+            for x in string_col.iter().flatten() {
+                valid_count += 1;
+                assert_eq!(x, "parquet");
+            }
+            assert_eq!(
+                valid_count,
+                valid_rows_per_batch * num_batches * num_row_groups
+            );
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+    }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn test_write_encrypted_column_non_uniform() {
+        let message_type = "
+            message test_schema {
+                OPTIONAL BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = vec![ByteArray::from(b"parquet".to_vec()); 7];
+        let def_levels = [1, 1, 1, 1, 0, 1, 0, 1, 0, 1];
+
+        let num_row_groups = 3;
+        let num_batches = 3;
+        let rows_per_batch = def_levels.len();
+        let valid_rows_per_batch = def_levels.iter().filter(|&level| *level > 0).count();
+
+        let file: File = tempfile::tempfile().unwrap();
+
+        let builder = WriterProperties::builder();
+        let footer_key: &[u8] = "0123456789012345".as_bytes();
+        let column_key = EncryptionKey::new(b"1234567890123450".to_vec());
+        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("a".into(), column_key.clone())
+            .build();
+
+        let props = Arc::new(
+            builder
+                .with_file_encryption_properties(file_encryption_properties)
+                .set_data_page_row_count_limit(rows_per_batch)
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        for _ in 0..num_row_groups {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+
+            for _ in 0..num_batches {
+                col_writer
+                    .typed::<ByteArrayType>()
+                    .write_batch(&data, Some(&def_levels), None)
+                    .unwrap();
+            }
+
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+
+        let _file_metadata = writer.close().unwrap();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("a", column_key.key().clone())
+            .build()
+            .unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let record_reader = builder.build().unwrap();
+
+        assert_eq!(
+            file_metadata.num_rows(),
+            (num_row_groups * num_batches * rows_per_batch) as i64
+        );
+        assert_eq!(file_metadata.schema_descr().num_columns(), 1);
+
+        assert_eq!(metadata.metadata.num_row_groups(), num_row_groups);
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 1);
+            assert_eq!(rg.num_rows(), (num_batches * rows_per_batch) as i64);
+        });
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let string_col = batch.column(0).as_string_opt::<i32>().unwrap();
+
+            let mut valid_count = 0;
+            for x in string_col.iter().flatten() {
+                valid_count += 1;
+                assert_eq!(x, "parquet");
+            }
+            assert_eq!(
+                valid_count,
+                valid_rows_per_batch * num_batches * num_row_groups
+            );
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
     }
 
     #[test]

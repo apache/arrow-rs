@@ -15,17 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-pub mod bit_util;
-mod bit_pack;
-pub(crate) mod interner;
+//! Encryption implementation specific to Parquet, as described
+//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-pub(crate) mod never;
-#[cfg(any(test, feature = "test_common"))]
-pub(crate) mod test_common;
-pub mod utf8;
-
-#[cfg(any(test, feature = "test_common"))]
-pub use self::test_common::page_util::{
-    DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
-};
+pub(crate) mod ciphers;
+pub(crate) mod decrypt;
+pub(crate) mod encrypt;
+pub(crate) mod modules;
+pub(crate) mod page_encryptor;

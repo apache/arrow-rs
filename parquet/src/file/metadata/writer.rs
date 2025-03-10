@@ -15,15 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::{encrypt_object, encrypt_object_to_vec, FileEncryptor};
+#[cfg(feature = "encryption")]
+use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
+#[cfg(feature = "encryption")]
+use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
-use crate::file::writer::TrackedWrite;
-use crate::file::PARQUET_MAGIC;
+use crate::file::writer::{get_file_magic, TrackedWrite};
+#[cfg(feature = "encryption")]
+use crate::format::{AesGcmV1, ColumnChunk, ColumnCryptoMetaData, EncryptionAlgorithm};
 use crate::format::{ColumnIndex, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
+#[cfg(not(feature = "encryption"))]
+use crate::util::never::Never;
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
@@ -41,6 +50,10 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
     writer_version: i32,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
+    #[cfg(not(feature = "encryption"))]
+    file_encryptor: Option<Never>,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -57,8 +70,24 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 if let Some(offset_index) = &offset_indexes[row_group_idx][column_idx] {
                     let start_offset = self.buf.bytes_written();
-                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                    offset_index.write_to_out_protocol(&mut protocol)?;
+                    match self.file_encryptor.as_ref() {
+                        #[cfg(feature = "encryption")]
+                        Some(file_encryptor) => {
+                            write_column_object_with_encryption(
+                                offset_index,
+                                &mut self.buf,
+                                file_encryptor,
+                                column_metadata,
+                                ModuleType::OffsetIndex,
+                                row_group_idx,
+                                column_idx,
+                            )?;
+                        }
+                        _ => {
+                            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                            offset_index.write_to_out_protocol(&mut protocol)?;
+                        }
+                    }
                     let end_offset = self.buf.bytes_written();
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
@@ -82,8 +111,24 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
                     let start_offset = self.buf.bytes_written();
-                    let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-                    column_index.write_to_out_protocol(&mut protocol)?;
+                    match self.file_encryptor.as_ref() {
+                        #[cfg(feature = "encryption")]
+                        Some(file_encryptor) => {
+                            write_column_object_with_encryption(
+                                column_index,
+                                &mut self.buf,
+                                file_encryptor,
+                                column_metadata,
+                                ModuleType::ColumnIndex,
+                                row_group_idx,
+                                column_idx,
+                            )?;
+                        }
+                        _ => {
+                            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                            column_index.write_to_out_protocol(&mut protocol)?;
+                        }
+                    }
                     let end_offset = self.buf.bytes_written();
                     // set offset and index for offset index
                     column_metadata.column_index_offset = Some(start_offset as i64);
@@ -119,9 +164,15 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // But for simplicity we always set this field.
         let column_orders = Some(column_orders);
 
+        let row_groups = match self.file_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(file_encryptor) => Self::encrypt_row_groups(self.row_groups, file_encryptor)?,
+            _ => self.row_groups,
+        };
+
         let file_metadata = crate::format::FileMetaData {
             num_rows,
-            row_groups: self.row_groups,
+            row_groups,
             key_value_metadata: self.key_value_metadata.clone(),
             version: self.writer_version,
             schema: types::to_thrift(self.schema.as_ref())?,
@@ -133,17 +184,41 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // Write file metadata
         let start_pos = self.buf.bytes_written();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
-            file_metadata.write_to_out_protocol(&mut protocol)?;
+        match self.file_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
+                // First write FileCryptoMetadata
+                let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
+                let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                crypto_metadata.write_to_out_protocol(&mut protocol)?;
+
+                // Then write encrypted footer
+                let aad = create_footer_aad(file_encryptor.file_aad())?;
+                let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                encrypt_object(&file_metadata, &mut encryptor, &mut self.buf, &aad)?;
+            }
+            _ => {
+                let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                file_metadata.write_to_out_protocol(&mut protocol)?;
+            }
         }
+
         let end_pos = self.buf.bytes_written();
 
         // Write footer
         let metadata_len = (end_pos - start_pos) as u32;
 
         self.buf.write_all(&metadata_len.to_le_bytes())?;
-        self.buf.write_all(&PARQUET_MAGIC)?;
+        #[cfg(feature = "encryption")]
+        let magic = get_file_magic(
+            self.file_encryptor
+                .as_ref()
+                .map(|encryptor| encryptor.properties()),
+        );
+        #[cfg(not(feature = "encryption"))]
+        let magic = get_file_magic();
+        self.buf.write_all(magic)?;
+
         Ok(file_metadata)
     }
 
@@ -165,6 +240,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             key_value_metadata: None,
             created_by,
             writer_version,
+            file_encryptor: Default::default(),
         }
     }
 
@@ -181,6 +257,96 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     pub fn with_key_value_metadata(mut self, key_value_metadata: Vec<KeyValue>) -> Self {
         self.key_value_metadata = Some(key_value_metadata);
         self
+    }
+
+    #[cfg(feature = "encryption")]
+    pub fn with_file_encryptor(mut self, file_encryptor: Option<Arc<FileEncryptor>>) -> Self {
+        self.file_encryptor = file_encryptor;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    fn file_crypto_metadata(
+        file_encryptor: &Arc<FileEncryptor>,
+    ) -> Result<crate::format::FileCryptoMetaData> {
+        let properties = file_encryptor.properties();
+        let supply_aad_prefix = properties
+            .aad_prefix()
+            .map(|_| !properties.store_aad_prefix());
+        let encryption_algorithm = AesGcmV1 {
+            aad_prefix: properties.aad_prefix().cloned(),
+            aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
+            supply_aad_prefix,
+        };
+
+        Ok(crate::format::FileCryptoMetaData {
+            encryption_algorithm: EncryptionAlgorithm::AESGCMV1(encryption_algorithm),
+            key_metadata: properties.footer_key_metadata().cloned(),
+        })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn encrypt_row_groups(
+        row_groups: Vec<RowGroup>,
+        file_encryptor: &Arc<FileEncryptor>,
+    ) -> Result<Vec<RowGroup>> {
+        row_groups
+            .into_iter()
+            .enumerate()
+            .map(|(rg_idx, mut rg)| {
+                let cols: Result<Vec<ColumnChunk>> = rg
+                    .columns
+                    .into_iter()
+                    .enumerate()
+                    .map(|(col_idx, c)| {
+                        Self::encrypt_column_chunk(c, file_encryptor, rg_idx, col_idx)
+                    })
+                    .collect();
+                rg.columns = cols?;
+                Ok(rg)
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Apply column encryption to column chunk metadata
+    fn encrypt_column_chunk(
+        mut column_chunk: ColumnChunk,
+        file_encryptor: &Arc<FileEncryptor>,
+        row_group_index: usize,
+        column_index: usize,
+    ) -> Result<ColumnChunk> {
+        // Column crypto metadata should have already been set when the column was created.
+        // Here we apply the encryption by encrypting the column metadata if required.
+        match column_chunk.crypto_metadata.as_ref() {
+            None => {}
+            Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                // When uniform encryption is used the footer is already encrypted,
+                // so the column chunk does not need additional encryption.
+            }
+            Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(col_key)) => {
+                let column_path = col_key.path_in_schema.join(".");
+                let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
+                let meta_data = column_chunk
+                    .meta_data
+                    .take()
+                    .ok_or_else(|| general_err!("Column metadata not set for encryption"))?;
+                let aad = create_module_aad(
+                    file_encryptor.file_aad(),
+                    ModuleType::ColumnMetaData,
+                    row_group_index,
+                    column_index,
+                    None,
+                )?;
+                let ciphertext = encrypt_object_to_vec(&meta_data, &mut column_encryptor, &aad)?;
+
+                column_chunk.encrypted_column_metadata = Some(ciphertext);
+                debug_assert!(column_chunk.meta_data.is_none());
+            }
+        }
+        // TODO: In plaintext footer mode, the plaintext metadata is retained but with statistics stripped out
+        // (for both uniform and per-column encryption).
+        Ok(column_chunk)
     }
 }
 
@@ -376,5 +542,47 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                 .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
                 .collect()
         }
+    }
+}
+
+#[cfg(feature = "encryption")]
+fn write_column_object_with_encryption<T, W>(
+    object: &T,
+    sink: &mut W,
+    file_encryptor: &FileEncryptor,
+    column_metadata: &ColumnChunk,
+    module_type: ModuleType,
+    row_group_index: usize,
+    column_index: usize,
+) -> Result<()>
+where
+    T: TSerializable,
+    W: Write,
+{
+    let column_path = column_metadata
+        .meta_data
+        .as_ref()
+        .ok_or_else(|| {
+            general_err!(
+                "Column metadata not set for column {} when encrypting object",
+                column_index
+            )
+        })?
+        .path_in_schema
+        .join(".");
+    if file_encryptor.is_column_encrypted(&column_path) {
+        let aad = create_module_aad(
+            file_encryptor.file_aad(),
+            module_type,
+            row_group_index,
+            column_index,
+            None,
+        )?;
+        let mut encryptor = file_encryptor.get_column_encryptor(&column_path)?;
+        encrypt_object(object, &mut encryptor, sink, &aad)
+    } else {
+        let mut protocol = TCompactOutputProtocol::new(sink);
+        object.write_to_out_protocol(&mut protocol)?;
+        Ok(())
     }
 }
