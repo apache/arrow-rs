@@ -345,12 +345,9 @@ impl PrimitiveEncode for f16 {
 }
 
 /// Extension trait providing null-related methods to `Option<NullBuffer>`
-pub trait NullBufferExt {
+pub(crate) trait NullBufferExt {
     /// Check if the value at `idx` is null.
     fn is_null(&self, idx: usize) -> bool;
-
-    /// Check if this buffer contains any nulls.
-    fn has_nulls(&self) -> bool;
 }
 
 impl NullBufferExt for Option<NullBuffer> {
@@ -358,10 +355,6 @@ impl NullBufferExt for Option<NullBuffer> {
         self.as_ref()
             .map(|nulls| nulls.is_null(idx))
             .unwrap_or_default()
-    }
-
-    fn has_nulls(&self) -> bool {
-        self.is_some()
     }
 }
 
