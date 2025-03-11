@@ -174,8 +174,8 @@ impl DecryptionPropertiesBuilder {
         })
     }
 
-    pub fn with_aad_prefix(mut self, value: &str) -> Self {
-        self.aad_prefix = Some(value.as_bytes().to_vec());
+    pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
+        self.aad_prefix = Some(value);
         self
     }
 

@@ -1893,7 +1893,7 @@ mod tests {
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field", column_1_key.to_vec())
             .with_column_key("float_field", column_2_key.to_vec())
-            .with_aad_prefix("tester")
+            .with_aad_prefix("tester".as_bytes().to_vec())
             .build()
             .unwrap();
 
@@ -1903,7 +1903,7 @@ mod tests {
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field", column_1_key.to_vec())
             .with_column_key("float_field", column_2_key.to_vec())
-            .with_aad_prefix("wrong_aad_prefix")
+            .with_aad_prefix("wrong_aad_prefix".as_bytes().to_vec())
             .build()
             .unwrap();
 

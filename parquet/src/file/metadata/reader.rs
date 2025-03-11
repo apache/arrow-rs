@@ -85,7 +85,7 @@ pub struct ParquetMetaDataReader {
 /// This is parsed from the last 8 bytes of the Parquet file
 pub struct FooterTail {
     metadata_length: usize,
-    pub(crate) encrypted_footer: bool,
+    encrypted_footer: bool,
 }
 
 impl FooterTail {
