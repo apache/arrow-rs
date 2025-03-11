@@ -19,5 +19,5 @@
 //! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
 pub(crate) mod ciphers;
-pub(crate) mod decrypt;
+pub mod decrypt;
 pub(crate) mod modules;
