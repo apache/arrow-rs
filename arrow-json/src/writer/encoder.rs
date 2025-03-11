@@ -57,17 +57,17 @@ impl EncoderOptions {
         self.encoder_factory = Some(encoder_factory);
         self
     }
-    
+
     /// Get whether to include nulls in the output or elide them.
     pub fn explicit_nulls(&self) -> bool {
         self.explicit_nulls
     }
-    
+
     /// Get whether to encode structs as JSON objects or JSON arrays of their values.
     pub fn struct_mode(&self) -> StructMode {
         self.struct_mode
     }
-    
+
     /// Get the optional hook for customizing encoding behavior.
     pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
         self.encoder_factory.as_ref()

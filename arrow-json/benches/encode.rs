@@ -193,13 +193,13 @@ fn bench_json_encoding(c: &mut Criterion) {
 
                         if test_case.explicit_nulls {
                             // Create writer with explicit nulls
-                            
+
                             WriterBuilder::new()
                                 .with_explicit_nulls(true)
                                 .build::<_, LineDelimited>(sink)
                         } else {
                             // Create default writer
-                            
+
                             LineDelimitedWriter::new(sink)
                         }
                     },
