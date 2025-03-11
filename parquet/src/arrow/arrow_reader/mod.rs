@@ -1889,7 +1889,7 @@ mod tests {
         let column_1_key = "1234567890123450".as_bytes();
         let column_2_key = "1234567890123451".as_bytes();
 
-        // Provided AAD prefix overrides the one stored in the file
+        // Can read successfully when providing the correct AAD prefix
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field", column_1_key.to_vec())
             .with_column_key("float_field", column_2_key.to_vec())
@@ -1917,7 +1917,7 @@ mod tests {
             "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
         );
 
-        // Using wrong AAD prefix stored in the file should fail
+        // Not providing any AAD prefix should fail as it isn't stored in the file
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
             .with_column_key("double_field", column_1_key.to_vec())
             .with_column_key("float_field", column_2_key.to_vec())
