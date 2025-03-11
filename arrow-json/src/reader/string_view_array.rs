@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Array;
 use arrow_array::builder::GenericByteViewBuilder;
 use arrow_array::types::StringViewType;
+use arrow_array::Array;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
@@ -96,20 +96,20 @@ impl ArrayDecoder for StringViewArrayDecoder {
                 TapeElement::I64(high) if coerce => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
                         let val = ((high as i64) << 32) | (low as u32) as i64;
-                        builder.append_value(&val.to_string());
+                        builder.append_value(val.to_string());
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I32(n) if coerce => {
-                    builder.append_value(&n.to_string());
+                    builder.append_value(n.to_string());
                 }
                 TapeElement::F32(n) if coerce => {
-                    builder.append_value(&n.to_string());
+                    builder.append_value(n.to_string());
                 }
                 TapeElement::F64(high) if coerce => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let val = f64::from_bits(((high as u64) << 32) | low as u64);
-                        builder.append_value(&val.to_string());
+                        builder.append_value(val.to_string());
                     }
                     _ => unreachable!(),
                 },
