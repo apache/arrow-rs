@@ -34,7 +34,7 @@ pub fn create_footer_aad(file_aad: &[u8]) -> crate::errors::Result<Vec<u8>> {
 pub(crate) fn create_module_aad(
     file_aad: &[u8],
     module_type: ModuleType,
-    row_group_ordinal: usize,
+    row_group_idx: usize,
     column_ordinal: usize,
     page_ordinal: Option<usize>,
 ) -> crate::errors::Result<Vec<u8>> {
@@ -47,11 +47,11 @@ pub(crate) fn create_module_aad(
         return Ok(aad);
     }
 
-    if row_group_ordinal > i16::MAX as usize {
+    if row_group_idx > i16::MAX as usize {
         return Err(general_err!(
             "Encrypted parquet files can't have more than {} row groups: {}",
             i16::MAX,
-            row_group_ordinal
+            row_group_idx
         ));
     }
     if column_ordinal > i16::MAX as usize {
@@ -68,7 +68,7 @@ pub(crate) fn create_module_aad(
         let mut aad = Vec::with_capacity(file_aad.len() + 5);
         aad.extend_from_slice(file_aad);
         aad.extend_from_slice(module_buf.as_ref());
-        aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
+        aad.extend_from_slice((row_group_idx as i16).to_le_bytes().as_ref());
         aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
         return Ok(aad);
     }
@@ -87,7 +87,7 @@ pub(crate) fn create_module_aad(
     let mut aad = Vec::with_capacity(file_aad.len() + 7);
     aad.extend_from_slice(file_aad);
     aad.extend_from_slice(module_buf.as_ref());
-    aad.extend_from_slice((row_group_ordinal as i16).to_le_bytes().as_ref());
+    aad.extend_from_slice((row_group_idx as i16).to_le_bytes().as_ref());
     aad.extend_from_slice((column_ordinal as i16).to_le_bytes().as_ref());
     aad.extend_from_slice((page_ordinal as i16).to_le_bytes().as_ref());
     Ok(aad)

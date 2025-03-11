@@ -40,7 +40,7 @@ pub fn read_and_decrypt<T: Read>(
 // decrypt parquet modules (data pages, dictionary pages, etc.).
 #[derive(Debug, Clone)]
 pub(crate) struct CryptoContext {
-    pub(crate) row_group_ordinal: usize,
+    pub(crate) row_group_idx: usize,
     pub(crate) column_ordinal: usize,
     pub(crate) page_ordinal: Option<usize>,
     pub(crate) dictionary_page: bool,
@@ -54,14 +54,14 @@ pub(crate) struct CryptoContext {
 
 impl CryptoContext {
     pub(crate) fn new(
-        row_group_ordinal: usize,
+        row_group_idx: usize,
         column_ordinal: usize,
         data_decryptor: Arc<dyn BlockDecryptor>,
         metadata_decryptor: Arc<dyn BlockDecryptor>,
         file_aad: Vec<u8>,
     ) -> Self {
         Self {
-            row_group_ordinal,
+            row_group_idx,
             column_ordinal,
             page_ordinal: None,
             dictionary_page: false,
@@ -73,7 +73,7 @@ impl CryptoContext {
 
     pub(crate) fn with_page_ordinal(&self, page_ordinal: usize) -> Self {
         Self {
-            row_group_ordinal: self.row_group_ordinal,
+            row_group_idx: self.row_group_idx,
             column_ordinal: self.column_ordinal,
             page_ordinal: Some(page_ordinal),
             dictionary_page: false,
@@ -93,7 +93,7 @@ impl CryptoContext {
         create_module_aad(
             self.file_aad(),
             module_type,
-            self.row_group_ordinal,
+            self.row_group_idx,
             self.column_ordinal,
             self.page_ordinal,
         )
@@ -109,7 +109,7 @@ impl CryptoContext {
         create_module_aad(
             self.file_aad(),
             module_type,
-            self.row_group_ordinal,
+            self.row_group_idx,
             self.column_ordinal,
             self.page_ordinal,
         )
@@ -117,7 +117,7 @@ impl CryptoContext {
 
     pub(crate) fn for_dictionary_page(&self) -> Self {
         Self {
-            row_group_ordinal: self.row_group_ordinal,
+            row_group_idx: self.row_group_idx,
             column_ordinal: self.column_ordinal,
             page_ordinal: self.page_ordinal,
             dictionary_page: true,

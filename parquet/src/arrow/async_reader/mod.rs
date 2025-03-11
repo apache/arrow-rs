@@ -52,7 +52,7 @@ use crate::bloom_filter::{
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::file::FOOTER_SIZE;
@@ -636,15 +636,13 @@ where
             .map(|x| x[row_group_idx].as_slice());
 
         let mut row_group = InMemoryRowGroup {
-            metadata: meta,
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
             #[cfg(feature = "encryption")]
-            row_group_ordinal: row_group_idx,
-            #[cfg(feature = "encryption")]
-            parquet_metadata: self.metadata.clone(),
+            row_group_idx,
+            metadata: self.metadata.as_ref(),
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -926,14 +924,12 @@ where
 
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup<'a> {
-    metadata: &'a RowGroupMetaData,
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
     #[cfg(feature = "encryption")]
-    row_group_ordinal: usize,
-    #[cfg(feature = "encryption")]
-    parquet_metadata: Arc<ParquetMetaData>,
+    row_group_idx: usize,
+    metadata: &'a ParquetMetaData,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -944,6 +940,7 @@ impl InMemoryRowGroup<'_> {
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
     ) -> Result<()> {
+        let metadata = self.metadata.row_group(self.row_group_idx);
         if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
@@ -952,7 +949,7 @@ impl InMemoryRowGroup<'_> {
             let fetch_ranges = self
                 .column_chunks
                 .iter()
-                .zip(self.metadata.columns())
+                .zip(metadata.columns())
                 .enumerate()
                 .filter(|&(idx, (chunk, _chunk_meta))| {
                     chunk.is_none() && projection.leaf_included(idx)
@@ -991,7 +988,7 @@ impl InMemoryRowGroup<'_> {
                     }
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: self.metadata.column(idx).byte_range().1 as usize,
+                        length: metadata.column(idx).byte_range().1 as usize,
                         data: offsets.into_iter().zip(chunks.into_iter()).collect(),
                     }))
                 }
@@ -1003,7 +1000,7 @@ impl InMemoryRowGroup<'_> {
                 .enumerate()
                 .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
                 .map(|(idx, _chunk)| {
-                    let column = self.metadata.column(idx);
+                    let column = metadata.column(idx);
                     let (start, length) = column.byte_range();
                     start as usize..(start + length) as usize
                 })
@@ -1018,7 +1015,7 @@ impl InMemoryRowGroup<'_> {
 
                 if let Some(data) = chunk_data.next() {
                     *chunk = Some(Arc::new(ColumnChunkData::Dense {
-                        offset: self.metadata.column(idx).byte_range().0 as usize,
+                        offset: metadata.column(idx).byte_range().0 as usize,
                         data,
                     }));
                 }
@@ -1037,9 +1034,9 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
         let crypto_context =
-            if let Some(file_decryptor) = &self.parquet_metadata.clone().file_decryptor().clone() {
+            if let Some(file_decryptor) = self.metadata.clone().file_decryptor().clone() {
                 let column_name = &self
-                    .parquet_metadata
+                    .metadata
                     .clone()
                     .file_metadata()
                     .schema_descr()
@@ -1052,7 +1049,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                         file_decryptor.get_column_metadata_decryptor(column_name.name())?;
 
                     let crypto_context = CryptoContext::new(
-                        self.row_group_ordinal,
+                        self.row_group_idx,
                         i,
                         data_decryptor,
                         metadata_decryptor,
@@ -1076,9 +1073,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
+                let metadata = self.metadata.row_group(self.row_group_idx);
                 let page_reader = SerializedPageReader::new(
                     data.clone(),
-                    self.metadata.column(i),
+                    metadata.column(i),
                     self.row_count,
                     page_locations,
                 )?;
