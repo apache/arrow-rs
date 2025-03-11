@@ -561,7 +561,7 @@ impl ParquetMetaDataReader {
             return Err(ParquetError::NeedMoreData(footer_metadata_len));
         }
         #[cfg(not(feature = "encryption"))]
-        if footer.encrypted_footer {
+        if footer.is_encrypted_footer() {
             return Err(general_err!(
                 "Parquet file has an encrypted footer but the encryption feature is disabled"
             ));

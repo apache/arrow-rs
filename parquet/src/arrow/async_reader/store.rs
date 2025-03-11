@@ -253,7 +253,7 @@ mod tests {
         let options =
             ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
         let mut binding = ParquetObjectReader::new(store, meta);
-        let binding = binding.get_metadata_with_options(&options);
+        let _binding = binding.get_metadata_with_options(&options);
 
         // todo: this should pass
         // let object_reader = binding.await.unwrap();

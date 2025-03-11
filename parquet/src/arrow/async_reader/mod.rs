@@ -161,7 +161,6 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         .boxed()
     }
 
-    #[cfg(feature = "encryption")]
     fn get_metadata_with_options<'a>(
         &'a mut self,
         options: &'a ArrowReaderOptions,
@@ -202,7 +201,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
             #[cfg(not(feature = "encryption"))]
-            if footer.encrypted_footer {
+            if footer.is_encrypted_footer() {
                 return Err(general_err!(
                     "Parquet file has an encrypted footer but the encryption feature is disabled"
                 ));
@@ -927,7 +926,6 @@ struct InMemoryRowGroup<'a> {
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
-    #[cfg(feature = "encryption")]
     row_group_idx: usize,
     metadata: &'a ParquetMetaData,
 }
@@ -1033,35 +1031,34 @@ impl RowGroups for InMemoryRowGroup<'_> {
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
-        let crypto_context =
-            if let Some(file_decryptor) = self.metadata.clone().file_decryptor().clone() {
-                let column_name = &self
-                    .metadata
-                    .clone()
-                    .file_metadata()
-                    .schema_descr()
-                    .column(i);
+        let crypto_context = if let Some(file_decryptor) = self.metadata.clone().file_decryptor() {
+            let column_name = &self
+                .metadata
+                .clone()
+                .file_metadata()
+                .schema_descr()
+                .column(i);
 
-                if file_decryptor.is_column_encrypted(column_name.name()) {
-                    let data_decryptor =
-                        file_decryptor.get_column_data_decryptor(column_name.name())?;
-                    let metadata_decryptor =
-                        file_decryptor.get_column_metadata_decryptor(column_name.name())?;
+            if file_decryptor.is_column_encrypted(column_name.name()) {
+                let data_decryptor =
+                    file_decryptor.get_column_data_decryptor(column_name.name())?;
+                let metadata_decryptor =
+                    file_decryptor.get_column_metadata_decryptor(column_name.name())?;
 
-                    let crypto_context = CryptoContext::new(
-                        self.row_group_idx,
-                        i,
-                        data_decryptor,
-                        metadata_decryptor,
-                        file_decryptor.file_aad().clone(),
-                    );
-                    Some(Arc::new(crypto_context))
-                } else {
-                    None
-                }
+                let crypto_context = CryptoContext::new(
+                    self.row_group_idx,
+                    i,
+                    data_decryptor,
+                    metadata_decryptor,
+                    file_decryptor.file_aad().clone(),
+                );
+                Some(Arc::new(crypto_context))
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -1212,7 +1209,6 @@ mod tests {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
 
-        #[cfg(feature = "encryption")]
         fn get_metadata_with_options<'a>(
             &'a mut self,
             options: &'a ArrowReaderOptions,
