@@ -154,6 +154,7 @@ use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
+use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
@@ -167,6 +168,7 @@ mod primitive_array;
 mod schema;
 mod serializer;
 mod string_array;
+mod string_view_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
@@ -732,6 +734,7 @@ fn make_decoder(
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
+        DataType::Utf8View => Ok(Box::new(StringViewArrayDecoder::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
         DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
@@ -892,6 +895,43 @@ mod tests {
         assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
         assert!(col1.is_null(3));
         assert!(col1.is_null(4));
+
+        let col2 = batches[0].column(1).as_string::<i64>();
+        assert_eq!(col2.null_count(), 1);
+        assert_eq!(col2.value(0), "2");
+        assert_eq!(col2.value(1), "shoo");
+        assert_eq!(col2.value(2), "\t😁foo");
+        assert!(col2.is_null(3));
+        assert_eq!(col2.value(4), "");
+    }
+
+    #[test]
+    fn test_string_with_uft8view() {
+        let buf = r#"
+        {"a": "1", "b": "2"}
+        {"a": "hello", "b": "shoo"}
+        {"b": "\t😁foo", "a": "\nfoobar\ud83d\ude00\u0061\u0073\u0066\u0067\u00FF"}
+
+        {"b": null}
+        {"b": "", "a": null}
+
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8View, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_string_view();
+        assert_eq!(col1.null_count(), 2);
+        assert_eq!(col1.value(0), "1");
+        assert_eq!(col1.value(1), "hello");
+        assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
+        assert!(col1.is_null(3));
+        assert!(col1.is_null(4));
+        assert_eq!(col1.data_type(), &DataType::Utf8View);
 
         let col2 = batches[0].column(1).as_string::<i64>();
         assert_eq!(col2.null_count(), 1);
