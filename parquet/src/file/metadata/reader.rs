@@ -414,8 +414,9 @@ impl ParquetMetaDataReader {
         mut fetch: F,
         file_size: usize,
     ) -> Result<()> {
-        let (metadata, remainder) =
-            Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
+        let (metadata, remainder) = self
+            .load_metadata(&mut fetch, file_size, self.get_prefetch_size())
+            .await?;
 
         self.metadata = Some(metadata);
 
@@ -560,22 +561,12 @@ impl ParquetMetaDataReader {
         if footer_metadata_len > file_size as usize {
             return Err(ParquetError::NeedMoreData(footer_metadata_len));
         }
-        #[cfg(not(feature = "encryption"))]
-        if footer.is_encrypted_footer() {
-            return Err(general_err!(
-                "Parquet file has an encrypted footer but the encryption feature is disabled"
-            ));
-        }
 
         let start = file_size - footer_metadata_len as u64;
-        #[cfg(feature = "encryption")]
-        return Self::decode_metadata_with_encryption(
+        self.decode_footer_metadata(
             chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-            footer.is_encrypted_footer(),
-            self.file_decryption_properties.as_ref(),
-        );
-        #[cfg(not(feature = "encryption"))]
-        Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
+            &footer,
+        )
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -593,6 +584,7 @@ impl ParquetMetaDataReader {
 
     #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_metadata<F: MetadataFetch>(
+        &self,
         fetch: &mut F,
         file_size: usize,
         prefetch: usize,
@@ -635,12 +627,12 @@ impl ParquetMetaDataReader {
         if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            Ok((Self::decode_metadata(&meta)?, None))
+            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             Ok((
-                Self::decode_metadata(slice)?,
+                self.decode_footer_metadata(slice, &footer)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             ))
         }
@@ -681,17 +673,50 @@ impl ParquetMetaDataReader {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
 
-    /// Decodes [`ParquetMetaData`] from the provided encrypted bytes.
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Typically, this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec].
+    ///
+    /// This method handles using either decode_footer of
+    /// decode_metadata_with_encryption depending on whether the encryption
+    /// feature is enabled.
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    pub(crate) fn decode_footer_metadata(
+        &self,
+        buf: &[u8],
+        footer_tail: &FooterTail,
+    ) -> Result<ParquetMetaData> {
+        #[cfg(feature = "encryption")]
+        let result = Self::decode_metadata_with_encryption(
+            buf,
+            footer_tail.is_encrypted_footer(),
+            self.file_decryption_properties.as_ref(),
+        );
+        #[cfg(not(feature = "encryption"))]
+        let result = {
+            if footer_tail.is_encrypted_footer() {
+                Err(general_err!("Parquet error: Parquet file has an encrypted footer but the encryption feature is disabled"))
+            } else {
+                Self::decode_metadata(buf)
+            }
+        };
+        result
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
     ///
     /// Typically this is used to decode the metadata from the end of a parquet
     /// file. The format of `buf` is the Thrift compact binary protocol, as specified
-    /// by the [Parquet Spec]. Buffer can is encrypted with AES GCM or AES CTR
+    /// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
     /// ciphers as specfied in the [Parquet Encryption Spec].
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
     #[cfg(feature = "encryption")]
-    pub(crate) fn decode_metadata_with_encryption(
+    fn decode_metadata_with_encryption(
         buf: &[u8],
         encrypted_footer: bool,
         file_decryption_properties: Option<&FileDecryptionProperties>,

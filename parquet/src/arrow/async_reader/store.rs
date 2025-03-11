@@ -176,7 +176,6 @@ impl AsyncFileReader for ParquetObjectReader {
         })
     }
 
-    #[cfg(feature = "encryption")]
     fn get_metadata_with_options<'a>(
         &'a mut self,
         options: &'a ArrowReaderOptions,
@@ -186,10 +185,13 @@ impl AsyncFileReader for ParquetObjectReader {
             let metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
-                .with_prefetch_hint(self.metadata_size_hint)
-                .with_decryption_properties(options.file_decryption_properties.as_ref())
-                .load_and_finish(self, file_size)
-                .await?;
+                .with_prefetch_hint(self.metadata_size_hint);
+
+            #[cfg(feature = "encryption")]
+            let metadata =
+                metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+
+            let metadata = metadata.load_and_finish(self, file_size).await?;
 
             Ok(Arc::new(metadata))
         })
@@ -252,19 +254,19 @@ mod tests {
             .unwrap();
         let options =
             ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-        let mut binding = ParquetObjectReader::new(store, meta);
-        let _binding = binding.get_metadata_with_options(&options);
+        let mut reader = ParquetObjectReader::new(store.clone(), meta.clone());
+        let metadata = reader.get_metadata_with_options(&options).await.unwrap();
 
-        // todo: this should pass
-        // let object_reader = binding.await.unwrap();
+        assert_eq!(metadata.num_row_groups(), 1);
 
-        // let builder = ParquetRecordBatchStreamBuilder::new_with_options(object_reader, options)
-        //     .await
-        //     .unwrap();
-        // let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
-        //
-        // assert_eq!(batches.len(), 1);
-        // assert_eq!(batches[0].num_rows(), 8);
+        let reader = ParquetObjectReader::new(store, meta);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+            .await
+            .unwrap();
+        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 50);
     }
 
     #[tokio::test]

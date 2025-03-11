@@ -62,7 +62,7 @@ mod metadata;
 pub use metadata::*;
 
 #[cfg(feature = "encryption")]
-use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
+use crate::encryption::decrypt::CryptoContext;
 
 #[cfg(feature = "object_store")]
 mod store;
@@ -137,10 +137,7 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         &'a mut self,
         options: &'a ArrowReaderOptions,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        #[cfg(feature = "encryption")]
-        return self.as_mut().get_metadata_with_options(options);
-        #[cfg(not(feature = "encryption"))]
-        self.as_mut().get_metadata()
+        self.as_mut().get_metadata_with_options(options)
     }
 }
 
@@ -180,12 +177,15 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            let parquet_metadata_reader = ParquetMetaDataReader::decode_metadata_with_encryption(
-                &buf,
-                footer.is_encrypted_footer(),
-                options.file_decryption_properties.as_ref(),
-            )?;
-            Ok(Arc::new(parquet_metadata_reader))
+            let metadata_reader = ParquetMetaDataReader::new();
+
+            #[cfg(feature = "encryption")]
+            let metadata_reader = metadata_reader
+                .with_decryption_properties(options.file_decryption_properties.as_ref());
+
+            let parquet_metadata = metadata_reader.decode_footer_metadata(&buf, &footer)?;
+
+            Ok(Arc::new(parquet_metadata))
         }
         .boxed()
     }
@@ -200,10 +200,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
-            #[cfg(not(feature = "encryption"))]
+
             if footer.is_encrypted_footer() {
                 return Err(general_err!(
-                    "Parquet file has an encrypted footer but the encryption feature is disabled"
+                    "Parquet file has an encrypted footer but decryption properties were not provided"
                 ));
             }
 
@@ -236,11 +236,7 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        #[cfg(feature = "encryption")]
         let mut metadata = input.get_metadata_with_options(&options).await?;
-
-        #[cfg(not(feature = "encryption"))]
-        let mut metadata = input.get_metadata().await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -639,7 +635,6 @@ where
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
-            #[cfg(feature = "encryption")]
             row_group_idx,
             metadata: self.metadata.as_ref(),
         };
@@ -1170,6 +1165,8 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
+    #[cfg(feature = "encryption")]
+    use crate::encryption::decrypt::FileDecryptionProperties;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     #[cfg(feature = "encryption")]
@@ -1211,7 +1208,7 @@ mod tests {
 
         fn get_metadata_with_options<'a>(
             &'a mut self,
-            options: &'a ArrowReaderOptions,
+            _options: &'a ArrowReaderOptions,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
