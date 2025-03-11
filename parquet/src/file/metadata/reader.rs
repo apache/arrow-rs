@@ -679,8 +679,8 @@ impl ParquetMetaDataReader {
     /// file. The format of `buf` is the Thrift compact binary protocol, as specified
     /// by the [Parquet Spec].
     ///
-    /// This method handles using either decode_footer of
-    /// decode_metadata_with_encryption depending on whether the encryption
+    /// This method handles using either `decode_metadata` or
+    /// `decode_metadata_with_encryption` depending on whether the encryption
     /// feature is enabled.
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
@@ -698,7 +698,9 @@ impl ParquetMetaDataReader {
         #[cfg(not(feature = "encryption"))]
         let result = {
             if footer_tail.is_encrypted_footer() {
-                Err(general_err!("Parquet error: Parquet file has an encrypted footer but the encryption feature is disabled"))
+                Err(general_err!(
+                    "Parquet file has an encrypted footer but the encryption feature is disabled"
+                ))
             } else {
                 Self::decode_metadata(buf)
             }
