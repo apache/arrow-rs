@@ -38,7 +38,7 @@ pub struct Int96 {
     value: [u32; 3],
 }
 
-const JULIAN_DAY_OF_EPOCH: i32 = 2_440_588;
+const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
 
 /// Number of seconds in a day
 const SECONDS_IN_DAY: i64 = 86_400;
@@ -80,7 +80,7 @@ impl Int96 {
     #[inline]
     pub fn to_seconds(&self) -> i64 {
         let (day, nanos) = self.to_parts();
-        (day.wrapping_sub(JULIAN_DAY_OF_EPOCH) as i64)
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(SECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000_000_000)
     }
@@ -91,7 +91,7 @@ impl Int96 {
     #[inline]
     pub fn to_millis(&self) -> i64 {
         let (day, nanos) = self.to_parts();
-        (day.wrapping_sub(JULIAN_DAY_OF_EPOCH) as i64)
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(MILLISECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000_000)
     }
@@ -102,7 +102,7 @@ impl Int96 {
     #[inline]
     pub fn to_micros(&self) -> i64 {
         let (day, nanos) = self.to_parts();
-        (day.wrapping_sub(JULIAN_DAY_OF_EPOCH) as i64)
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(MICROSECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000)
     }
@@ -113,7 +113,7 @@ impl Int96 {
     #[inline]
     pub fn to_nanos(&self) -> i64 {
         let (day, nanos) = self.to_parts();
-        (day.wrapping_sub(JULIAN_DAY_OF_EPOCH) as i64)
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(NANOSECONDS_IN_DAY)
             .wrapping_add(nanos)
     }
