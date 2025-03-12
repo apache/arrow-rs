@@ -112,7 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions};
+pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, EncoderWithNullBuffer};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -1914,7 +1914,7 @@ mod tests {
         let json_str = str::from_utf8(&json).unwrap();
         assert_eq!(
             json_str,
-            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":null}]"#
+            r#"[{"my_dict":"a"},{"my_dict":null},{"my_dict":""}]"#
         )
     }
 
@@ -2084,18 +2084,6 @@ mod tests {
                     }
                 }
             }
-
-            fn nulls(&self) -> Option<NullBuffer> {
-                if self.array.iter().any(Option::is_none) {
-                    let mut builder = NullBufferBuilder::new(self.array.len());
-                    for val in self.array.iter() {
-                        builder.append(val.is_some());
-                    }
-                    builder.finish()
-                } else {
-                    None
-                }
-            }
         }
 
         #[derive(Debug)]
@@ -2104,10 +2092,10 @@ mod tests {
         impl EncoderFactory for UnionEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                _field: &FieldRef,
-                array: &dyn Array,
-                _options: &EncoderOptions,
-            ) -> Result<Option<Box<dyn Encoder>>, ArrowError> {
+                _field: &'a FieldRef,
+                array: &'a dyn Array,
+                _options: &'a EncoderOptions,
+            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
                 let data_type = array.data_type();
                 let fields = match data_type {
                     DataType::Union(fields, UnionMode::Sparse) => fields,
@@ -2145,7 +2133,10 @@ mod tests {
                     };
                     values.push(value);
                 }
-                Ok(Some(Box::new(UnionEncoder { array: values })))
+                let array_encoder =
+                    Box::new(UnionEncoder { array: values }) as Box<dyn Encoder + 'a>;
+                let nulls = array.nulls().cloned();
+                Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
             }
         }
 
@@ -2213,7 +2204,7 @@ mod tests {
             &buf,
             r#"{"union":1,"float":1.0}
 {"union":"a"}
-{"float":3.4}
+{"union":null,"float":3.4}
 "#,
         );
     }
@@ -2258,7 +2249,7 @@ mod tests {
         let expected = json!([
             {"union":1,"float":1.0},
             {"union":"a"},
-            {"float":3.4},
+            {"float":3.4,"union":null},
         ]);
 
         assert_eq!(json_value, expected);
@@ -2309,10 +2300,6 @@ mod tests {
                 }
                 out.push(b']');
             }
-
-            fn nulls(&self) -> Option<NullBuffer> {
-                self.array.nulls().cloned()
-            }
         }
 
         #[derive(Debug)]
@@ -2321,15 +2308,17 @@ mod tests {
         impl EncoderFactory for IntArayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                _field: &FieldRef,
+                _field: &'a FieldRef,
                 array: &'a dyn Array,
-                _options: &EncoderOptions,
-            ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
+                _options: &'a EncoderOptions,
+            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
                 match array.data_type() {
                     DataType::Binary => {
                         let array = array.as_binary::<i32>();
                         let encoder = IntArrayBinaryEncoder { array };
-                        Ok(Some(Box::new(encoder)))
+                        let array_encoder = Box::new(encoder) as Box<dyn Encoder + 'a>;
+                        let nulls = array.nulls().cloned();
+                        Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
                     }
                     _ => Ok(None),
                 }
@@ -2378,17 +2367,12 @@ mod tests {
         // Just trying to add some variety to the test cases and demonstrate use cases of the encoder factory.
         struct PaddedInt32Encoder {
             array: Int32Array,
-            nulls: Option<NullBuffer>,
         }
 
         impl Encoder for PaddedInt32Encoder {
             fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
                 let value = self.array.value(idx);
                 write!(out, "\"{value:0>8}\"").unwrap();
-            }
-
-            fn nulls(&self) -> Option<NullBuffer> {
-                self.nulls.clone()
             }
         }
 
@@ -2398,10 +2382,10 @@ mod tests {
         impl EncoderFactory for CustomEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                field: &FieldRef,
+                field: &'a FieldRef,
                 array: &'a dyn Array,
-                _options: &EncoderOptions,
-            ) -> Result<Option<Box<dyn Encoder + 'a>>, ArrowError> {
+                _options: &'a EncoderOptions,
+            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
                 // The point here is:
                 // 1. You can use information from Field to determine how to do the encoding.
                 // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
@@ -2417,9 +2401,9 @@ mod tests {
                         let nulls = array.nulls().cloned();
                         let encoder = PaddedInt32Encoder {
                             array: array.clone(),
-                            nulls,
                         };
-                        Ok(Some(Box::new(encoder)))
+                        let array_encoder = Box::new(encoder) as Box<dyn Encoder + 'a>;
+                        Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
                     }
                     _ => Ok(None),
                 }
