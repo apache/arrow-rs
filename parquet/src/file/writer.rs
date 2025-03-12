@@ -190,6 +190,15 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(encryption_props) => Some(Arc::new(FileEncryptor::new(encryption_props.clone())?)),
         };
 
+        #[cfg(feature = "encryption")]
+        if properties.file_encryption_properties.is_some() {
+            properties
+                .file_encryption_properties
+                .clone()
+                .unwrap()
+                .encrypted_columns_in_schema(SchemaDescriptor::new(schema.clone()))?;
+        }
+
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
@@ -297,9 +306,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         let magic = get_file_magic(properties.file_encryption_properties.as_ref());
         #[cfg(not(feature = "encryption"))]
         let magic = get_file_magic();
-
-        // todo: check if all columns in properties.file_encryption_properties.column_keys
-        // are present in the schema
 
         buf.write_all(magic)?;
         Ok(())
