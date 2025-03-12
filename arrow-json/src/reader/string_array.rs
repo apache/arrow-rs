@@ -109,8 +109,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                     builder.append_value(FALSE);
                 }
                 TapeElement::Number(idx) if coerce_primitive => {
-                    let s = self.write_number(tape.get_string(idx));
-                    builder.append_value(s);
+                    builder.append_value(tape.get_string(idx));
                 }
                 TapeElement::I64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
