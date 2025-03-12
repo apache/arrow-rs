@@ -91,29 +91,37 @@ pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
         _field: &'a FieldRef,
         _array: &'a dyn Array,
         _options: &'a EncoderOptions,
-    ) -> Result<Option<EncoderWithNullBuffer>, ArrowError> {
+    ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
         Ok(None)
     }
 }
 
+/// An encoder + a null buffer.
+/// This is packaged together into a wrapper struct to minimize dynamic dispatch for null checks.
 pub struct EncoderWithNullBuffer<'a> {
     encoder: Box<dyn Encoder + 'a>,
     nulls: Option<NullBuffer>,
 }
 
-impl EncoderWithNullBuffer<'_> {
-    pub fn new(encoder: Box<dyn Encoder>, nulls: Option<NullBuffer>) -> Self {
+impl<'a> EncoderWithNullBuffer<'a> {
+    /// Create a new encoder with a null buffer.
+    pub fn new(encoder: Box<dyn Encoder + 'a>, nulls: Option<NullBuffer>) -> Self {
         Self { encoder, nulls }
     }
 
+    /// Encode the value at index `idx` to `out`.
     pub fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(idx, out)
     }
 
+    /// Returns whether the value at index `idx` is null.
     pub fn is_null(&self, idx: usize) -> bool {
-        self.nulls.as_ref().map_or(false, |nulls| nulls.is_null(idx))
+        self.nulls
+            .as_ref()
+            .map_or(false, |nulls| nulls.is_null(idx))
     }
 
+    /// Returns whether the encoder has any nulls.
     pub fn has_nulls(&self) -> bool {
         match self.nulls {
             Some(ref nulls) => nulls.null_count() > 0,
@@ -239,12 +247,12 @@ pub fn make_encoder<'a>(
                 struct_mode: options.struct_mode(),
             };
             let nulls = array.nulls().cloned();
-            EncoderWithNullBuffer::new(Box::new(encoder), nulls)
+            EncoderWithNullBuffer::new(Box::new(encoder) as Box<dyn Encoder + 'a>, nulls)
         }
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
             let options = FormatOptions::new().with_display_error(true);
-            let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?, array.nulls());
-            EncoderWithNullBuffer::new(Box::new(RawArrayFormatter(formatter)), nulls)
+            let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?);
+            EncoderWithNullBuffer::new(Box::new(RawArrayFormatter(formatter)) as Box<dyn Encoder + 'a>, nulls)
         }
         d => match d.is_temporal() {
             true => {
@@ -254,7 +262,7 @@ pub fn make_encoder<'a>(
                 // may need to be revisited
                 let options = FormatOptions::new().with_display_error(true);
                 let formatter = ArrayFormatter::try_new(array, &options)?;
-                let formatter = JsonArrayFormatter::new(formatter, array.nulls());
+                let formatter = JsonArrayFormatter::new(formatter);
                 EncoderWithNullBuffer::new(Box::new(formatter) as Box<dyn Encoder + 'a>, nulls)
             }
             false => return Err(ArrowError::JsonError(format!(
@@ -263,7 +271,7 @@ pub fn make_encoder<'a>(
             )))
         }
     };
-    
+
     Ok(encoder)
 }
 
@@ -409,9 +417,7 @@ struct PrimitiveEncoder<N: PrimitiveEncode> {
 }
 
 impl<N: PrimitiveEncode> PrimitiveEncoder<N> {
-    fn new<P: ArrowPrimitiveType<Native = N>>(
-        array: &PrimitiveArray<P>,
-    ) -> Self {
+    fn new<P: ArrowPrimitiveType<Native = N>>(array: &PrimitiveArray<P>) -> Self {
         Self {
             values: array.values().clone(),
             buffer: N::init_buffer(),
@@ -560,12 +566,11 @@ impl<K: ArrowDictionaryKeyType> Encoder for DictionaryEncoder<'_, K> {
 /// A newtype wrapper around [`ArrayFormatter`] to keep our usage of it private and not implement `Encoder` for the public type
 struct JsonArrayFormatter<'a> {
     formatter: ArrayFormatter<'a>,
-    nulls: Option<&'a NullBuffer>,
 }
 
 impl<'a> JsonArrayFormatter<'a> {
-    fn new(formatter: ArrayFormatter<'a>, nulls: Option<&'a NullBuffer>) -> Self {
-        Self { formatter, nulls }
+    fn new(formatter: ArrayFormatter<'a>) -> Self {
+        Self { formatter }
     }
 }
 
