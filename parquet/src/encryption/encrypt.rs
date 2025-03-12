@@ -18,10 +18,10 @@
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
-use crate::schema::types::ColumnDescPtr;
+use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use thrift::protocol::TCompactOutputProtocol;
 
@@ -77,6 +77,39 @@ impl FileEncryptionProperties {
 
     pub fn store_aad_prefix(&self) -> bool {
         self.store_aad_prefix && self.aad_prefix.is_some()
+    }
+
+    /// Checks if columns that are to be encrypted are present in schema
+    #[cfg(feature = "encryption")]
+    pub(crate) fn encrypted_columns_in_schema(
+        &self,
+        schema: SchemaDescriptor,
+    ) -> std::result::Result<(), ParquetError> {
+        let schema_columns = schema
+            .columns()
+            .iter()
+            .map(|c| c.path().string())
+            .collect::<HashSet<_>>();
+        let encryption_columns = self
+            .column_keys
+            .keys()
+            .cloned()
+            .collect::<HashSet<String>>();
+        if !encryption_columns.is_subset(&schema_columns) {
+            let mut columns_missing_in_schema = encryption_columns
+                .difference(&schema_columns)
+                .cloned()
+                .collect::<Vec<String>>();
+            columns_missing_in_schema.sort();
+            return Err(ParquetError::General(
+                format!(
+                    "Column {} not found in schema",
+                    columns_missing_in_schema.join(", ")
+                )
+                .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
