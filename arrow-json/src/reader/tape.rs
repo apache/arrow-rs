@@ -1002,26 +1002,22 @@ mod tests {
 
     /// Attempts to parse `n` as an integer no larger than i64. If successful, writes out the value
     /// as the smallest int type that can hold it and returns true. Otherwise, returns false.
-    fn try_decode_int(n: &str, scale: u8, values: &mut ByteBuffer) -> bool {
+    fn try_decode_int(n: &str, values: &mut ByteBuffer) -> bool {
         let Ok(val): Result<i64, _> = n.parse() else {
             return false;
         };
 
         if let Ok(val) = val.try_into() {
             write_value_header(values, BasicType::Primitive, PrimitiveType::Int8);
-            values.write_u8(scale);
             values.write_i8(val);
         } else if let Ok(val) = val.try_into() {
             write_value_header(values, BasicType::Primitive, PrimitiveType::Int16);
-            values.write_u8(scale);
             values.write_i16(val);
         } else if let Ok(val) = val.try_into() {
             write_value_header(values, BasicType::Primitive, PrimitiveType::Int32);
-            values.write_u8(scale);
             values.write_i32(val);
         } else {
             write_value_header(values, BasicType::Primitive, PrimitiveType::Int64);
-            values.write_u8(scale);
             values.write_i64(val);
         }
         true
@@ -1076,7 +1072,7 @@ mod tests {
                 }
             } else {
                 // No decimal point, so prefer int but use decimal if too large for i64.
-                if try_decode_int(n, 0, values) || try_decode_decimal(n, 0, values) {
+                if try_decode_int(n, values) || try_decode_decimal(n, 0, values) {
                     return; // else fall out and parse as float
                 }
             }
@@ -1492,5 +1488,252 @@ mod tests {
                 52, 55, 57, 58, 59, 62, 63, 63, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77
             ]
         )
+    }
+}
+
+#[cfg(test)]
+mod serde_json_variant {
+    use bytebuffer::{ByteBuffer, Endian};
+    use num_enum::IntoPrimitive;
+    use static_assertions::const_assert;
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[derive(IntoPrimitive)]
+    #[repr(u64)]
+    enum BasicType {
+        Primitive = 0,
+        ShortString,
+        Object,
+        Array,
+    }
+    pub const BASIC_TYPE_BITS: u8 = 2;
+
+    /// For efficiency, JSON parsing only supports a subset of Variant types that can be easily and
+    /// directly inferred from the JSON type, with some concessions for JSON numeric to avoid
+    /// information loss. Fancy values like Date and Uuid just come back as strings.
+    #[derive(IntoPrimitive)]
+    #[repr(u64)]
+    enum PrimitiveType {
+        Null = 0,
+        True,
+        False,
+        Int8,
+        Int16,
+        Int32,
+        Int64,
+        Double,
+        Decimal4,
+        Decimal8,
+        Decimal16 = 10,
+        Float = 14,
+        String = 16,
+    }
+    pub const VALUE_HEADER_BITS: u8 = 6;
+
+    fn write_value_header(
+        values: &mut ByteBuffer,
+        basic_type: impl Into<u64>,
+        header: impl Into<u64>,
+    ) {
+        // WARNING: `ByteBuffer::write_bits` puts highest bits first, even in little-endian mode, so we have add
+        // the bitfields in reverse order.
+        values.write_bits(header.into(), VALUE_HEADER_BITS);
+        values.write_bits(basic_type.into(), BASIC_TYPE_BITS);
+    }
+
+    /// Attempts to parse `n` as an integer no larger than i64. If successful, writes out the value
+    /// as the smallest int type that can hold it and returns true. Otherwise, returns false.
+    fn decode_int(val: i64, values: &mut ByteBuffer) {
+        if let Ok(val) = val.try_into() {
+            write_value_header(values, BasicType::Primitive, PrimitiveType::Int8);
+            values.write_i8(val);
+        } else if let Ok(val) = val.try_into() {
+            write_value_header(values, BasicType::Primitive, PrimitiveType::Int16);
+            values.write_i16(val);
+        } else if let Ok(val) = val.try_into() {
+            write_value_header(values, BasicType::Primitive, PrimitiveType::Int32);
+            values.write_i32(val);
+        } else {
+            write_value_header(values, BasicType::Primitive, PrimitiveType::Int64);
+            values.write_i64(val);
+        }
+    }
+
+    fn decode_number(n: &serde_json::Number, values: &mut ByteBuffer) {
+        if let Some(i) = n.as_i64() {
+           return decode_int(i, values);
+        }
+
+        // Floating point. No way to know the best size, so always parse it as double.
+        write_value_header(values, BasicType::Primitive, PrimitiveType::Double);
+        values.write_f64(n.as_f64().expect("TODO"));
+    }
+
+    /// Collects the strings we eventually need to store in a variant `metadata` column. We don't
+    /// know in advance how many strings there will be, and we prefer to dedup for space savings. As
+    /// each new string is inserted, we assign it an index, which the value column will use to refer
+    /// to it. We also write out the byte offset, since that can be computed easily up front. After
+    /// all strings are collected, the `build` method appends their actual bytes in order.
+    struct MetadataBuilder<'a> {
+        metadata: ByteBuffer,
+        strings: HashMap<&'a str, u32>,
+        num_string_bytes: u32,
+    }
+    impl<'a> MetadataBuilder<'a> {
+        fn new() -> Self {
+            let mut metadata = ByteBuffer::new();
+            metadata.set_endian(Endian::LittleEndian);
+            metadata.write_bits(0b_11_0_0, 4); // 4-byte offsets, <unused>, not sorted
+            metadata.write_bits(1, 4); // version
+            metadata.write_u32(0); // placeholder for dictionary_size
+            Self {
+                metadata,
+                strings: HashMap::new(),
+                num_string_bytes: 0,
+            }
+        }
+
+        fn add_string(&mut self, s: &'a str) -> u32 {
+            if let Some(idx) = self.strings.get(s) {
+                return *idx;
+            }
+
+            let idx = u32::try_from(self.strings.len()).expect("TODO");
+            self.strings.insert(s, idx);
+
+            self.num_string_bytes += u32::try_from(s.len()).expect("TODO");
+            self.metadata.write_u32(self.num_string_bytes);
+            idx
+        }
+
+        fn build(self) -> Vec<u8> {
+            let mut strings: Vec<_> = self.strings.into_iter().collect();
+            let dictionary_size = strings.len();
+            strings.sort_by_key(|(_, idx)| *idx);
+
+            // Append the string bytes now that the offset list is complete
+            let mut metadata = self.metadata;
+            for (name, _) in strings {
+                metadata.write_bytes(name.as_bytes());
+            }
+
+            // Fix up the dictionary_size field now that we know its value
+            metadata.set_wpos(1);
+            metadata.write_u32(u32::try_from(dictionary_size).expect("TODO"));
+            metadata.into_vec()
+        }
+    }
+
+    fn decode_array<'a>(
+        array: &'a Vec<serde_json::Value>,
+        metadata: &mut MetadataBuilder<'a>,
+        values: &mut ByteBuffer,
+    ) {
+        // is_large=true, 4-byte offsets (tape can anyway only handle 32-bit offsets)
+        write_value_header(values, BasicType::Array, 0b_1_11_u8);
+
+        // Write out the number of elements
+        values.write_u32(array.len().try_into().unwrap());
+
+        // The first field offset is always 0, and each array element adds another offset.
+        values.write_u32(0);
+
+        // Reserve space for the rest of the field offset array up front
+        let mut field_offset_array_wpos = values.len();
+        for _ in 0..array.len() {
+            values.write_u32(0);
+        }
+
+        let value_bytes_start = values.len();
+        for item in array {
+            // Write out the value of this array element
+            decode_one(item, metadata, values);
+
+            // Write out the end offset of this array element's value
+            let end_offset = values.len() - value_bytes_start;
+            values.set_wpos(field_offset_array_wpos);
+            values.write_u32(u32::try_from(end_offset).expect("TODO"));
+            field_offset_array_wpos = values.get_wpos();
+            values.set_wpos(values.len());
+        }
+    }
+
+    fn decode_object<'a>(
+        items: &'a serde_json::Map<String, serde_json::Value>,
+        metadata: &mut MetadataBuilder<'a>,
+        values: &mut ByteBuffer,
+    ) {
+        // is_large=true, 4-byte name ids, 4-byte value offsets
+        write_value_header(values, BasicType::Object, 0b_1_11_11_u8);
+
+        // WARNING: The fields of an object must be laid out in lexicographical name order. The
+        // caller must _not_ enable the serde_json "preserve_order" feature that keeps keys in
+        // arrival order instead.
+
+        // Make an initial pass in order reserve space for the name ids and value offsets. There are
+        // n+1 value offsets, so reserve the extra slot as well.
+        let mut field_id_wpos = values.len();
+        values.write_u32(0);
+        let mut value_offset_wpos = values.len();
+        for _ in 0..items.len() {
+            // Reserve space for both field id and value offset. Each field id we write increments
+            // the value_offset_wpos so that it remains accurate at all times.
+            //
+            // NOTE: It's important to write zeros here because one of these calls initializes the
+            // first value offset that must always be zero. We just don't know in advance which one.
+            values.write_u32(0);
+            values.write_u32(0);
+        }
+
+        let value_bytes_start = values.len();
+        for (name, value) in items {
+            // Append the value bytes
+            decode_one(value, metadata, values);
+            let end_offset = values.len() - value_bytes_start;
+
+            let name_idx = metadata.add_string(name);
+            values.set_wpos(field_id_wpos);
+            values.write_u32(name_idx);
+            field_id_wpos = values.get_wpos();
+
+            values.set_wpos(value_offset_wpos);
+            values.write_u32(u32::try_from(end_offset).expect("TODO"));
+            value_offset_wpos = values.get_wpos();
+            values.set_wpos(values.len());
+        }
+    }
+
+    fn decode_one<'a>(
+        value: &'a serde_json::Value,
+        metadata: &mut MetadataBuilder<'a>,
+        values: &mut ByteBuffer,
+    ) {
+        match value {
+            serde_json::Value::Null => {
+                write_value_header(values, BasicType::Primitive, PrimitiveType::Null);
+            }
+            serde_json::Value::Bool(true) => {
+                write_value_header(values, BasicType::Primitive, PrimitiveType::True);
+            }
+            serde_json::Value::Bool(false) => {
+                write_value_header(values, BasicType::Primitive, PrimitiveType::False);
+            }
+            serde_json::Value::String(s) => {
+                if s.len() <= (1 << VALUE_HEADER_BITS) - 1 {
+                    // There is no `From<usize> for u64`. 128-bit architectures rejoice?
+                    const_assert!(size_of::<usize>() <= size_of::<u64>());
+                    write_value_header(values, BasicType::ShortString, s.len() as u64);
+                    values.write_bytes(s.as_bytes());
+                } else {
+                    write_value_header(values, BasicType::Primitive, PrimitiveType::String);
+                    values.write_string(s);
+                }
+            }
+            serde_json::Value::Number(n) => decode_number(n, values),
+            serde_json::Value::Object(o) => decode_object(o, metadata, values),
+            serde_json::Value::Array(a) => decode_array(a, metadata, values),
+        }
     }
 }
