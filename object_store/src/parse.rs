@@ -201,7 +201,13 @@ where
             let url = &url[..url::Position::BeforePath];
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
-        #[cfg(not(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http")))]
+        #[cfg(not(all(
+            feature = "aws",
+            feature = "azure",
+            feature = "gcp",
+            feature = "http",
+            not(target_arch = "wasm32")
+        )))]
         s => {
             return Err(super::Error::Generic {
                 store: "parse_url",
@@ -345,7 +351,7 @@ mod tests {
     #[cfg(feature = "http")]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
-        use hyper::{header::USER_AGENT, Response};
+        use http::{header::USER_AGENT, Response};
 
         let server = MockServer::new().await;
 

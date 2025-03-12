@@ -70,8 +70,10 @@ pub fn div(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
 
 /// Perform `lhs % rhs`
 ///
-/// Overflow or division by zero will result in an error, with exception to
+/// Division by zero will result in an error, with exception to
 /// floating point numbers, which instead follow the IEEE 754 rules
+///
+/// `signed_integer::MIN % -1` will not result in an error but return 0
 pub fn rem(lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, ArrowError> {
     arithmetic_op(Op::Rem, lhs, rhs)
 }
@@ -313,7 +315,13 @@ fn integer_op<T: ArrowPrimitiveType>(
         Op::MulWrapping => op!(l, l_s, r, r_s, l.mul_wrapping(r)),
         Op::Mul => try_op!(l, l_s, r, r_s, l.mul_checked(r)),
         Op::Div => try_op!(l, l_s, r, r_s, l.div_checked(r)),
-        Op::Rem => try_op!(l, l_s, r, r_s, l.mod_checked(r)),
+        Op::Rem => try_op!(l, l_s, r, r_s, {
+            if r.is_zero() {
+                Err(ArrowError::DivideByZero)
+            } else {
+                Ok(l.mod_wrapping(r))
+            }
+        }),
     };
     Ok(Arc::new(array))
 }
@@ -1041,6 +1049,11 @@ mod tests {
             err,
             "Arithmetic overflow: Overflow happened on: -32768 / -1"
         );
+
+        let a = Int16Array::from(vec![i16::MIN]);
+        let b = Int16Array::from(vec![-1]);
+        let result = rem(&a, &b).unwrap();
+        assert_eq!(result.as_ref(), &Int16Array::from(vec![0]));
 
         let a = Int16Array::from(vec![21]);
         let b = Int16Array::from(vec![0]);

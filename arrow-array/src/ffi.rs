@@ -1298,12 +1298,12 @@ mod tests_to_then_from_ffi {
 mod tests_from_ffi {
     use std::sync::Arc;
 
-    use arrow_buffer::{bit_util, buffer::Buffer, MutableBuffer, OffsetBuffer};
+    use arrow_buffer::{bit_util, buffer::Buffer};
     use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
-    use super::{ImportedArrowArray, Result};
+    use super::Result;
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
@@ -1507,7 +1507,11 @@ mod tests_from_ffi {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_empty_string_with_non_zero_offset() -> Result<()> {
+        use super::ImportedArrowArray;
+        use arrow_buffer::{MutableBuffer, OffsetBuffer};
+
         // Simulate an empty string array with a non-zero offset from a producer
         let data: Buffer = MutableBuffer::new(0).into();
         let offsets = OffsetBuffer::new(vec![123].into());

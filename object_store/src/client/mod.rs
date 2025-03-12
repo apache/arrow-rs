@@ -19,6 +19,7 @@
 
 pub(crate) mod backoff;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod dns;
 
 #[cfg(test)]
@@ -42,18 +43,30 @@ pub(crate) mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) mod s3;
 
+mod body;
+pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
+
+pub(crate) mod builder;
+
+mod connection;
+pub(crate) use connection::http_connector;
+#[cfg(not(target_arch = "wasm32"))]
+pub use connection::ReqwestConnector;
+pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
-use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::{NoProxy, Proxy};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
@@ -186,8 +199,10 @@ impl FromStr for ClientConfigKey {
 /// This is used to configure the client to trust a specific certificate. See
 /// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Certificate(reqwest::tls::Certificate);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Certificate {
     /// Create a `Certificate` from a PEM encoded certificate.
     ///
@@ -234,6 +249,7 @@ impl Certificate {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
+    #[cfg(not(target_arch = "wasm32"))]
     root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
@@ -267,6 +283,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
+            #[cfg(not(target_arch = "wasm32"))]
             root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
@@ -393,6 +410,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self
@@ -593,21 +611,21 @@ impl ClientOptions {
         }
     }
 
-    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
     #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-    pub(crate) fn metadata_client(&self) -> Result<Client> {
+    pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
             .with_connect_timeout(Duration::from_secs(1))
-            .client()
     }
 
-    pub(crate) fn client(&self) -> Result<Client> {
-        let mut builder = ClientBuilder::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn client(&self) -> Result<reqwest::Client> {
+        let mut builder = reqwest::ClientBuilder::new();
 
         match &self.user_agent {
             Some(user_agent) => builder = builder.user_agent(user_agent.get()?),
@@ -706,30 +724,43 @@ pub(crate) trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }
 
-impl GetOptionsExt for RequestBuilder {
+impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
         use hyper::header::*;
 
-        if let Some(range) = options.range {
+        let GetOptions {
+            if_match,
+            if_none_match,
+            if_modified_since,
+            if_unmodified_since,
+            range,
+            version: _,
+            head: _,
+            extensions,
+        } = options;
+
+        if let Some(range) = range {
             self = self.header(RANGE, range.to_string());
         }
 
-        if let Some(tag) = options.if_match {
+        if let Some(tag) = if_match {
             self = self.header(IF_MATCH, tag);
         }
 
-        if let Some(tag) = options.if_none_match {
+        if let Some(tag) = if_none_match {
             self = self.header(IF_NONE_MATCH, tag);
         }
 
         const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
-        if let Some(date) = options.if_unmodified_since {
+        if let Some(date) = if_unmodified_since {
             self = self.header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
 
-        if let Some(date) = options.if_modified_since {
+        if let Some(date) = if_modified_since {
             self = self.header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
+
+        self = self.extensions(extensions);
 
         self
     }
@@ -778,17 +809,17 @@ mod cloud {
     use crate::client::token::{TemporaryToken, TokenCache};
     use crate::RetryConfig;
 
-    /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
+    /// A [`CredentialProvider`] that uses [`HttpClient`] to fetch temporary tokens
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
-        client: Client,
+        client: HttpClient,
         retry: RetryConfig,
         cache: TokenCache<Arc<T::Credential>>,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub(crate) fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub(crate) fn new(inner: T, client: HttpClient, retry: RetryConfig) -> Self {
             Self {
                 inner,
                 client,
@@ -822,12 +853,13 @@ mod cloud {
 
         async fn fetch_token(
             &self,
-            client: &Client,
+            client: &HttpClient,
             retry: &RetryConfig,
         ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
     }
 }
 
+use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
 

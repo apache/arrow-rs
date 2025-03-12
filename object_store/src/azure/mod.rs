@@ -58,7 +58,7 @@ const STORE: &str = "MicrosoftAzure";
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
-    client: Arc<client::AzureClient>,
+    client: Arc<AzureClient>,
 }
 
 impl MicrosoftAzure {
@@ -68,7 +68,7 @@ impl MicrosoftAzure {
     }
 
     /// Create a full URL to the resource specified by `path` with this instance's configuration.
-    fn path_url(&self, path: &Path) -> url::Url {
+    fn path_url(&self, path: &Path) -> Url {
         self.client.config().path_url(path)
     }
 }

@@ -18,7 +18,7 @@
 use super::client::GoogleCloudStorageClient;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
-use crate::client::TokenProvider;
+use crate::client::{HttpClient, HttpError, TokenProvider};
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
 use crate::util::{hex_digest, hex_encode, STRICT_ENCODE_SET};
 use crate::{RetryConfig, StaticCredentialProvider};
@@ -27,10 +27,9 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
-use hyper::HeaderMap;
+use http::{HeaderMap, Method};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
-use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -83,10 +82,12 @@ pub enum Error {
     UnsupportedKey { encoding: String },
 
     #[error("Error performing token request: {}", source)]
-    TokenRequest { source: crate::client::retry::Error },
+    TokenRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting token response body: {}", source)]
-    TokenResponseBody { source: reqwest::Error },
+    TokenResponseBody { source: HttpError },
 }
 
 impl From<Error> for crate::Error {
@@ -259,7 +260,7 @@ impl TokenProvider for SelfSignedJwt {
     /// Fetch a fresh token
     async fn fetch_token(
         &self,
-        _client: &Client,
+        _client: &HttpClient,
         _retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let now = seconds_since_epoch();
@@ -395,19 +396,20 @@ pub(crate) struct InstanceCredentialProvider {}
 
 /// Make a request to the metadata server to fetch a token, using a a given hostname.
 async fn make_metadata_request(
-    client: &Client,
+    client: &HttpClient,
     hostname: &str,
     retry: &RetryConfig,
 ) -> crate::Result<TokenResponse> {
     let url =
         format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token");
     let response: TokenResponse = client
-        .request(Method::GET, url)
+        .get(url)
         .header("Metadata-Flavor", "Google")
         .query(&[("audience", "https://www.googleapis.com/oauth2/v4/token")])
         .send_retry(retry)
         .await
         .map_err(|source| Error::TokenRequest { source })?
+        .into_body()
         .json()
         .await
         .map_err(|source| Error::TokenResponseBody { source })?;
@@ -426,7 +428,7 @@ impl TokenProvider for InstanceCredentialProvider {
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let metadata_host = if let Ok(host) = env::var("GCE_METADATA_HOST") {
@@ -459,18 +461,19 @@ impl TokenProvider for InstanceCredentialProvider {
 
 /// Make a request to the metadata server to fetch the client email, using a given hostname.
 async fn make_metadata_request_for_email(
-    client: &Client,
+    client: &HttpClient,
     hostname: &str,
     retry: &RetryConfig,
 ) -> crate::Result<String> {
     let url =
         format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/email",);
     let response = client
-        .request(Method::GET, url)
+        .get(url)
         .header("Metadata-Flavor", "Google")
         .send_retry(retry)
         .await
         .map_err(|source| Error::TokenRequest { source })?
+        .into_body()
         .text()
         .await
         .map_err(|source| Error::TokenResponseBody { source })?;
@@ -495,7 +498,7 @@ impl TokenProvider for InstanceSigningCredentialProvider {
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
         let metadata_host = if let Ok(host) = env::var("GCE_METADATA_HOST") {
@@ -605,13 +608,18 @@ impl AuthorizedUserSigningCredentials {
         Ok(Self { credential })
     }
 
-    async fn client_email(&self, client: &Client, retry: &RetryConfig) -> crate::Result<String> {
+    async fn client_email(
+        &self,
+        client: &HttpClient,
+        retry: &RetryConfig,
+    ) -> crate::Result<String> {
         let response = client
-            .request(Method::GET, "https://oauth2.googleapis.com/tokeninfo")
+            .get("https://oauth2.googleapis.com/tokeninfo")
             .query(&[("access_token", &self.credential.refresh_token)])
             .send_retry(retry)
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .json::<EmailResponse>()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
@@ -626,7 +634,7 @@ impl TokenProvider for AuthorizedUserSigningCredentials {
 
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
         let email = self.client_email(client, retry).await?;
@@ -647,12 +655,12 @@ impl TokenProvider for AuthorizedUserCredentials {
 
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let response = client
-            .request(Method::POST, DEFAULT_TOKEN_GCP_URI)
-            .form(&[
+            .post(DEFAULT_TOKEN_GCP_URI)
+            .form([
                 ("grant_type", "refresh_token"),
                 ("client_id", &self.client_id),
                 ("client_secret", &self.client_secret),
@@ -663,6 +671,7 @@ impl TokenProvider for AuthorizedUserCredentials {
             .send()
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .json::<TokenResponse>()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
