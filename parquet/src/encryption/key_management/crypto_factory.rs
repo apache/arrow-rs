@@ -51,6 +51,11 @@ pub struct EncryptionConfiguration {
 }
 
 impl EncryptionConfiguration {
+    /// Create a new builder for an [`EncryptionConfiguration`]
+    pub fn builder(footer_key: String) -> EncryptionConfigurationBuilder {
+        EncryptionConfigurationBuilder::new(footer_key)
+    }
+
     /// Master key identifier for footer key encryption or signing
     pub fn footer_key(&self) -> &str {
         &self.footer_key
@@ -210,6 +215,11 @@ pub struct DecryptionConfiguration {
 }
 
 impl DecryptionConfiguration {
+    /// Create a new builder for a [`DecryptionConfiguration`]
+    pub fn builder() -> DecryptionConfigurationBuilder {
+        DecryptionConfigurationBuilder::default()
+    }
+
     /// How long to cache objects for, including decrypted key encryption keys
     /// and KMS clients. When None, no caching is used.
     pub fn cache_lifetime(&self) -> Option<Duration> {
@@ -223,7 +233,7 @@ impl Default for DecryptionConfiguration {
     }
 }
 
-/// Builder for Parquet [`EncryptionConfiguration`].
+/// Builder for Parquet [`DecryptionConfiguration`].
 pub struct DecryptionConfigurationBuilder {
     cache_lifetime: Option<Duration>,
 }
@@ -391,9 +401,20 @@ mod tests {
     }
 
     #[test]
-    fn test_kms_client_caching() {
+    fn test_kms_client_caching_with_lifetime() {
+        test_kms_client_caching(Some(Duration::from_secs(6000)));
+    }
+
+    #[test]
+    fn test_kms_client_caching_no_lifetime() {
+        test_kms_client_caching(None);
+    }
+
+    fn test_kms_client_caching(cache_lifetime: Option<Duration>) {
         let kms_config = Arc::new(KmsConnectionConfig::default());
-        let config = Default::default();
+        let config = DecryptionConfiguration::builder()
+            .set_cache_lifetime(cache_lifetime)
+            .build();
 
         let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
         let crypto_factory = CryptoFactory::new(kms_factory.clone());

@@ -52,6 +52,7 @@ impl KmsManager {
         kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
     ) -> Result<KmsClientRef> {
+        self.clear_expired_entries(cache_lifetime);
         let key_access_token = kms_connection_config.read_key_access_token();
         let key = ClientKey::new(
             key_access_token.clone(),
@@ -69,52 +70,58 @@ impl KmsManager {
         kms_connection_config: &Arc<KmsConnectionConfig>,
         cache_lifetime: Option<Duration>,
     ) -> KekCache {
+        self.clear_expired_entries(cache_lifetime);
         let key = KekCacheKey::new(kms_connection_config.key_access_token().clone());
         self.kek_caches.get_or_create(key, cache_lifetime, || {
             Arc::new(Mutex::new(Default::default()))
         })
     }
 
-    // TODO: Clear expired clients and KEK caches
+    fn clear_expired_entries(&self, cleanup_interval: Option<Duration>) {
+        // TODO: Only check if cache duration has passed since last clean
+        if let Some(cleanup_interval) = cleanup_interval {
+            self.kms_client_cache.clear_expired(cleanup_interval);
+            self.kek_caches.clear_expired(cleanup_interval);
+        }
+    }
 }
 
 struct ExpiringCache<TKey, TValue> {
     cache: Mutex<HashMap<TKey, ExpiringCacheValue<TValue>>>,
+    last_cleanup: Mutex<Instant>,
 }
 
 #[derive(Debug)]
 struct ExpiringCacheValue<TValue> {
     value: TValue,
-    creation_time: Instant,
+    expiration_time: Option<Instant>,
 }
 
 impl<TValue> ExpiringCacheValue<TValue> {
-    pub fn new(value: TValue) -> Self {
+    pub fn new(value: TValue, cache_duration: Option<Duration>) -> Self {
         Self {
             value,
-            creation_time: Instant::now(),
+            expiration_time: cache_duration.map(|d| Instant::now() + d),
         }
     }
 
-    pub fn is_valid(&self, cache_lifetime: Option<Duration>) -> bool {
-        match cache_lifetime {
+    pub fn is_valid(&self) -> bool {
+        match self.expiration_time {
             None => true,
-            Some(cache_lifetime) => {
-                let age = Instant::now().saturating_duration_since(self.creation_time);
-                age < cache_lifetime
-            }
+            Some(expiration_time) => Instant::now() < expiration_time,
         }
     }
 }
 
 impl<TKey, TValue> ExpiringCache<TKey, TValue>
 where
-    TKey: Eq + Hash,
+    TKey: Clone + Eq + Hash,
     TValue: Clone,
 {
     pub fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::default()),
+            last_cleanup: Mutex::new(Instant::now()),
         }
     }
 
@@ -130,15 +137,13 @@ where
         let mut cache = self.cache.lock().unwrap();
         let entry = cache.entry(key);
         match entry {
-            Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {
-                entry.get().value.clone()
-            }
+            Entry::Occupied(entry) if entry.get().is_valid() => entry.get().value.clone(),
             entry => {
                 let value = creator();
                 // TODO: Change to use entry.insert_entry once MSRV >= 1.83.0
                 entry
-                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone()))
-                    .or_insert_with(|| ExpiringCacheValue::new(value.clone()));
+                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone(), cache_lifetime))
+                    .or_insert_with(|| ExpiringCacheValue::new(value.clone(), cache_lifetime));
                 value
             }
         }
@@ -156,17 +161,35 @@ where
         let mut cache = self.cache.lock().unwrap();
         let entry = cache.entry(key);
         match entry {
-            Entry::Occupied(entry) if entry.get().is_valid(cache_lifetime) => {
-                Ok(entry.get().value.clone())
-            }
+            Entry::Occupied(entry) if entry.get().is_valid() => Ok(entry.get().value.clone()),
             entry => {
                 let value = creator()?;
                 // TODO: Change to use entry.insert_entry once MSRV >= 1.83.0
                 entry
-                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone()))
-                    .or_insert_with(|| ExpiringCacheValue::new(value.clone()));
+                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone(), cache_lifetime))
+                    .or_insert_with(|| ExpiringCacheValue::new(value.clone(), cache_lifetime));
                 Ok(value)
             }
+        }
+    }
+
+    /// Remove any expired entries from the cache
+    pub fn clear_expired(&self, cleanup_interval: Duration) {
+        {
+            let mut last_cleanup = self.last_cleanup.lock().unwrap();
+            if last_cleanup.elapsed() < cleanup_interval {
+                return;
+            }
+            *last_cleanup = Instant::now();
+        }
+
+        let mut cache = self.cache.lock().unwrap();
+        let to_remove: Vec<TKey> = cache
+            .iter()
+            .filter_map(|(k, v)| if v.is_valid() { None } else { Some(k.clone()) })
+            .collect();
+        for k in to_remove {
+            cache.remove(&k);
         }
     }
 }
