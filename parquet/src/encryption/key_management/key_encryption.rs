@@ -41,7 +41,7 @@ pub fn encrypt_encryption_key(dek: &[u8], kek_id: &[u8], kek_bytes: &[u8]) -> Re
 
     let mut ciphertext = Vec::with_capacity(NONCE_LEN + dek.len() + algorithm.tag_len());
     ciphertext.extend_from_slice(nonce.as_ref());
-    ciphertext.extend_from_slice(&dek);
+    ciphertext.extend_from_slice(dek);
     let tag =
         kek.seal_in_place_separate_tag(nonce, Aad::from(kek_id), &mut ciphertext[NONCE_LEN..])?;
     ciphertext.extend_from_slice(tag.as_ref());

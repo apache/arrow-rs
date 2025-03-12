@@ -60,7 +60,7 @@ impl KmsManager {
         self.kms_client_cache
             .get_or_create_fallible(key, cache_lifetime, || {
                 let client_factory = self.kms_client_factory.lock().unwrap();
-                client_factory.create_client(&kms_connection_config)
+                client_factory.create_client(kms_connection_config)
             })
     }
 
@@ -135,7 +135,10 @@ where
             }
             entry => {
                 let value = creator();
-                entry.insert_entry(ExpiringCacheValue::new(value.clone()));
+                // TODO: Change to use entry.insert_entry once MSRV >= 1.83.0
+                entry
+                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone()))
+                    .or_insert_with(|| ExpiringCacheValue::new(value.clone()));
                 value
             }
         }
@@ -158,7 +161,10 @@ where
             }
             entry => {
                 let value = creator()?;
-                entry.insert_entry(ExpiringCacheValue::new(value.clone()));
+                // TODO: Change to use entry.insert_entry once MSRV >= 1.83.0
+                entry
+                    .and_modify(|e| *e = ExpiringCacheValue::new(value.clone()))
+                    .or_insert_with(|| ExpiringCacheValue::new(value.clone()));
                 Ok(value)
             }
         }

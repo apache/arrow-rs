@@ -65,12 +65,12 @@ impl TestKmsClientFactory {
 
     /// Get the number of times a key was wrapped with a KMS client created by this factory
     pub fn keys_wrapped(&self) -> usize {
-        self.keys_wrapped.lock().unwrap().clone()
+        *self.keys_wrapped.lock().unwrap()
     }
 
     /// Get the number of times a key was unwrapped with a KMS client created by this factory
     pub fn keys_unwrapped(&self) -> usize {
-        self.keys_unwrapped.lock().unwrap().clone()
+        *self.keys_unwrapped.lock().unwrap()
     }
 }
 
@@ -106,7 +106,7 @@ impl TestKmsClient {
             .key_map
             .get(master_key_identifier)
             .ok_or_else(|| general_err!("Invalid master key '{}'", master_key_identifier))?;
-        let key = UnboundKey::new(&AES_128_GCM, &key)
+        let key = UnboundKey::new(&AES_128_GCM, key)
             .map_err(|e| general_err!("Error creating AES key '{}'", e))?;
         Ok(LessSafeKey::new(key))
     }
@@ -125,7 +125,7 @@ impl KmsClient for TestKmsClient {
         let tag_len = key.algorithm().tag_len();
         let mut ciphertext = Vec::with_capacity(NONCE_LEN + key_bytes.len() + tag_len);
         ciphertext.extend_from_slice(nonce.as_ref());
-        ciphertext.extend_from_slice(&key_bytes);
+        ciphertext.extend_from_slice(key_bytes);
         let tag =
             key.seal_in_place_separate_tag(nonce, Aad::from(aad), &mut ciphertext[NONCE_LEN..])?;
         ciphertext.extend_from_slice(tag.as_ref());

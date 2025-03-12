@@ -234,7 +234,7 @@ impl DecryptionConfiguration {
 
 impl Default for DecryptionConfiguration {
     fn default() -> Self {
-        DecryptionConfigurationBuilder::new().build()
+        DecryptionConfigurationBuilder::default().build()
     }
 }
 
@@ -263,6 +263,12 @@ impl DecryptionConfigurationBuilder {
     pub fn set_cache_lifetime(mut self, cache_lifetime: Option<Duration>) -> Self {
         self.cache_lifetime = cache_lifetime;
         self
+    }
+}
+
+impl Default for DecryptionConfigurationBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -348,11 +354,11 @@ impl CryptoFactory {
         })
     }
 
-    fn generate_key<'a>(
+    fn generate_key(
         &self,
         master_key_identifier: &str,
         is_footer_key: bool,
-        key_wrapper: &'a mut KeyWrapper,
+        key_wrapper: &mut KeyWrapper,
     ) -> Result<EncryptionKey> {
         let rng = SystemRandom::new();
         let mut key = vec![0u8; 16];
@@ -513,7 +519,7 @@ mod tests {
         );
 
         let column_keys = file_encryption_properties.column_keys.unwrap();
-        let mut all_columns: Vec<String> = column_keys.iter().map(|(k, _)| k.clone()).collect();
+        let mut all_columns: Vec<String> = column_keys.keys().cloned().collect();
         all_columns.sort();
         assert_eq!(vec!["x0", "x1", "x2", "x3"], all_columns);
         for (_, column_key) in column_keys.iter() {

@@ -78,11 +78,11 @@ impl KmsConnectionConfig {
 
 impl Default for KmsConnectionConfig {
     fn default() -> Self {
-        KmsConnectionConfigBuilder::new().build()
+        KmsConnectionConfigBuilder::default().build()
     }
 }
 
-/// A builder for creating a `KmsConnectionConfig`
+/// A builder for creating a [`KmsConnectionConfig`]
 pub struct KmsConnectionConfigBuilder {
     kms_instance_id: String,
     kms_instance_url: String,
@@ -91,7 +91,7 @@ pub struct KmsConnectionConfigBuilder {
 }
 
 impl KmsConnectionConfigBuilder {
-    /// Create a new `KmsConnectionConfigBuilder` with default options
+    /// Create a new [`KmsConnectionConfigBuilder`] with default options
     pub fn new() -> Self {
         Self {
             kms_instance_id: "".to_string(),
@@ -139,6 +139,13 @@ impl KmsConnectionConfigBuilder {
     pub fn set_custom_kms_conf_option(mut self, conf_key: String, conf_value: String) -> Self {
         self.custom_kms_conf.insert(conf_key, conf_value);
         self
+    }
+}
+
+impl Default for KmsConnectionConfigBuilder {
+    /// Create a new [`KmsConnectionConfigBuilder`] with default options
+    fn default() -> Self {
+        Self::new()
     }
 }
 

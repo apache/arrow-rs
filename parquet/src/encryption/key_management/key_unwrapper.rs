@@ -78,7 +78,7 @@ impl KeyUnwrapper {
                 entry.insert(kek)
             }
         };
-        key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, &kek)
+        key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, kek)
     }
 }
 

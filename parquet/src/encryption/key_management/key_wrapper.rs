@@ -93,7 +93,7 @@ impl<'a> KeyWrapper<'a> {
                 &self.kms_connection_config,
                 self.encryption_configuration.cache_lifetime(),
             )?;
-            let wrapped = kms_client.wrap_key(&key, master_key_id)?;
+            let wrapped = kms_client.wrap_key(key, master_key_id)?;
             key_material_builder
                 .with_single_wrapped_key(master_key_id.to_owned(), wrapped)
                 .build()?
