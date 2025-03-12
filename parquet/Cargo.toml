@@ -89,14 +89,6 @@ tokio = { version = "1.0", default-features = false, features = ["macros", "rt-m
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 object_store = { version = "0.11.0", default-features = false, features = ["azure"] }
 
-# TODO: temporary to fix parquet wasm build
-# upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-[target.'cfg(target_family = "wasm")'.dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.14", optional = true, default-features = false }
-
-[target.'cfg(target_family = "wasm")'.dev-dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
-
 [package.metadata.docs.rs]
 all-features = true
 
@@ -121,7 +113,7 @@ async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
-zstd = ["dep:zstd", "zstd-sys"]
+zstd = ["dep:zstd"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
 # Verify 32-bit CRC checksum when decoding parquet pages

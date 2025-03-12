@@ -130,6 +130,7 @@ jobs:
         run: |
           cargo update -p tokio --precise 1.29.1
           cargo update -p url --precise 2.5.0
+          cargo update -p once_cell --precise 1.20.3
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

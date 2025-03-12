@@ -32,9 +32,12 @@ use arrow_schema::{ArrowError, DataType};
 /// Hash collisions will result in replacement
 struct Interner<'a, V> {
     state: RandomState,
-    buckets: Vec<Option<(&'a [u8], V)>>,
+    buckets: Vec<Option<InternerBucket<'a, V>>>,
     shift: u32,
 }
+
+/// A single bucket in [`Interner`].
+type InternerBucket<'a, V> = (Option<&'a [u8]>, V);
 
 impl<'a, V> Interner<'a, V> {
     /// Capacity controls the number of unique buckets allocated within the Interner
@@ -54,7 +57,11 @@ impl<'a, V> Interner<'a, V> {
         }
     }
 
-    fn intern<F: FnOnce() -> Result<V, E>, E>(&mut self, new: &'a [u8], f: F) -> Result<&V, E> {
+    fn intern<F: FnOnce() -> Result<V, E>, E>(
+        &mut self,
+        new: Option<&'a [u8]>,
+        f: F,
+    ) -> Result<&V, E> {
         let hash = self.state.hash_one(new);
         let bucket_idx = hash >> self.shift;
         Ok(match &mut self.buckets[bucket_idx as usize] {
@@ -151,15 +158,19 @@ pub fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
 
     for (idx, dictionary) in dictionaries.iter().enumerate() {
         let mask = masks.and_then(|m| m.get(idx));
-        let key_mask = match (dictionary.logical_nulls(), mask) {
-            (Some(n), None) => Some(n.into_inner()),
-            (None, Some(n)) => Some(n.clone()),
-            (Some(n), Some(m)) => Some(n.inner() & m),
+        let key_mask_owned;
+        let key_mask = match (dictionary.nulls(), mask) {
+            (Some(n), None) => Some(n.inner()),
+            (None, Some(n)) => Some(n),
+            (Some(n), Some(m)) => {
+                key_mask_owned = n.inner() & m;
+                Some(&key_mask_owned)
+            }
             (None, None) => None,
         };
         let keys = dictionary.keys().values();
         let values = dictionary.values().as_ref();
-        let values_mask = compute_values_mask(keys, key_mask.as_ref(), values.len());
+        let values_mask = compute_values_mask(keys, key_mask, values.len());
 
         let masked_values = get_masked_values(values, &values_mask);
         num_values += masked_values.len();
@@ -223,7 +234,10 @@ fn compute_values_mask<K: ArrowNativeType>(
 }
 
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
-fn get_masked_values<'a>(array: &'a dyn Array, mask: &BooleanBuffer) -> Vec<(usize, &'a [u8])> {
+fn get_masked_values<'a>(
+    array: &'a dyn Array,
+    mask: &BooleanBuffer,
+) -> Vec<(usize, Option<&'a [u8]>)> {
     match array.data_type() {
         DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
         DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
@@ -239,10 +253,13 @@ fn get_masked_values<'a>(array: &'a dyn Array, mask: &BooleanBuffer) -> Vec<(usi
 fn masked_bytes<'a, T: ByteArrayType>(
     array: &'a GenericByteArray<T>,
     mask: &BooleanBuffer,
-) -> Vec<(usize, &'a [u8])> {
+) -> Vec<(usize, Option<&'a [u8]>)> {
     let mut out = Vec::with_capacity(mask.count_set_bits());
     for idx in mask.set_indices() {
-        out.push((idx, array.value(idx).as_ref()))
+        out.push((
+            idx,
+            array.is_valid(idx).then_some(array.value(idx).as_ref()),
+        ))
     }
     out
 }
@@ -311,10 +328,10 @@ mod tests {
         let b = DictionaryArray::new(Int32Array::new_null(10), Arc::new(StringArray::new_null(0)));
 
         let merged = merge_dictionary_values(&[&a, &b], None).unwrap();
-        let expected = StringArray::from(vec!["bingo", "hello"]);
+        let expected = StringArray::from(vec![None, Some("bingo"), Some("hello")]);
         assert_eq!(merged.values.as_ref(), &expected);
         assert_eq!(merged.key_mappings.len(), 2);
-        assert_eq!(&merged.key_mappings[0], &[0, 0, 0, 1, 0]);
+        assert_eq!(&merged.key_mappings[0], &[0, 0, 1, 2, 0]);
         assert_eq!(&merged.key_mappings[1], &[] as &[i32; 0]);
     }
 

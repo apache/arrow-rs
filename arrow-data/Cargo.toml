@@ -30,7 +30,6 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_data"
-path = "src/lib.rs"
 bench = false
 
 [features]
@@ -42,7 +41,7 @@ force_validate = []
 ffi = ["arrow-schema/ffi"]
 
 [package.metadata.docs.rs]
-features = ["ffi"]
+all-features = true
 
 [dependencies]
 

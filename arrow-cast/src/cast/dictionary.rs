@@ -295,6 +295,9 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             }
             pack_byte_to_dictionary::<K, GenericBinaryType<i64>>(array, cast_options)
         }
+        FixedSizeBinary(byte_size) => {
+            pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
+        }
         _ => Err(ArrowError::CastError(format!(
             "Unsupported output type for dictionary packing: {dict_value_type:?}"
         ))),
@@ -439,6 +442,37 @@ where
             ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
         })?;
     let mut b = GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
+
+    // copy each element one at a time
+    for i in 0..values.len() {
+        if values.is_null(i) {
+            b.append_null();
+        } else {
+            b.append(values.value(i))?;
+        }
+    }
+    Ok(Arc::new(b.finish()))
+}
+
+// Packs the data as a GenericByteDictionaryBuilder, if possible, with the
+// key types of K
+pub(crate) fn pack_byte_to_fixed_size_dictionary<K>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+    byte_width: i32,
+) -> Result<ArrayRef, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+{
+    let cast_values =
+        cast_with_options(array, &DataType::FixedSizeBinary(byte_width), cast_options)?;
+    let values = cast_values
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
+        })?;
+    let mut b = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(1024, 1024, byte_width);
 
     // copy each element one at a time
     for i in 0..values.len() {
