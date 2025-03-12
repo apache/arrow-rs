@@ -118,7 +118,7 @@ impl EncryptionConfigurationBuilder {
             column_keys: Default::default(),
             encryption_algorithm: EncryptionAlgorithm::AesGcmV1,
             plaintext_footer: false,
-            double_wrapping: false,
+            double_wrapping: true,
             cache_lifetime: Some(Duration::from_secs(600)),
             internal_key_material: true,
             data_key_length_bits: 128,
