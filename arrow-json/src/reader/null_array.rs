@@ -34,9 +34,11 @@ impl NullArrayDecoder {
 
 impl ArrayDecoder for NullArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
-        for p in pos {
-            if !matches!(tape.get(*p), TapeElement::Null) && !self.ignore_type_conflicts {
-                return Err(tape.error(*p, "null"));
+        if !self.ignore_type_conflicts {
+            for p in pos {
+                if !matches!(tape.get(*p), TapeElement::Null) {
+                    return Err(tape.error(*p, "null"));
+                }
             }
         }
         ArrayDataBuilder::new(DataType::Null).len(pos.len()).build()
