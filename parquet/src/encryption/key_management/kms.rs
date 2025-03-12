@@ -30,7 +30,7 @@ pub trait KmsClient: Send + Sync {
     fn unwrap_key(&self, wrapped_key: &str, master_key_identifier: &str) -> Result<Vec<u8>>;
 }
 
-/// A reference-counted reference to a generic `KmsClient`
+/// A reference-counted reference to a generic [`KmsClient`]
 pub type KmsClientRef = Arc<dyn KmsClient>;
 
 /// Holds configuration options required to connect to a KMS
@@ -54,7 +54,7 @@ impl KmsConnectionConfig {
         &self.kms_instance_url
     }
 
-    /// The authorization token to pass to the KMS.
+    /// The access token to pass to the KMS.
     pub fn key_access_token(&self) -> String {
         self.key_access_token.read().unwrap().clone()
     }

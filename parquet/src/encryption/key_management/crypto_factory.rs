@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::encryption::decrypt::FileDecryptionProperties;
+use crate::encryption::encrypt::{EncryptionKey, FileEncryptionProperties};
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
 use crate::encryption::key_management::key_wrapper::KeyWrapper;
 use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConfig};
@@ -202,22 +203,6 @@ impl EncryptionConfigurationBuilder {
     }
 }
 
-// Temporary FileEncryptionProperties struct until low-level encryption is added
-// TODO: Delete this
-#[derive(Debug, Clone, PartialEq)]
-pub struct FileEncryptionProperties {
-    encrypt_footer: bool,
-    footer_key: EncryptionKey,
-    column_keys: Option<HashMap<String, EncryptionKey>>,
-    aad_prefix: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EncryptionKey {
-    pub key: Vec<u8>,
-    pub key_metadata: Vec<u8>,
-}
-
 /// Configuration for decrypting a Parquet file
 #[derive(Debug)]
 pub struct DecryptionConfiguration {
@@ -320,7 +305,6 @@ impl CryptoFactory {
             return Err(nyi_err!("Only 128 bit data keys are currently implemented"));
         }
 
-        let encrypt_footer = !encryption_configuration.plaintext_footer;
         let mut key_wrapper = KeyWrapper::new(
             self.kms_manager.clone(),
             kms_connection_config,
@@ -333,25 +317,23 @@ impl CryptoFactory {
             &mut key_wrapper,
         )?;
 
-        let column_keys = if encryption_configuration.column_keys.is_empty() {
-            None
-        } else {
-            let mut column_keys = HashMap::default();
-            for (master_key_id, column_paths) in &encryption_configuration.column_keys {
-                for column_path in column_paths {
-                    let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
-                    column_keys.insert(column_path.clone(), column_key);
-                }
-            }
-            Some(column_keys)
-        };
+        let mut builder = FileEncryptionProperties::builder(footer_key.key().clone())
+            .with_footer_key_metadata(
+                footer_key
+                    .key_metadata()
+                    .expect("KMT generated keys must have key metadata")
+                    .clone(),
+            )
+            .with_plaintext_footer(encryption_configuration.plaintext_footer);
 
-        Ok(FileEncryptionProperties {
-            encrypt_footer,
-            footer_key,
-            column_keys,
-            aad_prefix: None,
-        })
+        for (master_key_id, column_paths) in &encryption_configuration.column_keys {
+            for column_path in column_paths {
+                let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
+                builder = builder.with_column_key(column_path.clone(), column_key);
+            }
+        }
+
+        Ok(builder.build())
     }
 
     fn generate_key(
@@ -367,7 +349,7 @@ impl CryptoFactory {
         let key_metadata =
             key_wrapper.get_key_metadata(&key, master_key_identifier, is_footer_key)?;
 
-        Ok(EncryptionKey { key, key_metadata })
+        Ok(EncryptionKey::new(key).with_metadata(key_metadata))
     }
 }
 
@@ -483,7 +465,7 @@ mod tests {
             .file_encryption_properties(kms_config.clone(), &encryption_config)
             .unwrap();
 
-        assert!(file_encryption_properties.column_keys.is_none());
+        assert!(file_encryption_properties.column_keys().is_empty());
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
@@ -506,29 +488,29 @@ mod tests {
             .unwrap();
         let key_retriever = decryption_properties.key_retriever().unwrap();
 
-        assert!(file_encryption_properties.encrypt_footer);
-        assert!(file_encryption_properties.aad_prefix.is_none());
-        assert_eq!(16, file_encryption_properties.footer_key.key.len());
+        assert!(file_encryption_properties.encrypt_footer());
+        assert!(file_encryption_properties.aad_prefix().is_none());
+        assert_eq!(16, file_encryption_properties.footer_key().len());
 
         let retrieved_footer_key = key_retriever
-            .retrieve_key(&file_encryption_properties.footer_key.key_metadata)
+            .retrieve_key(file_encryption_properties.footer_key_metadata().unwrap())
             .unwrap();
         assert_eq!(
-            &file_encryption_properties.footer_key.key,
+            &file_encryption_properties.footer_key(),
             &retrieved_footer_key
         );
 
-        let column_keys = file_encryption_properties.column_keys.unwrap();
+        let column_keys = file_encryption_properties.column_keys();
         let mut all_columns: Vec<String> = column_keys.keys().cloned().collect();
         all_columns.sort();
         assert_eq!(vec!["x0", "x1", "x2", "x3"], all_columns);
         for (_, column_key) in column_keys.iter() {
-            assert_eq!(16, column_key.key.len());
+            assert_eq!(16, column_key.key().len());
 
             let retrieved_key = key_retriever
-                .retrieve_key(&column_key.key_metadata)
+                .retrieve_key(column_key.key_metadata().unwrap())
                 .unwrap();
-            assert_eq!(&column_key.key, &retrieved_key);
+            assert_eq!(column_key.key(), &retrieved_key);
         }
 
         assert_eq!(1, kms_factory.invocations().len());

@@ -49,6 +49,10 @@ impl EncryptionKey {
     fn key(&self) -> &Vec<u8> {
         &self.key
     }
+
+    pub fn key_metadata(&self) -> Option<&Vec<u8>> {
+        self.key_metadata.as_ref()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +144,16 @@ impl FileEncryptionProperties {
     /// Should the AAD prefix be stored in the file
     pub fn store_aad_prefix(&self) -> bool {
         self.store_aad_prefix && self.aad_prefix.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn footer_key(&self) -> &[u8] {
+        &self.footer_key.key
+    }
+
+    #[cfg(test)]
+    pub fn column_keys(&self) -> &HashMap<String, EncryptionKey> {
+        &self.column_keys
     }
 
     /// Checks if columns that are to be encrypted are present in schema
