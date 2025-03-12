@@ -46,7 +46,8 @@ impl<O: OffsetSizeTrait> StringArrayDecoder<O> {
     fn write_number<T: std::fmt::Display>(&mut self, n: T) -> &str {
         self.number_buffer.clear();
         write!(&mut self.number_buffer, "{}", n).unwrap();
-        // SAFETY: We just wrote valid UTF-8 using write! macro
+        // SAFETY: We only write ASCII characters (digits, signs, decimal points,
+        // exponent symbols) into `number_buffer`, which are guaranteed valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(&self.number_buffer) }
     }
 }
