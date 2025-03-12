@@ -140,7 +140,6 @@ use std::sync::Arc;
 use chrono::Utc;
 use serde::Serialize;
 
-use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
@@ -763,27 +762,6 @@ fn make_decoder(
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, ignore_type_conflicts, is_nullable, struct_mode)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
-}
-
-/// Attempts to append a value to the builder, if valid. Otherwise, returns the error.
-fn try_append_value<P: ArrowPrimitiveType>(
-    builder: &mut PrimitiveBuilder<P>,
-    value: Result<P::Native, ArrowError>,
-) -> Result<(), ArrowError> {
-    builder.append_value(value?);
-    Ok(())
-}
-
-/// Attempts to append a value to the builder, if valid. Otherwise, appends NULL.
-fn append_value_or_null<P: ArrowPrimitiveType>(
-    builder: &mut PrimitiveBuilder<P>,
-    value: Result<P::Native, ArrowError>,
-) -> Result<(), ArrowError> {
-    match value {
-        Ok(value) => builder.append_value(value),
-        Err(_) => builder.append_null(),
-    }
-    Ok(())
 }
 
 #[cfg(test)]

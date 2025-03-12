@@ -100,14 +100,16 @@ where
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
         let d = &self.data_type;
 
-        // Simplify call sites below by hoisting the branch out of the loop. Depending on compiler
-        // optimizations each call site will either be a predictable function pointer invocation or
-        // a predictable branch. Either way, the cost should be trivial compared to the expensive
-        // and unpredictably branchy string parse that immediately precedes each call.
-        let append = if self.ignore_type_conflicts {
-            super::append_value_or_null
-        } else {
-            super::try_append_value
+        // Factor out this logic to simplify call sites below; the compiler will inline it,
+        // producing a highly predictable branch whose cost should be trivial compared to the
+        // expensive and unpredictably branchy string parse that immediately precedes each call.
+        let append = |builder: &mut PrimitiveBuilder<P>, value| {
+            match value {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
+            };
+            Ok(())
         };
 
         for p in pos {

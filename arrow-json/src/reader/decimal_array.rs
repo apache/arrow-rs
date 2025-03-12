@@ -53,55 +53,39 @@ where
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
 
-        // Simplify call sites below by hoisting the branch out of the loop. Depending on compiler
-        // optimizations each call site will either be a predictable function pointer invocation or
-        // a predictable branch. Either way, the cost should be trivial compared to the expensive
-        // and unpredictably branchy string parse that immediately precedes each call.
-        let append = if self.ignore_type_conflicts {
-            super::append_value_or_null
-        } else {
-            super::try_append_value
+        // Factor out this logic to simplify call sites below; the compiler will inline it,
+        // producing a highly predictable branch whose cost should be trivial compared to the
+        // expensive and unpredictably branchy string parse that immediately precedes each call.
+        let append = |builder: &mut PrimitiveBuilder<D>, value: &str| {
+            match parse_decimal::<D>(value, self.precision, self.scale) {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
+            }
+            Ok(())
         };
 
         for p in pos {
             match tape.get(*p) {
                 TapeElement::Null => builder.append_null(),
-                TapeElement::String(idx) => {
-                    let s = tape.get_string(idx);
-                    let value = parse_decimal::<D>(s, self.precision, self.scale);
-                    append(&mut builder, value)?
-                }
-                TapeElement::Number(idx) => {
-                    let s = tape.get_string(idx);
-                    let value = parse_decimal::<D>(s, self.precision, self.scale);
-                    append(&mut builder, value)?
-                }
+                TapeElement::String(idx) => append(&mut builder, tape.get_string(idx))?,
+                TapeElement::Number(idx) => append(&mut builder, tape.get_string(idx))?,
                 TapeElement::I64(high) => match tape.get(*p + 1) {
                     TapeElement::I32(low) => {
                         let val = (((high as i64) << 32) | (low as u32) as i64).to_string();
-                        let value = parse_decimal::<D>(&val, self.precision, self.scale);
-                        append(&mut builder, value)?
+                        append(&mut builder, &val)?
                     }
                     _ => unreachable!(),
                 },
-                TapeElement::I32(val) => {
-                    let s = val.to_string();
-                    let value = parse_decimal::<D>(&s, self.precision, self.scale);
-                    append(&mut builder, value)?
-                }
+                TapeElement::I32(val) => append(&mut builder, &val.to_string())?,
                 TapeElement::F64(high) => match tape.get(*p + 1) {
                     TapeElement::F32(low) => {
                         let val = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
-                        let value = parse_decimal::<D>(&val, self.precision, self.scale);
-                        append(&mut builder, value)?
+                        append(&mut builder, &val)?
                     }
                     _ => unreachable!(),
                 },
-                TapeElement::F32(val) => {
-                    let s = f32::from_bits(val).to_string();
-                    let value = parse_decimal::<D>(&s, self.precision, self.scale);
-                    append(&mut builder, value)?
-                }
+                TapeElement::F32(val) => append(&mut builder, &f32::from_bits(val).to_string())?,
                 _ if self.ignore_type_conflicts => builder.append_null(),
                 _ => return Err(tape.error(*p, "decimal")),
             }
