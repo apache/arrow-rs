@@ -381,8 +381,7 @@ mod tests {
             .file_decryption_properties(kms_config, config)
             .unwrap();
 
-        assert!(decryption_props.key_retriever.is_some());
-        let key_retriever = decryption_props.key_retriever.unwrap();
+        let key_retriever = decryption_props.key_retriever().unwrap();
 
         let expected_dek = "1234567890123450".as_bytes().to_vec();
         let kms = TestKmsClientFactory::with_default_keys()
@@ -414,8 +413,7 @@ mod tests {
             .file_decryption_properties(kms_config.clone(), config)
             .unwrap();
 
-        assert!(decryption_props.key_retriever.is_some());
-        let key_retriever = decryption_props.key_retriever.unwrap();
+        let key_retriever = decryption_props.key_retriever().unwrap();
 
         let dek = "1234567890123450".as_bytes().to_vec();
         let kms = TestKmsClientFactory::with_default_keys()
@@ -500,7 +498,7 @@ mod tests {
         let decryption_properties = crypto_factory
             .file_decryption_properties(kms_config.clone(), Default::default())
             .unwrap();
-        let key_retriever = decryption_properties.key_retriever.unwrap();
+        let key_retriever = decryption_properties.key_retriever().unwrap();
 
         assert!(file_encryption_properties.encrypt_footer);
         assert!(file_encryption_properties.aad_prefix.is_none());
