@@ -29,6 +29,8 @@ include = [
     "src/**/*.rs",
     "tests/*.rs",
     "Cargo.toml",
+    "LICENSE.txt",
+    "NOTICE.txt",
 ]
 edition = { workspace = true }
 rust-version = { workspace = true }
