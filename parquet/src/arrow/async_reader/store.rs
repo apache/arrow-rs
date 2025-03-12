@@ -17,14 +17,14 @@
 
 use std::{ops::Range, sync::Arc};
 
+use crate::arrow::arrow_reader::ArrowReaderOptions;
+use crate::arrow::async_reader::AsyncFileReader;
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, TryFutureExt};
 use object_store::{path::Path, ObjectMeta, ObjectStore};
 use tokio::runtime::Handle;
-
-use crate::arrow::async_reader::AsyncFileReader;
-use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
 ///
@@ -175,6 +175,27 @@ impl AsyncFileReader for ParquetObjectReader {
             Ok(Arc::new(metadata))
         })
     }
+
+    fn get_metadata_with_options<'a>(
+        &'a mut self,
+        options: &'a ArrowReaderOptions,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
+            let file_size = self.meta.size;
+            let metadata = ParquetMetaDataReader::new()
+                .with_column_indexes(self.preload_column_index)
+                .with_offset_indexes(self.preload_offset_index)
+                .with_prefetch_hint(self.metadata_size_hint);
+
+            #[cfg(feature = "encryption")]
+            let metadata =
+                metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+
+            let metadata = metadata.load_and_finish(self, file_size).await?;
+
+            Ok(Arc::new(metadata))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -186,15 +207,16 @@ mod tests {
 
     use futures::TryStreamExt;
 
+    use crate::arrow::arrow_reader::ArrowReaderOptions;
+    use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
+    use crate::arrow::ParquetRecordBatchStreamBuilder;
+    use crate::encryption::decrypt::FileDecryptionProperties;
+    use crate::errors::ParquetError;
     use arrow::util::test_util::parquet_test_data;
     use futures::FutureExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
-
-    use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-    use crate::arrow::ParquetRecordBatchStreamBuilder;
-    use crate::errors::ParquetError;
 
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
@@ -206,6 +228,45 @@ mod tests {
             .unwrap();
 
         (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    }
+
+    #[cfg(feature = "encryption")]
+    async fn get_encrypted_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
+        let res = parquet_test_data();
+        let store = LocalFileSystem::new_with_prefix(res).unwrap();
+
+        let meta = store
+            .head(&Path::from("uniform_encryption.parquet.encrypted"))
+            .await
+            .unwrap();
+
+        (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "encryption")]
+    async fn test_encrypted() {
+        let (meta, store) = get_encrypted_meta_store().await;
+
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+        let options =
+            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+        let mut reader = ParquetObjectReader::new(store.clone(), meta.clone());
+        let metadata = reader.get_metadata_with_options(&options).await.unwrap();
+
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let reader = ParquetObjectReader::new(store, meta);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+            .await
+            .unwrap();
+        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 50);
     }
 
     #[tokio::test]

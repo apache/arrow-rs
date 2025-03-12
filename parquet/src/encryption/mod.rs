@@ -15,13 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod page_util;
+//! Encryption implementation specific to Parquet, as described
+//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-#[cfg(test)]
-pub mod file_util;
-
-#[cfg(test)]
-pub mod rand_gen;
-
-#[cfg(all(test, feature = "encryption", feature = "arrow"))]
-pub mod encryption_util;
+pub(crate) mod ciphers;
+pub mod decrypt;
+pub(crate) mod modules;
