@@ -116,9 +116,7 @@ impl<'a> EncoderWithNullBuffer<'a> {
 
     /// Returns whether the value at index `idx` is null.
     pub fn is_null(&self, idx: usize) -> bool {
-        self.nulls
-            .as_ref()
-            .map_or(false, |nulls| nulls.is_null(idx))
+        self.nulls.as_ref().is_some_and(|nulls| nulls.is_null(idx))
     }
 
     /// Returns whether the encoder has any nulls.
