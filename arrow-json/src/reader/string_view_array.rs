@@ -20,6 +20,7 @@ use arrow_array::types::StringViewType;
 use arrow_array::Array;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::fmt::Write;
 
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
@@ -44,24 +45,49 @@ impl ArrayDecoder for StringViewArrayDecoder {
         for &p in pos {
             match tape.get(p) {
                 TapeElement::String(idx) => {
-                    data_capacity += tape.get_string(idx).len();
+                    let s = tape.get_string(idx);
+                    // Only increase capacity if the string length is greater than 12 bytes
+                    if s.len() > 12 {
+                        data_capacity += s.len();
+                    }
                 }
-                TapeElement::Null => { /* 不增加容量 */ }
-                TapeElement::True if coerce => {
-                    data_capacity += TRUE.len();
+                TapeElement::Null => {
+                    // Do not increase capacity for null values
                 }
-                TapeElement::False if coerce => {
-                    data_capacity += FALSE.len();
-                }
+                // For booleans, do not increase capacity
+                TapeElement::True if coerce => {}
+                TapeElement::False if coerce => {}
+                // For Number, use the same strategy as for strings
                 TapeElement::Number(idx) if coerce => {
-                    data_capacity += tape.get_string(idx).len();
+                    let s = tape.get_string(idx);
+                    if s.len() > 12 {
+                        data_capacity += s.len();
+                    }
                 }
+                // For I64, only add capacity if the absolute value is greater than 999,999,999,999
                 TapeElement::I64(_) if coerce => {
-                    data_capacity += 10;
+                    match tape.get(p + 1) {
+                        TapeElement::I32(_) => {
+                            let high = match tape.get(p) {
+                                TapeElement::I64(h) => h,
+                                _ => unreachable!(),
+                            };
+                            let low = match tape.get(p + 1) {
+                                TapeElement::I32(l) => l,
+                                _ => unreachable!(),
+                            };
+                            let val = ((high as i64) << 32) | (low as u32) as i64;
+                            if val.abs() > 999_999_999_999 {
+                                // Only allocate capacity based on the string representation if the number is large
+                                data_capacity += val.to_string().len();
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
                 }
-                TapeElement::I32(_) if coerce => {
-                    data_capacity += 10;
-                }
+                // For I32, do not increase capacity (the longest string representation is <= 12 bytes)
+                TapeElement::I32(_) if coerce => {}
+                // For F32 and F64, keep the existing estimate
                 TapeElement::F32(_) if coerce => {
                     data_capacity += 10;
                 }
@@ -75,6 +101,8 @@ impl ArrayDecoder for StringViewArrayDecoder {
         }
 
         let mut builder = GenericByteViewBuilder::<StringViewType>::with_capacity(data_capacity);
+        // Temporary buffer to avoid per-iteration allocation for numeric types
+        let mut tmp_buf = String::new();
 
         for &p in pos {
             match tape.get(p) {
@@ -96,20 +124,29 @@ impl ArrayDecoder for StringViewArrayDecoder {
                 TapeElement::I64(high) if coerce => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
                         let val = ((high as i64) << 32) | (low as u32) as i64;
-                        builder.append_value(val.to_string());
+                        tmp_buf.clear();
+                        // Reuse the temporary buffer instead of allocating a new String
+                        write!(&mut tmp_buf, "{}", val).unwrap();
+                        builder.append_value(&tmp_buf);
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I32(n) if coerce => {
-                    builder.append_value(n.to_string());
+                    tmp_buf.clear();
+                    write!(&mut tmp_buf, "{}", n).unwrap();
+                    builder.append_value(&tmp_buf);
                 }
                 TapeElement::F32(n) if coerce => {
-                    builder.append_value(n.to_string());
+                    tmp_buf.clear();
+                    write!(&mut tmp_buf, "{}", n).unwrap();
+                    builder.append_value(&tmp_buf);
                 }
                 TapeElement::F64(high) if coerce => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
-                        let val = f64::from_bits(((high as u64) << 32) | low as u64);
-                        builder.append_value(val.to_string());
+                        let val = f64::from_bits(((high as u64) << 32) | (low as u64));
+                        tmp_buf.clear();
+                        write!(&mut tmp_buf, "{}", val).unwrap();
+                        builder.append_value(&tmp_buf);
                     }
                     _ => unreachable!(),
                 },
