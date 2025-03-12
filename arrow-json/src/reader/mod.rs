@@ -140,10 +140,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use serde::Serialize;
 
+use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
-use arrow_array::builder::PrimitiveBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
@@ -169,7 +169,7 @@ mod schema;
 mod serializer;
 mod string_array;
 mod struct_array;
-pub mod tape;
+mod tape;
 mod timestamp_array;
 
 /// A builder for [`Reader`] and [`Decoder`]
@@ -283,8 +283,11 @@ impl ReaderBuilder {
         }
     }
 
-    /// Sets if the decoder should produce NULL instead of returning an error if it encounters a
-    /// type conflict on a nullable column.
+    /// Sets whether the decoder should produce NULL instead of returning an error if it encounters
+    /// a type conflict on a nullable column (effectively treating it as a non-existent column).
+    ///
+    /// NOTE: The inferred NULL on type conflict will still produce errors for non-nullable columns,
+    /// the same as any other NULL or missing value.
     pub fn with_ignore_type_conflicts(self, ignore_type_conflicts: bool) -> Self {
         Self {
             ignore_type_conflicts,
@@ -785,16 +788,17 @@ fn append_value_or_null<P: ArrowPrimitiveType>(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-    use std::fs::File;
-    use std::io::{BufReader, Cursor, Seek};
-
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, BooleanArray, Float64Array, ListArray, StringArray};
-    use arrow_buffer::{ArrowNativeType, Buffer};
+    use arrow_array::{
+        Array, BooleanArray, Float64Array, Int32Array, ListArray, MapArray, NullArray, StringArray,
+    };
+    use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::{Field, Fields};
+    use serde_json::json;
+    use std::fs::File;
+    use std::io::{BufReader, Cursor, Seek};
 
     use super::*;
 
@@ -2708,23 +2712,16 @@ mod tests {
 
     #[test]
     fn test_type_conflict_nulls() {
-        use arrow_array::{BooleanArray, Int32Array, MapArray, NullArray};
-        use arrow_buffer::NullBuffer;
-        use arrow_schema::Fields;
-        let json = vec![
-            json!({"null": null, "bool": true, "numeric": 1.234, "string": "hi", "array": [1, "hi", 3], "map": {"k": "value"}, "struct": {"a": 1}}),
-            json!({"bool": null, "numeric": true, "string": 1.234, "array": "hi", "map": [1, "hi", 3], "struct": {"k": "value"}, "null": {"a": 1}}),
-            json!({"numeric": null, "string": true, "array": 1.234, "map": "hi", "struct": [1, "hi", 3], "null": {"k": "value"}, "bool": {"a": 1}}),
-            json!({"string": null, "array": true, "map": 1.234, "struct": "hi", "null": [1, "hi", 3], "bool": {"k": "value"}, "numeric": {"a": 1}}),
-            json!({"array": null, "map": true, "struct": 1.234, "null": "hi", "bool": [1, "hi", 3], "numeric": {"k": "value"}, "string": {"a": 1}}),
-            json!({"map": null, "struct": true, "null": 1.234, "bool": "hi", "numeric": [1, "hi", 3], "string": {"k": "value"}, "array": {"a": 1}}),
-            json!({"struct": null, "null": true, "bool": 1.234, "numeric": "hi", "string": [1, "hi", 3], "array": {"k": "value"}, "map": {"a": 1}}),
-        ];
         let schema = Schema::new(vec![
             Field::new("null", DataType::Null, true),
             Field::new("bool", DataType::Boolean, true),
             Field::new("numeric", DataType::Decimal128(10, 3), true),
             Field::new("string", DataType::Utf8, true),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Second, None),
+                true,
+            ),
             Field::new(
                 "array",
                 DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
@@ -2751,6 +2748,31 @@ mod tests {
                 true,
             ),
         ]);
+
+        // A compatible value for each schema field above, in schema order
+        let json_values = vec![
+            json!(null),
+            json!(true),
+            json!(1.234),
+            json!("hi"),
+            json!("1970-01-01T00:00:00+02:00"),
+            json!([1, "ho", 3]),
+            json!({"k": "value"}),
+            json!({"a": 1}),
+        ];
+
+        // Create a set of JSON rows that rotates each value past every field
+        let json: Vec<_> = (0..json_values.len())
+            .map(|i| {
+                let pairs = json_values[i..]
+                    .iter()
+                    .chain(json_values[..i].iter())
+                    .zip(&schema.fields)
+                    .map(|(v, f)| (f.name().to_string(), v.clone()))
+                    .collect();
+                serde_json::Value::Object(pairs)
+            })
+            .collect();
         let mut decoder = ReaderBuilder::new(Arc::new(schema))
             .with_ignore_type_conflicts(true)
             .with_coerce_primitive(true)
@@ -2758,8 +2780,8 @@ mod tests {
             .unwrap();
         decoder.serialize(&json).unwrap();
         let batch = decoder.flush().unwrap().unwrap();
-        assert_eq!(batch.num_rows(), 7);
-        assert_eq!(batch.num_columns(), 7);
+        assert_eq!(batch.num_rows(), 8);
+        assert_eq!(batch.num_columns(), 8);
 
         let _ = batch
             .column(0)
@@ -2775,12 +2797,12 @@ mod tests {
             .unwrap();
         assert!(bools
             .iter()
-            .eq([Some(true), None, None, None, None, None, None]));
+            .eq([Some(true), None, None, None, None, None, None, None]));
 
         let numbers = batch.column(2).as_primitive::<Decimal128Type>();
         assert!(numbers
             .iter()
-            .eq([Some(1234), None, None, None, None, None, None]));
+            .eq([Some(1234), None, None, None, None, None, None, None]));
 
         let strings = batch
             .column(3)
@@ -2789,23 +2811,29 @@ mod tests {
             .unwrap();
         assert!(strings.iter().eq([
             Some("hi"),
-            Some("1.234"),
+            Some("1970-01-01T00:00:00+02:00"),
+            None,
+            None,
+            None,
+            None,
             Some("true"),
-            None,
-            None,
-            None,
-            None
+            Some("1.234"),
         ]));
 
+        let timestamps = batch.column(4).as_primitive::<TimestampSecondType>();
+        assert!(timestamps
+            .iter()
+            .eq([Some(-7200), None, None, None, None, None, None, None,]));
+
         let arrays = batch
-            .column(4)
+            .column(5)
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
         assert_eq!(
             arrays.nulls(),
             Some(&NullBuffer::from(
-                &[true, false, false, false, false, false, false][..]
+                &[true, false, false, false, false, false, false, false][..]
             ))
         );
         assert_eq!(arrays.offsets()[1], 3);
@@ -2814,16 +2842,14 @@ mod tests {
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap();
-        assert!(
-            array_values.iter().eq([Some(1), None, Some(3)]),
-            "{array_values:?}"
-        );
+        assert!(array_values.iter().eq([Some(1), None, Some(3)]));
 
-        let maps = batch.column(5).as_any().downcast_ref::<MapArray>().unwrap();
+        let maps = batch.column(6).as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(
             maps.nulls(),
             Some(&NullBuffer::from(
-                &[true, false, false, false, false, false, true][..]
+                // Both map and struct can parse
+                &[true, true, false, false, false, false, false, false][..]
             ))
         );
         let map_keys = maps.keys().as_any().downcast_ref::<StringArray>().unwrap();
@@ -2836,14 +2862,15 @@ mod tests {
         assert!(map_values.iter().eq([Some("value"), Some("1")]));
 
         let structs = batch
-            .column(6)
+            .column(7)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
         assert_eq!(
             structs.nulls(),
             Some(&NullBuffer::from(
-                &[true, true, false, false, false, false, false][..]
+                // Both map and struct can parse
+                &[true, false, false, false, false, false, false, true][..]
             ))
         );
         let struct_fields = structs
@@ -2852,5 +2879,110 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert!(struct_fields.slice(0, 2).iter().eq([Some(1), None]));
+    }
+
+    #[test]
+    fn test_type_conflict_non_nullable() {
+        let fields = [
+            Field::new("bool", DataType::Boolean, false),
+            Field::new("numeric", DataType::Decimal128(10, 3), false),
+            Field::new("string", DataType::Utf8, false),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Second, None),
+                false,
+            ),
+            Field::new(
+                "array",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                false,
+            ),
+            Field::new(
+                "map",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
+                        ])),
+                        false, // not nullable
+                    )),
+                    false, // not sorted
+                ),
+                false, // not nullable
+            ),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                false,
+            ),
+        ];
+
+        // Every field above will have a type conflict with at least one of these values
+        let json_values = vec![json!(true), json!({"a": 1})];
+
+        for field in fields {
+            let mut decoder = ReaderBuilder::new_with_field(field)
+                .with_ignore_type_conflicts(true)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(&json_values).unwrap();
+            decoder
+                .flush()
+                .expect_err("type conflict on non-nullable type");
+        }
+    }
+
+    #[test]
+    fn test_ignore_type_conflicts_disabled() {
+        let fields = [
+            Field::new("bool", DataType::Boolean, true),
+            Field::new("numeric", DataType::Decimal128(10, 3), true),
+            Field::new("string", DataType::Utf8, true),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Second, None),
+                true,
+            ),
+            Field::new(
+                "array",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "map",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
+                        ])),
+                        false, // not nullable
+                    )),
+                    false, // not sorted
+                ),
+                true, // not nullable
+            ),
+            Field::new(
+                "struct",
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)])),
+                true,
+            ),
+        ];
+
+        // Every field above will have a type conflict with at least one of these values
+        let json_values = vec![json!(true), json!({"a": 1})];
+
+        for field in fields {
+            let mut decoder = ReaderBuilder::new_with_field(field)
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(&json_values).unwrap();
+            decoder
+                .flush()
+                .expect_err("type conflict on non-nullable type");
+        }
     }
 }

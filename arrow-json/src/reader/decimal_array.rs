@@ -52,6 +52,11 @@ where
 {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
+
+        // Simplify call sites below by hoisting the branch out of the loop. Depending on compiler
+        // optimizations each call site will either be a predictable function pointer invocation or
+        // a predictable branch. Either way, the cost should be trivial compared to the expensive
+        // and unpredictably branchy string parse that immediately precedes each call.
         let append = if self.ignore_type_conflicts {
             super::append_value_or_null
         } else {
