@@ -85,7 +85,7 @@ fn small_bench_primitive_with_utf8view(c: &mut Criterion) {
         {"c1": "fifteen", "c2": null, "c4": true}
         "#;
 
-    do_bench(c, "small_bench_primitive", json_content, schema)
+    do_bench(c, "small_bench_primitive_with_utf8view", json_content, schema)
 }
 
 fn large_bench_primitive(c: &mut Criterion) {
