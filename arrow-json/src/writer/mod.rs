@@ -112,7 +112,6 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-use encoder::NullBufferExt;
 pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions};
 
 /// This trait defines how to format a sequence of JSON objects to a
@@ -368,12 +367,9 @@ where
         ));
 
         let encoder = make_encoder(&field, &array, &self.options)?;
-        let nulls = encoder.nulls();
 
         // Validate that the root is not nullable
-        for idx in 0..array.len() {
-            assert!(!nulls.is_null(idx), "root cannot be nullable");
-        }
+        assert!(!encoder.has_nulls(), "root cannot be nullable");
 
         let mut encoder = make_encoder(&field, &array, &self.options)?;
         for idx in 0..batch.num_rows() {
