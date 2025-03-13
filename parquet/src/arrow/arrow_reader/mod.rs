@@ -1725,7 +1725,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // https://github.com/apache/arrow-rs/issues/2253
     fn test_decimal_list() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
