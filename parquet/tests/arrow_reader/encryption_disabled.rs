@@ -52,12 +52,12 @@ async fn test_async_read_without_encryption_enabled_fails() {
 #[test]
 #[cfg(feature = "snap")]
 fn test_plaintext_footer_read_without_decryption() {
-    crate::encryption_common::read_plaintext_footer_file_without_decryption_properties();
+    crate::encryption_agnostic::read_plaintext_footer_file_without_decryption_properties();
 }
 
 #[tokio::test]
 #[cfg(all(feature = "async", feature = "snap"))]
 async fn test_plaintext_footer_read_without_decryption_async() {
-    crate::encryption_common::read_plaintext_footer_file_without_decryption_properties_async()
+    crate::encryption_agnostic::read_plaintext_footer_file_without_decryption_properties_async()
         .await;
 }

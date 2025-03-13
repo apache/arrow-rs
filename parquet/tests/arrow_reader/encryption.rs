@@ -106,7 +106,7 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
 #[test]
 #[cfg(feature = "snap")]
 fn test_plaintext_footer_read_without_decryption() {
-    crate::encryption_common::read_plaintext_footer_file_without_decryption_properties();
+    crate::encryption_agnostic::read_plaintext_footer_file_without_decryption_properties();
 }
 
 #[test]

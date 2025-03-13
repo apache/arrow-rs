@@ -139,7 +139,7 @@ async fn test_misspecified_encryption_keys() {
 #[tokio::test]
 #[cfg(feature = "snap")]
 async fn test_plaintext_footer_read_without_decryption() {
-    crate::encryption_common::read_plaintext_footer_file_without_decryption_properties_async()
+    crate::encryption_agnostic::read_plaintext_footer_file_without_decryption_properties_async()
         .await;
 }
 
