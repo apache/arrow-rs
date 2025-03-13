@@ -64,6 +64,35 @@ fn small_bench_primitive(c: &mut Criterion) {
     do_bench(c, "small_bench_primitive", json_content, schema)
 }
 
+fn small_bench_primitive_with_utf8view(c: &mut Criterion) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8View, true),
+        Field::new("c2", DataType::Float64, true),
+        Field::new("c3", DataType::UInt32, true),
+        Field::new("c4", DataType::Boolean, true),
+    ]));
+
+    let json_content = r#"
+        {"c1": "eleven", "c2": 6.2222222225, "c3": 5.0, "c4": false}
+        {"c1": "twelve", "c2": -55555555555555.2, "c3": 3}
+        {"c1": null, "c2": 3, "c3": 125, "c4": null}
+        {"c2": -35, "c3": 100.0, "c4": true}
+        {"c1": "fifteen", "c2": null, "c4": true}
+        {"c1": "eleven", "c2": 6.2222222225, "c3": 5.0, "c4": false}
+        {"c1": "twelve", "c2": -55555555555555.2, "c3": 3}
+        {"c1": null, "c2": 3, "c3": 125, "c4": null}
+        {"c2": -35, "c3": 100.0, "c4": true}
+        {"c1": "fifteen", "c2": null, "c4": true}
+        "#;
+
+    do_bench(
+        c,
+        "small_bench_primitive_with_utf8view",
+        json_content,
+        schema,
+    )
+}
+
 fn large_bench_primitive(c: &mut Criterion) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, true),
@@ -142,6 +171,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     small_bench_primitive(c);
     large_bench_primitive(c);
     small_bench_list(c);
+    small_bench_primitive_with_utf8view(c);
 }
 
 criterion_group!(benches, criterion_benchmark);
