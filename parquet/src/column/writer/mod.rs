@@ -1552,8 +1552,6 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "encryption")]
-    use arrow_array::cast::AsArray;
     use core::str;
     use rand::distributions::uniform::SampleUniform;
     use std::{fs::File, sync::Arc};
