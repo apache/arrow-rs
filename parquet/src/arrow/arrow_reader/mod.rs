@@ -17,9 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -27,12 +24,16 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -252,6 +253,9 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
+    /// If encryption is enabled, the file decryption properties can be provided
+    #[cfg(feature = "encryption")]
+    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ArrowReaderOptions {
@@ -317,7 +321,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -341,6 +345,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
+    }
+
+    /// Provide the file decryption properties to use when reading encrypted parquet files.
+    ///
+    /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) -> Self {
+        Self {
+            file_decryption_properties: Some(file_decryption_properties),
+            ..self
+        }
     }
 }
 
@@ -380,9 +398,11 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(options.page_index)
-            .parse_and_finish(reader)?;
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -553,6 +573,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -670,14 +691,55 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let meta = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
         // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
+        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
+        #[cfg(feature = "encryption")]
+        let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
+            let column_name = self
+                .metadata
+                .file_metadata()
+                .schema_descr()
+                .column(self.column_idx);
+
+            if file_decryptor.is_column_encrypted(column_name.name()) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
+                let data_decryptor = match data_decryptor {
+                    Ok(data_decryptor) => data_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
+
+                let metadata_decryptor =
+                    file_decryptor.get_column_metadata_decryptor(column_name.name());
+                let metadata_decryptor = match metadata_decryptor {
+                    Ok(metadata_decryptor) => metadata_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
+
+                let crypto_context = CryptoContext::new(
+                    rg_idx,
+                    self.column_idx,
+                    data_decryptor,
+                    metadata_decryptor,
+                    file_decryptor.file_aad().clone(),
+                );
+                Some(Arc::new(crypto_context))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+
+        #[cfg(feature = "encryption")]
+        let ret = ret.map(|reader| reader.with_crypto_context(crypto_context));
+
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -943,6 +1005,7 @@ mod tests {
     };
     use arrow_select::concat::concat_batches;
 
+    use crate::arrow::arrow_reader::ArrowReaderMetadata;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
@@ -955,11 +1018,15 @@ mod tests {
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
         FloatType, Int32Type, Int64Type, Int96Type,
     };
+    #[cfg(feature = "encryption")]
+    use crate::encryption::decrypt::FileDecryptionProperties;
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
+    #[cfg(feature = "encryption")]
+    use crate::util::test_common::encryption_util::verify_encryption_test_file_read;
     use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
@@ -1786,6 +1853,241 @@ mod tests {
         assert_eq!(col.value(1), f16::ZERO);
         assert!(col.value(1).is_sign_positive());
         assert!(col.value(2).is_nan());
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_non_uniform_encryption_plaintext_footer() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        // There is always a footer key even with a plaintext footer,
+        // but this is used for signing the footer.
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_non_uniform_encryption_disabled_aad_storage() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path =
+            format!("{testdata}/encrypt_columns_and_footer_disable_aad_storage.parquet.encrypted");
+        let file = File::open(path.clone()).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        // Can read successfully when providing the correct AAD prefix
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .with_aad_prefix("tester".as_bytes().to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+
+        // Using wrong AAD prefix should fail
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .with_aad_prefix("wrong_aad_prefix".as_bytes().to_vec())
+            .build()
+            .unwrap();
+
+        let file = File::open(path.clone()).unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+        );
+
+        // Not providing any AAD prefix should fail as it isn't stored in the file
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        let file = File::open(path).unwrap();
+        let options = ArrowReaderOptions::default()
+            .with_file_decryption_properties(decryption_properties.clone());
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+        );
+    }
+
+    #[test]
+    fn test_non_uniform_encryption_plaintext_footer_without_decryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+        let file = File::open(&path).unwrap();
+
+        let metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
+        let file_metadata = metadata.metadata.file_metadata();
+
+        assert_eq!(file_metadata.num_rows(), 50);
+        assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
+        );
+
+        metadata.metadata.row_groups().iter().for_each(|rg| {
+            assert_eq!(rg.num_columns(), 8);
+            assert_eq!(rg.num_rows(), 50);
+        });
+
+        // Should be able to read unencrypted columns. Test reading one column.
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
+        let record_reader = builder.with_projection(mask).build().unwrap();
+
+        let mut row_count = 0;
+        for batch in record_reader {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+
+            let time_col = batch
+                .column(0)
+                .as_primitive::<types::Time32MillisecondType>();
+            for (i, x) in time_col.iter().enumerate() {
+                assert_eq!(x.unwrap(), i as i32);
+            }
+        }
+
+        assert_eq!(row_count, file_metadata.num_rows() as usize);
+
+        // Reading an encrypted column should fail
+        let file = File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
+        let mut record_reader = builder.with_projection(mask).build().unwrap();
+
+        match record_reader.next() {
+            Some(Err(ArrowError::ParquetError(s))) => {
+                assert!(s.contains("protocol error"));
+            }
+            _ => {
+                panic!("Expected ArrowError::ParquetError");
+            }
+        };
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_non_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_uniform_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        verify_encryption_test_file_read(file, decryption_properties);
+    }
+
+    #[test]
+    #[cfg(not(feature = "encryption"))]
+    fn test_decrypting_without_encryption_flag_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let options = ArrowReaderOptions::default();
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but the encryption feature is disabled"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_decrypting_without_decryption_properties_fails() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let options = ArrowReaderOptions::default();
+        let result = ArrowReaderMetadata::load(&file, options.clone());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: Parquet file has an encrypted footer but no decryption properties were provided"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_aes_ctr_encryption() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/encrypt_columns_and_footer_ctr.parquet.encrypted");
+        let file = File::open(path).unwrap();
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_1_key = "1234567890123450".as_bytes();
+        let column_2_key = "1234567890123451".as_bytes();
+
+        let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+            .with_column_key("double_field", column_1_key.to_vec())
+            .with_column_key("float_field", column_2_key.to_vec())
+            .build()
+            .unwrap();
+
+        let options =
+            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+        let metadata = ArrowReaderMetadata::load(&file, options);
+
+        match metadata {
+            Err(crate::errors::ParquetError::NYI(s)) => {
+                assert!(s.contains("AES_GCM_CTR_V1"));
+            }
+            _ => {
+                panic!("Expected ParquetError::NYI");
+            }
+        };
     }
 
     #[test]
