@@ -103,7 +103,7 @@ impl FileEncryptionProperties {
             columns_missing_in_schema.sort();
             return Err(ParquetError::General(
                 format!(
-                    "Column {} not found in schema",
+                    "The following columns with encryption keys specified were not found in the schema: {}",
                     columns_missing_in_schema.join(", ")
                 )
                 .to_string(),
@@ -164,7 +164,7 @@ impl EncryptionPropertiesBuilder {
 }
 
 #[derive(Debug)]
-pub struct FileEncryptor {
+pub(crate) struct FileEncryptor {
     properties: FileEncryptionProperties,
     aad_file_unique: Vec<u8>,
     file_aad: Vec<u8>,
