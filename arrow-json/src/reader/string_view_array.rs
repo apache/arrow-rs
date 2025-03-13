@@ -43,6 +43,9 @@ impl ArrayDecoder for StringViewArrayDecoder {
         let coerce = self.coerce_primitive;
         let mut data_capacity = 0;
         for &p in pos {
+            // note that StringView is different that StringArray in that only
+            // "long" strings (longer than 12 bytes) are stored in the buffer.
+            // "short" strings are inlined into a fixed length structure.
             match tape.get(p) {
                 TapeElement::String(idx) => {
                     let s = tape.get_string(idx);
@@ -54,7 +57,8 @@ impl ArrayDecoder for StringViewArrayDecoder {
                 TapeElement::Null => {
                     // Do not increase capacity for null values
                 }
-                // For booleans, do not increase capacity
+                // For booleans, do not increase capacity (both "true" and "false" are less than
+                // 12 bytes)
                 TapeElement::True if coerce => {}
                 TapeElement::False if coerce => {}
                 // For Number, use the same strategy as for strings
@@ -65,6 +69,7 @@ impl ArrayDecoder for StringViewArrayDecoder {
                     }
                 }
                 // For I64, only add capacity if the absolute value is greater than 999,999,999,999
+                // (the largest number that can fit in 12 bytes)
                 TapeElement::I64(_) if coerce => {
                     match tape.get(p + 1) {
                         TapeElement::I32(_) => {
