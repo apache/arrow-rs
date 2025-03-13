@@ -15,32 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Convert data to / from the [Apache Arrow] memory format and [Apache Avro]
-//!
-//! [Apache Arrow]: https://arrow.apache.org
-//! [Apache Avro]: https://avro.apache.org/
+//! Encryption implementation specific to Parquet, as described
+//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 
-#![doc(
-    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
-    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![warn(missing_docs)]
-#![allow(unused)] // Temporary
-
-pub mod reader;
-mod schema;
-
-mod compression;
-
-mod codec;
-
-#[cfg(test)]
-mod test_util {
-    pub fn arrow_test_data(path: &str) -> String {
-        match std::env::var("ARROW_TEST_DATA") {
-            Ok(dir) => format!("{dir}/{path}"),
-            Err(_) => format!("../testing/data/{path}"),
-        }
-    }
-}
+pub(crate) mod ciphers;
+pub mod decrypt;
+pub(crate) mod modules;

@@ -47,7 +47,7 @@ walkdir = { version = "2", optional = true }
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 form_urlencoded = { version = "1.2", optional = true }
-http-body-util = { version = "0.1", optional = true }
+http-body-util = { version = "0.1.2", optional = true }
 httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
