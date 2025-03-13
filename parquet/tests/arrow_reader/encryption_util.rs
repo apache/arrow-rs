@@ -15,67 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
-};
-use crate::arrow::ParquetRecordBatchStreamBuilder;
-use crate::encryption::decrypt::FileDecryptionProperties;
-use crate::errors::ParquetError;
-use crate::file::metadata::FileMetaData;
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
-use futures::TryStreamExt;
-use std::fs::File;
+use parquet::file::metadata::ParquetMetaData;
 
-pub(crate) fn verify_encryption_test_file_read(
-    file: File,
-    decryption_properties: FileDecryptionProperties,
-) {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-    let file_metadata = metadata.metadata.file_metadata();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let record_reader = builder.build().unwrap();
-    let record_batches = record_reader
-        .map(|x| x.unwrap())
-        .collect::<Vec<RecordBatch>>();
-
-    verify_encryption_test_data(record_batches, file_metadata.clone(), metadata);
-}
-
-pub(crate) async fn verify_encryption_test_file_read_async(
-    file: &mut tokio::fs::File,
-    decryption_properties: FileDecryptionProperties,
-) -> Result<(), ParquetError> {
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-
-    let metadata = ArrowReaderMetadata::load_async(file, options.clone()).await?;
-    let arrow_reader_metadata = ArrowReaderMetadata::load_async(file, options).await?;
-    let file_metadata = metadata.metadata.file_metadata();
-
-    let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
-        file.try_clone().await?,
-        arrow_reader_metadata.clone(),
-    )
-    .build()?;
-    let record_batches = record_reader.try_collect::<Vec<_>>().await?;
-
-    verify_encryption_test_data(record_batches, file_metadata.clone(), metadata);
-    Ok(())
-}
-
-/// Tests reading an encrypted file from the parquet-testing repository
-fn verify_encryption_test_data(
-    record_batches: Vec<RecordBatch>,
-    file_metadata: FileMetaData,
-    metadata: ArrowReaderMetadata,
-) {
+/// Verifies data read from an encrypted file from the parquet-testing repository
+pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &ParquetMetaData) {
+    let file_metadata = metadata.file_metadata();
     assert_eq!(file_metadata.num_rows(), 50);
     assert_eq!(file_metadata.schema_descr().num_columns(), 8);
 
-    metadata.metadata.row_groups().iter().for_each(|rg| {
+    metadata.row_groups().iter().for_each(|rg| {
         assert_eq!(rg.num_columns(), 8);
         assert_eq!(rg.num_rows(), 50);
     });

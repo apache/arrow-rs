@@ -207,10 +207,8 @@ mod tests {
 
     use futures::TryStreamExt;
 
-    use crate::arrow::arrow_reader::ArrowReaderOptions;
     use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::arrow::ParquetRecordBatchStreamBuilder;
-    use crate::encryption::decrypt::FileDecryptionProperties;
     use crate::errors::ParquetError;
     use arrow::util::test_util::parquet_test_data;
     use futures::FutureExt;
@@ -228,45 +226,6 @@ mod tests {
             .unwrap();
 
         (meta, Arc::new(store) as Arc<dyn ObjectStore>)
-    }
-
-    #[cfg(feature = "encryption")]
-    async fn get_encrypted_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
-        let res = parquet_test_data();
-        let store = LocalFileSystem::new_with_prefix(res).unwrap();
-
-        let meta = store
-            .head(&Path::from("uniform_encryption.parquet.encrypted"))
-            .await
-            .unwrap();
-
-        (meta, Arc::new(store) as Arc<dyn ObjectStore>)
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "encryption")]
-    async fn test_encrypted() {
-        let (meta, store) = get_encrypted_meta_store().await;
-
-        let key_code: &[u8] = "0123456789012345".as_bytes();
-        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-            .build()
-            .unwrap();
-        let options =
-            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-        let mut reader = ParquetObjectReader::new(store.clone(), meta.clone());
-        let metadata = reader.get_metadata_with_options(&options).await.unwrap();
-
-        assert_eq!(metadata.num_row_groups(), 1);
-
-        let reader = ParquetObjectReader::new(store, meta);
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
-            .await
-            .unwrap();
-        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
-
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 50);
     }
 
     #[tokio::test]
