@@ -606,12 +606,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                     column.path().string(),
                 );
 
-                #[cfg(feature = "encryption")]
-                let page_writer =
-                    SerializedPageWriter::new(buf).with_page_encryptor(page_encryptor);
-
-                #[cfg(not(feature = "encryption"))]
                 let page_writer = SerializedPageWriter::new(buf);
+                #[cfg(feature = "encryption")]
+                let page_writer = page_writer.with_page_encryptor(page_encryptor);
 
                 Some(factory(
                     column,
