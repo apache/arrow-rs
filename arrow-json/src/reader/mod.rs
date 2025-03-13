@@ -2836,8 +2836,10 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("null", DataType::Null, true),
             Field::new("bool", DataType::Boolean, true),
+            Field::new("primitive", DataType::Int32, true),
             Field::new("numeric", DataType::Decimal128(10, 3), true),
             Field::new("string", DataType::Utf8, true),
+            Field::new("string_view", DataType::Utf8View, true),
             Field::new(
                 "timestamp",
                 DataType::Timestamp(TimeUnit::Second, None),
@@ -2874,8 +2876,10 @@ mod tests {
         let json_values = vec![
             json!(null),
             json!(true),
+            json!(42),
             json!(1.234),
             json!("hi"),
+            json!("ho"),
             json!("1970-01-01T00:00:00+02:00"),
             json!([1, "ho", 3]),
             json!({"k": "value"}),
@@ -2901,60 +2905,125 @@ mod tests {
             .unwrap();
         decoder.serialize(&json).unwrap();
         let batch = decoder.flush().unwrap().unwrap();
-        assert_eq!(batch.num_rows(), 8);
-        assert_eq!(batch.num_columns(), 8);
+        assert_eq!(batch.num_rows(), 10);
+        assert_eq!(batch.num_columns(), 10);
 
+        // NOTE: NullArray doesn't materialize any values (they're all NULL by definition)
         let _ = batch
             .column(0)
             .as_any()
             .downcast_ref::<NullArray>()
             .unwrap();
-        // NOTE: NullArray doesn't materialize any values (they're all NULL by definition)
 
-        let bools = batch
+        assert!(batch
             .column(1)
             .as_any()
             .downcast_ref::<BooleanArray>()
-            .unwrap();
-        assert!(bools
+            .unwrap()
             .iter()
-            .eq([Some(true), None, None, None, None, None, None, None]));
+            .eq([
+                Some(true),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ]));
 
-        let numbers = batch.column(2).as_primitive::<Decimal128Type>();
-        assert!(numbers
-            .iter()
-            .eq([Some(1234), None, None, None, None, None, None, None]));
-
-        let strings = batch
-            .column(3)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert!(strings.iter().eq([
-            Some("hi"),
-            Some("1970-01-01T00:00:00+02:00"),
+        assert!(batch.column(2).as_primitive::<Int32Type>().iter().eq([
+            Some(42),
+            Some(1),
             None,
             None,
             None,
             None,
-            Some("true"),
-            Some("1.234"),
+            None,
+            None,
+            None,
+            None
         ]));
 
-        let timestamps = batch.column(4).as_primitive::<TimestampSecondType>();
-        assert!(timestamps
+        assert!(batch.column(3).as_primitive::<Decimal128Type>().iter().eq([
+            Some(1234),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(42000)
+        ]));
+
+        assert!(batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
             .iter()
-            .eq([Some(-7200), None, None, None, None, None, None, None,]));
+            .eq([
+                Some("hi"),
+                Some("ho"),
+                Some("1970-01-01T00:00:00+02:00"),
+                None,
+                None,
+                None,
+                None,
+                Some("true"),
+                Some("42"),
+                Some("1.234"),
+            ]));
+
+        assert!(batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap()
+            .iter()
+            .eq([
+                Some("ho"),
+                Some("1970-01-01T00:00:00+02:00"),
+                None,
+                None,
+                None,
+                None,
+                Some("true"),
+                Some("42"),
+                Some("1.234"),
+                Some("hi"),
+            ]));
+
+        assert!(batch
+            .column(6)
+            .as_primitive::<TimestampSecondType>()
+            .iter()
+            .eq([
+                Some(-7200),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(42),
+                None,
+                None,
+                None,
+            ]));
 
         let arrays = batch
-            .column(5)
+            .column(7)
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
         assert_eq!(
             arrays.nulls(),
             Some(&NullBuffer::from(
-                &[true, false, false, false, false, false, false, false][..]
+                &[true, false, false, false, false, false, false, false, false, false][..]
             ))
         );
         assert_eq!(arrays.offsets()[1], 3);
@@ -2965,12 +3034,12 @@ mod tests {
             .unwrap();
         assert!(array_values.iter().eq([Some(1), None, Some(3)]));
 
-        let maps = batch.column(6).as_any().downcast_ref::<MapArray>().unwrap();
+        let maps = batch.column(8).as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(
             maps.nulls(),
             Some(&NullBuffer::from(
                 // Both map and struct can parse
-                &[true, true, false, false, false, false, false, false][..]
+                &[true, true, false, false, false, false, false, false, false, false][..]
             ))
         );
         let map_keys = maps.keys().as_any().downcast_ref::<StringArray>().unwrap();
@@ -2983,7 +3052,7 @@ mod tests {
         assert!(map_values.iter().eq([Some("value"), Some("1")]));
 
         let structs = batch
-            .column(7)
+            .column(9)
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap();
@@ -2991,7 +3060,7 @@ mod tests {
             structs.nulls(),
             Some(&NullBuffer::from(
                 // Both map and struct can parse
-                &[true, false, false, false, false, false, false, true][..]
+                &[true, false, false, false, false, false, false, false, false, true][..]
             ))
         );
         let struct_fields = structs
@@ -3006,8 +3075,10 @@ mod tests {
     fn test_type_conflict_non_nullable() {
         let fields = [
             Field::new("bool", DataType::Boolean, false),
+            Field::new("primitive", DataType::Int32, false),
             Field::new("numeric", DataType::Decimal128(10, 3), false),
             Field::new("string", DataType::Utf8, false),
+            Field::new("string_view", DataType::Utf8View, false),
             Field::new(
                 "timestamp",
                 DataType::Timestamp(TimeUnit::Second, None),
@@ -3058,9 +3129,12 @@ mod tests {
     #[test]
     fn test_ignore_type_conflicts_disabled() {
         let fields = [
+            Field::new("null", DataType::Null, true),
             Field::new("bool", DataType::Boolean, true),
+            Field::new("primitive", DataType::Int32, true),
             Field::new("numeric", DataType::Decimal128(10, 3), true),
             Field::new("string", DataType::Utf8, true),
+            Field::new("string_view", DataType::Utf8View, true),
             Field::new(
                 "timestamp",
                 DataType::Timestamp(TimeUnit::Second, None),
