@@ -17,19 +17,15 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
-use parquet::arrow::arrow_reader::ArrowReaderMetadata;
-use parquet::file::metadata::FileMetaData;
+use parquet::file::metadata::ParquetMetaData;
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
-pub fn verify_encryption_test_data(
-    record_batches: Vec<RecordBatch>,
-    file_metadata: FileMetaData,
-    metadata: ArrowReaderMetadata,
-) {
+pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &ParquetMetaData) {
+    let file_metadata = metadata.file_metadata();
     assert_eq!(file_metadata.num_rows(), 50);
     assert_eq!(file_metadata.schema_descr().num_columns(), 8);
 
-    metadata.metadata().row_groups().iter().for_each(|rg| {
+    metadata.row_groups().iter().for_each(|rg| {
         assert_eq!(rg.num_columns(), 8);
         assert_eq!(rg.num_rows(), 50);
     });

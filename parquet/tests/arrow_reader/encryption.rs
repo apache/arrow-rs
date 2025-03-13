@@ -242,10 +242,10 @@ fn test_aes_ctr_encryption() {
 }
 
 fn verify_encryption_test_file_read(file: File, decryption_properties: FileDecryptionProperties) {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-    let file_metadata = metadata.metadata().file_metadata();
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+    let metadata = reader_metadata.metadata();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
     let record_reader = builder.build().unwrap();
@@ -253,5 +253,5 @@ fn verify_encryption_test_file_read(file: File, decryption_properties: FileDecry
         .map(|x| x.unwrap())
         .collect::<Vec<RecordBatch>>();
 
-    verify_encryption_test_data(record_batches, file_metadata.clone(), metadata);
+    verify_encryption_test_data(record_batches, metadata);
 }

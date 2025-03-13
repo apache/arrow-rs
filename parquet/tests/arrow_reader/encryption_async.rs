@@ -279,23 +279,66 @@ async fn test_decrypting_without_decryption_properties_fails() {
     );
 }
 
+#[cfg(feature = "object_store")]
+async fn get_encrypted_meta_store() -> (
+    object_store::ObjectMeta,
+    std::sync::Arc<dyn object_store::ObjectStore>,
+) {
+    use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store::ObjectStore;
+
+    use std::sync::Arc;
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let store = LocalFileSystem::new_with_prefix(test_data).unwrap();
+
+    let meta = store
+        .head(&Path::from("uniform_encryption.parquet.encrypted"))
+        .await
+        .unwrap();
+
+    (meta, Arc::new(store) as Arc<dyn ObjectStore>)
+}
+
+#[tokio::test]
+#[cfg(feature = "object_store")]
+async fn test_read_encrypted_file_from_object_store() {
+    use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
+    let (meta, store) = get_encrypted_meta_store().await;
+
+    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+
+    let mut reader = ParquetObjectReader::new(store, meta);
+    let metadata = reader.get_metadata_with_options(&options).await.unwrap();
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
+        .await
+        .unwrap();
+    let batch_stream = builder.build().unwrap();
+    let record_batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+    verify_encryption_test_data(record_batches, &metadata);
+}
+
 async fn verify_encryption_test_file_read_async(
     file: &mut tokio::fs::File,
     decryption_properties: FileDecryptionProperties,
 ) -> Result<(), ParquetError> {
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let metadata = ArrowReaderMetadata::load_async(file, options.clone()).await?;
-    let arrow_reader_metadata = ArrowReaderMetadata::load_async(file, options).await?;
-    let file_metadata = metadata.metadata().file_metadata();
+    let arrow_metadata = ArrowReaderMetadata::load_async(file, options).await?;
+    let metadata = arrow_metadata.metadata();
 
     let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
         file.try_clone().await?,
-        arrow_reader_metadata.clone(),
+        arrow_metadata.clone(),
     )
     .build()?;
     let record_batches = record_reader.try_collect::<Vec<_>>().await?;
 
-    verify_encryption_test_data(record_batches, file_metadata.clone(), metadata);
+    verify_encryption_test_data(record_batches, metadata);
     Ok(())
 }
