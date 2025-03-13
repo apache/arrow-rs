@@ -81,7 +81,7 @@ impl FileEncryptionProperties {
 
     /// Checks if columns that are to be encrypted are present in schema
     #[cfg(feature = "encryption")]
-    pub(crate) fn encrypted_columns_in_schema(
+    pub(crate) fn validate_encrypted_column_names(
         &self,
         schema: SchemaDescriptor,
     ) -> std::result::Result<(), ParquetError> {

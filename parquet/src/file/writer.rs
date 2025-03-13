@@ -196,7 +196,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                 .file_encryption_properties
                 .clone()
                 .unwrap()
-                .encrypted_columns_in_schema(SchemaDescriptor::new(schema.clone()))?;
+                .validate_encrypted_column_names(SchemaDescriptor::new(schema.clone()))?;
         }
 
         Self::start_file(&properties, &mut buf)?;
@@ -204,7 +204,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             buf,
             schema: schema.clone(),
             descr: Arc::new(SchemaDescriptor::new(schema)),
-            props: properties.clone(),
+            props: properties,
             row_groups: vec![],
             bloom_filters: vec![],
             column_indexes: Vec::new(),
@@ -525,7 +525,10 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
 
     #[cfg(feature = "encryption")]
     /// Set the file encryptor to use for encrypting row group data and metadata
-    pub fn with_file_encryptor(mut self, file_encryptor: Option<Arc<FileEncryptor>>) -> Self {
+    pub(crate) fn with_file_encryptor(
+        mut self,
+        file_encryptor: Option<Arc<FileEncryptor>>,
+    ) -> Self {
         self.file_encryptor = file_encryptor;
         self
     }
