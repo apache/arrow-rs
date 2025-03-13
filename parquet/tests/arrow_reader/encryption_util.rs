@@ -15,22 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
-};
-use crate::arrow::ParquetRecordBatchStreamBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 
-use std::fs::File;
+use parquet::arrow::ArrowWriter;
+use parquet::encryption::decrypt::FileDecryptionProperties;
+use parquet::encryption::encrypt::FileEncryptionProperties;
+use parquet::errors::Result;
 use parquet::file::metadata::ParquetMetaData;
-use crate::arrow::ArrowWriter;
-use crate::encryption::decrypt::FileDecryptionProperties;
-use crate::encryption::encrypt::FileEncryptionProperties;
-use crate::errors::ParquetError;
-use crate::file::metadata::FileMetaData;
-use crate::file::properties::WriterProperties;
-use futures::TryStreamExt;
+use parquet::file::properties::WriterProperties;
 use std::fs::File;
 
 /// Tests reading an encrypted file from the parquet-testing repository
@@ -41,7 +37,6 @@ pub(crate) fn verify_encryption_test_file_read(
     let options = ArrowReaderOptions::default()
         .with_file_decryption_properties(decryption_properties.clone());
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-    let file_metadata = metadata.metadata.file_metadata();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
     let record_reader = builder.build().unwrap();
@@ -49,7 +44,7 @@ pub(crate) fn verify_encryption_test_file_read(
         .map(|x| x.unwrap())
         .collect::<Vec<RecordBatch>>();
 
-    verify_encryption_test_data(record_batches, file_metadata.clone(), metadata);
+    verify_encryption_test_data(record_batches, &metadata.metadata().clone());
 }
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
@@ -134,7 +129,7 @@ pub fn read_and_roundtrip_to_encrypted_file(
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
     let batch_reader = builder.build().unwrap();
     let batches = batch_reader
-        .collect::<crate::errors::Result<Vec<RecordBatch>, _>>()
+        .collect::<Result<Vec<RecordBatch>, _>>()
         .unwrap();
 
     // write example data
@@ -142,8 +137,12 @@ pub fn read_and_roundtrip_to_encrypted_file(
         .with_file_encryption_properties(encryption_properties)
         .build();
 
-    let mut writer =
-        ArrowWriter::try_new(temp_file.try_clone().unwrap(), metadata.schema, Some(props)).unwrap();
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+    .unwrap();
     for batch in batches {
         writer.write(&batch).unwrap();
     }
