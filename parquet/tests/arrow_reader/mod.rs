@@ -42,10 +42,11 @@ mod checksum;
 mod encryption;
 #[cfg(all(feature = "encryption", feature = "async"))]
 mod encryption_async;
+mod encryption_common;
 #[cfg(not(feature = "encryption"))]
 mod encryption_disabled;
 #[cfg(feature = "encryption")]
-pub(crate) mod encryption_util;
+mod encryption_util;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values

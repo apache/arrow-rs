@@ -18,11 +18,9 @@
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
 use crate::encryption_util::verify_encryption_test_data;
-use arrow_array::cast::AsArray;
-use arrow_array::types;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::errors::ParquetError;
 use tokio::fs::File;
@@ -139,63 +137,10 @@ async fn test_misspecified_encryption_keys() {
 }
 
 #[tokio::test]
-async fn test_non_uniform_encryption_plaintext_footer_without_decryption() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
-
-    let metadata = ArrowReaderMetadata::load_async(&mut file, Default::default())
-        .await
-        .unwrap();
-    let file_metadata = metadata.metadata().file_metadata();
-
-    assert_eq!(file_metadata.num_rows(), 50);
-    assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-    assert_eq!(
-        file_metadata.created_by().unwrap(),
-        "parquet-cpp-arrow version 19.0.0-SNAPSHOT"
-    );
-
-    metadata.metadata().row_groups().iter().for_each(|rg| {
-        assert_eq!(rg.num_columns(), 8);
-        assert_eq!(rg.num_rows(), 50);
-    });
-
-    // Should be able to read unencrypted columns. Test reading one column.
-    let builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
-    let mask = ProjectionMask::leaves(builder.parquet_schema(), [1]);
-    let record_reader = builder.with_projection(mask).build().unwrap();
-    let record_batches = record_reader.try_collect::<Vec<_>>().await.unwrap();
-
-    let mut row_count = 0;
-    for batch in record_batches {
-        let batch = batch;
-        row_count += batch.num_rows();
-
-        let time_col = batch
-            .column(0)
-            .as_primitive::<types::Time32MillisecondType>();
-        for (i, x) in time_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), i as i32);
-        }
-    }
-
-    assert_eq!(row_count, file_metadata.num_rows() as usize);
-
-    // Reading an encrypted column should fail
-    let file = File::open(&path).await.unwrap();
-    let builder = ParquetRecordBatchStreamBuilder::new(file).await.unwrap();
-    let mask = ProjectionMask::leaves(builder.parquet_schema(), [4]);
-    let mut record_reader = builder.with_projection(mask).build().unwrap();
-
-    match record_reader.next().await {
-        Some(Err(ParquetError::ArrowError(s))) => {
-            assert!(s.contains("protocol error"));
-        }
-        _ => {
-            panic!("Expected ArrowError::ParquetError");
-        }
-    };
+#[cfg(feature = "snap")]
+async fn test_plaintext_footer_read_without_decryption() {
+    crate::encryption_common::read_plaintext_footer_file_without_decryption_properties_async()
+        .await;
 }
 
 #[tokio::test]
