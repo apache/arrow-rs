@@ -96,8 +96,7 @@
 //!
 //! # Example of reading uniformly encrypted parquet file into arrow record batch
 //!
-#![cfg_attr(feature = "encryption", doc = "```rust")]
-#![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
+//! ```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
 //! # use arrow_array::{types, RecordBatch};
 //! # use parquet::arrow::arrow_reader::{
@@ -138,8 +137,7 @@
 //!
 //! # Example of reading non-uniformly encrypted parquet file into arrow record batch
 //!
-#![cfg_attr(feature = "encryption", doc = "```rust")]
-#![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
+//! ```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
 //! # use arrow_array::{types, RecordBatch};
 //! # use parquet::arrow::arrow_reader::{
