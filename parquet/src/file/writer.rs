@@ -25,6 +25,7 @@ use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
+use bytes::Bytes;
 use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
@@ -837,8 +838,91 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+trait PageModuleWriter {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)>;
+}
+
+#[cfg(not(feature = "encryption"))]
+impl PageModuleWriter for PageModuleWriter {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)> {
+        let mut buf = self.buffer.try_lock().unwrap();
+        let data = page.compressed_page().buffer().clone();
+
+        let mut page_header = page.to_thrift_header();
+        page_header.compressed_page_size = data.len() as i32;
+
+        let mut header = Vec::with_capacity(1024);
+
+        let mut protocol = TCompactOutputProtocol::new(&mut header);
+        page_header.write_to_out_protocol(&mut protocol)?;
+
+        let header = Bytes::from(header);
+        let compressed_size = data.len() + header.len();
+        let uncompressed_size = page.uncompressed_size() + header.len();
+        let buffer_length = buf.length as u64;
+
+        buf.length += compressed_size;
+        buf.data.push(header);
+        buf.data.push(data);
+
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)> {
+        let page_type = page.page_type();
+        let start_pos = self.sink.bytes_written() as u64;
+
+        let page_data = match self.page_encryptor.as_ref() {
+            Some(encryptor) => encryptor.encrypt_page(&page)?,
+            _ => page.data(),
+        };
+        let mut page_header = page.to_thrift_header();
+        // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
+        // before they are written so the compressed page size is correct.
+        page_header.compressed_page_size = page_data.len() as i32;
+
+        let header_size = self.serialize_page_header(page_header)?;
+
+        self.sink.write_all(page_data)?;
+
+        let mut spec = PageWriteSpec::new();
+        spec.page_type = page_type;
+        spec.uncompressed_size = page.uncompressed_size() + header_size;
+        spec.compressed_size = page_data.len() + header_size;
+        spec.offset = start_pos;
+        spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
+        spec.num_values = page.num_values();
+
+        #[cfg(feature = "encryption")]
+        if let Some(page_encryptor) = self.page_encryptor.as_mut() {
+            if page.compressed_page().is_data_page() {
+                page_encryptor.increment_page();
+            }
+        }
+
+        Ok(spec)
+
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let (uncompressed_size, compressed_size, len) =
+            self.write_page_to_buffer(&page)?;
+
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
