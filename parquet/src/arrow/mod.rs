@@ -96,6 +96,9 @@
 //!
 //! # Example of reading non-uniformly encrypted parquet file into arrow record batch
 //!
+//! Note: This requires the experimental `encryption` feature to be enabled at compile time.
+//!
+//!
 #![cfg_attr(feature = "encryption", doc = "```rust")]
 #![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
 //! # use arrow_array::{Int32Array, ArrayRef};
