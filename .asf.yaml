@@ -37,6 +37,7 @@ github:
     rebase: false
   features:
     issues: true
+    discussions: true
   protected_branches:
     main:
       required_status_checks:
