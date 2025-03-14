@@ -94,58 +94,10 @@
 //! println!("Read {} records.", record_batch.num_rows());
 //! ```
 //!
-//! #![cfg(feature = "encryption")]
-//! # Example of reading uniformly encrypted parquet file into arrow record batch
-//!
-#![cfg(feature = "encryption")]
-//! ```rust
-#![cfg(not(feature = "encryption"))]
-//! ```ignore
-//! # use arrow_array::{Int32Array, ArrayRef};
-//! # use arrow_array::{types, RecordBatch};
-//! # use parquet::arrow::arrow_reader::{
-//! #     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
-//! # };
-//! # use arrow_array::cast::AsArray;
-//! # use parquet::file::metadata::ParquetMetaData;
-//! # use tempfile::tempfile;
-//! # use std::fs::File;
-//! # use parquet::encryption::decrypt::FileDecryptionProperties;
-//! # let test_data = arrow::util::test_util::parquet_test_data();
-//! # let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
-//! #
-//!  let file = File::open(path).unwrap();
-//!
-//!  let key_code: &[u8] = "0123456789012345".as_bytes();
-//!  let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-//!      .build()
-//!      .unwrap();
-//!
-//! let options =
-//!         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
-//! let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-//! let metadata = reader_metadata.metadata();
-//! let file_metadata = metadata.file_metadata();
-//!
-//! println!("Read {} rows.", file_metadata.num_rows());
-//!
-//! let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-//! println!("Converted arrow schema is: {}", builder.schema());
-//!
-//! let mut reader = builder.build().unwrap();
-//!
-//! let record_batch = reader.next().unwrap().unwrap();
-//!
-//! println!("Read {} records.", record_batch.num_rows());
-//! ```
-//!
-//! #![cfg(feature = "encryption")]
 //! # Example of reading non-uniformly encrypted parquet file into arrow record batch
 //!
-#![cfg(feature = "encryption")]
-//! ```rust
-#![cfg(not(feature = "encryption"))]
-//! ```ignore
+#![cfg_attr(feature = "encryption", doc = "```rust")]
+#![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
 //! # use arrow_array::{Int32Array, ArrayRef};
 //! # use arrow_array::{types, RecordBatch};
 //! # use parquet::arrow::arrow_reader::{
@@ -161,8 +113,11 @@
 //! #
 //! let file = File::open(path).unwrap();
 //!
-//! // There is always a footer key even with a plaintext footer,
-//! // but this is used for signing the footer.
+//! // Define the AES encryption keys required required for decrypting the footer metadata
+//! // and column-specific data. If only a footer key is used then it is assumed that the
+//! // file uses uniform encryption and all columns are encrypted with the footer key.
+//! // If any column keys are specified, other columns without a key provided are assumed
+//! // to be unencrypted
 //! let footer_key = "0123456789012345".as_bytes(); // Keys are 128 bits (16 bytes)
 //! let column_1_key = "1234567890123450".as_bytes();
 //! let column_2_key = "1234567890123451".as_bytes();
