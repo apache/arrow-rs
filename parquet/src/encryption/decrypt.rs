@@ -180,7 +180,8 @@ pub struct FileDecryptionProperties {
 }
 
 impl FileDecryptionProperties {
-    /// Returns a new [`FileDecryptionProperties`] builder with the specified footer key.
+    /// Returns a new [`FileDecryptionProperties`] builder that will use the provided key to
+    /// decrypt footer metadata.
     pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new(footer_key)
     }
@@ -200,7 +201,7 @@ impl std::fmt::Debug for FileDecryptionProperties {
 
 impl PartialEq for FileDecryptionProperties {
     // FileDecryptionProperties needs to implement PartialEq to allow
-    // ParquetMetadata to implement PartialEq.
+    // ParquetMetaData to implement PartialEq.
     // We cannot compare a key retriever, but this isn't derived from the metadata.
     fn eq(&self, other: &Self) -> bool {
         let keys_eq = match self.keys {
@@ -226,7 +227,8 @@ pub struct DecryptionPropertiesBuilder {
 }
 
 impl DecryptionPropertiesBuilder {
-    /// Create a new [`DecryptionPropertiesBuilder`] by specifying the footer decryption key
+    /// Create a new [`DecryptionPropertiesBuilder`] builder that will use the provided key to
+    /// decrypt footer metadata.
     pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
             footer_key: Some(footer_key),
