@@ -131,19 +131,14 @@
 //! let options =
 //!         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
 //! let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-//! let metadata = reader_metadata.metadata();
-//! let file_metadata = metadata.file_metadata();
+//! let file_metadata = reader_metadata.metadata().file_metadata();
+//! println!("File has {} rows.", file_metadata.num_rows());
 //!
-//! println!("Read {} rows.", file_metadata.num_rows());
-//!
-//! let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-//! println!("Converted arrow schema is: {}", builder.schema());
-//!
-//! let mut reader = builder.build().unwrap();
+//! let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap().build().unwrap();
 //!
 //! let record_batch = reader.next().unwrap().unwrap();
-//!
 //! println!("Read {} records.", record_batch.num_rows());
+//! ```
 
 experimental!(mod array_reader);
 pub mod arrow_reader;
