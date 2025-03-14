@@ -21,7 +21,7 @@ use crate::bit_util::ceil;
 
 /// Util function to set bits in a slice of bytes.
 ///
-/// This will sets all bits on `write_data` in the range `[offset_write..offset_write+len]`
+/// This will set all bits on `write_data` in the range `[offset_write..offset_write+len]`
 /// to be equal to the bits in `data` in the range `[offset_read..offset_read+len]`
 /// returns the number of `0` bits `data[offset_read..offset_read+len]`
 /// `offset_write`, `offset_read`, and `len` are in terms of bits
@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
-    use rand::{Fill, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, Fill, RngCore};
     use std::fmt::Display;
 
     #[test]
@@ -356,12 +356,13 @@ mod tests {
             self.data
                 .resize(offset_read_bytes + len + extra_read_data_bytes, 0);
             // fill source data with random bytes
-            self.data.try_fill(rng).unwrap();
+            rng.fill_bytes(&mut *self.data);
+            //self.data.try_fill(rng).unwrap();
             self.offset_read = offset_read_bits;
 
             self.len = len;
 
-            // generated expectated output (not efficient)
+            // generated expected output (not efficient)
             self.expected_data.resize(self.write_data.len(), 0);
             self.expected_data.copy_from_slice(&self.write_data);
 

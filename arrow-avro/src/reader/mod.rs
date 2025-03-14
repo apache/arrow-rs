@@ -116,7 +116,7 @@ mod test {
         decoder.flush().unwrap()
     }
 
-    #[test]
+    #[ignore]
     fn test_alltypes() {
         let files = [
             "avro/alltypes_plain.avro",

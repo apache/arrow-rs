@@ -18,10 +18,7 @@
 use crate::basic::Encoding;
 use crate::column::page::Page;
 use bytes::Bytes;
-use rand::{
-    distributions::{uniform::SampleUniform, Distribution, Standard},
-    thread_rng, Rng,
-};
+use rand::{distr::{uniform::SampleUniform, Distribution, StandardUniform}, rng, Rng};
 use std::collections::VecDeque;
 
 use crate::data_type::*;
@@ -44,25 +41,25 @@ pub trait RandGen<T: DataType> {
 
 impl RandGen<BoolType> for BoolType {
     fn gen(_: i32) -> bool {
-        thread_rng().gen::<bool>()
+        rng().gen::<bool>()
     }
 }
 
 impl RandGen<Int32Type> for Int32Type {
     fn gen(_: i32) -> i32 {
-        thread_rng().gen::<i32>()
+        rng().gen::<i32>()
     }
 }
 
 impl RandGen<Int64Type> for Int64Type {
     fn gen(_: i32) -> i64 {
-        thread_rng().gen::<i64>()
+        rng().gen::<i64>()
     }
 }
 
 impl RandGen<Int96Type> for Int96Type {
     fn gen(_: i32) -> Int96 {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut result = Int96::new();
         result.set_data(rng.gen::<u32>(), rng.gen::<u32>(), rng.gen::<u32>());
         result
@@ -71,19 +68,19 @@ impl RandGen<Int96Type> for Int96Type {
 
 impl RandGen<FloatType> for FloatType {
     fn gen(_: i32) -> f32 {
-        thread_rng().gen::<f32>()
+        rng().gen::<f32>()
     }
 }
 
 impl RandGen<DoubleType> for DoubleType {
     fn gen(_: i32) -> f64 {
-        thread_rng().gen::<f64>()
+        rng().gen::<f64>()
     }
 }
 
 impl RandGen<ByteArrayType> for ByteArrayType {
     fn gen(_: i32) -> ByteArray {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut result = ByteArray::new();
         let mut value = vec![];
         let len = rng.gen_range(0..128);
@@ -105,7 +102,7 @@ impl RandGen<FixedLenByteArrayType> for FixedLenByteArrayType {
 
 pub fn random_bytes(n: usize) -> Vec<u8> {
     let mut result = vec![];
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..n {
         result.push(rng.gen_range(0..255));
     }
@@ -114,17 +111,17 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
 
 pub fn random_numbers<T>(n: usize) -> Vec<T>
 where
-    Standard: Distribution<T>,
+    StandardUniform: Distribution<T>,
 {
-    let mut rng = thread_rng();
-    Standard.sample_iter(&mut rng).take(n).collect()
+    let mut rng = rng();
+    StandardUniform.sample_iter(&mut rng).take(n).collect()
 }
 
 pub fn random_numbers_range<T>(n: usize, low: T, high: T, result: &mut Vec<T>)
 where
     T: PartialOrd + SampleUniform + Copy,
 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..n {
         result.push(rng.gen_range(low..high));
     }

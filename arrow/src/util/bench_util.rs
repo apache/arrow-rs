@@ -22,12 +22,11 @@ use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
-use rand::distributions::uniform::SampleUniform;
-use rand::thread_rng;
-use rand::Rng;
+use rand::distr::uniform::SampleUniform;
+use rand::{rng, Rng};
 use rand::SeedableRng;
 use rand::{
-    distributions::{Alphanumeric, Distribution, Standard},
+    distr::{Alphanumeric, Distribution, StandardUniform},
     prelude::StdRng,
 };
 use std::ops::Range;
@@ -36,7 +35,7 @@ use std::ops::Range;
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
 
@@ -60,7 +59,7 @@ pub fn create_primitive_array_with_seed<T>(
 ) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut rng = StdRng::seed_from_u64(seed);
 
@@ -98,7 +97,7 @@ pub fn create_month_day_nano_array_with_seed(
 /// Creates a random (but fixed-seeded) array of a given size and null density
 pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
-    Standard: Distribution<bool>,
+    StandardUniform: Distribution<bool>,
 {
     let mut rng = seedable_rng();
     (0..size)
@@ -296,7 +295,7 @@ pub fn create_string_array_for_runs(
     string_len: usize,
 ) -> Vec<String> {
     assert!(logical_array_len >= physical_array_len);
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     // typical length of each run
     let run_len = logical_array_len / physical_array_len;
@@ -336,7 +335,7 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
                 None
             } else {
                 let value = rng
-                    .sample_iter::<u8, _>(Standard)
+                    .sample_iter::<u8, _>(StandardUniform)
                     .take(range_rng.gen_range(0..8))
                     .collect::<Vec<u8>>();
                 Some(value)
@@ -355,7 +354,7 @@ pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> Fix
                 None
             } else {
                 let value = rng
-                    .sample_iter::<u8, _>(Standard)
+                    .sample_iter::<u8, _>(StandardUniform)
                     .take(value_len)
                     .collect::<Vec<u8>>();
                 Some(value)
@@ -375,7 +374,7 @@ pub fn create_dict_from_values<K>(
 ) -> DictionaryArray<K>
 where
     K: ArrowDictionaryKeyType,
-    Standard: Distribution<K::Native>,
+    StandardUniform: Distribution<K::Native>,
     K::Native: SampleUniform,
 {
     let min_key = K::Native::from_usize(0).unwrap();
@@ -393,7 +392,7 @@ pub fn create_sparse_dict_from_values<K>(
 ) -> DictionaryArray<K>
 where
     K: ArrowDictionaryKeyType,
-    Standard: Distribution<K::Native>,
+    StandardUniform: Distribution<K::Native>,
     K::Native: SampleUniform,
 {
     let mut rng = seedable_rng();

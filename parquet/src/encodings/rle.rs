@@ -528,7 +528,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, distributions::Standard, thread_rng, Rng, SeedableRng};
+    use rand::{self, distr::StandardUniform, rng, Rng, SeedableRng};
 
     const MAX_WIDTH: usize = 32;
 
@@ -1019,8 +1019,8 @@ mod tests {
 
         for _ in 0..niters {
             values.clear();
-            let rng = thread_rng();
-            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
+            let rng = rng();
+            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&StandardUniform).take(seed_len).collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
             let mut gen = rand::rngs::StdRng::from_seed(seed);

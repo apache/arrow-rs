@@ -485,6 +485,7 @@ mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
     use rand::prelude::*;
+    use rand::rng;
 
     #[test]
     fn test_skip_padding() {
@@ -509,7 +510,7 @@ mod tests {
     #[test]
     fn test_skip_rep_levels() {
         for _ in 0..10 {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             let total_len = 10000_usize;
             let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.gen_range(0..5)).collect();
             encoded[0] = 0;

@@ -66,10 +66,11 @@ mod tests {
     use super::*;
     use arrow_array::builder::BooleanBufferBuilder;
     use rand::prelude::*;
+    use rand::rng;
 
     #[test]
     fn test_bit_fns() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mask_length = rng.gen_range(1..1024);
         let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
             .take(mask_length)

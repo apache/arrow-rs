@@ -372,7 +372,7 @@ impl ExactSizeIterator for BitChunkIterator<'_> {
 #[cfg(test)]
 mod tests {
     use rand::prelude::*;
-
+    use rand::rng;
     use crate::buffer::Buffer;
     use crate::util::bit_chunk_iterator::UnalignedBitChunk;
 
@@ -624,7 +624,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for _ in 0..100 {
             let mask_len = rng.gen_range(0..1024);
@@ -635,10 +635,10 @@ mod tests {
             let buffer = Buffer::from_iter(bools.iter().cloned());
 
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = rng.random_range(0..=usize::MAX).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = rng.random_range(0..=usize::MAX).checked_rem(max_truncate).unwrap_or(0);
 
             let unaligned =
                 UnalignedBitChunk::new(buffer.as_slice(), offset, mask_len - offset - truncate);

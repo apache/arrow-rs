@@ -1438,8 +1438,8 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
-    use rand::distributions::uniform::SampleUniform;
-    use rand::distributions::{Distribution, Standard};
+    use rand::distr::uniform::SampleUniform;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::{thread_rng, Rng};
 
     use arrow_array::builder::*;
@@ -2198,7 +2198,7 @@ mod tests {
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
-        Standard: Distribution<K::Native>,
+        StandardUniform: Distribution<K::Native>,
     {
         let mut rng = thread_rng();
         (0..len)

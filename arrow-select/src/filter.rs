@@ -861,12 +861,12 @@ fn filter_sparse_union(
 
 #[cfg(test)]
 mod tests {
+    use rand::distr::{Alphanumeric, StandardUniform};
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use rand::distributions::{Alphanumeric, Standard};
     use rand::prelude::*;
-
+    use rand::rng;
     use super::*;
 
     macro_rules! def_temporal_test {
@@ -1475,7 +1475,7 @@ mod tests {
     }
 
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
             .take(mask_len)
@@ -1516,15 +1516,15 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test_slices_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for _ in 0..100 {
             let mask_len = rng.gen_range(0..1024);
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = rng.random_range(0..=usize::MAX).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = rng.random_range(0..=usize::MAX).checked_rem(max_truncate).unwrap_or(0);
 
             test_slices_fuzz(mask_len, offset, truncate);
         }
@@ -1549,9 +1549,9 @@ mod tests {
     /// Generates an array of length `len` with `valid_percent` non-null values
     fn gen_primitive<T>(len: usize, valid_percent: f64) -> Vec<Option<T>>
     where
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
             .collect()
@@ -1563,7 +1563,7 @@ mod tests {
         valid_percent: f64,
         str_len_range: std::ops::Range<usize>,
     ) -> Vec<Option<String>> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
                 rng.gen_bool(valid_percent).then(|| {
@@ -1584,7 +1584,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_filter() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for i in 0..100 {
             let filter_percent = match i {
