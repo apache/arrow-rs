@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::connection::{HttpError, HttpErrorKind};
+use crate::client::{HttpError, HttpErrorKind};
 use crate::{collect_bytes, PutPayload};
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -192,6 +192,18 @@ impl HttpResponseBody {
     pub(crate) async fn json<B: serde::de::DeserializeOwned>(self) -> Result<B, HttpError> {
         let b = self.bytes().await?;
         serde_json::from_slice(&b).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
+    }
+}
+
+impl Body for HttpResponseBody {
+    type Data = Bytes;
+    type Error = HttpError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.0).poll_frame(cx)
     }
 }
 
