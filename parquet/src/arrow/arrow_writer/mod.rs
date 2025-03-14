@@ -490,55 +490,91 @@ impl ArrowPageWriter {
     }
 }
 
-impl PageWriter for ArrowPageWriter {
-    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let mut buf = self.buffer.try_lock().unwrap();
+trait PageModuleWriter {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<(usize, usize, u64)>;
+}
 
-        let data = match self.page_encryptor.as_ref() {
-            #[cfg(feature = "encryption")]
-            Some(encryptor) => {
-                let encrypted_buffer = encryptor.encrypt_page(&page)?;
+#[cfg(not(feature = "encryption"))]
+impl PageModuleWriter for ArrowPageWriter {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<(usize, usize, u64)> {
+        let mut buf = self.buffer.try_lock().unwrap();
+        let data = page.compressed_page().buffer().clone();
+
+        let mut page_header = page.to_thrift_header();
+        page_header.compressed_page_size = data.len() as i32;
+
+        let mut header = Vec::with_capacity(1024);
+
+        let mut protocol = TCompactOutputProtocol::new(&mut header);
+        page_header.write_to_out_protocol(&mut protocol)?;
+
+        let header = Bytes::from(header);
+        let compressed_size = data.len() + header.len();
+        let uncompressed_size = page.uncompressed_size() + header.len();
+        let buffer_length = buf.length as u64;
+
+        buf.length += compressed_size;
+        buf.data.push(header);
+        buf.data.push(data);
+
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl PageModuleWriter for ArrowPageWriter {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<(usize, usize, u64)> {
+        let mut buf = self.buffer.try_lock().unwrap();
+        let data = match self.page_encryptor.as_mut() {
+            Some(page_encryptor) => {
+                let encrypted_buffer = page_encryptor.encrypt_page(page)?;
+                if page.compressed_page().is_data_page() {
+                    page_encryptor.increment_page();
+                }
                 Bytes::from(encrypted_buffer)
             }
-            _ => page.compressed_page().buffer().clone(),
+            None => page.compressed_page().buffer().clone(),
         };
 
         let mut page_header = page.to_thrift_header();
         page_header.compressed_page_size = data.len() as i32;
 
         let mut header = Vec::with_capacity(1024);
+
         match self.page_encryptor.as_ref() {
-            #[cfg(feature = "encryption")]
-            Some(encryptor) => {
-                encryptor.encrypt_page_header(&page_header, &mut header)?;
+            Some(page_encryptor) => {
+                page_encryptor.encrypt_page_header(&page_header, &mut header)?;
             }
-            _ => {
+            None => {
                 let mut protocol = TCompactOutputProtocol::new(&mut header);
                 page_header.write_to_out_protocol(&mut protocol)?;
             }
-        };
+        }
 
         let header = Bytes::from(header);
         let compressed_size = data.len() + header.len();
-
-        let mut spec = PageWriteSpec::new();
-        spec.page_type = page.page_type();
-        spec.num_values = page.num_values();
-        spec.uncompressed_size = page.uncompressed_size() + header.len();
-        spec.offset = buf.length as u64;
-        spec.compressed_size = compressed_size;
-        spec.bytes_written = compressed_size as u64;
+        let uncompressed_size = page.uncompressed_size() + header.len();
+        let buffer_length = buf.length as u64;
 
         buf.length += compressed_size;
         buf.data.push(header);
         buf.data.push(data);
 
-        #[cfg(feature = "encryption")]
-        if let Some(encryptor) = self.page_encryptor.as_mut() {
-            if page.compressed_page().is_data_page() {
-                encryptor.increment_page();
-            }
-        }
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
+impl PageWriter for ArrowPageWriter {
+    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let (uncompressed_size, compressed_size, len) = self.write_page_to_buffer(&page)?;
+
+        let mut spec = PageWriteSpec::new();
+        spec.page_type = page.page_type();
+        spec.num_values = page.num_values();
+        spec.uncompressed_size = uncompressed_size;
+        spec.offset = len;
+        spec.compressed_size = compressed_size;
+        spec.bytes_written = compressed_size as u64;
 
         Ok(spec)
     }
