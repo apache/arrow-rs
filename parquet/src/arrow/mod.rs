@@ -163,7 +163,7 @@
 //!
 //! // There is always a footer key even with a plaintext footer,
 //! // but this is used for signing the footer.
-//! let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+//! let footer_key = "0123456789012345".as_bytes(); // Keys are 128 bits (16 bytes)
 //! let column_1_key = "1234567890123450".as_bytes();
 //! let column_2_key = "1234567890123451".as_bytes();
 //!
