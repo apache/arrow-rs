@@ -23,7 +23,7 @@ use crate::format::{PageHeader, PageType};
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PageEncryptor {
     file_encryptor: Arc<FileEncryptor>,
     row_group_index: usize,

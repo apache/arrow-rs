@@ -837,21 +837,32 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+trait PageModuleWriter {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>>;
+}
+
+#[cfg(not(feature = "encryption"))]
+impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
+        Ok(page.data().to_vec())
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
+    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
+        match self.page_encryptor.as_mut() {
+            Some(page_encryptor) => page_encryptor.encrypt_page(page),
+            _ => Ok(page.data().to_vec()),
+        }
+    }
+}
+
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
-
-        #[cfg(feature = "encryption")]
-        let encrypted_buffer;
-        let page_data = match self.page_encryptor.as_ref() {
-            #[cfg(feature = "encryption")]
-            Some(encryptor) => {
-                encrypted_buffer = encryptor.encrypt_page(&page)?;
-                &encrypted_buffer
-            }
-            _ => page.data(),
-        };
+        let page_data = self.write_page_to_buffer(&page)?;
 
         let mut page_header = page.to_thrift_header();
         // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
@@ -859,8 +870,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         page_header.compressed_page_size = page_data.len() as i32;
 
         let header_size = self.serialize_page_header(page_header)?;
-
-        self.sink.write_all(page_data)?;
+        self.sink.write_all(page_data.as_slice())?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
@@ -876,7 +886,6 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
                 page_encryptor.increment_page();
             }
         }
-
         Ok(spec)
     }
 

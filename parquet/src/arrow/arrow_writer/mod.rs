@@ -489,17 +489,32 @@ impl ArrowPageWriter {
         self
     }
 }
+trait PageModuleWriter {
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<(Bytes, Bytes)>;
+}
 
-impl PageWriter for ArrowPageWriter {
-    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let mut buf = self.buffer.try_lock().unwrap();
+#[cfg(not(feature = "encryption"))]
+impl PageModuleWriter for ArrowPageWriter {
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<(Bytes, Bytes)> {
+        let data = page.compressed_page().buffer().clone();
 
+        let mut page_header = page.to_thrift_header();
+        page_header.compressed_page_size = data.len() as i32;
+
+        let mut header = Vec::with_capacity(1024);
+
+        let mut protocol = TCompactOutputProtocol::new(&mut header);
+        page_header.write_to_out_protocol(&mut protocol)?;
+
+        Ok((data, Bytes::from(header)))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl PageModuleWriter for ArrowPageWriter {
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<(Bytes, Bytes)> {
         let data = match self.page_encryptor.as_ref() {
-            #[cfg(feature = "encryption")]
-            Some(encryptor) => {
-                let encrypted_buffer = encryptor.encrypt_page(&page)?;
-                Bytes::from(encrypted_buffer)
-            }
+            Some(page_encryptor) => Bytes::from(page_encryptor.encrypt_page(page)?),
             _ => page.compressed_page().buffer().clone(),
         };
 
@@ -507,10 +522,13 @@ impl PageWriter for ArrowPageWriter {
         page_header.compressed_page_size = data.len() as i32;
 
         let mut header = Vec::with_capacity(1024);
-        match self.page_encryptor.as_ref() {
-            #[cfg(feature = "encryption")]
-            Some(encryptor) => {
-                encryptor.encrypt_page_header(&page_header, &mut header)?;
+
+        match self.page_encryptor.as_mut() {
+            Some(page_encryptor) => {
+                page_encryptor.encrypt_page_header(&page_header, &mut header)?;
+                if page.compressed_page().is_data_page() {
+                    page_encryptor.increment_page();
+                }
             }
             _ => {
                 let mut protocol = TCompactOutputProtocol::new(&mut header);
@@ -518,7 +536,15 @@ impl PageWriter for ArrowPageWriter {
             }
         };
 
-        let header = Bytes::from(header);
+        Ok((data, Bytes::from(header)))
+    }
+}
+
+impl PageWriter for ArrowPageWriter {
+    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let (data, header) = self.serialize_page(&page)?;
+        let mut buf = self.buffer.try_lock().unwrap();
+
         let compressed_size = data.len() + header.len();
 
         let mut spec = PageWriteSpec::new();
@@ -532,13 +558,6 @@ impl PageWriter for ArrowPageWriter {
         buf.length += compressed_size;
         buf.data.push(header);
         buf.data.push(data);
-
-        #[cfg(feature = "encryption")]
-        if let Some(encryptor) = self.page_encryptor.as_mut() {
-            if page.compressed_page().is_data_page() {
-                encryptor.increment_page();
-            }
-        }
 
         Ok(spec)
     }
