@@ -19,17 +19,17 @@
 
 use crate::array::*;
 use crate::datatypes::*;
-use crate::util::test_util::seedable_rng;
-use arrow_buffer::{Buffer, IntervalMonthDayNano};
-use half::f16;
-use rand::distributions::uniform::SampleUniform;
-use rand::thread_rng;
-use rand::Rng;
-use rand::SeedableRng;
-use rand::{
+use crate::util::rand::distributions::uniform::SampleUniform;
+use crate::util::rand::thread_rng;
+use crate::util::rand::Rng;
+use crate::util::rand::SeedableRng;
+use crate::util::rand::{
     distributions::{Alphanumeric, Distribution, Standard},
     prelude::StdRng,
 };
+use crate::util::test_util::seedable_rng;
+use arrow_buffer::{Buffer, IntervalMonthDayNano};
+use half::f16;
 use std::ops::Range;
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
