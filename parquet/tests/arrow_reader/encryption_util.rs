@@ -17,7 +17,11 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
+use parquet::encryption::decrypt::KeyRetriever;
+use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::ParquetMetaData;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
 pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &ParquetMetaData) {
@@ -82,4 +86,42 @@ pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &
     }
 
     assert_eq!(row_count, file_metadata.num_rows() as usize);
+}
+
+/// A KeyRetriever to use in Parquet encryption tests,
+/// which stores a map from key names/metadata to encryption key bytes.
+pub struct TestKeyRetriever {
+    keys: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl TestKeyRetriever {
+    pub fn new() -> Self {
+        Self {
+            keys: Mutex::new(HashMap::default()),
+        }
+    }
+
+    pub fn with_key(self, key_name: String, key: Vec<u8>) -> Self {
+        {
+            let mut keys = self.keys.lock().unwrap();
+            keys.insert(key_name, key);
+        }
+        self
+    }
+}
+
+impl KeyRetriever for TestKeyRetriever {
+    fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>> {
+        let key_metadata = std::str::from_utf8(key_metadata).map_err(|e| {
+            ParquetError::General(format!("Could not convert key metadata to string: {}", e))
+        })?;
+        let keys = self.keys.lock().unwrap();
+        match keys.get(key_metadata) {
+            Some(key) => Ok(key.clone()),
+            None => Err(ParquetError::General(format!(
+                "Could not retrieve key for metadata {:?}",
+                key_metadata
+            ))),
+        }
+    }
 }
