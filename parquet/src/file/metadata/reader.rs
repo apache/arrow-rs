@@ -460,7 +460,7 @@ impl ParquetMetaDataReader {
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => fetch.fetch(range.start..range.end).await?,
+            _ => fetch.fetch(range.start as u64..range.end as u64).await?,
         };
 
         // Sanity check
@@ -598,7 +598,7 @@ impl ParquetMetaDataReader {
         // Note: prefetch > file_size is ok since we're using saturating_sub.
         let footer_start = file_size.saturating_sub(prefetch);
 
-        let suffix = fetch.fetch(footer_start..file_size).await?;
+        let suffix = fetch.fetch(footer_start as u64..file_size as u64).await?;
         let suffix_len = suffix.len();
         let fetch_len = file_size - footer_start;
         if suffix_len < fetch_len {
@@ -626,7 +626,7 @@ impl ParquetMetaDataReader {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
-            let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
+            let meta = fetch.fetch(metadata_start as u64..(file_size - FOOTER_SIZE) as u64).await?;
             Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
@@ -1112,18 +1112,18 @@ mod async_tests {
 
     impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
     where
-        F: FnMut(Range<usize>) -> Fut + Send,
+        F: FnMut(Range<u64>) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
     {
-        fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+        fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
             async move { self.0(range).await }.boxed()
         }
     }
 
-    fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
-        file.seek(SeekFrom::Start(range.start as _))?;
+    fn read_range(file: &mut File, range: Range<u64>) -> Result<Bytes> {
+        file.seek(SeekFrom::Start(range.start))?;
         let len = range.end - range.start;
-        let mut buf = Vec::with_capacity(len);
+        let mut buf = Vec::with_capacity(len as usize);
         file.take(len as _).read_to_end(&mut buf)?;
         Ok(buf.into())
     }
