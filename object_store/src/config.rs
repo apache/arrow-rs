@@ -18,7 +18,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use std::time::Duration;
 
-use humantime::{format_duration, parse_duration};
+use jiff::SignedDuration;
 use reqwest::header::HeaderValue;
 
 use crate::{Error, Result};
@@ -87,10 +87,12 @@ impl Parse for bool {
 
 impl Parse for Duration {
     fn parse(v: &str) -> Result<Self> {
-        parse_duration(v).map_err(|_| Error::Generic {
-            store: "Config",
-            source: format!("failed to parse \"{v}\" as Duration").into(),
-        })
+        SignedDuration::from_str(v)
+            .and_then(Self::try_from)
+            .map_err(|_| Error::Generic {
+                store: "Config",
+                source: format!("failed to parse \"{v}\" as Duration").into(),
+            })
     }
 }
 
@@ -123,7 +125,12 @@ impl Parse for HeaderValue {
 
 pub(crate) fn fmt_duration(duration: &ConfigValue<Duration>) -> String {
     match duration {
-        ConfigValue::Parsed(v) => format_duration(*v).to_string(),
+        ConfigValue::Parsed(v) => {
+            // Should only fail if `Duration` has more seconds than what fits
+            // into i64.
+            let d = SignedDuration::try_from(*v).unwrap();
+            format!("{:#}", d)
+        }
         ConfigValue::Deferred(v) => v.clone(),
     }
 }
@@ -139,5 +146,14 @@ mod tests {
         assert_eq!(Duration::parse("60 seconds").unwrap(), duration);
         assert_eq!(Duration::parse("60 s").unwrap(), duration);
         assert_eq!(Duration::parse("60s").unwrap(), duration)
+    }
+
+    #[test]
+    fn test_fmt_duration() {
+        let dur = ConfigValue::Parsed(Duration::new(9420, 0));
+        assert_eq!("2h 37m", fmt_duration(&dur));
+
+        let dur = ConfigValue::Parsed(Duration::new(0, 32_000_000));
+        assert_eq!("32ms", fmt_duration(&dur));
     }
 }
