@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SCHEMA_METADATA_KEY"],"enum":["ComplexType","PrimitiveType","Schema","TypeName"],"struct":["Array","Attributes","Enum","Field","Fixed","Map","Record","Type"]};
