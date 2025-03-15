@@ -25,6 +25,7 @@ use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
+use bytes::Bytes;
 use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
@@ -33,11 +34,21 @@ use crate::column::{
     writer::{get_column_writer, ColumnWriter},
 };
 use crate::data_type::DataType;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::{
+    get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
+};
+#[cfg(feature = "encryption")]
+use crate::encryption::page_encryptor::PageEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
+#[cfg(feature = "encryption")]
+use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
 use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
+#[cfg(not(feature = "encryption"))]
+use crate::util::never::Never;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
@@ -153,6 +164,8 @@ pub struct SerializedFileWriter<W: Write> {
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
     finished: bool,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl<W: Write> Debug for SerializedFileWriter<W> {
@@ -171,7 +184,23 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
-        Self::start_file(&mut buf)?;
+
+        #[cfg(feature = "encryption")]
+        let file_encryptor = match properties.file_encryption_properties.as_ref() {
+            None => None,
+            Some(encryption_props) => Some(Arc::new(FileEncryptor::new(encryption_props.clone())?)),
+        };
+
+        #[cfg(feature = "encryption")]
+        if properties.file_encryption_properties.is_some() {
+            properties
+                .file_encryption_properties
+                .clone()
+                .unwrap()
+                .validate_encrypted_column_names(SchemaDescriptor::new(schema.clone()))?;
+        }
+
+        Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
             schema: schema.clone(),
@@ -184,6 +213,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             row_group_index: 0,
             kv_metadatas: Vec::new(),
             finished: false,
+            #[cfg(feature = "encryption")]
+            file_encryptor,
         })
     }
 
@@ -241,6 +272,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             ordinal,
             Some(Box::new(on_close)),
         );
+        #[cfg(feature = "encryption")]
+        let row_group_writer = row_group_writer.with_file_encryptor(self.file_encryptor.clone());
+
         Ok(row_group_writer)
     }
 
@@ -266,9 +300,15 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.finish()
     }
 
+    #[allow(unused_variables)]
     /// Writes magic bytes at the beginning of the file.
-    fn start_file(buf: &mut TrackedWrite<W>) -> Result<()> {
-        buf.write_all(&PARQUET_MAGIC)?;
+    fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        #[cfg(feature = "encryption")]
+        let magic = get_file_magic(properties.file_encryption_properties.as_ref());
+        #[cfg(not(feature = "encryption"))]
+        let magic = get_file_magic();
+
+        buf.write_all(magic)?;
         Ok(())
     }
 
@@ -301,6 +341,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
+
+        #[cfg(feature = "encryption")]
+        {
+            encoder = encoder.with_file_encryptor(self.file_encryptor.clone());
+        }
+
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
@@ -360,6 +406,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Returns the number of bytes written to this instance
     pub fn bytes_written(&self) -> usize {
         self.buf.bytes_written()
+    }
+
+    /// Get the file encryptor used by this instance to encrypt data
+    #[cfg(feature = "encryption")]
+    pub(crate) fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
+        self.file_encryptor.clone()
     }
 }
 
@@ -429,6 +481,8 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     row_group_index: i16,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
@@ -465,7 +519,19 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
             total_uncompressed_bytes: 0,
+            #[cfg(feature = "encryption")]
+            file_encryptor: None,
         }
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the file encryptor to use for encrypting row group data and metadata
+    pub(crate) fn with_file_encryptor(
+        mut self,
+        file_encryptor: Option<Arc<FileEncryptor>>,
+    ) -> Self {
+        self.file_encryptor = file_encryptor;
+        self
     }
 
     /// Advance `self.column_index` returning the next [`ColumnDescPtr`] if any
@@ -523,12 +589,37 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         ) -> Result<C>,
     {
         self.assert_previous_writer_closed()?;
+
+        #[cfg(feature = "encryption")]
+        let file_encryptor = self.file_encryptor.clone();
+        #[cfg(feature = "encryption")]
+        let row_group_index = self.row_group_index as usize;
+        #[cfg(feature = "encryption")]
+        let column_index = self.column_index;
+
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
                 let (buf, on_close) = self.get_on_close();
-                let page_writer = Box::new(SerializedPageWriter::new(buf));
-                Some(factory(column, props, page_writer, Box::new(on_close))?)
+
+                #[cfg(feature = "encryption")]
+                let page_encryptor = PageEncryptor::create_if_column_encrypted(
+                    &file_encryptor,
+                    row_group_index,
+                    column_index,
+                    column.path().string(),
+                );
+
+                let page_writer = SerializedPageWriter::new(buf);
+                #[cfg(feature = "encryption")]
+                let page_writer = page_writer.with_page_encryptor(page_encryptor);
+
+                Some(factory(
+                    column,
+                    props,
+                    Box::new(page_writer),
+                    Box::new(on_close),
+                )?)
             }
             None => None,
         })
@@ -604,6 +695,13 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
+        }
+        #[cfg(feature = "encryption")]
+        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
+            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                file_encryptor.properties(),
+                &metadata.column_descr_ptr(),
+            ));
         }
         close.metadata = builder.build()?;
 
@@ -699,12 +797,26 @@ impl<'a> SerializedColumnWriter<'a> {
 /// `SerializedPageWriter` should not be used after calling `close()`.
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
+    #[cfg(feature = "encryption")]
+    page_encryptor: Option<PageEncryptor>,
+    #[cfg(not(feature = "encryption"))]
+    page_encryptor: Option<Never>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Creates new page writer.
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
-        Self { sink }
+        Self {
+            sink,
+            page_encryptor: None,
+        }
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryptor to use to encrypt page data
+    fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
+        self.page_encryptor = page_encryptor;
+        self
     }
 
     /// Serializes page header into Thrift.
@@ -712,30 +824,142 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            header.write_to_out_protocol(&mut protocol)?;
+        match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(page_encryptor) => {
+                page_encryptor.encrypt_page_header(&header, &mut self.sink)?;
+            }
+            _ => {
+                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
+                header.write_to_out_protocol(&mut protocol)?;
+            }
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
 }
 
-impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
-    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+trait PageModuleWriter {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)>;
+}
+
+#[cfg(not(feature = "encryption"))]
+impl PageModuleWriter for PageModuleWriter {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)> {
+        let mut buf = self.buffer.try_lock().unwrap();
+        let data = page.compressed_page().buffer().clone();
+
+        let mut page_header = page.to_thrift_header();
+        page_header.compressed_page_size = data.len() as i32;
+
+        let mut header = Vec::with_capacity(1024);
+
+        let mut protocol = TCompactOutputProtocol::new(&mut header);
+        page_header.write_to_out_protocol(&mut protocol)?;
+
+        let header = Bytes::from(header);
+        let compressed_size = data.len() + header.len();
+        let uncompressed_size = page.uncompressed_size() + header.len();
+        let buffer_length = buf.length as u64;
+
+        buf.length += compressed_size;
+        buf.data.push(header);
+        buf.data.push(data);
+
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
+    fn write_page_to_buffer(
+        &mut self,
+        page: &CompressedPage,
+    ) -> Result<(usize, usize, u64)> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
-        let page_header = page.to_thrift_header();
+        let page_data = match self.page_encryptor.as_ref() {
+            Some(encryptor) => encryptor.encrypt_page(&page)?,
+            _ => page.data(),
+        };
+        let mut page_header = page.to_thrift_header();
+        // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
+        // before they are written so the compressed page size is correct.
+        page_header.compressed_page_size = page_data.len() as i32;
+
         let header_size = self.serialize_page_header(page_header)?;
-        self.sink.write_all(page.data())?;
+
+        self.sink.write_all(page_data)?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
         spec.uncompressed_size = page.uncompressed_size() + header_size;
-        spec.compressed_size = page.compressed_size() + header_size;
+        spec.compressed_size = page_data.len() + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
+
+        #[cfg(feature = "encryption")]
+        if let Some(page_encryptor) = self.page_encryptor.as_mut() {
+            if page.compressed_page().is_data_page() {
+                page_encryptor.increment_page();
+            }
+        }
+
+        Ok(spec)
+
+        Ok((compressed_size, uncompressed_size, buffer_length))
+    }
+}
+
+impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
+    fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let (uncompressed_size, compressed_size, len) =
+            self.write_page_to_buffer(&page)?;
+
+        let page_type = page.page_type();
+        let start_pos = self.sink.bytes_written() as u64;
+
+        #[cfg(feature = "encryption")]
+        let encrypted_buffer;
+        let page_data = match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(encryptor) => {
+                encrypted_buffer = encryptor.encrypt_page(&page)?;
+                &encrypted_buffer
+            }
+            _ => page.data(),
+        };
+
+        let mut page_header = page.to_thrift_header();
+        // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
+        // before they are written so the compressed page size is correct.
+        page_header.compressed_page_size = page_data.len() as i32;
+
+        let header_size = self.serialize_page_header(page_header)?;
+
+        self.sink.write_all(page_data)?;
+
+        let mut spec = PageWriteSpec::new();
+        spec.page_type = page_type;
+        spec.uncompressed_size = page.uncompressed_size() + header_size;
+        spec.compressed_size = page_data.len() + header_size;
+        spec.offset = start_pos;
+        spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
+        spec.num_values = page.num_values();
+
+        #[cfg(feature = "encryption")]
+        if let Some(page_encryptor) = self.page_encryptor.as_mut() {
+            if page.compressed_page().is_data_page() {
+                page_encryptor.increment_page();
+            }
+        }
 
         Ok(spec)
     }
@@ -744,6 +968,25 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         self.sink.flush()?;
         Ok(())
     }
+}
+
+/// Get the magic bytes at the start and end of the file that identify this
+/// as a Parquet file.
+#[cfg(feature = "encryption")]
+pub(crate) fn get_file_magic(
+    file_encryption_properties: Option<&FileEncryptionProperties>,
+) -> &'static [u8; 4] {
+    match file_encryption_properties.as_ref() {
+        Some(encryption_properties) if encryption_properties.encrypt_footer() => {
+            &PARQUET_MAGIC_ENCR_FOOTER
+        }
+        _ => &PARQUET_MAGIC,
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+pub(crate) fn get_file_magic() -> &'static [u8; 4] {
+    &PARQUET_MAGIC
 }
 
 #[cfg(test)]

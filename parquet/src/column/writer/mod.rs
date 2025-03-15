@@ -32,6 +32,8 @@ use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
@@ -1199,6 +1201,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
         }
 
+        #[cfg(feature = "encryption")]
+        if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
+            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                encryption_properties,
+                &self.descr,
+            ));
+        }
+
         let metadata = builder.build()?;
         Ok(metadata)
     }
@@ -1523,26 +1533,28 @@ fn increment(mut data: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
-        schema::parser::parse_message_type,
-    };
-    use core::str;
-    use rand::distributions::uniform::SampleUniform;
-    use std::{fs::File, sync::Arc};
 
     use crate::column::{
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+
     use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::ReaderProperties, reader::SerializedPageReader, writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnPath, Type as SchemaType};
     use crate::util::test_common::rand_gen::random_numbers_range;
+    use crate::{
+        file::{properties::DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH, writer::SerializedFileWriter},
+        schema::parser::parse_message_type,
+    };
 
     use super::*;
+
+    use core::str;
+    use rand::distributions::uniform::SampleUniform;
+    use std::{fs::File, sync::Arc};
 
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
