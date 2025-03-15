@@ -25,18 +25,17 @@
 
 **Implemented enhancements:**
 
-- Add example for how to read/write encrypted parquet files [\#7281](https://github.com/apache/arrow-rs/issues/7281)
+- Add example for how to read/write encrypted parquet files [\#7281](https://github.com/apache/arrow-rs/issues/7281) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Have writer return parsed `ParquetMetadata` [\#7254](https://github.com/apache/arrow-rs/issues/7254)
-- feat: Support Utf8View in  JSON reader [\#7244](https://github.com/apache/arrow-rs/issues/7244)
+- feat: Support Utf8View in  JSON reader [\#7244](https://github.com/apache/arrow-rs/issues/7244) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Release arrow-rs / parquet patch version 53.4.1 \(March 2025\) [\#7232](https://github.com/apache/arrow-rs/issues/7232)
 - The relative path of the test data is incorrect [\#7222](https://github.com/apache/arrow-rs/issues/7222)
-- StructBuilder should provide a way to get a &dyn ArrayBuilder of a field builder [\#7193](https://github.com/apache/arrow-rs/issues/7193)
-- Support div\_wrapping/rem\_wrapping for numeric arithmetic kernels [\#7158](https://github.com/apache/arrow-rs/issues/7158)
-- Release object\_store `0.12.0` \(API breaking\) Around Feb 30 2025 [\#6903](https://github.com/apache/arrow-rs/issues/6903)
+- StructBuilder should provide a way to get a &dyn ArrayBuilder of a field builder [\#7193](https://github.com/apache/arrow-rs/issues/7193) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support div\_wrapping/rem\_wrapping for numeric arithmetic kernels [\#7158](https://github.com/apache/arrow-rs/issues/7158) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Incorrect IPC schema encoding for multiple dictionaries [\#7058](https://github.com/apache/arrow-rs/issues/7058) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Incorrect IPC schema encoding for multiple dictionaries [\#7058](https://github.com/apache/arrow-rs/issues/7058) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 
 **Documentation updates:**
 
@@ -91,18 +90,13 @@
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/54.2.1...53.4.1)
 
-**Implemented enhancements:**
-
-- Introduce Extensions concept to object\_store::GetOptions and object\_store::PutOptions [\#7155](https://github.com/apache/arrow-rs/issues/7155)
-- Enable conditional put by default for S3 [\#7080](https://github.com/apache/arrow-rs/issues/7080)
-
 **Fixed bugs:**
 
 - Take empty struct array would get array with length 0 [\#7225](https://github.com/apache/arrow-rs/issues/7225)
 
 **Closed issues:**
 
-- Release arrow-rs / parquet patch version 54.2.1 \(Feb 2025\) \(HOTFIX\) [\#7209](https://github.com/apache/arrow-rs/issues/7209)
+- Release arrow-rs / parquet patch version 54.2.1 \(Feb 2025\) \(HOTFIX\) [\#7209](https://github.com/apache/arrow-rs/issues/7209) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 
 
