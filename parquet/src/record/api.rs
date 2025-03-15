@@ -701,7 +701,7 @@ impl Field {
     /// `Timestamp` value.
     #[inline]
     pub fn convert_int96(_descr: &ColumnDescPtr, value: Int96) -> Self {
-        Field::TimestampMillis(value.to_i64())
+        Field::TimestampMillis(value.to_millis())
     }
 
     /// Converts Parquet FLOAT type with logical type into `f32` value.

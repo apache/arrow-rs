@@ -50,8 +50,23 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Coerce Date32 back to Date64 (#1666)
         (DataType::Date32, DataType::Date64) => hint,
 
-        // Determine timezone
+        // Timestamps of the same resolution can be converted to a a different timezone.
         (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
+
+        // INT96 default to Timestamp(TimeUnit::Nanosecond, None) (see from_parquet below).
+        // Allow different resolutions to support larger date ranges.
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second, None),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ) => hint,
 
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
