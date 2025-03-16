@@ -754,7 +754,7 @@ impl ParquetMetaDataReader {
             }
         }
 
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+        let mut t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
@@ -767,13 +767,17 @@ impl ParquetMetaDataReader {
             file_decryptor = Some(get_file_decryptor(algo, file_decryption_properties)?);
         }
 
+        let mut first_row_number = 0;
         let mut row_groups = Vec::new();
+        t_file_metadata.row_groups.sort_by_key(|rg| rg.ordinal);
         for rg in t_file_metadata.row_groups {
             let r = RowGroupMetaData::from_encrypted_thrift(
                 schema_descr.clone(),
                 rg,
+                Some(first_row_number),
                 file_decryptor.as_ref(),
             )?;
+            first_row_number += r.num_rows;
             row_groups.push(r);
         }
         let column_orders =
@@ -804,14 +808,19 @@ impl ParquetMetaDataReader {
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
 
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+        let mut t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
+        let mut first_row_number = 0;
         let mut row_groups = Vec::new();
+        t_file_metadata.row_groups.sort_by_key(|rg| rg.ordinal);
         for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
+            let row_group =
+                RowGroupMetaData::from_thrift(schema_descr.clone(), rg, Some(first_row_number))?;
+            first_row_number += row_group.num_rows;
+            row_groups.push(row_group);
         }
         let column_orders =
             Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
