@@ -489,6 +489,7 @@ impl ArrowPageWriter {
         self
     }
 }
+
 trait PageModuleWriter {
     fn serialize_page(&mut self, page: &CompressedPage) -> Result<(Bytes, Bytes)>;
 }

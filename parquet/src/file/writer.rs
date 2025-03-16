@@ -838,19 +838,19 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 }
 
 trait PageModuleWriter {
-    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>>;
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>>;
 }
 
 #[cfg(not(feature = "encryption"))]
 impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
-    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
         Ok(page.data().to_vec())
     }
 }
 
 #[cfg(feature = "encryption")]
 impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
-    fn write_page_to_buffer(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
+    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
         match self.page_encryptor.as_mut() {
             Some(page_encryptor) => page_encryptor.encrypt_page(page),
             _ => Ok(page.data().to_vec()),
@@ -862,7 +862,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
-        let page_data = self.write_page_to_buffer(&page)?;
+        let page_data = self.serialize_page(&page)?;
 
         let mut page_header = page.to_thrift_header();
         // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
