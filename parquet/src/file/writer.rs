@@ -199,6 +199,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                 .validate_encrypted_column_names(SchemaDescriptor::new(schema.clone()))?;
         }
 
+        #[cfg(feature = "encryption")]
+        if let Some(ref file_encryption_properties) = properties.file_encryption_properties {
+            if !file_encryption_properties.encrypt_footer() {
+                return Err(general_err!("Footer encryption is not supported yet"));
+            }
+        }
+
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,

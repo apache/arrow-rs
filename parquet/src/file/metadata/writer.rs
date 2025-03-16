@@ -344,8 +344,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                 debug_assert!(column_chunk.meta_data.is_none());
             }
         }
-        // TODO: In plaintext footer mode, the plaintext metadata is retained but with statistics stripped out
-        // (for both uniform and per-column encryption).
+
         Ok(column_chunk)
     }
 }
