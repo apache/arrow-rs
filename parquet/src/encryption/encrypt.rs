@@ -59,22 +59,27 @@ pub struct FileEncryptionProperties {
 }
 
 impl FileEncryptionProperties {
+    /// Create a new builder for encryption properties
     pub fn builder(footer_key: Vec<u8>) -> EncryptionPropertiesBuilder {
         EncryptionPropertiesBuilder::new(footer_key)
     }
 
+    /// Should the footer be encrypted
     pub fn encrypt_footer(&self) -> bool {
         self.encrypt_footer
     }
 
+    /// Retrieval metadata of key used for encryption of footer and (possibly) columns
     pub fn footer_key_metadata(&self) -> Option<&Vec<u8>> {
         self.footer_key.key_metadata.as_ref()
     }
 
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
         self.aad_prefix.as_ref()
     }
 
+    /// Should the AAD prefix should be stored in the file
     pub fn store_aad_prefix(&self) -> bool {
         self.store_aad_prefix && self.aad_prefix.is_some()
     }
@@ -132,26 +137,41 @@ impl EncryptionPropertiesBuilder {
         }
     }
 
+    /// Set if the footer be encrypted
     pub fn with_plaintext_footer(mut self, plaintext_footer: bool) -> Self {
         self.encrypt_footer = !plaintext_footer;
         self
     }
 
+    /// Set retrieval metadata of key used for encryption of footer and (possibly) columns
     pub fn with_footer_key_metadata(mut self, metadata: Vec<u8>) -> Self {
         self.footer_key = self.footer_key.with_metadata(metadata);
         self
     }
 
+    /// Set the key used for encryption of a column. Note that if no column keys are provided but
+    /// footer key is all columns will be encrypted with the footer key. If column keys are provided
+    /// only the columns with a key will be encrypted even if footer key is provided.
     pub fn with_column_key(mut self, column_path: String, encryption_key: EncryptionKey) -> Self {
         self.column_keys.insert(column_path, encryption_key);
         self
     }
 
+    /// AAD prefix string uniquely identifies the file and allows to differentiate it e.g. from
+    /// older versions of the file or from other partition files in the same data set (table).
+    /// This string is optionally passed by a writer upon file creation.
+    pub fn with_aad_prefix(mut self, aad_prefix: Vec<u8>) -> Self {
+        self.aad_prefix = Some(aad_prefix);
+        self
+    }
+
+    /// Should the AAD prefix be stored in the file
     pub fn with_aad_prefix_storage(mut self, store_aad_prefix: bool) -> Self {
         self.store_aad_prefix = store_aad_prefix;
         self
     }
 
+    /// Build the encryption properties
     pub fn build(self) -> FileEncryptionProperties {
         FileEncryptionProperties {
             encrypt_footer: self.encrypt_footer,
@@ -189,19 +209,25 @@ impl FileEncryptor {
         })
     }
 
+    /// Get the encryptor's file encryption properties
     pub fn properties(&self) -> &FileEncryptionProperties {
         &self.properties
     }
 
+    /// Combined AAD prefix and suffix for the file generated
     pub fn file_aad(&self) -> &[u8] {
         &self.file_aad
     }
 
+    /// Unique file identifier part of AAD suffix. This is generated per module by
+    /// concatenating unique file unique, module type, row group ordinal (all except
+    /// footer),column ordinal (all except footer) and page ordinal (data page and
+    /// header only).
     pub fn aad_file_unique(&self) -> &Vec<u8> {
         &self.aad_file_unique
     }
 
-    /// Returns whether data for the specified column is encrypted
+    /// Returns whether data for the specified column should be encrypted
     pub fn is_column_encrypted(&self, column_path: &str) -> bool {
         if self.properties.column_keys.is_empty() {
             // Uniform encryption
@@ -211,6 +237,7 @@ impl FileEncryptor {
         }
     }
 
+    /// Get the BlockEncryptor for the footer
     pub(crate) fn get_footer_encryptor(&self) -> Result<Box<dyn BlockEncryptor>> {
         Ok(Box::new(RingGcmBlockEncryptor::new(
             &self.properties.footer_key.key,
