@@ -32,6 +32,9 @@
 - feat: Support Utf8View in  JSON reader [\#7244](https://github.com/apache/arrow-rs/issues/7244) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - StructBuilder should provide a way to get a &dyn ArrayBuilder of a field builder [\#7193](https://github.com/apache/arrow-rs/issues/7193) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support div\_wrapping/rem\_wrapping for numeric arithmetic kernels [\#7158](https://github.com/apache/arrow-rs/issues/7158) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve RleDecoder performance [\#7195](https://github.com/apache/arrow-rs/pull/7195) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
+- Improve arrow-json deserialization performance by 30% [\#7157](https://github.com/apache/arrow-rs/pull/7157) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mwylde](https://github.com/mwylde))
+- Add `with_skip_validation` flag to IPC `StreamReader`, `FileReader` and `FileDecoder` [\#7120](https://github.com/apache/arrow-rs/pull/7120) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 
 **Fixed bugs:**
 
@@ -46,12 +49,6 @@
 - Minor: fix doc and remove unused code [\#7194](https://github.com/apache/arrow-rs/pull/7194) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([lewiszlw](https://github.com/lewiszlw))
 - doc: modify wrong comment [\#7190](https://github.com/apache/arrow-rs/pull/7190) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([YichiZhang0613](https://github.com/YichiZhang0613))
 - doc: fix IPC file reader/writer docs [\#7178](https://github.com/apache/arrow-rs/pull/7178) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
-
-**Performance improvements:**
-
-- Improve RleDecoder performance [\#7195](https://github.com/apache/arrow-rs/pull/7195) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
-- Improve arrow-json deserialization performance by 30% [\#7157](https://github.com/apache/arrow-rs/pull/7157) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mwylde](https://github.com/mwylde))
-- Add `with_skip_validation` flag to IPC `StreamReader`, `FileReader` and `FileDecoder` [\#7120](https://github.com/apache/arrow-rs/pull/7120) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 
 **Merged pull requests:**
 
