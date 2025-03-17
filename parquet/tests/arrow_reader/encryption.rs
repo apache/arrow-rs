@@ -17,26 +17,25 @@
 
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
+use crate::encryption_util::read_and_roundtrip_to_encrypted_file;
 use crate::encryption_util::verify_encryption_test_data;
+use arrow::array::*;
+use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema};
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
 use parquet::arrow::ArrowWriter;
-use parquet::data_type::{AsBytes, ByteArray, ByteArrayType};
+use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
-use parquet::encryption::encrypt::{EncryptionKey, FileEncryptionProperties};
-use parquet::file::properties::WriterProperties;
-use std::fs::File;
-use std::sync::Arc;
-
-use crate::encryption_util::read_and_roundtrip_to_encrypted_file;
-use arrow::array::*;
-use arrow::error::Result as ArrowResult;
+use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
+use std::fs::File;
+use std::sync::Arc;
 
 #[test]
 fn test_non_uniform_encryption_plaintext_footer() {
@@ -66,25 +65,25 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
         format!("{test_data}/encrypt_columns_and_footer_disable_aad_storage.parquet.encrypted");
     let file = File::open(path.clone()).unwrap();
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_1_key = b"1234567890123450".to_vec();
+    let column_2_key = b"1234567890123451".to_vec();
 
     // Can read successfully when providing the correct AAD prefix
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
-        .with_aad_prefix("tester".as_bytes().to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_aad_prefix(b"tester".to_vec())
         .build()
         .unwrap();
 
     verify_encryption_test_file_read(file, decryption_properties);
 
     // Using wrong AAD prefix should fail
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
-        .with_aad_prefix("wrong_aad_prefix".as_bytes().to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .with_aad_prefix(b"wrong_aad_prefix".to_vec())
         .build()
         .unwrap();
 
@@ -99,9 +98,9 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
     );
 
     // Not providing any AAD prefix should fail as it isn't stored in the file
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
         .build()
         .unwrap();
 
@@ -128,13 +127,13 @@ fn test_non_uniform_encryption() {
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
     let file = File::open(path).unwrap();
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_1_key = b"1234567890123450".to_vec();
+    let column_2_key = b"1234567890123451".to_vec();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
         .build()
         .unwrap();
 
@@ -147,10 +146,8 @@ fn test_uniform_encryption() {
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
     let file = File::open(path).unwrap();
 
-    let key_code: &[u8] = "0123456789012345".as_bytes();
-    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-        .build()
-        .unwrap();
+    let key_code = b"0123456789012345".to_vec();
+    let decryption_properties = FileDecryptionProperties::builder(key_code).build().unwrap();
 
     verify_encryption_test_file_read(file, decryption_properties);
 }
@@ -176,13 +173,13 @@ fn test_aes_ctr_encryption() {
     let path = format!("{test_data}/encrypt_columns_and_footer_ctr.parquet.encrypted");
     let file = File::open(path).unwrap();
 
-    let footer_key = "0123456789012345".as_bytes();
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec();
+    let column_1_key = b"1234567890123450".to_vec();
+    let column_2_key = b"1234567890123451".to_vec();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
         .build()
         .unwrap();
 
@@ -237,7 +234,7 @@ fn test_uniform_encryption_roundtrip() {
 
     let file = tempfile::tempfile().unwrap();
 
-    let footer_key: &[u8] = "0123456789012345".as_bytes();
+    let footer_key = b"0123456789012345";
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build();
 
     let props = WriterProperties::builder()
@@ -320,21 +317,17 @@ fn test_write_non_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_names = vec!["double_field", "float_field"];
+    let column_keys = vec![b"1234567890123450".to_vec(), b"1234567890123451".to_vec()];
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_keys(column_names.clone(), column_keys.clone())
         .build()
         .unwrap();
 
-    let column_1_key = EncryptionKey::new(column_1_key.as_bytes().to_vec());
-    let column_2_key = EncryptionKey::new(column_2_key.as_bytes().to_vec());
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field".into(), column_1_key)
-        .with_column_key("float_field".into(), column_2_key)
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_column_keys(column_names, column_keys)
         .build();
 
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
@@ -347,17 +340,17 @@ fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_1_key = b"1234567890123450".to_vec();
+    let column_2_key = b"1234567890123451".to_vec();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
         .build()
         .unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
         .with_plaintext_footer(true)
         .build();
 
@@ -388,13 +381,13 @@ fn test_write_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
         .build()
         .unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key).build();
 
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
@@ -404,22 +397,20 @@ fn test_write_non_uniform_encryption_column_missmatch() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
 
-    let footer_key = "0123456789012345".as_bytes(); // 128bit/16
-    let column_1_key = "1234567890123450".as_bytes();
-    let column_2_key = "1234567890123451".as_bytes();
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_1_key = b"1234567890123450".to_vec();
+    let column_2_key = b"1234567890123451".to_vec();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field", column_1_key.to_vec())
-        .with_column_key("float_field", column_2_key.to_vec())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
         .build()
         .unwrap();
 
-    let column_1_key = EncryptionKey::new(column_1_key.as_bytes().to_vec());
-    let column_2_key = EncryptionKey::new(column_2_key.as_bytes().to_vec());
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("double_field".into(), column_1_key.clone())
-        .with_column_key("other_field".into(), column_1_key)
-        .with_column_key("yet_another_field".into(), column_2_key)
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("other_field", column_1_key)
+        .with_column_key("yet_another_field", column_2_key)
         .build();
 
     let temp_file = tempfile::tempfile().unwrap();
@@ -553,10 +544,10 @@ fn test_write_encrypted_column_non_uniform() {
     let file: File = tempfile::tempfile().unwrap();
 
     let builder = WriterProperties::builder();
-    let footer_key: &[u8] = "0123456789012345".as_bytes();
-    let column_key = EncryptionKey::new(b"1234567890123450".to_vec());
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("a".into(), column_key.clone())
+    let footer_key = b"0123456789012345".to_vec();
+    let column_key = b"1234567890123450".to_vec();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_column_key("a", column_key.clone())
         .build();
 
     let props = Arc::new(
@@ -583,8 +574,8 @@ fn test_write_encrypted_column_non_uniform() {
 
     let _file_metadata = writer.close().unwrap();
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .with_column_key("a", column_key.key().clone())
+    let decryption_properties = FileDecryptionProperties::builder(footer_key)
+        .with_column_key("a", column_key.clone())
         .build()
         .unwrap();
     let options = ArrowReaderOptions::default()

@@ -179,9 +179,15 @@ impl DecryptionPropertiesBuilder {
         self
     }
 
-    pub fn with_column_key(mut self, column_name: &str, decryption_key: Vec<u8>) -> Self {
-        self.column_keys
-            .insert(column_name.to_string(), decryption_key);
+    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
+        for (column_name, key) in column_names.into_iter().zip(keys.into_iter()) {
+            self.column_keys.insert(column_name.to_string(), key);
+        }
+        self
+    }
+
+    pub fn with_column_key(mut self, column_name: &str, key: Vec<u8>) -> Self {
+        self.column_keys.insert(column_name.to_string(), key);
         self
     }
 }

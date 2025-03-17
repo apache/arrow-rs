@@ -26,25 +26,25 @@ use std::io::Write;
 use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct EncryptionKey {
+struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
 }
 
 impl EncryptionKey {
-    pub fn new(key: Vec<u8>) -> EncryptionKey {
+    fn new(key: Vec<u8>) -> EncryptionKey {
         Self {
             key,
             key_metadata: None,
         }
     }
 
-    pub fn with_metadata(mut self, metadata: Vec<u8>) -> Self {
+    fn with_metadata(mut self, metadata: Vec<u8>) -> Self {
         self.key_metadata = Some(metadata);
         self
     }
 
-    pub fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Vec<u8> {
         &self.key
     }
 }
@@ -152,8 +152,37 @@ impl EncryptionPropertiesBuilder {
     /// Set the key used for encryption of a column. Note that if no column keys are provided but
     /// footer key is all columns will be encrypted with the footer key. If column keys are provided
     /// only the columns with a key will be encrypted even if footer key is provided.
-    pub fn with_column_key(mut self, column_path: String, encryption_key: EncryptionKey) -> Self {
-        self.column_keys.insert(column_path, encryption_key);
+    pub fn with_column_key(mut self, column_name: &str, key: Vec<u8>) -> Self {
+        self.column_keys
+            .insert(column_name.to_string(), EncryptionKey::new(key));
+        self
+    }
+
+    /// Set the key used for encryption of a column and it's metadata. Key's metadata field is to
+    /// enable file readers to recover the key. For example, the key_metadata can keep a serialized
+    /// ID of a data key. Note that if no column keys are provided but footer key is all columns
+    /// will be encrypted with the footer key. If column keys are provided only the columns with
+    /// a key will be encrypted even if footer key is provided.
+    pub fn with_column_key_and_metadata(
+        mut self,
+        column_name: &str,
+        key: Vec<u8>,
+        metadata: Vec<u8>,
+    ) -> Self {
+        self.column_keys.insert(
+            column_name.to_string(),
+            EncryptionKey::new(key).with_metadata(metadata),
+        );
+        self
+    }
+
+    /// Set the keys used for encryption of columns. Analogous to
+    /// with_column_key but for multiple columns.
+    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
+        for (i, column_name) in column_names.into_iter().enumerate() {
+            self.column_keys
+                .insert(column_name.to_string(), EncryptionKey::new(keys[i].clone()));
+        }
         self
     }
 
