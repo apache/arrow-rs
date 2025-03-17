@@ -481,14 +481,22 @@ impl<O: OffsetSizeTrait> Encoder for ListEncoder<'_, O> {
         let start = self.offsets[idx].as_usize();
         out.push(b'[');
 
-        for idx in start..end {
-            if idx != start {
-                out.push(b',')
+        if self.encoder.has_nulls() {
+            for idx in start..end {
+                if idx != start {
+                    out.push(b',')
+                }
+                if self.encoder.is_null(idx) {
+                    out.extend_from_slice(b"null");
+                } else {
+                    self.encoder.encode(idx, out);
+                }
             }
-
-            if self.encoder.is_null(idx) {
-                out.extend_from_slice(b"null");
-            } else {
+        } else {
+            for idx in start..end {
+                if idx != start {
+                    out.push(b',')
+                }
                 self.encoder.encode(idx, out);
             }
         }
@@ -520,14 +528,22 @@ impl Encoder for FixedSizeListEncoder<'_> {
         let start = idx * self.value_length;
         let end = start + self.value_length;
         out.push(b'[');
-
-        for idx in start..end {
-            if idx != start {
-                out.push(b',');
+        if self.encoder.has_nulls() {
+            for idx in start..end {
+                if idx != start {
+                    out.push(b',')
+                }
+                if self.encoder.is_null(idx) {
+                    out.extend_from_slice(b"null");
+                } else {
+                    self.encoder.encode(idx, out);
+                }
             }
-            if self.encoder.is_null(idx) {
-                out.extend_from_slice(b"null");
-            } else {
+        } else {
+            for idx in start..end {
+                if idx != start {
+                    out.push(b',')
+                }
                 self.encoder.encode(idx, out);
             }
         }
