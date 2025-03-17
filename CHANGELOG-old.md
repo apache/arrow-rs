@@ -19,6 +19,15 @@
 
 # Historical Changelog
 
+## [54.2.1](https://github.com/apache/arrow-rs/tree/54.2.1) (2025-02-27)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.2.0...54.2.1)
+
+**Fixed bugs:**
+
+- Use chrono >= 0.4.34, < 0.4.40 to avoid breaking [\#7210](https://github.com/apache/arrow-rs/pull/7210)
+
+**Fixed bugs:**
 ## [54.2.0](https://github.com/apache/arrow-rs/tree/54.2.0) (2025-02-12)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/54.1.0...54.2.0)
