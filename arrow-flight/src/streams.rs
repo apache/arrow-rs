@@ -127,7 +127,7 @@ impl<T> Stream for FallibleTonicResponseStream<T> {
 
         match ready!(pinned.response_stream.poll_next_unpin(cx)) {
             Some(Ok(res)) => Poll::Ready(Some(Ok(res))),
-            Some(Err(status)) => Poll::Ready(Some(Err(status.into()))),
+            Some(Err(status)) => Poll::Ready(Some(Err(FlightError::Tonic(status)))),
             None => Poll::Ready(None),
         }
     }

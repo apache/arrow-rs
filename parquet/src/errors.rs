@@ -132,6 +132,13 @@ impl From<object_store::Error> for ParquetError {
     }
 }
 
+#[cfg(feature = "encryption")]
+impl From<ring::error::Unspecified> for ParquetError {
+    fn from(e: ring::error::Unspecified) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 /// A specialized `Result` for Parquet errors.
 pub type Result<T, E = ParquetError> = result::Result<T, E>;
 

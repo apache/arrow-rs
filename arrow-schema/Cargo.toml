@@ -57,3 +57,4 @@ criterion = { version = "0.5", default-features = false }
 [[bench]]
 name = "ffi"
 harness = false
+required-features = ["ffi"]
