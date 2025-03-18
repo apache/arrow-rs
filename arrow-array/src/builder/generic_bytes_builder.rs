@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{ArrayRef, GenericByteArray, OffsetSizeTrait};
+use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
@@ -127,6 +127,43 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
         self.offsets_builder.append(self.next_offset());
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    #[inline]
+    pub fn append_array(&mut self, array: &GenericByteArray<T>) {
+        if array.len() == 0 {
+            return;
+        }
+
+        let offsets = array.offsets();
+
+        // Append underlying values, starting from the first offset and ending at the last offset
+        self.value_builder.append_slice(
+            &array.values().as_slice()[offsets[0].as_usize()..offsets[array.len()].as_usize()],
+        );
+
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
+
+        // If the offsets are contiguous, we can append them directly avoiding the need to align
+        // them
+        if self.next_offset() == offsets[0] {
+            self.offsets_builder.append_slice(&offsets[1..]);
+        } else {
+            let rhs: T::Offset = offsets[0] - self.next_offset();
+            let mut intermediate = Vec::with_capacity(offsets.len() - 1);
+
+            for &offset in &offsets[1..] {
+                intermediate.push(offset + rhs)
+            }
+
+            self.offsets_builder.append_slice(&intermediate);
+        }
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -357,7 +394,7 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 mod tests {
     use super::*;
     use crate::array::Array;
-    use crate::GenericStringArray;
+    use crate::{GenericStringArray, Int32Array};
     use std::fmt::Write as _;
     use std::io::Write as _;
 
@@ -592,5 +629,97 @@ mod tests {
             r,
             &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
         )
+    }
+
+    #[test]
+    fn test_append_array_without_nulls() {
+        let input = vec![
+            "hello",
+            "world",
+            "how",
+            "are",
+            "you",
+            "doing",
+            "today",
+            "I",
+            "am",
+            "doing",
+            "well",
+            "thank",
+            "you",
+            "for",
+            "asking",
+        ];
+        let arr1 = GenericStringArray::<i32>::from(input[0..3].to_vec());
+        let arr2 = GenericStringArray::<i32>::from(input[3..7].to_vec());
+        let arr3 = GenericStringArray::<i32>::from(input[7..].to_vec());
+
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+
+        let actual = builder.finish();
+        let expected = GenericStringArray::<i32>::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+
+    #[test]
+    fn test_primitive_array_append_array() {
+        let input = vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            None,
+            None,
+            None,
+            Some(7),
+            Some(9),
+            Some(8),
+            Some(6),
+            Some(4),
+        ];
+        let arr1 = Int32Array::from(input[..5].to_vec());
+        let arr2 = Int32Array::from(input[5..8].to_vec());
+        let arr3 = Int32Array::from(input[8..].to_vec());
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = Int32Array::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_with_nulls() {
+        // TODO
+    }
+
+    #[test]
+    fn test_append_empty_array() {
+        // TODO
+    }
+
+    #[test]
+    fn test_append_array_with_offset_not_starting_at_0() {
+        // TODO
+        let mut builder = GenericStringBuilder::<i32>::new();
+        let array = GenericStringArray::<i32>::from(vec!["hello", "world"]);
+
+        builder.append_array(&array);
+        let result = builder.finish();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_append_underlying_null_values_added_as_is() {
+        // TODO
     }
 }
