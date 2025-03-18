@@ -139,6 +139,26 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
         let offsets = array.offsets();
 
+        // If the offsets are contiguous, we can append them directly avoiding the need to align
+        // them
+        if self.next_offset() == offsets[0] {
+            self.offsets_builder.append_slice(&offsets[1..]);
+        } else {
+            // Shifting all the offsets
+            let shift: T::Offset = self.next_offset() - offsets[0];
+
+            // Creating intermediate offsets instead of pushing each offset is faster
+            // (even if we make MutableBuffer to avoid updating length on each push
+            //  and reserve the necessary capacity, it's still slower)
+            let mut intermediate = Vec::with_capacity(offsets.len() - 1);
+
+            for &offset in &offsets[1..] {
+                intermediate.push(offset + shift)
+            }
+
+            self.offsets_builder.append_slice(&intermediate);
+        }
+
         // Append underlying values, starting from the first offset and ending at the last offset
         self.value_builder.append_slice(
             &array.values().as_slice()[offsets[0].as_usize()..offsets[array.len()].as_usize()],
@@ -148,21 +168,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             self.null_buffer_builder.append_buffer(null_buffer);
         } else {
             self.null_buffer_builder.append_n_non_nulls(array.len());
-        }
-
-        // If the offsets are contiguous, we can append them directly avoiding the need to align
-        // them
-        if self.next_offset() == offsets[0] {
-            self.offsets_builder.append_slice(&offsets[1..]);
-        } else {
-            let rhs: T::Offset = offsets[0] - self.next_offset();
-            let mut intermediate = Vec::with_capacity(offsets.len() - 1);
-
-            for &offset in &offsets[1..] {
-                intermediate.push(offset + rhs)
-            }
-
-            self.offsets_builder.append_slice(&intermediate);
         }
     }
 
@@ -637,7 +642,7 @@ mod tests {
             "hello", "world", "how", "are", "you", "doing", "today", "I", "am", "doing", "well",
             "thank", "you", "for", "asking",
         ];
-        let arr1 = GenericStringArray::<i32>::from(input[0..3].to_vec());
+        let arr1 = GenericStringArray::<i32>::from(input[..3].to_vec());
         let arr2 = GenericStringArray::<i32>::from(input[3..7].to_vec());
         let arr3 = GenericStringArray::<i32>::from(input[7..].to_vec());
 
@@ -653,55 +658,56 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_array_append_array() {
+    fn test_append_array_with_nulls() {
         let input = vec![
-            Some(1),
-            None,
-            Some(3),
-            None,
-            Some(5),
-            None,
-            None,
-            None,
-            Some(7),
-            Some(9),
-            Some(8),
-            Some(6),
-            Some(4),
+            Some("hello"), None, Some("how"), None, None, None, None, Some("I"), Some("am"), Some("doing"), Some("well")
         ];
-        let arr1 = Int32Array::from(input[..5].to_vec());
-        let arr2 = Int32Array::from(input[5..8].to_vec());
-        let arr3 = Int32Array::from(input[8..].to_vec());
+        let arr1 = GenericStringArray::<i32>::from(input[..3].to_vec());
+        let arr2 = GenericStringArray::<i32>::from(input[3..7].to_vec());
+        let arr3 = GenericStringArray::<i32>::from(input[7..].to_vec());
 
-        let mut builder = Int32Array::builder(5);
+        let mut builder = GenericStringBuilder::<i32>::new();
         builder.append_array(&arr1);
         builder.append_array(&arr2);
         builder.append_array(&arr3);
+
         let actual = builder.finish();
-        let expected = Int32Array::from(input);
+        let expected = GenericStringArray::<i32>::from(input);
 
         assert_eq!(actual, expected);
     }
 
     #[test]
-    fn test_append_array_with_nulls() {
-        // TODO
-    }
-
-    #[test]
     fn test_append_empty_array() {
-        // TODO
+        let arr = GenericStringArray::<i32>::from(Vec::<&str>::new());
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_array(&arr);
+        let result = builder.finish();
+        assert_eq!(result.len(), 0);
     }
 
     #[test]
     fn test_append_array_with_offset_not_starting_at_0() {
-        // TODO
-        let mut builder = GenericStringBuilder::<i32>::new();
-        let array = GenericStringArray::<i32>::from(vec!["hello", "world"]);
+        let input = vec![
+            Some("hello"), None, Some("how"), None, None, None, None, Some("I"), Some("am"), Some("doing"), Some("well")
+        ];
+        let full_array = GenericStringArray::<i32>::from(input);
+        let sliced = full_array.slice(1, 4);
 
-        builder.append_array(&array);
-        let result = builder.finish();
-        assert_eq!(result.len(), 2);
+        assert_ne!(sliced.offsets()[0].as_usize(), 0);
+        assert_ne!(sliced.offsets().last(), full_array.offsets().last());
+
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_array(&sliced);
+        let actual = builder.finish();
+
+        let expected = GenericStringArray::<i32>::from(vec![
+            None, Some("how"), None, None
+        ]);
+
+        println!("actual: {:?}", actual);
+        println!("expected: {:?}", expected);
+        assert_eq!(actual, expected);
     }
 
     #[test]
