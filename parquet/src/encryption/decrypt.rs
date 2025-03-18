@@ -64,7 +64,6 @@ impl CryptoContext {
     pub(crate) fn for_column(
         file_decryptor: &FileDecryptor,
         column_crypto_metadata: &ColumnCryptoMetaData,
-        column_name: &str,
         row_group_idx: usize,
         column_ordinal: usize,
     ) -> Result<Self> {
@@ -77,6 +76,13 @@ impl CryptoContext {
             }
             ColumnCryptoMetaData::EncryptionWithColumnKey(column_key_encryption) => {
                 let key_metadata = &column_key_encryption.key_metadata;
+                let full_column_name;
+                let column_name = if column_key_encryption.path_in_schema.len() == 1 {
+                    &column_key_encryption.path_in_schema[0]
+                } else {
+                    full_column_name = column_key_encryption.path_in_schema.join(".");
+                    &full_column_name
+                };
                 let data_decryptor = file_decryptor
                     .get_column_data_decryptor(column_name, key_metadata.as_deref())?;
                 let metadata_decryptor = file_decryptor

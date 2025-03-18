@@ -1029,8 +1029,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         #[cfg(feature = "encryption")]
         let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            let column_name = &self.metadata.file_metadata().schema_descr().column(i);
-
             let crypto_metadata = self
                 .metadata
                 .row_group(self.row_group_idx)
@@ -1041,7 +1039,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 Some(crypto_metadata) => Some(Arc::new(CryptoContext::for_column(
                     file_decryptor,
                     crypto_metadata,
-                    column_name.name(),
                     self.row_group_idx,
                     i,
                 )?)),
