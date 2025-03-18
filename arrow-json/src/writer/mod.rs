@@ -112,7 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, EncoderWithNullBuffer};
+pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullableEncoder};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -2095,7 +2095,7 @@ mod tests {
                 _field: &'a FieldRef,
                 array: &'a dyn Array,
                 _options: &'a EncoderOptions,
-            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
+            ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 let data_type = array.data_type();
                 let fields = match data_type {
                     DataType::Union(fields, UnionMode::Sparse) => fields,
@@ -2136,7 +2136,7 @@ mod tests {
                 let array_encoder =
                     Box::new(UnionEncoder { array: values }) as Box<dyn Encoder + 'a>;
                 let nulls = array.nulls().cloned();
-                Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
+                Ok(Some(NullableEncoder::new(array_encoder, nulls)))
             }
         }
 
@@ -2311,14 +2311,14 @@ mod tests {
                 _field: &'a FieldRef,
                 array: &'a dyn Array,
                 _options: &'a EncoderOptions,
-            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
+            ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 match array.data_type() {
                     DataType::Binary => {
                         let array = array.as_binary::<i32>();
                         let encoder = IntArrayBinaryEncoder { array };
                         let array_encoder = Box::new(encoder) as Box<dyn Encoder + 'a>;
                         let nulls = array.nulls().cloned();
-                        Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
+                        Ok(Some(NullableEncoder::new(array_encoder, nulls)))
                     }
                     _ => Ok(None),
                 }
@@ -2385,7 +2385,7 @@ mod tests {
                 field: &'a FieldRef,
                 array: &'a dyn Array,
                 _options: &'a EncoderOptions,
-            ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
+            ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 // The point here is:
                 // 1. You can use information from Field to determine how to do the encoding.
                 // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
@@ -2403,7 +2403,7 @@ mod tests {
                             array: array.clone(),
                         };
                         let array_encoder = Box::new(encoder) as Box<dyn Encoder + 'a>;
-                        Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
+                        Ok(Some(NullableEncoder::new(array_encoder, nulls)))
                     }
                     _ => Ok(None),
                 }
