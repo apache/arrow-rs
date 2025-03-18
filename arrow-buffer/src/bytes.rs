@@ -289,13 +289,11 @@ mod tests {
             let pool = TrackingMemoryPool::default();
             assert_eq!(pool.used(), 0);
 
-            // Reserve memory and assign to buffer
+            // Reserve memory and assign to buffer. Claim twice.
             buffer.claim(&pool);
             assert_eq!(pool.used(), 1024);
-
-            // Claim with explicit size directly
             buffer.claim(&pool);
-            assert_eq!(pool.used(), 512);
+            assert_eq!(pool.used(), 1024);
 
             // Memory should be released when buffer is dropped
             drop(buffer);
