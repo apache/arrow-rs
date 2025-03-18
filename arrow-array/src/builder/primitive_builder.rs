@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
-use crate::{ArrayRef, PrimitiveArray};
+use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -253,6 +253,41 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         );
         self.null_buffer_builder.append_slice(is_valid);
         self.values_builder.append_slice(values);
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `array` and `self` data types are different
+    #[inline]
+    pub fn append_array(&mut self, array: &PrimitiveArray<T>) {
+        assert_eq!(
+            &self.data_type,
+            array.data_type(),
+            "array data type mismatch"
+        );
+
+        unsafe {
+            self.append_array_unchecked(array);
+        }
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    ///
+    /// # Safety
+    ///
+    /// `self` data type and `array` data type must be the same
+    #[inline]
+    pub unsafe fn append_array_unchecked(&mut self, array: &PrimitiveArray<T>) {
+        self.values_builder.append_slice(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
     }
 
     /// Appends values from a trusted length iterator.
@@ -614,5 +649,61 @@ mod tests {
         builder.extend([2, 4, 6, 2].into_iter().map(Some));
         let array = builder.finish();
         assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
+    }
+
+    #[test]
+    fn test_primitive_array_append_array() {
+        let input = vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            None,
+            None,
+            None,
+            Some(7),
+            Some(9),
+            Some(8),
+            Some(6),
+            Some(4),
+        ];
+        let arr1 = Int32Array::from(input[..5].to_vec());
+        let arr2 = Int32Array::from(input[5..8].to_vec());
+        let arr3 = Int32Array::from(input[8..].to_vec());
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = Int32Array::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "array data type mismatch")]
+    fn test_invalid_with_data_type_in_append_array() {
+        let array = {
+            let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+            builder.append_value(1);
+            builder.finish()
+        };
+
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
+        builder.append_array(&array)
+    }
+
+    #[test]
+    fn test_invalid_with_data_type_in_append_array_should_not_fail_with_unchecked() {
+        let array = {
+            let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+            builder.append_value(1);
+            builder.finish()
+        };
+
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
+        unsafe { builder.append_array_unchecked(&array) }
     }
 }
