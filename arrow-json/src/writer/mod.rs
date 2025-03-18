@@ -362,7 +362,7 @@ where
         let array = StructArray::from(batch.clone());
         let field = Arc::new(Field::new_struct(
             "",
-            batch.schema().fields().iter().cloned().collect::<Vec<_>>(),
+            batch.schema().fields().clone(),
             false,
         ));
 
