@@ -18,8 +18,9 @@
 use crate::column::page::CompressedPage;
 use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::format::{PageHeader, PageType};
+use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -57,7 +58,7 @@ impl PageEncryptor {
         self.page_index += 1;
     }
 
-    pub fn encrypt_page(&self, page: &CompressedPage) -> crate::errors::Result<Vec<u8>> {
+    fn encrypt_page(&self, page: &CompressedPage) -> Result<Vec<u8>> {
         let module_type = if page.compressed_page().is_data_page() {
             ModuleType::DataPage
         } else {
@@ -78,11 +79,16 @@ impl PageEncryptor {
         Ok(encrypted_buffer)
     }
 
+    pub fn encrypt_compressed_page(&self, page: CompressedPage) -> Result<CompressedPage> {
+        let encrypted_page = self.encrypt_page(&page)?;
+        Ok(page.with_new_compressed_buffer(Bytes::from(encrypted_page)))
+    }
+
     pub fn encrypt_page_header<W: Write>(
         &self,
         page_header: &PageHeader,
         sink: &mut W,
-    ) -> crate::errors::Result<()> {
+    ) -> Result<()> {
         let module_type = match page_header.type_ {
             PageType::DATA_PAGE => ModuleType::DataPageHeader,
             PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,

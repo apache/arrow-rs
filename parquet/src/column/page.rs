@@ -263,6 +263,70 @@ impl CompressedPage {
         }
         page_header
     }
+
+    /// Update the compressed buffer for a page.
+    /// This might be required when encrypting page data for example.
+    /// The size of uncompressed data must not change.
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_new_compressed_buffer(self, new_buffer: Bytes) -> Self {
+        let Self {
+            compressed_page,
+            uncompressed_size,
+        } = self;
+        let compressed_page = match compressed_page {
+            Page::DataPage {
+                buf: _,
+                num_values,
+                encoding,
+                def_level_encoding,
+                rep_level_encoding,
+                statistics,
+            } => Page::DataPage {
+                buf: new_buffer,
+                num_values,
+                encoding,
+                def_level_encoding,
+                rep_level_encoding,
+                statistics,
+            },
+            Page::DataPageV2 {
+                buf: _,
+                num_values,
+                encoding,
+                num_nulls,
+                num_rows,
+                def_levels_byte_len,
+                rep_levels_byte_len,
+                is_compressed,
+                statistics,
+            } => Page::DataPageV2 {
+                buf: new_buffer,
+                num_values,
+                encoding,
+                num_nulls,
+                num_rows,
+                def_levels_byte_len,
+                rep_levels_byte_len,
+                is_compressed,
+                statistics,
+            },
+            Page::DictionaryPage {
+                buf: _,
+                num_values,
+                encoding,
+                is_sorted,
+            } => Page::DictionaryPage {
+                buf: new_buffer,
+                num_values,
+                encoding,
+                is_sorted,
+            },
+        };
+        Self {
+            compressed_page,
+            uncompressed_size,
+        }
+    }
 }
 
 /// Contains page write metrics.

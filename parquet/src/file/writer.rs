@@ -844,45 +844,26 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
-trait PageModuleWriter {
-    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>>;
-}
-
-#[cfg(not(feature = "encryption"))]
-impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
-    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
-        Ok(page.data().to_vec())
-    }
-}
-
-#[cfg(feature = "encryption")]
-impl<W: Write + Send> PageModuleWriter for SerializedPageWriter<'_, W> {
-    fn serialize_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
-        match self.page_encryptor.as_mut() {
-            Some(page_encryptor) => page_encryptor.encrypt_page(page),
-            _ => Ok(page.data().to_vec()),
-        }
-    }
-}
-
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let page = match self.page_encryptor.as_ref() {
+            #[cfg(feature = "encryption")]
+            Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
+            _ => page,
+        };
+
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
-        let page_data = self.serialize_page(&page)?;
 
-        let mut page_header = page.to_thrift_header();
-        // TODO: This is a bit of an ugly hack, we should probably encrypt the pages
-        // before they are written so the compressed page size is correct.
-        page_header.compressed_page_size = page_data.len() as i32;
-
+        let page_header = page.to_thrift_header();
         let header_size = self.serialize_page_header(page_header)?;
-        self.sink.write_all(page_data.as_slice())?;
+
+        self.sink.write_all(page.data())?;
 
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
         spec.uncompressed_size = page.uncompressed_size() + header_size;
-        spec.compressed_size = page_data.len() + header_size;
+        spec.compressed_size = page.compressed_size() + header_size;
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
