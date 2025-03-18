@@ -78,8 +78,100 @@ impl EncoderOptions {
 ///
 /// This allows overriding the default encoders for specific data types,
 /// or adding new encoders for custom data types.
+/// 
+/// # Examples
+/// 
+/// ```
+/// use std::io::Write;
+/// use arrow_array::{ArrayAccessor, Array, BinaryArray, Float64Array, RecordBatch};
+/// use arrow_array::cast::AsArray;
+/// use arrow_schema::{DataType, Field, Schema, FieldRef};
+/// use arrow_json::{writer::{WriterBuilder, JsonArray, EncoderWithNullBuffer}, StructMode};
+/// use arrow_json::{Encoder, EncoderFactory, EncoderOptions};
+/// use arrow_schema::ArrowError;
+/// use std::sync::Arc;
+/// use serde_json::json;
+/// use serde_json::Value;
+///
+/// struct IntArrayBinaryEncoder<B> {
+///     array: B,
+/// }
+///
+/// impl<'a, B> Encoder for IntArrayBinaryEncoder<B>
+/// where
+///     B: ArrayAccessor<Item = &'a [u8]>,
+/// {
+///     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+///         out.push(b'[');
+///         let child = self.array.value(idx);
+///         for (idx, byte) in child.iter().enumerate() {
+///             write!(out, "{byte}").unwrap();
+///             if idx < child.len() - 1 {
+///                 out.push(b',');
+///             }
+///         }
+///         out.push(b']');
+///     }
+/// }
+///
+/// #[derive(Debug)]
+/// struct IntArayBinaryEncoderFactory;
+///
+/// impl EncoderFactory for IntArayBinaryEncoderFactory {
+///     fn make_default_encoder<'a>(
+///         &self,
+///         _field: &'a FieldRef,
+///         array: &'a dyn Array,
+///         _options: &'a EncoderOptions,
+///     ) -> Result<Option<EncoderWithNullBuffer<'a>>, ArrowError> {
+///         match array.data_type() {
+///             DataType::Binary => {
+///                 let array = array.as_binary::<i32>();
+///                 let encoder = IntArrayBinaryEncoder { array };
+///                 let array_encoder = Box::new(encoder) as Box<dyn Encoder + 'a>;
+///                 let nulls = array.nulls().cloned();
+///                 Ok(Some(EncoderWithNullBuffer::new(array_encoder, nulls)))
+///             }
+///             _ => Ok(None),
+///         }
+///     }
+/// }
+///
+/// let binary_array = BinaryArray::from_iter([Some(b"a".as_slice()), None, Some(b"b".as_slice())]);
+/// let float_array = Float64Array::from(vec![Some(1.0), Some(2.3), None]);
+/// let fields = vec![
+///     Field::new("bytes", DataType::Binary, true),
+///     Field::new("float", DataType::Float64, true),
+/// ];
+/// let batch = RecordBatch::try_new(
+///     Arc::new(Schema::new(fields)),
+///     vec![
+///         Arc::new(binary_array) as Arc<dyn Array>,
+///         Arc::new(float_array) as Arc<dyn Array>,
+///     ],
+/// )
+/// .unwrap();
+///
+/// let json_value: Value = {
+///     let mut buf = Vec::new();
+///     let mut writer = WriterBuilder::new()
+///         .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+///         .build::<_, JsonArray>(&mut buf);
+///     writer.write_batches(&[&batch]).unwrap();
+///     writer.finish().unwrap();
+///     serde_json::from_slice(&buf).unwrap()
+/// };
+///
+/// let expected = json!([
+///     {"bytes": [97], "float": 1.0},
+///     {"float": 2.3},
+///     {"bytes": [98]},
+/// ]);
+///
+/// assert_eq!(json_value, expected);
+/// ```
 pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
-    /// Make an encoder that if returned runs before all of the default encoders.
+    /// Make an encoder that overrides the default encoder for a specific field and array or provides an encoder for a custom data type.
     /// This can be used to override how e.g. binary data is encoded so that it is an encoded string or an array of integers.
     ///
     /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
