@@ -244,6 +244,7 @@ impl Extend<Option<bool>> for BooleanBuilder {
 mod tests {
     use super::*;
     use crate::Array;
+    use arrow_buffer::{BooleanBuffer, NullBuffer};
 
     #[test]
     fn test_boolean_array_builder() {
@@ -388,5 +389,20 @@ mod tests {
         let expected = BooleanArray::from(input);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = BooleanArray::new(
+            BooleanBuffer::from(vec![true, false, true, false]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
     }
 }

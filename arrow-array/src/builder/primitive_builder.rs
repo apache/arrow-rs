@@ -401,6 +401,7 @@ impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::{NullBuffer, ScalarBuffer};
     use arrow_schema::TimeUnit;
 
     use crate::array::Array;
@@ -680,6 +681,21 @@ mod tests {
         let expected = Int32Array::from(input);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = Int32Array::new(
+            ScalarBuffer::from(vec![2, 3, 4, 5]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
     }
 
     #[test]
