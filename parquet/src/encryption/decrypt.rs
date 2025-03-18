@@ -319,9 +319,9 @@ impl DecryptionPropertiesBuilder {
     }
 
     /// Specify the decryption key to use for a column
-    pub fn with_column_key(mut self, column_path: &str, decryption_key: Vec<u8>) -> Self {
+    pub fn with_column_key(mut self, column_name: &str, decryption_key: Vec<u8>) -> Self {
         self.column_keys
-            .insert(column_path.to_string(), decryption_key);
+            .insert(column_name.to_string(), decryption_key);
         self
     }
 }
