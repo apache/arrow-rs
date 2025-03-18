@@ -35,6 +35,9 @@ bench = false
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+pool = []
+
 [dependencies]
 bytes = { version = "1.4" }
 num = { version = "0.4", default-features = false, features = ["std"] }
