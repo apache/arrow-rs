@@ -19,6 +19,7 @@ use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
@@ -204,6 +205,39 @@ impl FileDecryptionProperties {
     pub fn with_key_retriever(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new_with_key_retriever(key_retriever)
     }
+
+    /// Get the encryption key for decrypting a file's footer,
+    /// and also column data if uniform encryption is used.
+    pub(crate) fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
+        match &self.keys {
+            DecryptionKeys::Explicit(keys) => Ok(Cow::Borrowed(&keys.footer_key)),
+            DecryptionKeys::ViaRetriever(retriever) => {
+                let key = retriever.retrieve_key(key_metadata.unwrap_or_default())?;
+                Ok(Cow::Owned(key))
+            }
+        }
+    }
+
+    /// Get the column-specific encryption key for decrypting column data and metadata within a file
+    pub(crate) fn column_key(
+        &self,
+        column_name: &str,
+        key_metadata: Option<&[u8]>,
+    ) -> Result<Cow<Vec<u8>>> {
+        match &self.keys {
+            DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
+                None => Err(general_err!(
+                    "No column decryption key set for column '{}'",
+                    column_name
+                )),
+                Some(key) => Ok(Cow::Borrowed(key)),
+            },
+            DecryptionKeys::ViaRetriever(retriever) => {
+                let key = retriever.retrieve_key(key_metadata.unwrap_or_default())?;
+                Ok(Cow::Owned(key))
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for FileDecryptionProperties {
@@ -307,14 +341,8 @@ impl FileDecryptor {
         aad_prefix: Vec<u8>,
     ) -> Result<Self> {
         let file_aad = [aad_prefix.as_slice(), aad_file_unique.as_slice()].concat();
-        let footer_decryptor = match &decryption_properties.keys {
-            DecryptionKeys::Explicit(keys) => RingGcmBlockDecryptor::new(&keys.footer_key),
-            DecryptionKeys::ViaRetriever(retriever) => {
-                let footer_key = retriever.retrieve_key(footer_key_metadata.unwrap_or_default())?;
-                RingGcmBlockDecryptor::new(&footer_key)
-            }
-        };
-        let footer_decryptor = footer_decryptor.map_err(|e| {
+        let footer_key = decryption_properties.footer_key(footer_key_metadata)?;
+        let footer_decryptor = RingGcmBlockDecryptor::new(&footer_key).map_err(|e| {
             general_err!(
                 "Invalid footer key. {}",
                 e.to_string().replace("Parquet error: ", "")
@@ -337,16 +365,10 @@ impl FileDecryptor {
         column_name: &str,
         key_metadata: Option<&[u8]>,
     ) -> Result<Arc<dyn BlockDecryptor>> {
-        match &self.decryption_properties.keys {
-            DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
-                Some(column_key) => Ok(Arc::new(RingGcmBlockDecryptor::new(column_key)?)),
-                None => self.get_footer_decryptor(),
-            },
-            DecryptionKeys::ViaRetriever(retriever) => {
-                let key = retriever.retrieve_key(key_metadata.unwrap_or_default())?;
-                Ok(Arc::new(RingGcmBlockDecryptor::new(&key)?))
-            }
-        }
+        let column_key = self
+            .decryption_properties
+            .column_key(column_name, key_metadata)?;
+        Ok(Arc::new(RingGcmBlockDecryptor::new(&column_key)?))
     }
 
     pub(crate) fn get_column_metadata_decryptor(

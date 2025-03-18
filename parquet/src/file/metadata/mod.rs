@@ -680,10 +680,13 @@ impl RowGroupMetaData {
                 )?;
 
                 let buf = c.encrypted_column_metadata.clone().unwrap();
-                let decrypted_cc_buf =
-                    column_decryptor.decrypt(buf.as_slice(), column_aad.as_ref()).map_err(|_| {
-                        general_err!("Unable to decrypt column '{}', perhaps the column key is wrong or missing?",
-                            d.path().string())
+                let decrypted_cc_buf = column_decryptor
+                    .decrypt(buf.as_slice(), column_aad.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
+                            d.path().string()
+                        )
                     })?;
 
                 let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());

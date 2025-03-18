@@ -115,8 +115,14 @@ async fn test_misspecified_encryption_keys() {
     .await;
 
     // Missing column key
-    check_for_error("Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong or missing?",
-                    &path, footer_key, "".as_bytes(), column_2_key).await;
+    check_for_error(
+        "Parquet error: No column decryption key set for column 'double_field'",
+        &path,
+        footer_key,
+        "".as_bytes(),
+        column_2_key,
+    )
+    .await;
 
     // Too short column key
     check_for_error(
@@ -129,12 +135,24 @@ async fn test_misspecified_encryption_keys() {
     .await;
 
     // Wrong column key
-    check_for_error("Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong or missing?",
-                    &path, footer_key, "1123456789012345".as_bytes(), column_2_key).await;
+    check_for_error(
+        "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
+        &path,
+        footer_key,
+        "1123456789012345".as_bytes(),
+        column_2_key,
+    )
+    .await;
 
     // Mixed up keys
-    check_for_error("Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong or missing?",
-                    &path, footer_key, column_2_key, column_1_key).await;
+    check_for_error(
+        "Parquet error: Unable to decrypt column 'float_field', perhaps the column key is wrong?",
+        &path,
+        footer_key,
+        column_2_key,
+        column_1_key,
+    )
+    .await;
 }
 
 #[tokio::test]
