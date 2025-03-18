@@ -172,8 +172,21 @@ enum DecryptionKeys {
     ViaRetriever(Arc<dyn KeyRetriever>),
 }
 
+impl PartialEq for DecryptionKeys {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (DecryptionKeys::Explicit(keys), DecryptionKeys::Explicit(other_keys)) => {
+                keys.footer_key == other_keys.footer_key
+                    && keys.column_keys == other_keys.column_keys
+            }
+            (DecryptionKeys::ViaRetriever(_), DecryptionKeys::ViaRetriever(_)) => true,
+            _ => false,
+        }
+    }
+}
+
 /// FileDecryptionProperties hold keys and AAD data required to decrypt a Parquet file.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     pub(crate) aad_prefix: Option<Vec<u8>>,
@@ -196,25 +209,6 @@ impl FileDecryptionProperties {
 impl std::fmt::Debug for FileDecryptionProperties {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "FileDecryptionProperties {{ }}")
-    }
-}
-
-impl PartialEq for FileDecryptionProperties {
-    // FileDecryptionProperties needs to implement PartialEq to allow
-    // ParquetMetaData to implement PartialEq.
-    // We cannot compare a key retriever, but this isn't derived from the metadata.
-    fn eq(&self, other: &Self) -> bool {
-        let keys_eq = match self.keys {
-            DecryptionKeys::Explicit(ref keys) => {
-                if let DecryptionKeys::Explicit(ref other_keys) = other.keys {
-                    keys == other_keys
-                } else {
-                    false
-                }
-            }
-            _ => true,
-        };
-        keys_eq && self.aad_prefix == other.aad_prefix
     }
 }
 
