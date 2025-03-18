@@ -224,6 +224,54 @@ impl HttpService for reqwest::Client {
     }
 }
 
+#[async_trait]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+impl HttpService for reqwest::Client {
+    async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let (parts, body) = req.into_parts();
+        let url = parts.uri.to_string().parse().unwrap();
+        let mut req = reqwest::Request::new(parts.method, url);
+        *req.headers_mut() = parts.headers;
+        *req.body_mut() = Some(body.into_reqwest());
+
+        use http_body_util::{Empty, StreamBody};
+        use wasm_bindgen_futures::spawn_local;
+        use futures::{channel::{mpsc, oneshot}, StreamExt, SinkExt, TryStreamExt};
+        
+        let (mut tx, rx) = mpsc::channel(1);
+        let (tx_parts, rx_parts) = oneshot::channel();
+        let res_fut = self.execute(req);
+
+        spawn_local(async move {
+            match res_fut.await.map_err(HttpError::reqwest) {
+                Err(err) => {
+                    let _ = tx_parts.send(Err(err));
+                    drop(tx);
+                },
+                Ok(res) => {
+                    let (mut parts, _) = http::Response::new(Empty::<()>::new()).into_parts();
+                    parts.headers = res.headers().clone();
+                    parts.status = res.status();
+                    let _ = tx_parts.send(Ok(parts));
+                    let mut stream = res.bytes_stream().map_err(HttpError::reqwest);
+                    while let Some(chunk) = stream.next().await {
+                        tx.send(chunk).await.unwrap();
+                    }
+                }
+            }
+        });
+        
+        let parts = rx_parts.await.unwrap()?;
+        let safe_stream = rx.map(|chunk| {
+            let frame = hyper::body::Frame::data(chunk?);
+            Ok(frame)
+        });
+        let body = HttpResponseBody::new(StreamBody::new(safe_stream));
+
+        Ok(HttpResponse::from_parts(parts, body))
+    }
+}
+
 /// A factory for [`HttpClient`]
 pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
     /// Create a new [`HttpClient`] with the provided [`ClientOptions`]
@@ -233,10 +281,10 @@ pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
 /// [`HttpConnector`] using [`reqwest::Client`]
 #[derive(Debug, Default)]
 #[allow(missing_copy_implementations)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
 pub struct ReqwestConnector {}
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
 impl HttpConnector for ReqwestConnector {
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
         let client = options.client()?;
@@ -244,21 +292,21 @@ impl HttpConnector for ReqwestConnector {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 pub(crate) fn http_connector(
     custom: Option<Arc<dyn HttpConnector>>,
 ) -> crate::Result<Arc<dyn HttpConnector>> {
     match custom {
         Some(x) => Ok(x),
         None => Err(crate::Error::NotSupported {
-            source: "WASM32 architectures must provide an HTTPConnector"
+            source: "WASI architectures must provide an HTTPConnector"
                 .to_string()
                 .into(),
         }),
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
 pub(crate) fn http_connector(
     custom: Option<Arc<dyn HttpConnector>>,
 ) -> crate::Result<Arc<dyn HttpConnector>> {

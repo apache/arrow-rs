@@ -41,7 +41,7 @@ parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 thiserror = "2.0.2"
 tracing = { version = "0.1" }
-url = "2.2"
+url = "2.5.3"
 walkdir = { version = "2", optional = true }
 
 # Cloud storage support
@@ -63,6 +63,10 @@ tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-ut
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+web-time = { version = "1.1.0" }
+wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]

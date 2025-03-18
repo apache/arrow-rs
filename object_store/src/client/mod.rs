@@ -50,7 +50,7 @@ pub(crate) mod builder;
 
 mod connection;
 pub(crate) use connection::http_connector;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
 pub use connection::ReqwestConnector;
 pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
 
@@ -717,6 +717,23 @@ impl ClientOptions {
             .https_only(!self.allow_http.get()?)
             .build()
             .map_err(map_client_error)
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn client(&self) -> Result<reqwest::Client> {
+        let mut builder = reqwest::ClientBuilder::new();
+
+        match &self.user_agent {
+            Some(user_agent) => builder = builder.user_agent(user_agent.get()?),
+            None => builder = builder.user_agent(DEFAULT_USER_AGENT),
+        }
+
+        if let Some(headers) = &self.default_headers {
+            builder = builder.default_headers(headers.clone())
+        }
+
+        builder
+            .build().map_err(map_client_error)
     }
 }
 
