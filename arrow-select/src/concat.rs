@@ -31,7 +31,7 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, PrimitiveBuilder};
+use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -40,20 +40,6 @@ use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
 use std::{collections::HashSet, sync::Arc};
 
-fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
-    let mut item_capacity = 0;
-    let mut bytes_capacity = 0;
-    for array in arrays {
-        let a = array.as_bytes::<T>();
-
-        // Guaranteed to always have at least one element
-        let offsets = a.value_offsets();
-        bytes_capacity += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
-        item_capacity += a.len()
-    }
-
-    Capacities::Binary(item_capacity, Some(bytes_capacity))
-}
 
 fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     if let DataType::FixedSizeList(f, _) = data_type {
@@ -217,6 +203,32 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     Ok(Arc::new(builder.finish()))
 }
 
+fn concat_bytes<T: ByteArrayType>(
+    arrays: &[&dyn Array],
+) -> Result<ArrayRef, ArrowError> {
+    let mut item_capacity = 0;
+    let mut data = 0;
+    for array in arrays {
+        let a = array.as_bytes::<T>();
+
+        // Guaranteed to always have at least one element
+        let offsets = a.value_offsets();
+        data += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
+        item_capacity += a.len()
+    }
+
+    let mut builder = GenericByteBuilder::<T>::with_capacity(
+        item_capacity,
+        data
+    );
+
+    for array in arrays {
+        builder.append_array(array.as_bytes::<T>());
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
         return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
@@ -231,10 +243,6 @@ macro_rules! primitive_concat {
 
 fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     match data_type {
-        DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
-        DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
-        DataType::Binary => binary_capacity::<BinaryType>(arrays),
-        DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
         DataType::FixedSizeList(_, _) => fixed_size_list_capacity(arrays, data_type),
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     }
@@ -295,6 +303,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
+        DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
+        DataType::Binary => concat_bytes::<BinaryType>(arrays),
+        DataType::LargeBinary => concat_bytes::<LargeBinaryType>(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
