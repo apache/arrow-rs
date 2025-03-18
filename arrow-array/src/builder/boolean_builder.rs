@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
-use crate::{ArrayRef, BooleanArray};
+use crate::{Array, ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -143,6 +143,18 @@ impl BooleanBuilder {
             self.null_buffer_builder.append_slice(is_valid);
             self.values_builder.append_slice(values);
             Ok(())
+        }
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    #[inline]
+    pub fn append_array(&mut self, array: &BooleanArray) {
+        self.values_builder.append_buffer(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
         }
     }
 
@@ -345,5 +357,36 @@ mod tests {
 
         let values = array.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
         assert_eq!(&values, &[true, true, true, false, false])
+    }
+
+    #[test]
+    fn test_append_array() {
+        let input = vec![
+            Some(true),
+            None,
+            Some(true),
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+        ];
+        let arr1 = BooleanArray::from(input[..5].to_vec());
+        let arr2 = BooleanArray::from(input[5..8].to_vec());
+        let arr3 = BooleanArray::from(input[8..].to_vec());
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = BooleanArray::from(input);
+
+        assert_eq!(actual, expected);
     }
 }
