@@ -1027,27 +1027,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        #[cfg(feature = "encryption")]
-        let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            let crypto_metadata = self
-                .metadata
-                .row_group(self.row_group_idx)
-                .column(i)
-                .crypto_metadata();
-
-            match crypto_metadata {
-                Some(crypto_metadata) => Some(Arc::new(CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    self.row_group_idx,
-                    i,
-                )?)),
-                None => None,
-            }
-        } else {
-            None
-        };
-
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
                 "Invalid column index {i}, column was not fetched"
@@ -1058,13 +1037,28 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-                let metadata = self.metadata.row_group(self.row_group_idx);
+                let column_metadata = self.metadata.row_group(self.row_group_idx).column(i);
                 let page_reader = SerializedPageReader::new(
                     data.clone(),
-                    metadata.column(i),
+                    column_metadata,
                     self.row_count,
                     page_locations,
                 )?;
+
+                #[cfg(feature = "encryption")]
+                let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
+                    match column_metadata.crypto_metadata() {
+                        Some(crypto_metadata) => Some(Arc::new(CryptoContext::for_column(
+                            file_decryptor,
+                            crypto_metadata,
+                            self.row_group_idx,
+                            i,
+                        )?)),
+                        None => None,
+                    }
+                } else {
+                    None
+                };
 
                 #[cfg(feature = "encryption")]
                 let page_reader = page_reader.with_crypto_context(crypto_context);

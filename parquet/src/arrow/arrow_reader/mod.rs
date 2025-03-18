@@ -700,13 +700,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
         #[cfg(feature = "encryption")]
         let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            let crypto_metadata = self
-                .metadata
-                .row_group(rg_idx)
-                .column(self.column_idx)
-                .crypto_metadata();
-
-            match crypto_metadata {
+            match meta.crypto_metadata() {
                 Some(crypto_metadata) => {
                     match CryptoContext::for_column(
                         file_decryptor,
