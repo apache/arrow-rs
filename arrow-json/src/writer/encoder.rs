@@ -78,9 +78,9 @@ impl EncoderOptions {
 ///
 /// This allows overriding the default encoders for specific data types,
 /// or adding new encoders for custom data types.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use std::io::Write;
 /// use arrow_array::{ArrayAccessor, Array, BinaryArray, Float64Array, RecordBatch};
