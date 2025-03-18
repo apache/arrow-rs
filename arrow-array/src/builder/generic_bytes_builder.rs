@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder, UInt8BufferBuilder};
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait, PrimitiveArray};
+use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
@@ -634,21 +634,8 @@ mod tests {
     #[test]
     fn test_append_array_without_nulls() {
         let input = vec![
-            "hello",
-            "world",
-            "how",
-            "are",
-            "you",
-            "doing",
-            "today",
-            "I",
-            "am",
-            "doing",
-            "well",
-            "thank",
-            "you",
-            "for",
-            "asking",
+            "hello", "world", "how", "are", "you", "doing", "today", "I", "am", "doing", "well",
+            "thank", "you", "for", "asking",
         ];
         let arr1 = GenericStringArray::<i32>::from(input[0..3].to_vec());
         let arr2 = GenericStringArray::<i32>::from(input[3..7].to_vec());
@@ -664,7 +651,6 @@ mod tests {
 
         assert_eq!(actual, expected);
     }
-
 
     #[test]
     fn test_primitive_array_append_array() {
