@@ -1519,11 +1519,13 @@ mod tests {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
 
         let resolutions: Vec<(Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef)> = vec![
+            // Test without a specified ArrowType hint.
             (None, |vals: &[Option<Int96>]| {
                 Arc::new(TimestampNanosecondArray::from_iter(
                     vals.iter().map(|x| x.map(|x| x.to_nanos())),
                 )) as ArrayRef
             }),
+            // Test other TimeUnits as ArrowType hints.
             (
                 Some(ArrowDataType::Timestamp(TimeUnit::Second, None)),
                 |vals: &[Option<Int96>]| {
@@ -1554,6 +1556,21 @@ mod tests {
                     Arc::new(TimestampNanosecondArray::from_iter(
                         vals.iter().map(|x| x.map(|x| x.to_nanos())),
                     )) as ArrayRef
+                },
+            ),
+            // Test another timezone with TimeUnit as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(
+                    TimeUnit::Second,
+                    Some(Arc::from("-05:00")),
+                )),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(
+                        TimestampSecondArray::from_iter(
+                            vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                        )
+                        .with_timezone("-05:00"),
+                    ) as ArrayRef
                 },
             ),
         ];

@@ -57,15 +57,15 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Allow different resolutions to support larger date ranges.
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Second, _),
         ) => hint,
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, _),
         ) => hint,
         (
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
         ) => hint,
 
         // Determine offset size
