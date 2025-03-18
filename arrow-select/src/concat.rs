@@ -35,7 +35,7 @@ use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder}
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, BufferBuilder, NullBuffer, NullBufferBuilder, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
 use std::{collections::HashSet, sync::Arc};
@@ -181,16 +181,41 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
 }
 
 fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    let capacity = arrays.iter().map(|a| a.len()).sum();
 
+    let values_buffer = {
+        let mut values_builder = BufferBuilder::<T::Native>::new(capacity);
+
+        for array in arrays {
+            let primitive_array = array.as_primitive::<T>();
+            values_builder.append_slice(primitive_array.values());
+        }
+
+        values_builder.finish().into()
+    };
+
+    // If no nulls
+    if arrays.iter().all(|array| array.null_count() == 0) {
+        return Ok(Arc::new(PrimitiveArray::<T>::new(
+            values_buffer,
+            None,
+        )));
+    }
+
+    let mut null_buffer_builder = NullBufferBuilder::new(capacity);
     for array in arrays {
-        // Safety: the concat function ensures that all arrays are of the same type
-        unsafe {
-            builder.append_array_unchecked(array.as_primitive());
+        let primitive_array = array.as_primitive::<T>();
+        if primitive_array.null_count() > 0 {
+            null_buffer_builder.append_buffer(primitive_array.nulls().unwrap());
+        } else {
+            null_buffer_builder.append_n_non_nulls(primitive_array.len());
         }
     }
 
-    Ok(Arc::new(builder.finish()))
+    Ok(Arc::new(PrimitiveArray::<T>::new(
+        values_buffer,
+        null_buffer_builder.finish(),
+    )))
 }
 
 fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
