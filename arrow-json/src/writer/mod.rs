@@ -366,12 +366,10 @@ where
             false,
         ));
 
-        let encoder = make_encoder(&field, &array, &self.options)?;
+        let mut encoder = make_encoder(&field, &array, &self.options)?;
 
         // Validate that the root is not nullable
         assert!(!encoder.has_nulls(), "root cannot be nullable");
-
-        let mut encoder = make_encoder(&field, &array, &self.options)?;
         for idx in 0..batch.num_rows() {
             self.format.start_row(&mut buffer, is_first_row)?;
             is_first_row = false;
