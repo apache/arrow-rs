@@ -85,7 +85,7 @@ impl Int96 {
     /// Will wrap around on overflow
     #[inline]
     pub fn to_seconds(&self) -> i64 {
-        let (day, nanos) = self.to_parts();
+        let (day, nanos) = self.data_as_days_and_nanos();
         (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(SECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000_000_000)
@@ -96,7 +96,7 @@ impl Int96 {
     /// Will wrap around on overflow
     #[inline]
     pub fn to_millis(&self) -> i64 {
-        let (day, nanos) = self.to_parts();
+        let (day, nanos) = self.data_as_days_and_nanos();
         (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(MILLISECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000_000)
@@ -107,7 +107,7 @@ impl Int96 {
     /// Will wrap around on overflow
     #[inline]
     pub fn to_micros(&self) -> i64 {
-        let (day, nanos) = self.to_parts();
+        let (day, nanos) = self.data_as_days_and_nanos();
         (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(MICROSECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000)
@@ -118,14 +118,14 @@ impl Int96 {
     /// Will wrap around on overflow
     #[inline]
     pub fn to_nanos(&self) -> i64 {
-        let (day, nanos) = self.to_parts();
+        let (day, nanos) = self.data_as_days_and_nanos();
         (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(NANOSECONDS_IN_DAY)
             .wrapping_add(nanos)
     }
 
     #[inline]
-    fn to_parts(&self) -> (i32, i64) {
+    fn data_as_days_and_nanos(&self) -> (i32, i64) {
         let day = self.data()[2] as i32;
         let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
         (day, nanos)
