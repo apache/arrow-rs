@@ -74,7 +74,7 @@ impl Int96 {
         self.value = [elem0, elem1, elem2];
     }
 
-Ad    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
+    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
     #[deprecated(since = "54.0.0", note = "Use `to_millis` instead")]
     pub fn to_i64(&self) -> i64 {
         self.to_millis()
