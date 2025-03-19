@@ -30,7 +30,7 @@ pub(crate) trait DecimalCast: Sized {
 
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self>;
+    fn from_f64(n: f64) -> Option<Self>;
 }
 
 impl DecimalCast for i32 {
@@ -54,7 +54,7 @@ impl DecimalCast for i32 {
         n.to_i32()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i32()
     }
 }
@@ -80,7 +80,7 @@ impl DecimalCast for i64 {
         n.to_i64()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i64()
     }
 }
@@ -106,7 +106,7 @@ impl DecimalCast for i128 {
         n.to_i128()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i128()
     }
 }
@@ -132,7 +132,7 @@ impl DecimalCast for i256 {
         n.to_i256()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         i256::from_f64(n)
     }
 }
@@ -249,8 +249,7 @@ where
     let array: PrimitiveArray<T> =
         if input_scale == output_scale && input_precision <= output_precision {
             array.clone()
-        } else if input_scale < output_scale {
-            // the scale doesn't change, but precision may change and cause overflow
+        } else if input_scale <= output_scale {
             convert_to_bigger_or_equal_scale_decimal::<T, T>(
                 array,
                 input_scale,
@@ -546,7 +545,7 @@ where
     Ok(Arc::new(result))
 }
 
-pub(crate) fn cast_floating_point_to_decimal<T: ArrowPrimitiveType, D, M>(
+pub(crate) fn cast_floating_point_to_decimal<T: ArrowPrimitiveType, D>(
     array: &PrimitiveArray<T>,
     precision: u8,
     scale: i8,
@@ -554,15 +553,15 @@ pub(crate) fn cast_floating_point_to_decimal<T: ArrowPrimitiveType, D, M>(
 ) -> Result<ArrayRef, ArrowError>
 where
     <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
-    D: DecimalType + ArrowPrimitiveType<Native = M>,
-    M: ArrowNativeTypeOp + DecimalCast,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
         array
             .unary_opt::<_, D>(|v| {
-                M::from_f64::<M>((mul * v.as_()).round())
+                D::Native::from_f64((mul * v.as_()).round())
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -570,7 +569,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                M::from_f64::<M>((mul * v.as_()).round())
+                D::Native::from_f64((mul * v.as_()).round())
                     .ok_or_else(|| {
                         ArrowError::CastError(format!(
                             "Cannot cast to {}({}, {}). Overflowing on {:?}",

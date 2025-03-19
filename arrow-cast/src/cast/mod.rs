@@ -2221,13 +2221,13 @@ where
             base,
             cast_options,
         ),
-        Float32 => cast_floating_point_to_decimal::<_, D, _>(
+        Float32 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float32Type>(),
             *precision,
             *scale,
             cast_options,
         ),
-        Float64 => cast_floating_point_to_decimal::<_, D, _>(
+        Float64 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float64Type>(),
             *precision,
             *scale,
@@ -3138,91 +3138,92 @@ mod tests {
         );
     }
 
-    macro_rules! generate_decimal_to_numeric_cast_test_case {
-        ($INPUT_ARRAY: expr) => {
-            // u8
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                UInt8Array,
-                &DataType::UInt8,
-                vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
-            );
-            // u16
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                UInt16Array,
-                &DataType::UInt16,
-                vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
-            );
-            // u32
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                UInt32Array,
-                &DataType::UInt32,
-                vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
-            );
-            // u64
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                UInt64Array,
-                &DataType::UInt64,
-                vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
-            );
-            // i8
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Int8Array,
-                &DataType::Int8,
-                vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
-            );
-            // i16
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Int16Array,
-                &DataType::Int16,
-                vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
-            );
-            // i32
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Int32Array,
-                &DataType::Int32,
-                vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
-            );
-            // i64
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Int64Array,
-                &DataType::Int64,
-                vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
-            );
-            // f32
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Float32Array,
-                &DataType::Float32,
-                vec![
-                    Some(1.25_f32),
-                    Some(2.25_f32),
-                    Some(3.25_f32),
-                    None,
-                    Some(5.25_f32)
-                ]
-            );
-            // f64
-            generate_cast_test_case!(
-                $INPUT_ARRAY,
-                Float64Array,
-                &DataType::Float64,
-                vec![
-                    Some(1.25_f64),
-                    Some(2.25_f64),
-                    Some(3.25_f64),
-                    None,
-                    Some(5.25_f64)
-                ]
-            );
-        };
+    fn generate_decimal_to_numeric_cast_test_case<T>(array: &PrimitiveArray<T>)
+    where
+        T: ArrowPrimitiveType + DecimalType,
+    {
+        // u8
+        generate_cast_test_case!(
+            array,
+            UInt8Array,
+            &DataType::UInt8,
+            vec![Some(1_u8), Some(2_u8), Some(3_u8), None, Some(5_u8)]
+        );
+        // u16
+        generate_cast_test_case!(
+            array,
+            UInt16Array,
+            &DataType::UInt16,
+            vec![Some(1_u16), Some(2_u16), Some(3_u16), None, Some(5_u16)]
+        );
+        // u32
+        generate_cast_test_case!(
+            array,
+            UInt32Array,
+            &DataType::UInt32,
+            vec![Some(1_u32), Some(2_u32), Some(3_u32), None, Some(5_u32)]
+        );
+        // u64
+        generate_cast_test_case!(
+            array,
+            UInt64Array,
+            &DataType::UInt64,
+            vec![Some(1_u64), Some(2_u64), Some(3_u64), None, Some(5_u64)]
+        );
+        // i8
+        generate_cast_test_case!(
+            array,
+            Int8Array,
+            &DataType::Int8,
+            vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
+        );
+        // i16
+        generate_cast_test_case!(
+            array,
+            Int16Array,
+            &DataType::Int16,
+            vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
+        );
+        // i32
+        generate_cast_test_case!(
+            array,
+            Int32Array,
+            &DataType::Int32,
+            vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
+        );
+        // i64
+        generate_cast_test_case!(
+            array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
+        );
+        // f32
+        generate_cast_test_case!(
+            array,
+            Float32Array,
+            &DataType::Float32,
+            vec![
+                Some(1.25_f32),
+                Some(2.25_f32),
+                Some(3.25_f32),
+                None,
+                Some(5.25_f32)
+            ]
+        );
+        // f64
+        generate_cast_test_case!(
+            array,
+            Float64Array,
+            &DataType::Float64,
+            vec![
+                Some(1.25_f64),
+                Some(2.25_f64),
+                Some(3.25_f64),
+                None,
+                Some(5.25_f64)
+            ]
+        );
     }
 
     #[test]
@@ -3230,7 +3231,7 @@ mod tests {
         let value_array: Vec<Option<i32>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal32_array(value_array, 8, 2).unwrap();
 
-        generate_decimal_to_numeric_cast_test_case!(&array);
+        generate_decimal_to_numeric_cast_test_case(&array);
     }
 
     #[test]
@@ -3238,7 +3239,7 @@ mod tests {
         let value_array: Vec<Option<i64>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal64_array(value_array, 8, 2).unwrap();
 
-        generate_decimal_to_numeric_cast_test_case!(&array);
+        generate_decimal_to_numeric_cast_test_case(&array);
     }
 
     #[test]
@@ -3246,7 +3247,7 @@ mod tests {
         let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal128_array(value_array, 38, 2).unwrap();
 
-        generate_decimal_to_numeric_cast_test_case!(&array);
+        generate_decimal_to_numeric_cast_test_case(&array);
 
         // overflow test: out of range of max u8
         let value_array: Vec<Option<i128>> = vec![Some(51300)];
@@ -10290,7 +10291,36 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456790 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 123456789 is too large to store in a Decimal128 of precision 6. Max is 999999");
+    }
+
+    #[test]
+    fn test_decimal_to_decimal_same_scale() {
+        let array = vec![Some(520)];
+        let array = create_decimal128_array(array, 4, 2).unwrap();
+        let input_type = DataType::Decimal128(4, 2);
+        let output_type = DataType::Decimal128(3, 2);
+        assert!(can_cast_types(&input_type, &output_type));
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let result = cast_with_options(&array, &output_type, &options);
+        assert_eq!(
+            result.unwrap().as_primitive::<Decimal128Type>().value(0),
+            520
+        );
+
+        // Cast 0 of decimal(3, 0) type to decimal(2, 0)
+        assert_eq!(
+            &cast(
+                &create_decimal128_array(vec![Some(0)], 3, 0).unwrap(),
+                &DataType::Decimal128(2, 0)
+            )
+            .unwrap(),
+            &(Arc::new(create_decimal128_array(vec![Some(0)], 2, 0).unwrap()) as ArrayRef)
+        );
     }
 
     #[test]

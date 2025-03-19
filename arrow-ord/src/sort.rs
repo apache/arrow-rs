@@ -801,10 +801,7 @@ mod tests {
         scale: i8,
     ) -> PrimitiveArray<T> {
         data.into_iter()
-            .map(|x| match x {
-                None => None,
-                Some(y) => T::Native::from_usize(y),
-            })
+            .map(|x| x.and_then(T::Native::from_usize))
             .collect::<PrimitiveArray<T>>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
