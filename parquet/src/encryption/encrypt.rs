@@ -79,7 +79,7 @@ impl FileEncryptionProperties {
         self.aad_prefix.as_ref()
     }
 
-    /// Should the AAD prefix should be stored in the file
+    /// Should the AAD prefix be stored in the file
     pub fn store_aad_prefix(&self) -> bool {
         self.store_aad_prefix && self.aad_prefix.is_some()
     }
@@ -88,7 +88,7 @@ impl FileEncryptionProperties {
     #[cfg(feature = "encryption")]
     pub(crate) fn validate_encrypted_column_names(
         &self,
-        schema: SchemaDescriptor,
+        schema: &SchemaDescriptor,
     ) -> std::result::Result<(), ParquetError> {
         let schema_columns = schema
             .columns()
@@ -137,7 +137,7 @@ impl EncryptionPropertiesBuilder {
         }
     }
 
-    /// Set if the footer be encrypted
+    /// Set if the footer should be encrypted. Defaults to true.
     pub fn with_plaintext_footer(mut self, plaintext_footer: bool) -> Self {
         self.encrypt_footer = !plaintext_footer;
         self
@@ -194,7 +194,7 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
-    /// Should the AAD prefix be stored in the file
+    /// Should the AAD prefix be stored in the file. If false, readers will need to provide the AAD prefix to be able to decrypt data. Defaults to true.
     pub fn with_aad_prefix_storage(mut self, store_aad_prefix: bool) -> Self {
         self.store_aad_prefix = store_aad_prefix;
         self
@@ -248,8 +248,8 @@ impl FileEncryptor {
         &self.file_aad
     }
 
-    /// Unique file identifier part of AAD suffix. This is generated per module by
-    /// concatenating unique file unique, module type, row group ordinal (all except
+    /// Unique file identifier part of AAD suffix. The full AAD suffix is generated per module by
+    /// concatenating aad_file_unique, module type, row group ordinal (all except
     /// footer),column ordinal (all except footer) and page ordinal (data page and
     /// header only).
     pub fn aad_file_unique(&self) -> &Vec<u8> {

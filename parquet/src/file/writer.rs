@@ -190,19 +190,17 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(encryption_props) => Some(Arc::new(FileEncryptor::new(encryption_props.clone())?)),
         };
 
+        let schema_descriptor = SchemaDescriptor::new(schema.clone());
+
         #[cfg(feature = "encryption")]
-        if properties.file_encryption_properties.is_some() {
-            properties
-                .file_encryption_properties
-                .clone()
-                .unwrap()
-                .validate_encrypted_column_names(SchemaDescriptor::new(schema.clone()))?;
+        if let Some(file_encryption_properties) = properties.file_encryption_properties.as_ref() {
+            file_encryption_properties.validate_encrypted_column_names(&schema_descriptor)?;
         }
 
         #[cfg(feature = "encryption")]
         if let Some(ref file_encryption_properties) = properties.file_encryption_properties {
             if !file_encryption_properties.encrypt_footer() {
-                return Err(general_err!("Footer encryption is not supported yet"));
+                return Err(general_err!("Writing encrypted files with plaintext footers is not supported yet"));
             }
         }
 

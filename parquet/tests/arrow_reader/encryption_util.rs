@@ -35,7 +35,7 @@ pub(crate) fn verify_encryption_test_file_read(
     decryption_properties: FileDecryptionProperties,
 ) {
     let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+        .with_file_decryption_properties(decryption_properties);
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
@@ -44,7 +44,7 @@ pub(crate) fn verify_encryption_test_file_read(
         .map(|x| x.unwrap())
         .collect::<Vec<RecordBatch>>();
 
-    verify_encryption_test_data(record_batches, &metadata.metadata().clone());
+    verify_encryption_test_data(record_batches, metadata.metadata());
 }
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
