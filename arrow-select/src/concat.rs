@@ -31,6 +31,7 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::builder::{BooleanBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -193,9 +194,38 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(array))
 }
 
+fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum());
+
+    for array in arrays {
+        // Safety: the concat function ensures that all arrays are of the same type
+        unsafe {
+            builder.append_array_unchecked(array.as_primitive());
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = BooleanBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
+
+    for array in arrays {
+        builder.append_array(array.as_boolean());
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
         return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    };
+}
+
+macro_rules! primitive_concat {
+    ($t:ty, $arrays:expr) => {
+        return Ok(Arc::new(concat_primitives::<$t>($arrays)?) as _)
     };
 }
 
@@ -254,7 +284,9 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
-    match d {
+    downcast_primitive! {
+        d => (primitive_concat, arrays),
+        DataType::Boolean => concat_boolean(arrays),
         DataType::Dictionary(k, _) => {
             downcast_integer! {
                 k.as_ref() => (dict_helper, arrays),
