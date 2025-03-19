@@ -1518,7 +1518,10 @@ mod tests {
     fn test_int96_single_column_reader_test() {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
 
-        let resolutions: Vec<(Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef)> = vec![
+        type TypeHintAndConversionFunction =
+            (Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef);
+
+        let resolutions: Vec<TypeHintAndConversionFunction> = vec![
             // Test without a specified ArrowType hint.
             (None, |vals: &[Option<Int96>]| {
                 Arc::new(TimestampNanosecondArray::from_iter(
