@@ -234,10 +234,13 @@ impl HttpService for reqwest::Client {
         *req.headers_mut() = parts.headers;
         *req.body_mut() = Some(body.into_reqwest());
 
+        use futures::{
+            channel::{mpsc, oneshot},
+            SinkExt, StreamExt, TryStreamExt,
+        };
         use http_body_util::{Empty, StreamBody};
         use wasm_bindgen_futures::spawn_local;
-        use futures::{channel::{mpsc, oneshot}, StreamExt, SinkExt, TryStreamExt};
-        
+
         let (mut tx, rx) = mpsc::channel(1);
         let (tx_parts, rx_parts) = oneshot::channel();
         let res_fut = self.execute(req);
@@ -247,7 +250,7 @@ impl HttpService for reqwest::Client {
                 Err(err) => {
                     let _ = tx_parts.send(Err(err));
                     drop(tx);
-                },
+                }
                 Ok(res) => {
                     let (mut parts, _) = http::Response::new(Empty::<()>::new()).into_parts();
                     parts.headers = res.headers().clone();
@@ -260,7 +263,7 @@ impl HttpService for reqwest::Client {
                 }
             }
         });
-        
+
         let parts = rx_parts.await.unwrap()?;
         let safe_stream = rx.map(|chunk| {
             let frame = hyper::body::Frame::data(chunk?);

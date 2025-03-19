@@ -52,7 +52,7 @@ impl HttpRequestBody {
     pub(crate) fn into_reqwest(self) -> reqwest::Body {
         match self.0 {
             Inner::Bytes(b) => b.into(),
-            Inner::PutPayload(_, payload) => Into::<Bytes>::into(payload).into()
+            Inner::PutPayload(_, payload) => Into::<Bytes>::into(payload).into(),
         }
     }
 

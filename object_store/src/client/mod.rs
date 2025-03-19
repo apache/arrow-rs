@@ -732,8 +732,7 @@ impl ClientOptions {
             builder = builder.default_headers(headers.clone())
         }
 
-        builder
-            .build().map_err(map_client_error)
+        builder.build().map_err(map_client_error)
     }
 }
 
