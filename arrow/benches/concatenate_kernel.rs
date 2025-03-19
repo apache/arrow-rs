@@ -47,6 +47,19 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
+    {
+        let input = (0..1000).map(|_| create_primitive_array::<Int32Type>(8192, 0.0)).collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat i32 8192 over 100 arrays", |b| b.iter(|| bench_concat_arrays(&arrays)));
+    }
+
+    {
+        let input = (0..1000).map(|_| create_primitive_array::<Int32Type>(8192, 0.5)).collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat i32 nulls 8192 over 100 arrays", |b| b.iter(|| bench_concat_arrays(&arrays)));
+    }
+
+
     let small_array = create_primitive_array::<Int32Type>(4, 0.0);
     let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
     c.bench_function("concat 1024 arrays i32 4", |b| {
