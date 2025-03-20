@@ -732,7 +732,7 @@ impl ParquetMetaDataReader {
                 let t_file_crypto_metadata: TFileCryptoMetaData =
                     TFileCryptoMetaData::read_from_in_protocol(&mut prot)
                         .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-                let supply_aad_prefix = match t_file_crypto_metadata.encryption_algorithm.clone() {
+                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
                     EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
                     _ => Some(false),
                 }
