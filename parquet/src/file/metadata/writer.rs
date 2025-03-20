@@ -274,7 +274,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .aad_prefix()
             .map(|_| !properties.store_aad_prefix());
         let encryption_algorithm = AesGcmV1 {
-            aad_prefix: properties.aad_prefix().cloned(),
+            aad_prefix: if properties.store_aad_prefix() {
+                properties.aad_prefix().cloned()
+            } else {
+                None
+            },
             aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
             supply_aad_prefix,
         };

@@ -34,8 +34,8 @@ pub(crate) fn verify_encryption_test_file_read(
     file: File,
     decryption_properties: FileDecryptionProperties,
 ) {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties);
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
 
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();

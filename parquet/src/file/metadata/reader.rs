@@ -732,6 +732,16 @@ impl ParquetMetaDataReader {
                 let t_file_crypto_metadata: TFileCryptoMetaData =
                     TFileCryptoMetaData::read_from_in_protocol(&mut prot)
                         .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+                let supply_aad_prefix = match t_file_crypto_metadata.encryption_algorithm.clone() {
+                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
+                    _ => Some(false),
+                }
+                .unwrap_or(false);
+                if supply_aad_prefix && file_decryption_properties.aad_prefix.is_none() {
+                    return Err(general_err!(
+                        "Parquet file was encrypted with AAD prefix that is not stored in the file"
+                    ));
+                }
                 let decryptor = get_file_decryptor(
                     t_file_crypto_metadata.encryption_algorithm,
                     file_decryption_properties,

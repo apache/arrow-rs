@@ -200,15 +200,17 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         #[cfg(feature = "encryption")]
         if let Some(ref file_encryption_properties) = properties.file_encryption_properties {
             if !file_encryption_properties.encrypt_footer() {
-                return Err(general_err!("Writing encrypted files with plaintext footers is not supported yet"));
+                return Err(general_err!(
+                    "Writing encrypted files with plaintext footers is not supported yet"
+                ));
             }
         }
 
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
-            schema: schema.clone(),
-            descr: Arc::new(SchemaDescriptor::new(schema)),
+            schema,
+            descr: Arc::new(schema_descriptor),
             props: properties,
             row_groups: vec![],
             bloom_filters: vec![],
