@@ -1110,6 +1110,46 @@ impl GetResult {
     }
 }
 
+/// Configuration for controlling transfer behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferOptions {
+    /// Maximum number of concurrent chunks to transfer.
+    pub concurrent_tasks: usize,
+    /// Maximum number of chunks to buffer in memory during the transfer.
+    /// Defaults to `concurrent_tasks` if `None`.
+    pub buffer_capacity: Option<usize>,
+    /// Maximum number of retries for a chunk transfer.
+    pub max_retries: Option<usize>,
+}
+
+impl TransferOptions {
+    /// Creates a new `TransferOptions` with the specified parameters.
+    pub fn new(
+        concurrent_tasks: usize,
+        buffer_capacity: Option<usize>,
+        max_retries: Option<usize>,
+    ) -> Self {
+        let buffer_capacity = buffer_capacity.or(Some(concurrent_tasks));
+        let max_retries = max_retries.or(Some(3));
+        Self {
+            concurrent_tasks,
+            buffer_capacity,
+            max_retries,
+        }
+    }
+}
+
+/// Default implementation for `TransferOptions`.
+impl Default for TransferOptions {
+    fn default() -> Self {
+        Self {
+            concurrent_tasks: 1,
+            buffer_capacity: Some(1),
+            max_retries: None,
+        }
+    }
+}
+
 /// Configure preconditions for the put operation
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum PutMode {
