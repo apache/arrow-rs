@@ -64,6 +64,10 @@ tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-ut
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+web-time = { version = "1.1.0" }
+wasm-bindgen-futures = "0.4.18"
+
 [features]
 default = ["fs"]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]

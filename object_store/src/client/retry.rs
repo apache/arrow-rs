@@ -26,7 +26,11 @@ use futures::future::BoxFuture;
 use http::{Method, Uri};
 use reqwest::header::LOCATION;
 use reqwest::StatusCode;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::{Duration, Instant};
+
 use tracing::info;
 
 /// Retry request error
