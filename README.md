@@ -87,6 +87,16 @@ Planned Release Schedule
 | Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
 | Apr 2025         | `0.12.1` | Minor, NO breaking API changes          |
 
+### Rust Version Compatibility Policy
+
+arrow-rs, parquet and object_store is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version) which can only be updated in major releases on a need by basis (e.g project dependencies bump there MSRV or a particular rust feature is useful for us etc..). The new MSRV if selected will be at least 6 months old. The minor releases is guaranteed to have the same MSRV.
+
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+E.g
+
+in Apr 2025 we will release version 55.0.0 which might have a version bump. But the rust version selected in this case will be at most version 1.81
+
 ### Guidelines for `panic` vs `Result`
 
 In general, use panics for bad states that are unreachable, unrecoverable or harmful.
