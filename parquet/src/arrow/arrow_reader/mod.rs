@@ -4431,4 +4431,84 @@ mod tests {
         assert_eq!(c0.len(), c1.len());
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn test_variant_roundtrip() -> Result<()> {
+        use arrow_array::{BinaryArray, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        use arrow_schema::extension::Variant;
+        use bytes::Bytes;
+        use std::sync::Arc;
+        
+        let variant_metadata = vec![1, 2, 3]; 
+        let sample_json_values = vec![
+            "null",
+            "true",
+            "false",
+            "12",
+            "-9876543210",
+            "4.5678E123",
+            "\"string value\"",
+            "{\"a\": 1, \"b\": {\"e\": -4, \"f\": 5.5}, \"c\": true}",
+            "[1, -2, 4.5, -6.7, \"str\", true]"
+        ];
+        
+        let binary_values: Vec<Vec<u8>> = sample_json_values
+            .iter()
+            .map(|json| {
+                let mut data = Vec::new();
+                data.extend_from_slice(&variant_metadata);
+                data.extend_from_slice(json.as_bytes());
+                data
+            })
+            .collect();
+        
+        let binary_data: Vec<Option<&[u8]>> = binary_values
+            .iter()
+            .map(|v| Some(v.as_slice()))
+            .collect();
+        
+        let variant_array = BinaryArray::from(binary_data);
+        
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("variant_data", DataType::Binary, false)
+                .with_extension_type(Variant::new(variant_metadata.clone(), vec![]))])),
+            vec![Arc::new(variant_array)]
+        )?;
+        
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer.clone()))?;
+        let parquet_schema = builder.parquet_schema();
+        println!("Parquet schema: {:?}", parquet_schema);
+
+        
+        let column = parquet_schema.columns()[0].clone();
+        assert_eq!(column.physical_type(), PhysicalType::BYTE_ARRAY);
+        
+        let mut reader = builder.build()?;
+        assert_eq!(batch.schema(), reader.schema());
+        println!("reader schema: {:#?}", reader.schema());
+        
+        let out = reader.next().unwrap()?;
+        assert_eq!(batch, out);
+        
+        let binary_array = out.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
+        for (i, expected_json) in sample_json_values.iter().enumerate() {
+            let data = binary_array.value(i);
+            let (actual_metadata, actual_value) = data.split_at(variant_metadata.len());
+            
+            assert_eq!(actual_metadata, &variant_metadata);
+            assert_eq!(std::str::from_utf8(actual_value).unwrap(), *expected_json);
+        }
+  
+        
+        
+        Ok(())
+    }
 }

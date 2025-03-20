@@ -1886,7 +1886,7 @@ impl crate::thrift::TSerializable for VariantType {
   }
 
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
-      o_prot.write_struct_begin(&TStructIdentifier::new("VariantType  "))?;
+      o_prot.write_struct_begin(&TStructIdentifier::new("VariantType"))?;
       o_prot.write_field_begin(&TFieldIdentifier::new("metadata", TType::String, 1))?;
       o_prot.write_bytes(self.metadata.as_slice())?;
       o_prot.write_field_end()?;
@@ -2028,6 +2028,13 @@ impl crate::thrift::TSerializable for LogicalType {
           let val = Float16Type::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(LogicalType::FLOAT16(val));
+          }
+          received_field_count += 1;
+        },
+        16 => {
+          let val = VariantType::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(LogicalType::VARIANT(val));
           }
           received_field_count += 1;
         },
