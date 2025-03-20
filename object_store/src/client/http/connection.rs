@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::body::{HttpRequest, HttpResponse};
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
-use crate::client::HttpResponseBody;
+use crate::client::{HttpRequest, HttpResponse, HttpResponseBody};
 use crate::ClientOptions;
 use async_trait::async_trait;
 use http::{Method, Uri};
