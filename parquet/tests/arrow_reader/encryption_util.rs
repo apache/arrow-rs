@@ -112,7 +112,6 @@ pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &
     assert_eq!(row_count, file_metadata.num_rows() as usize);
 }
 
-#[cfg(feature = "encryption")]
 pub fn read_and_roundtrip_to_encrypted_file(
     path: &str,
     decryption_properties: FileDecryptionProperties,
