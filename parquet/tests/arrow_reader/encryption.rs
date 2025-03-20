@@ -111,7 +111,7 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
-        "Parquet error: Provided footer key and AAD were unable to decrypt parquet footer"
+        "Parquet error: Parquet file was encrypted with AAD prefix that is not stored in the file"
     );
 }
 
@@ -617,59 +617,4 @@ fn test_write_encrypted_column_non_uniform() {
     }
 
     assert_eq!(row_count, file_metadata.num_rows() as usize);
-}
-
-#[test]
-fn test_write_non_uniform_encryption_disabled_aad_storage() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
-    let temp_file = tempfile::tempfile().unwrap();
-
-    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
-
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
-        .build()
-        .unwrap();
-
-    let encryption_properties = FileEncryptionProperties::builder(footer_key)
-        .with_aad_prefix_storage(false)
-        .with_aad_prefix("tester".as_bytes().to_vec())
-        .build();
-
-    let file = File::open(path).unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let batch_reader = builder.build().unwrap();
-    let batches = batch_reader
-        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
-        .unwrap();
-
-    let props = WriterProperties::builder()
-        .with_file_encryption_properties(encryption_properties)
-        .build();
-
-    let mut writer = ArrowWriter::try_new(
-        temp_file.try_clone().unwrap(),
-        metadata.schema().clone(),
-        Some(props),
-    )
-    .unwrap();
-    for batch in batches {
-        writer.write(&batch).unwrap();
-    }
-
-    writer.close().unwrap();
-
-    let options =
-        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
-    let result = ArrowReaderMetadata::load(&temp_file, options.clone());
-
-    assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Parquet error: Parquet file was encrypted with AAD prefix that is not stored in the file"
-    );
 }

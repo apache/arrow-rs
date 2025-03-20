@@ -138,9 +138,9 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         // Create encrypted buffer.
         // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
-        let ciphertext_length : u32 = (NONCE_LEN + plaintext.len() + TAG_LEN).try_into()
-            .map_err(|err|
-                General(format!("Plaintext data too long. {:?}", err)))?;
+        let ciphertext_length: u32 = (NONCE_LEN + plaintext.len() + TAG_LEN)
+            .try_into()
+            .map_err(|err| General(format!("Plaintext data too long. {:?}", err)))?;
         // Not checking for overflow here because we've already checked for it with ciphertext_length
         let mut ciphertext = Vec::with_capacity(SIZE_LEN + ciphertext_length as usize);
         ciphertext.extend((ciphertext_length).to_le_bytes());
