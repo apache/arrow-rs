@@ -1,0 +1,57 @@
+{
+  "filename33": "alltypes_plain.parquet",
+  "row_goups": [
+    {
+      "columns": [
+        {
+          "file_offset": 77,
+          "file_path": null
+        },
+        {
+          "file_offset": 133,
+          "file_path": null
+        },
+        {
+          "file_offset": 215,
+          "file_path": null
+        },
+        {
+          "file_offset": 303,
+          "file_path": null
+        },
+        {
+          "file_offset": 392,
+          "file_path": null
+        },
+        {
+          "file_offset": 484,
+          "file_path": null
+        },
+        {
+          "file_offset": 571,
+          "file_path": null
+        },
+        {
+          "file_offset": 665,
+          "file_path": null
+        },
+        {
+          "file_offset": 793,
+          "file_path": null
+        },
+        {
+          "file_offset": 889,
+          "file_path": null
+        },
+        {
+          "file_offset": 1068,
+          "file_path": null
+        }
+      ],
+      "file_offset": null,
+      "num_rows": 8,
+      "ordinal": null,
+      "total_byte_size": 671
+    }
+  ]
+}
