@@ -137,10 +137,10 @@ impl FileEncryptionProperties {
 }
 
 pub struct EncryptionPropertiesBuilder {
+    encrypt_footer: bool,
     footer_key: EncryptionKey,
     column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
-    encrypt_footer: bool,
     store_aad_prefix: bool,
 }
 
@@ -155,11 +155,18 @@ impl EncryptionPropertiesBuilder {
         }
     }
 
-    /// Set if the footer should be encrypted. Defaults to true.
+    /// Set if the footer should be encrypted. Defaults to false.
+    pub fn with_encrypt_footer(mut self, encrypt_footer: bool) -> Self {
+        self.encrypt_footer = encrypt_footer;
+        self
+    }
+
+    /// Set if the footer should be plaintest. Defaults to true.
     pub fn with_plaintext_footer(mut self, plaintext_footer: bool) -> Self {
         self.encrypt_footer = !plaintext_footer;
         self
     }
+
 
     /// Set retrieval metadata of key used for encryption of footer and (possibly) columns
     pub fn with_footer_key_metadata(mut self, metadata: Vec<u8>) -> Self {

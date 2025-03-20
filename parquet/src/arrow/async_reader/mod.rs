@@ -111,15 +111,11 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, decrypting, etc...
-    ///
-    /// By default calls `get_metadata()`
+    //  No default here because this is too easy to get buggy behavior
     fn get_metadata_with_options<'a>(
         &'a mut self,
         options: &'a ArrowReaderOptions,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        let _ = options;
-        self.get_metadata()
-    }
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
