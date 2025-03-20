@@ -36,18 +36,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Create GitHub Releases
         run: |
-          case "${GITHUB_REF_NAME}" in
-            object_store_*)
-              version=${GITHUB_REF_NAME#object_store_}
-              title="object_store ${version}"
-              notes_file=object_store/CHANGELOG.md
-              ;;
-            *)
-              version=${GITHUB_REF_NAME}
-              title="arrow ${version}"
-              notes_file=CHANGELOG.md
-              ;;
-          esac
+          version=${GITHUB_REF_NAME}
+          title="arrow ${version}"
+          notes_file=CHANGELOG.md
           gh release create ${GITHUB_REF_NAME} \
             --title "${title}" \
             --notes-file ${notes_file} \
