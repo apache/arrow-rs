@@ -177,7 +177,9 @@ impl EncryptionPropertiesBuilder {
     }
 
     /// Set the keys used for encryption of columns. Analogous to
-    /// with_column_key but for multiple columns.
+    /// with_column_key but for multiple columns. This will add column keys provided to the
+    /// existing column keys. If column keys were already provided for some columns, the new keys
+    /// will overwrite the old ones.
     pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
         for (i, column_name) in column_names.into_iter().enumerate() {
             self.column_keys
@@ -188,13 +190,15 @@ impl EncryptionPropertiesBuilder {
 
     /// AAD prefix string uniquely identifies the file and allows to differentiate it e.g. from
     /// older versions of the file or from other partition files in the same data set (table).
-    /// This string is optionally passed by a writer upon file creation.
+    /// This string is optionally passed by a writer upon file creation. Not passing it will
+    /// in AAD prefix being an empty string.
     pub fn with_aad_prefix(mut self, aad_prefix: Vec<u8>) -> Self {
         self.aad_prefix = Some(aad_prefix);
         self
     }
 
-    /// Should the AAD prefix be stored in the file. If false, readers will need to provide the AAD prefix to be able to decrypt data. Defaults to true.
+    /// Should the AAD prefix be stored in the file. If false, readers will need to provide the
+    /// AAD prefix to be able to decrypt data. Defaults to true.
     pub fn with_aad_prefix_storage(mut self, store_aad_prefix: bool) -> Self {
         self.store_aad_prefix = store_aad_prefix;
         self
