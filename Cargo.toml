@@ -57,8 +57,6 @@ exclude = [
     # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
     # scratch this way, this is a stand-alone package that compiles independently of the others.
     "arrow-pyarrow-integration-testing",
-    # object_store is excluded because it follows a separate release cycle from the other arrow crates
-    "object_store"
 ]
 
 [workspace.package]
