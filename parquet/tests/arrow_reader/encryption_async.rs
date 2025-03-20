@@ -244,7 +244,8 @@ async fn test_write_non_uniform_encryption() {
 
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
         .with_column_keys(column_names, column_keys)
-        .build();
+        .build()
+        .unwrap();
 
     read_and_roundtrip_to_encrypted_file_async(
         &path,
