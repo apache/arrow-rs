@@ -115,9 +115,8 @@ pub trait AsyncFileReader: Send {
     /// By default calls `get_metadata()`
     fn get_metadata_with_options<'a>(
         &'a mut self,
-        options: &'a ArrowReaderOptions,
+        _options: &'a ArrowReaderOptions,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        let _ = options;
         self.get_metadata()
     }
 }
