@@ -1747,7 +1747,6 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
-
     } else {
         for buffer in array_data.buffers() {
             offset = write_buffer(
@@ -1860,6 +1859,8 @@ mod tests {
 
     use arrow_array::builder::FixedSizeListBuilder;
     use arrow_array::builder::Float32Builder;
+    use arrow_array::builder::Int32Builder;
+    use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
@@ -3101,7 +3102,6 @@ mod tests {
 
     #[test]
     fn test_roundtrip_list_of_fixed_list() -> Result<(), ArrowError> {
-
         let l0_builder = Float32Builder::new();
         let l1_builder = FixedSizeListBuilder::new(l0_builder, 3);
         let mut l2_builder = ListBuilder::new(l1_builder);
@@ -3125,7 +3125,6 @@ mod tests {
         l2_builder.append(true);
 
         let array = Arc::new(l2_builder.finish()) as ArrayRef;
-        println!("{:?}", array);
 
         let schema = Arc::new(Schema::new_with_metadata(
             vec![Field::new(
@@ -3143,39 +3142,69 @@ mod tests {
             HashMap::default(),
         ));
 
-        let subarray_1 = array.slice(0, 1);
-        let subarray_2 = array.slice(1, 1);
-
-        println!("{:?}", subarray_2);
-
-        let b1 = RecordBatch::try_new(schema.clone(), vec![subarray_1])?;
-        let b2 = RecordBatch::try_new(schema.clone(), vec![subarray_2])?;
-
-        // let mut bytes = Vec::new();
-        // let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
-        // writer.write(&b1)?;
-        // writer.finish()?;
-
-        // let mut cursor = std::io::Cursor::new(bytes);
-        // let mut reader = StreamReader::try_new(&mut cursor, None)?;
-        // let b1_return = reader.next().unwrap()?;
-
-        // assert_eq!(b1, b1_return);
-
-        let mut bytes = Vec::new();
-        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
-        writer.write(&b2)?;
-        writer.finish()?;
-
-        let mut cursor = std::io::Cursor::new(bytes);
-        let mut reader = StreamReader::try_new(&mut cursor, None)?;
-        let b2_return = reader.next().unwrap()?;
-
-        println!("{:?}", b2_return);
-
-        assert_eq!(b2, b2_return);
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_subarray(&array, &schema, 0, 1)?;
+        test_subarray(&array, &schema, 0, 2)?;
+        test_subarray(&array, &schema, 1, 1)?;
 
         Ok(())
     }
 
+    fn test_subarray(
+        parent_array: &ArrayRef,
+        schema: &SchemaRef,
+        offset: usize,
+        length: usize,
+    ) -> Result<(), ArrowError> {
+        let subarray = parent_array.slice(offset, length);
+        let original_batch = RecordBatch::try_new(schema.clone(), vec![subarray])?;
+
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&original_batch)?;
+        writer.finish()?;
+
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut reader = StreamReader::try_new(&mut cursor, None)?;
+        let returned_batch = reader.next().unwrap()?;
+
+        assert_eq!(original_batch, returned_batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_fixed_list() -> Result<(), ArrowError> {
+        let int_builder = Int64Builder::new();
+        let mut fixed_list_builder = FixedSizeListBuilder::new(int_builder, 3);
+
+        for point in [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]] {
+            fixed_list_builder.values().append_value(point[0]);
+            fixed_list_builder.values().append_value(point[1]);
+            fixed_list_builder.values().append_value(point[2]);
+
+            fixed_list_builder.append(true);
+        }
+
+        let array = Arc::new(fixed_list_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 3),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_subarray(&array, &schema, 0, 4)?;
+        test_subarray(&array, &schema, 0, 2)?;
+        test_subarray(&array, &schema, 1, 3)?;
+        test_subarray(&array, &schema, 2, 1)?;
+
+        Ok(())
+    }
 }
