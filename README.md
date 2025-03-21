@@ -89,7 +89,7 @@ Planned Release Schedule
 
 ### Rust Version Compatibility Policy
 
-arrow-rs, parquet and object_store is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version) which can only be updated in major releases on a need by basis (e.g project dependencies bump there MSRV or a particular rust feature is useful for us etc..). The new MSRV if selected will be at least 6 months old. The minor releases is guaranteed to have the same MSRV.
+arrow-rs, parquet and object_store is built and tested with stable rust, and will keep a rolling MSRV(minimum supported rust version) which can only be updated in major releases on a need by basis (e.g project dependencies bump their MSRV or a particular rust feature is useful for us etc..). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
