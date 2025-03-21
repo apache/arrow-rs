@@ -166,11 +166,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         let row_groups = match self.file_encryptor.as_ref() {
             #[cfg(feature = "encryption")]
-            Some(file_encryptor) => Self::encrypt_row_groups(self.row_groups, file_encryptor)?,
-            _ => self.row_groups,
+            Some(file_encryptor) => Self::encrypt_row_groups(self.row_groups.clone(), file_encryptor)?,
+            _ => self.row_groups.clone(),
         };
 
-        let file_metadata = crate::format::FileMetaData {
+        let mut file_metadata = crate::format::FileMetaData {
             num_rows,
             row_groups,
             key_value_metadata: self.key_value_metadata.clone(),
@@ -218,6 +218,15 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         #[cfg(not(feature = "encryption"))]
         let magic = get_file_magic();
         self.buf.write_all(magic)?;
+
+        // TODO: Discuss what to do here with community
+        // The argument for returning unencrypted rowgroups is that any users working with
+        // the returned FIleMetaData have no easy way to decrypt it and hence expect an
+        // unencrypted structure be returned. So, the argument here would be backward compatibility.
+        // Return unencrypted row_group for use in program
+        // E.g. when collecting statistics.
+        // Related to this see: https://github.com/apache/arrow-rs/issues/7254
+        file_metadata.row_groups = self.row_groups;
 
         Ok(file_metadata)
     }

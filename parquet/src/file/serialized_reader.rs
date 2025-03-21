@@ -341,7 +341,10 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
     let mut prot = TCompactInputProtocol::new(input);
-    Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+    let page_header = PageHeader::read_from_in_protocol(&mut prot)
+        .map_err(|_| ParquetError::General(
+            format!("Error reading column data. File may be corrupt or column decryptor may be missing")))?;
+    Ok(page_header)
 }
 
 #[cfg(feature = "encryption")]
@@ -352,7 +355,10 @@ pub(crate) fn read_encrypted_page_header<T: Read>(
     let data_decryptor = crypto_context.data_decryptor();
     let aad = crypto_context.create_page_header_aad()?;
 
-    let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
+    let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())
+        .map_err(|_| ParquetError::General(format!(
+            "Error decrypting column {}, decryptor may be wrong or missing",
+            crypto_context.column_ordinal)))?;
 
     let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
     Ok(PageHeader::read_from_in_protocol(&mut prot)?)

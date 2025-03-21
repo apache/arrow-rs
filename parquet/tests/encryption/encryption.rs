@@ -235,7 +235,7 @@ fn test_uniform_encryption_roundtrip() {
     let file = tempfile::tempfile().unwrap();
 
     let footer_key = b"0123456789012345";
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build().unwrap();
 
     let props = WriterProperties::builder()
         // Ensure multiple row groups
@@ -328,7 +328,8 @@ fn test_write_non_uniform_encryption() {
 
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
         .with_column_keys(column_names, column_keys)
-        .build();
+        .build()
+        .unwrap();
 
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
@@ -352,7 +353,8 @@ fn test_write_uniform_encryption_plaintext_footer() {
 
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
         .with_plaintext_footer(true)
-        .build();
+        .build()
+        .unwrap();
 
     let file = File::open(path).unwrap();
     let options = ArrowReaderOptions::default()
@@ -387,7 +389,7 @@ fn test_write_uniform_encryption() {
         .build()
         .unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key).build();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key).build().unwrap();
 
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
@@ -411,7 +413,8 @@ fn test_write_non_uniform_encryption_column_missmatch() {
         .with_column_key("double_field", column_1_key.clone())
         .with_column_key("other_field", column_1_key)
         .with_column_key("yet_another_field", column_2_key)
-        .build();
+        .build()
+        .unwrap();
 
     let temp_file = tempfile::tempfile().unwrap();
 
@@ -455,7 +458,7 @@ fn test_write_encrypted_column() {
 
     let builder = WriterProperties::builder();
     let footer_key: &[u8] = "0123456789012345".as_bytes();
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build().unwrap();
 
     let props = Arc::new(
         builder
@@ -556,7 +559,8 @@ fn test_write_encrypted_column_non_uniform() {
     let column_key = b"1234567890123450".to_vec();
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
         .with_column_key("struct", column_key.clone())
-        .build();
+        .build()
+        .unwrap();
 
     let props = builder
         .with_file_encryption_properties(file_encryption_properties)

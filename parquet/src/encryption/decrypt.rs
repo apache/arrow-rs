@@ -149,6 +149,25 @@ impl FileDecryptionProperties {
     pub fn builder(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         DecryptionPropertiesBuilder::new(footer_key)
     }
+
+    /// Retrieval of key used for encryption of footer and (possibly) columns
+    pub fn footer_key(&self) -> &Vec<u8> { self.footer_key.as_ref() }
+
+    /// Get the column names, keys used in column_keys
+    pub fn column_keys(&self) -> (Vec<String>, Vec<Vec<u8>>) {
+        let mut column_names: Vec<String> = Vec::new();
+        let mut keys: Vec<Vec<u8>> = Vec::new();
+        for (key, value) in self.column_keys.iter() {
+            column_names.push(key.clone());
+            keys.push(value.clone());
+        }
+        (column_names, keys)
+    }
+
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
+    pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
+        self.aad_prefix.as_ref()
+    }
 }
 
 pub struct DecryptionPropertiesBuilder {
