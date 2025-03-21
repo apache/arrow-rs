@@ -1727,6 +1727,27 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
+    } else if let DataType::FixedSizeList(_, fixed_size) = data_type {
+        assert_eq!(array_data.child_data().len(), 1);
+        let fixed_size = *fixed_size as usize;
+
+        let child_offset = array_data.offset() * fixed_size;
+        let child_length = array_data.len() * fixed_size;
+        let child_data = array_data.child_data()[0].slice(child_offset, child_length);
+
+        offset = write_array_data(
+            &child_data,
+            buffers,
+            arrow_data,
+            nodes,
+            offset,
+            child_data.len(),
+            child_data.null_count(),
+            compression_codec,
+            write_options,
+        )?;
+        return Ok(offset);
+
     } else {
         for buffer in array_data.buffers() {
             offset = write_buffer(
@@ -1837,6 +1858,8 @@ mod tests {
     use std::io::Cursor;
     use std::io::Seek;
 
+    use arrow_array::builder::FixedSizeListBuilder;
+    use arrow_array::builder::Float32Builder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
@@ -3075,4 +3098,84 @@ mod tests {
         assert_eq!(stream_bytes_written_on_flush, expected_stream_flushed_bytes);
         assert_eq!(file_bytes_written_on_flush, expected_file_flushed_bytes);
     }
+
+    #[test]
+    fn test_roundtrip_list_of_fixed_list() -> Result<(), ArrowError> {
+
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3);
+        let mut l2_builder = ListBuilder::new(l1_builder);
+
+        for point in [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]] {
+            l2_builder.values().values().append_value(point[0]);
+            l2_builder.values().values().append_value(point[1]);
+            l2_builder.values().values().append_value(point[2]);
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        for point in [[10., 11., 12.]] {
+            l2_builder.values().values().append_value(point[0]);
+            l2_builder.values().values().append_value(point[1]);
+            l2_builder.values().values().append_value(point[2]);
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+        println!("{:?}", array);
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Float32, true)),
+                        3,
+                    ),
+                    true,
+                ))),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        let subarray_1 = array.slice(0, 1);
+        let subarray_2 = array.slice(1, 1);
+
+        println!("{:?}", subarray_2);
+
+        let b1 = RecordBatch::try_new(schema.clone(), vec![subarray_1])?;
+        let b2 = RecordBatch::try_new(schema.clone(), vec![subarray_2])?;
+
+        // let mut bytes = Vec::new();
+        // let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        // writer.write(&b1)?;
+        // writer.finish()?;
+
+        // let mut cursor = std::io::Cursor::new(bytes);
+        // let mut reader = StreamReader::try_new(&mut cursor, None)?;
+        // let b1_return = reader.next().unwrap()?;
+
+        // assert_eq!(b1, b1_return);
+
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&b2)?;
+        writer.finish()?;
+
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut reader = StreamReader::try_new(&mut cursor, None)?;
+        let b2_return = reader.next().unwrap()?;
+
+        println!("{:?}", b2_return);
+
+        assert_eq!(b2, b2_return);
+
+        Ok(())
+    }
+
 }
