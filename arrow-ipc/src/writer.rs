@@ -1859,7 +1859,6 @@ mod tests {
 
     use arrow_array::builder::FixedSizeListBuilder;
     use arrow_array::builder::Float32Builder;
-    use arrow_array::builder::Int32Builder;
     use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
@@ -3115,13 +3114,12 @@ mod tests {
         }
         l2_builder.append(true);
 
-        for point in [[10., 11., 12.]] {
-            l2_builder.values().values().append_value(point[0]);
-            l2_builder.values().values().append_value(point[1]);
-            l2_builder.values().values().append_value(point[2]);
+        let point = [10., 11., 12.];
+        l2_builder.values().values().append_value(point[0]);
+        l2_builder.values().values().append_value(point[1]);
+        l2_builder.values().values().append_value(point[2]);
 
-            l2_builder.values().append(true);
-        }
+        l2_builder.values().append(true);
         l2_builder.append(true);
 
         let array = Arc::new(l2_builder.finish()) as ArrayRef;
@@ -3161,7 +3159,7 @@ mod tests {
         let original_batch = RecordBatch::try_new(schema.clone(), vec![subarray])?;
 
         let mut bytes = Vec::new();
-        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
         writer.write(&original_batch)?;
         writer.finish()?;
 
