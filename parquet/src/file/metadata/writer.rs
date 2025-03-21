@@ -166,7 +166,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         let row_groups = match self.file_encryptor.as_ref() {
             #[cfg(feature = "encryption")]
-            Some(file_encryptor) => Self::encrypt_row_groups(self.row_groups.clone(), file_encryptor)?,
+            Some(file_encryptor) => {
+                Self::encrypt_row_groups(self.row_groups.clone(), file_encryptor)?
+            }
             _ => self.row_groups.clone(),
         };
 

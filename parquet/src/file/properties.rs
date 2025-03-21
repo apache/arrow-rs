@@ -375,7 +375,7 @@ impl WriterProperties {
             .or_else(|| self.default_column_properties.bloom_filter_properties())
     }
 
-    // Return the encryption properties
+    /// Return file encryption properties
     #[cfg(feature = "encryption")]
     pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
         self.file_encryption_properties.as_ref()

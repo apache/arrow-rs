@@ -235,7 +235,9 @@ fn test_uniform_encryption_roundtrip() {
     let file = tempfile::tempfile().unwrap();
 
     let footer_key = b"0123456789012345";
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build().unwrap();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+        .build()
+        .unwrap();
 
     let props = WriterProperties::builder()
         // Ensure multiple row groups
@@ -389,7 +391,9 @@ fn test_write_uniform_encryption() {
         .build()
         .unwrap();
 
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key).build().unwrap();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .build()
+        .unwrap();
 
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
@@ -458,7 +462,9 @@ fn test_write_encrypted_column() {
 
     let builder = WriterProperties::builder();
     let footer_key: &[u8] = "0123456789012345".as_bytes();
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec()).build().unwrap();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+        .build()
+        .unwrap();
 
     let props = Arc::new(
         builder
