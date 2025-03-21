@@ -224,7 +224,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // the returned FIleMetaData have no easy way to decrypt it and hence expect an
         // unencrypted structure be returned. So, the argument here would be backward compatibility.
         // Return unencrypted row_group for use in program
-        // E.g. when collecting statistics
+        // E.g. when collecting statistics.
+        // Related to this see: https://github.com/apache/arrow-rs/issues/7254
         file_metadata.row_groups = self.row_groups;
 
         Ok(file_metadata)
