@@ -52,6 +52,9 @@ pub enum ParquetError {
     /// Returned when a function needs more data to complete properly. The `usize` field indicates
     /// the total number of bytes required, not the number of additional bytes.
     NeedMoreData(usize),
+    /// Returned when an operation needs to know the first row number of a row group, but the row
+    /// number is unknown.
+    RowGroupMetaDataMissingRowNumber,
 }
 
 impl std::fmt::Display for ParquetError {
@@ -69,6 +72,9 @@ impl std::fmt::Display for ParquetError {
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
             ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
+            ParquetError::RowGroupMetaDataMissingRowNumber => {
+                write!(fmt, "Row group missing row number")
+            }
         }
     }
 }

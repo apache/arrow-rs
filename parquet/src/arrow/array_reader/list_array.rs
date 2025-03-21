@@ -563,7 +563,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
+        let mut array_reader =
+            build_array_reader(fields.as_ref(), &mask, &file_reader, None).unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
         assert_eq!(batch.data_type(), array_reader.get_data_type());

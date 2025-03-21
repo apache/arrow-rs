@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 use std::sync::Arc;
-
-use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
+use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -39,10 +39,29 @@ pub fn build_array_reader(
     field: Option<&ParquetField>,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
+    row_number_column: Option<String>,
 ) -> Result<Box<dyn ArrayReader>> {
     let reader = field
-        .and_then(|field| build_reader(field, mask, row_groups).transpose())
-        .transpose()?
+        .and_then(|field| {
+            build_reader(field, mask, row_groups, row_number_column.clone()).transpose()
+        })
+        .or_else(|| {
+            row_number_column.map(|column| {
+                let row_number_reader = build_row_number_reader(row_groups)?;
+                let reader: Box<dyn ArrayReader> = Box::new(StructArrayReader::new(
+                    DataType::Struct(Fields::from(vec![Field::new(
+                        column,
+                        row_number_reader.get_data_type().clone(),
+                        false,
+                    )])),
+                    vec![row_number_reader],
+                    0,
+                    0,
+                    false,
+                ));
+                Ok(reader)
+            })
+        }).transpose()?
         .unwrap_or_else(|| make_empty_array_reader(row_groups.num_rows()));
 
     Ok(reader)
@@ -52,18 +71,23 @@ fn build_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
+    row_number_column: Option<String>,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     match field.field_type {
         ParquetFieldType::Primitive { .. } => build_primitive_reader(field, mask, row_groups),
         ParquetFieldType::Group { .. } => match &field.arrow_type {
             DataType::Map(_, _) => build_map_reader(field, mask, row_groups),
-            DataType::Struct(_) => build_struct_reader(field, mask, row_groups),
+            DataType::Struct(_) => build_struct_reader(field, mask, row_groups, row_number_column),
             DataType::List(_) => build_list_reader(field, mask, false, row_groups),
             DataType::LargeList(_) => build_list_reader(field, mask, true, row_groups),
             DataType::FixedSizeList(_, _) => build_fixed_size_list_reader(field, mask, row_groups),
             d => unimplemented!("reading group type {} not implemented", d),
         },
     }
+}
+
+fn build_row_number_reader(row_groups: &dyn RowGroups) -> Result<Box<dyn ArrayReader>> {
+    Ok(Box::new(RowNumberReader::try_new(row_groups.row_groups())?))
 }
 
 /// Build array reader for map type.
@@ -75,8 +99,8 @@ fn build_map_reader(
     let children = field.children().unwrap();
     assert_eq!(children.len(), 2);
 
-    let key_reader = build_reader(&children[0], mask, row_groups)?;
-    let value_reader = build_reader(&children[1], mask, row_groups)?;
+    let key_reader = build_reader(&children[0], mask, row_groups, None)?;
+    let value_reader = build_reader(&children[1], mask, row_groups, None)?;
 
     match (key_reader, value_reader) {
         (Some(key_reader), Some(value_reader)) => {
@@ -127,7 +151,7 @@ fn build_list_reader(
     let children = field.children().unwrap();
     assert_eq!(children.len(), 1);
 
-    let reader = match build_reader(&children[0], mask, row_groups)? {
+    let reader = match build_reader(&children[0], mask, row_groups, None)? {
         Some(item_reader) => {
             // Need to retrieve underlying data type to handle projection
             let item_type = item_reader.get_data_type().clone();
@@ -173,7 +197,7 @@ fn build_fixed_size_list_reader(
     let children = field.children().unwrap();
     assert_eq!(children.len(), 1);
 
-    let reader = match build_reader(&children[0], mask, row_groups)? {
+    let reader = match build_reader(&children[0], mask, row_groups, None)? {
         Some(item_reader) => {
             let item_type = item_reader.get_data_type().clone();
             let reader = match &field.arrow_type {
@@ -300,6 +324,7 @@ fn build_struct_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
+    row_number_column: Option<String>,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let arrow_fields = match &field.arrow_type {
         DataType::Struct(children) => children,
@@ -312,12 +337,22 @@ fn build_struct_reader(
     let mut builder = SchemaBuilder::with_capacity(children.len());
 
     for (arrow, parquet) in arrow_fields.iter().zip(children) {
-        if let Some(reader) = build_reader(parquet, mask, row_groups)? {
+        if let Some(reader) = build_reader(parquet, mask, row_groups, None)? {
             // Need to retrieve underlying data type to handle projection
             let child_type = reader.get_data_type().clone();
             builder.push(arrow.as_ref().clone().with_data_type(child_type));
             readers.push(reader);
         }
+    }
+
+    if let Some(row_number_column) = row_number_column {
+        let reader = build_row_number_reader(row_groups)?;
+        builder.push(Field::new(
+            row_number_column,
+            reader.get_data_type().clone(),
+            false,
+        ));
+        readers.push(reader);
     }
 
     if readers.is_empty() {
@@ -356,14 +391,23 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
+        let array_reader = build_array_reader(
+            fields.as_ref(),
+            &mask,
+            &file_reader,
+            Some("row_number".to_string()),
+        )
+        .unwrap();
 
         // Create arrow types
-        let arrow_type = DataType::Struct(Fields::from(vec![Field::new(
-            "b_struct",
-            DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
-            true,
-        )]));
+        let arrow_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "b_struct",
+                DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
+                true,
+            ),
+            Field::new("row_number", DataType::Int64, false),
+        ]));
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
     }
