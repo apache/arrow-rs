@@ -94,8 +94,8 @@ impl KmsConnectionConfigBuilder {
     /// Create a new [`KmsConnectionConfigBuilder`] with default options
     pub fn new() -> Self {
         Self {
-            kms_instance_id: "".to_string(),
-            kms_instance_url: "".to_string(),
+            kms_instance_id: "DEFAULT".to_string(),
+            kms_instance_url: "DEFAULT".to_string(),
             key_access_token: "DEFAULT".to_string(),
             custom_kms_conf: Default::default(),
         }
