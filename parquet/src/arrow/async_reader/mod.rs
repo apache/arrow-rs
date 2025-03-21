@@ -560,7 +560,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let batch_size = self
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
-        let reader = ReaderFactory {
+        let reader_factory = ReaderFactory {
             input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
@@ -571,7 +571,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
-        let projected_fields = match reader.fields.as_deref().map(|pf| &pf.arrow_type) {
+        let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
             Some(DataType::Struct(fields)) => {
                 fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
             }
@@ -587,7 +587,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection: self.projection,
             selection: self.selection,
             schema,
-            reader_factory: Some(reader),
+            reader_factory: Some(reader_factory),
             state: StreamState::Init,
         })
     }
