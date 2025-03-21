@@ -75,7 +75,9 @@ impl FileEncryptionProperties {
     }
 
     /// Retrieval of key used for encryption of footer and (possibly) columns
-    pub fn footer_key(&self) -> &Vec<u8> { self.footer_key.key.as_ref() }
+    pub fn footer_key(&self) -> &Vec<u8> {
+        self.footer_key.key.as_ref()
+    }
 
     /// Get the column names, keys, and metadata used in column_keys
     pub fn column_keys(&self) -> (Vec<String>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
@@ -165,7 +167,6 @@ impl EncryptionPropertiesBuilder {
         self.encrypt_footer = !plaintext_footer;
         self
     }
-
 
     /// Set retrieval metadata of key used for encryption of footer and (possibly) columns
     pub fn with_footer_key_metadata(mut self, metadata: Vec<u8>) -> Self {
