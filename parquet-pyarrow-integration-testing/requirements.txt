@@ -1,0 +1,5 @@
+maturin
+toml
+pytest
+pyarrow
+pycryptodome

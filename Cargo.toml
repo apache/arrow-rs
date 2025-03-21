@@ -57,6 +57,7 @@ exclude = [
     # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
     # scratch this way, this is a stand-alone package that compiles independently of the others.
     "arrow-pyarrow-integration-testing",
+    "parquet-pyarrow-integration-testing",
 ]
 
 [workspace.package]

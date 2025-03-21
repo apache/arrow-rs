@@ -24,5 +24,5 @@ mod key_unwrapper;
 mod key_wrapper;
 pub mod kms;
 mod kms_manager;
-#[cfg(test)]
-mod test_kms;
+#[cfg(any(test, feature = "test_common"))]
+pub mod test_kms;
