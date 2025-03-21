@@ -476,6 +476,67 @@ mod tests {
     }
 
     #[test]
+    fn test_kms_client_expiration() {
+        let kms_config = Arc::new(KmsConnectionConfig::default());
+        let config = DecryptionConfiguration::builder()
+            .set_cache_lifetime(Some(Duration::from_secs(600)))
+            .build();
+
+        let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
+        let crypto_factory = CryptoFactory::new(kms_factory.clone());
+        let decryption_props = crypto_factory
+            .file_decryption_properties(kms_config.clone(), config)
+            .unwrap();
+
+        let dek = "1234567890123450".as_bytes().to_vec();
+        let kms = TestKmsClientFactory::with_default_keys()
+            .create_client(&Default::default())
+            .unwrap();
+
+        let wrapped_key = kms.wrap_key(&dek, "kc1").unwrap();
+        let key_material = KeyMaterialBuilder::for_column_key()
+            .with_single_wrapped_key("kc1".to_owned(), wrapped_key)
+            .build()
+            .unwrap();
+        let serialized_key_material = key_material.serialize().unwrap();
+
+        let time_controller =
+            crate::encryption::key_management::kms_manager::mock_time::time_controller();
+
+        assert_eq!(0, kms_factory.invocations().len());
+
+        let do_key_retrieval = || {
+            decryption_props
+                .footer_key(Some(serialized_key_material.as_bytes()))
+                .unwrap()
+                .into_owned();
+        };
+
+        do_key_retrieval();
+        assert_eq!(1, kms_factory.invocations().len());
+
+        time_controller.advance(Duration::from_secs(599));
+
+        do_key_retrieval();
+        assert_eq!(1, kms_factory.invocations().len());
+
+        time_controller.advance(Duration::from_secs(1));
+
+        do_key_retrieval();
+        assert_eq!(2, kms_factory.invocations().len());
+
+        time_controller.advance(Duration::from_secs(599));
+
+        do_key_retrieval();
+        assert_eq!(2, kms_factory.invocations().len());
+
+        time_controller.advance(Duration::from_secs(1));
+
+        do_key_retrieval();
+        assert_eq!(3, kms_factory.invocations().len());
+    }
+
+    #[test]
     fn test_round_trip_double_wrapping_properties() {
         round_trip_encryption_properties(true);
     }

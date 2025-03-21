@@ -101,14 +101,14 @@ impl<TValue> ExpiringCacheValue<TValue> {
     pub fn new(value: TValue, cache_duration: Option<Duration>) -> Self {
         Self {
             value,
-            expiration_time: cache_duration.map(|d| Instant::now() + d),
+            expiration_time: cache_duration.map(|d| now() + d),
         }
     }
 
     pub fn is_valid(&self) -> bool {
         match self.expiration_time {
             None => true,
-            Some(expiration_time) => Instant::now() < expiration_time,
+            Some(expiration_time) => now() < expiration_time,
         }
     }
 }
@@ -121,7 +121,7 @@ where
     pub fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::default()),
-            last_cleanup: Mutex::new(Instant::now()),
+            last_cleanup: Mutex::new(now()),
         }
     }
 
@@ -180,7 +180,7 @@ where
             if last_cleanup.elapsed() < cleanup_interval {
                 return;
             }
-            *last_cleanup = Instant::now();
+            *last_cleanup = now();
         }
 
         let mut cache = self.cache.lock().unwrap();
@@ -217,5 +217,60 @@ struct KekCacheKey {
 impl KekCacheKey {
     pub fn new(key_access_token: String) -> Self {
         Self { key_access_token }
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn now() -> Instant {
+    Instant::now()
+}
+
+#[cfg(test)]
+fn now() -> Instant {
+    mock_time::now()
+}
+
+#[cfg(test)]
+/// Allows controlling the time returned by now() for testing cache behaviour
+pub mod mock_time {
+    use std::sync::{Mutex, MutexGuard};
+    use std::time::{Duration, Instant};
+
+    static MOCK_NOW: Mutex<Option<Instant>> = Mutex::new(None);
+
+    // Mutex to prevent multiple tests controlling time concurrently
+    static CONTROL_MUTEX: Mutex<()> = Mutex::new(());
+
+    pub struct TimeController {
+        _control_guard: MutexGuard<'static, ()>,
+    }
+
+    impl TimeController {
+        /// Advance the time returned by now by the specified duration
+        pub fn advance(&self, duration: Duration) {
+            let mut now_lock = MOCK_NOW.lock().unwrap();
+            if let Some(now) = &mut *now_lock {
+                *now += duration;
+            }
+        }
+    }
+
+    /// Get the current time
+    pub fn now() -> Instant {
+        let now_lock = MOCK_NOW.lock().unwrap();
+        now_lock.unwrap_or_else(Instant::now)
+    }
+
+    /// Get a [`TimeController`] that can be used to advance the time in a test
+    pub fn time_controller() -> TimeController {
+        {
+            let mut now_guard = MOCK_NOW.lock().unwrap();
+            *now_guard = Some(Instant::now());
+        }
+        let control_guard = CONTROL_MUTEX.lock().unwrap();
+        TimeController {
+            _control_guard: control_guard,
+        }
     }
 }
