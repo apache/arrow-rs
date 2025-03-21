@@ -621,4 +621,87 @@ mod tests {
             assert_eq!(5, kms_factory.keys_unwrapped());
         }
     }
+
+    #[test]
+    fn test_key_encryption_key_caching() {
+        let kms_config = Arc::new(KmsConnectionConfig::default());
+        let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
+            .set_double_wrapping(true)
+            .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])
+            .add_column_key("kc2".to_owned(), vec!["x2".to_owned(), "x3".to_owned()])
+            .build();
+
+        let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
+        let crypto_factory = CryptoFactory::new(kms_factory.clone());
+
+        let file_encryption_properties = crypto_factory
+            .file_encryption_properties(kms_config.clone(), &encryption_config)
+            .unwrap();
+
+        let footer_key_metadata = file_encryption_properties.footer_key_metadata().cloned();
+
+        // Key-encryption keys are cached for the lifetime of file decryption properties,
+        // and when creating new file decryption properties, a previous key-encryption key cache
+        // may be reused if the cache lifetime hasn't expired and the KMS access token is the same.
+
+        let get_new_decryption_properties = || {
+            let decryption_config = DecryptionConfiguration::builder()
+                .set_cache_lifetime(Some(Duration::from_secs(600)))
+                .build();
+            crypto_factory
+                .file_decryption_properties(kms_config.clone(), decryption_config)
+                .unwrap()
+        };
+
+        let retrieve_key = |props: &FileDecryptionProperties| {
+            props.footer_key(footer_key_metadata.as_deref()).unwrap();
+        };
+
+        let time_controller =
+            crate::encryption::key_management::kms_manager::mock_time::time_controller();
+
+        assert_eq!(0, kms_factory.keys_unwrapped());
+
+        {
+            let props = get_new_decryption_properties();
+            retrieve_key(&props);
+            time_controller.advance(Duration::from_secs(599));
+            retrieve_key(&props);
+            assert_eq!(1, kms_factory.keys_unwrapped());
+        }
+        {
+            let props = get_new_decryption_properties();
+            retrieve_key(&props);
+            assert_eq!(1, kms_factory.keys_unwrapped());
+            time_controller.advance(Duration::from_secs(1));
+            retrieve_key(&props);
+            // Cache lifetime has expired but the key unwrapper still holds the
+            // key encryption key cache.
+            assert_eq!(1, kms_factory.keys_unwrapped());
+        }
+        {
+            let props = get_new_decryption_properties();
+            retrieve_key(&props);
+            // Newly created decryption properties use a new key encryption key cache
+            assert_eq!(2, kms_factory.keys_unwrapped());
+        }
+        {
+            time_controller.advance(Duration::from_secs(599));
+            // Creating new decryption properties should re-use the more recent cache
+            let props1 = get_new_decryption_properties();
+            retrieve_key(&props1);
+            assert_eq!(2, kms_factory.keys_unwrapped());
+
+            kms_config.refresh_key_access_token("new_secret".to_owned());
+            // Creating decryption properties with a different access key should require
+            // creating a new key encryption key cache.
+            let props2 = get_new_decryption_properties();
+            retrieve_key(&props2);
+            assert_eq!(3, kms_factory.keys_unwrapped());
+
+            // But the cache used by older file encryption properties is still usable.
+            retrieve_key(&props1);
+            assert_eq!(3, kms_factory.keys_unwrapped());
+        }
+    }
 }
