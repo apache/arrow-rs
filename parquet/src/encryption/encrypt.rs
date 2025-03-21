@@ -107,19 +107,19 @@ impl FileEncryptionProperties {
         &self,
         schema: &SchemaDescriptor,
     ) -> std::result::Result<(), ParquetError> {
-        let schema_columns = schema
+        let column_names = schema
             .columns()
             .iter()
-            .map(|c| c.path().string())
+            .map(|c| c.path().parts()[0].to_string())
             .collect::<HashSet<_>>();
         let encryption_columns = self
             .column_keys
             .keys()
             .cloned()
             .collect::<HashSet<String>>();
-        if !encryption_columns.is_subset(&schema_columns) {
+        if !encryption_columns.is_subset(&column_names) {
             let mut columns_missing_in_schema = encryption_columns
-                .difference(&schema_columns)
+                .difference(&column_names)
                 .cloned()
                 .collect::<Vec<String>>();
             columns_missing_in_schema.sort();
