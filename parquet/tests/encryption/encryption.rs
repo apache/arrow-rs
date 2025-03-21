@@ -551,7 +551,7 @@ fn test_write_encrypted_column_non_uniform() {
     let struct_array_data = Arc::new(struct_array);
 
     let schema = Arc::new(Schema::new(vec![Field::new(
-        "struct",
+        ".struct.",
         struct_array_data.data_type().clone(),
         true,
     )]));
@@ -564,7 +564,7 @@ fn test_write_encrypted_column_non_uniform() {
     let footer_key = b"0123456789012345".to_vec();
     let column_key = b"1234567890123450".to_vec();
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-        .with_column_key("struct", column_key.clone())
+        .with_column_key(".struct.", column_key.clone())
         .build()
         .unwrap();
 
@@ -579,7 +579,7 @@ fn test_write_encrypted_column_non_uniform() {
     writer.close().unwrap();
 
     let decryption_properties = FileDecryptionProperties::builder(footer_key)
-        .with_column_key("struct", column_key.clone())
+        .with_column_key(".struct.", column_key.clone())
         .build()
         .unwrap();
     let options = ArrowReaderOptions::default()
