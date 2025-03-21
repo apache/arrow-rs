@@ -464,6 +464,7 @@ pub(crate) fn decode_page(
                     uncompressed_size
                 ));
             }
+
             Bytes::from(decompressed)
         }
         _ => buffer,
