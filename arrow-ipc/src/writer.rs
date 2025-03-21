@@ -3142,14 +3142,74 @@ mod tests {
 
         // Test a variety of combinations that include 0 and non-zero offsets
         // and also portions or the rest of the array
-        test_subarray(&array, &schema, 0, 1)?;
-        test_subarray(&array, &schema, 0, 2)?;
-        test_subarray(&array, &schema, 1, 1)?;
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
 
         Ok(())
     }
 
-    fn test_subarray(
+    #[test]
+    fn test_roundtrip_list_of_fixed_list_w_nulls() -> Result<(), ArrowError> {
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3);
+        let mut l2_builder = ListBuilder::new(l1_builder);
+
+        for point in [
+            [Some(1.0), Some(2.0), None],
+            [Some(4.0), Some(5.0), Some(6.0)],
+            [None, Some(8.0), Some(9.0)],
+        ] {
+            for p in point {
+                match p {
+                    Some(p) => l2_builder.values().values().append_value(p),
+                    None => l2_builder.values().values().append_null(),
+                }
+            }
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let point = [Some(10.), None, None];
+        for p in point {
+            match p {
+                Some(p) => l2_builder.values().values().append_value(p),
+                None => l2_builder.values().values().append_null(),
+            }
+        }
+
+        l2_builder.values().append(true);
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Float32, true)),
+                        3,
+                    ),
+                    true,
+                ))),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
+
+        Ok(())
+    }
+
+    fn test_slices(
         parent_array: &ArrayRef,
         schema: &SchemaRef,
         offset: usize,
@@ -3198,10 +3258,10 @@ mod tests {
 
         // Test a variety of combinations that include 0 and non-zero offsets
         // and also portions or the rest of the array
-        test_subarray(&array, &schema, 0, 4)?;
-        test_subarray(&array, &schema, 0, 2)?;
-        test_subarray(&array, &schema, 1, 3)?;
-        test_subarray(&array, &schema, 2, 1)?;
+        test_slices(&array, &schema, 0, 4)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 3)?;
+        test_slices(&array, &schema, 2, 1)?;
 
         Ok(())
     }
