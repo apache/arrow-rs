@@ -309,7 +309,7 @@ impl FlightSqlServiceClient<Channel> {
         let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream.map_err(FlightError::Tonic),
+            response_stream.map_err(|status| status.into()),
         )
         .with_headers(md)
         .with_trailers(trailers))
