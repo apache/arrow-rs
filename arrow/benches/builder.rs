@@ -126,7 +126,7 @@ fn bench_decimal128(c: &mut Criterion) {
 }
 
 fn bench_decimal256(c: &mut Criterion) {
-    c.bench_function("bench_decimal128_builder", |b| {
+    c.bench_function("bench_decimal256_builder", |b| {
         b.iter(|| {
             let mut rng = rand::thread_rng();
             let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);

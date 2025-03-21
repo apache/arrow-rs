@@ -23,7 +23,7 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::TokenCredentialProvider;
+use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::prelude::BASE64_STANDARD;
@@ -160,7 +160,7 @@ pub struct AmazonS3Builder {
     /// Copy if not exists
     copy_if_not_exists: Option<ConfigValue<S3CopyIfNotExists>>,
     /// Put precondition
-    conditional_put: Option<ConfigValue<S3ConditionalPut>>,
+    conditional_put: ConfigValue<S3ConditionalPut>,
     /// Ignore tags
     disable_tagging: ConfigValue<bool>,
     /// Encryption (See [`S3EncryptionConfigKey`])
@@ -171,6 +171,8 @@ pub struct AmazonS3Builder {
     encryption_customer_key_base64: Option<String>,
     /// When set to true, charge requester for bucket operations
     request_payer: ConfigValue<bool>,
+    /// The [`HttpConnector`] to use
+    http_connector: Option<Arc<dyn HttpConnector>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -427,7 +429,11 @@ impl AmazonS3Builder {
 
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
-    /// Variables extracted from environment:
+    /// All environment variables starting with `AWS_` will be evaluated. Names must
+    /// match acceptable input to [`AmazonS3ConfigKey::from_str`]. Only upper-case environment
+    /// variables are accepted.
+    ///
+    /// Some examples of variables extracted from environment:
     /// * `AWS_ACCESS_KEY_ID` -> access_key_id
     /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
     /// * `AWS_DEFAULT_REGION` -> region
@@ -435,6 +441,7 @@ impl AmazonS3Builder {
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
+    /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -518,7 +525,7 @@ impl AmazonS3Builder {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
             AmazonS3ConfigKey::ConditionalPut => {
-                self.conditional_put = Some(ConfigValue::Deferred(value.into()))
+                self.conditional_put = ConfigValue::Deferred(value.into())
             }
             AmazonS3ConfigKey::RequestPayer => {
                 self.request_payer = ConfigValue::Deferred(value.into())
@@ -576,9 +583,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
             }
-            AmazonS3ConfigKey::ConditionalPut => {
-                self.conditional_put.as_ref().map(ToString::to_string)
-            }
+            AmazonS3ConfigKey::ConditionalPut => Some(self.conditional_put.to_string()),
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
             AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
             AmazonS3ConfigKey::Encryption(key) => match key {
@@ -820,9 +825,10 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Configure how to provide conditional put operations
+    /// Configure how to provide conditional put operations.
+    /// if not set, the default value will be `S3ConditionalPut::ETagMatch`
     pub fn with_conditional_put(mut self, config: S3ConditionalPut) -> Self {
-        self.conditional_put = Some(config.into());
+        self.conditional_put = config.into();
         self
     }
 
@@ -877,6 +883,14 @@ impl AmazonS3Builder {
         self
     }
 
+    /// The [`HttpConnector`] to use
+    ///
+    /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
+    pub fn with_http_connector<C: HttpConnector>(mut self, connector: C) -> Self {
+        self.http_connector = Some(Arc::new(connector));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -884,11 +898,12 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
+        let http = http_connector(self.http_connector)?;
+
         let bucket = self.bucket_name.ok_or(Error::MissingBucketName)?;
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
         let checksum = self.checksum_algorithm.map(|x| x.get()).transpose()?;
         let copy_if_not_exists = self.copy_if_not_exists.map(|x| x.get()).transpose()?;
-        let put_precondition = self.conditional_put.map(|x| x.get()).transpose()?;
 
         let credentials = if let Some(credentials) = self.credentials {
             credentials
@@ -920,11 +935,7 @@ impl AmazonS3Builder {
             let endpoint = format!("https://sts.{region}.amazonaws.com");
 
             // Disallow non-HTTPs requests
-            let client = self
-                .client_options
-                .clone()
-                .with_allow_http(false)
-                .client()?;
+            let options = self.client_options.clone().with_allow_http(false);
 
             let token = WebIdentityProvider {
                 token_path,
@@ -935,16 +946,19 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                client,
+                http.connect(&options)?,
                 self.retry_config.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
             info!("Using Task credential provider");
+
+            let options = self.client_options.clone().with_allow_http(true);
+
             Arc::new(TaskCredentialProvider {
                 url: format!("http://169.254.170.2{uri}"),
                 retry: self.retry_config.clone(),
                 // The instance metadata endpoint is access over HTTP
-                client: self.client_options.clone().with_allow_http(true).client()?,
+                client: http.connect(&options)?,
                 cache: Default::default(),
             }) as _
         } else {
@@ -959,7 +973,7 @@ impl AmazonS3Builder {
 
             Arc::new(TokenCredentialProvider::new(
                 token,
-                self.client_options.metadata_client()?,
+                http.connect(&self.client_options.metadata_options())?,
                 self.retry_config.clone(),
             )) as _
         };
@@ -981,7 +995,7 @@ impl AmazonS3Builder {
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
                         },
-                        self.client_options.client()?,
+                        http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )
                     .with_min_ttl(Duration::from_secs(60)), // Credentials only valid for 5 minutes
@@ -1029,12 +1043,13 @@ impl AmazonS3Builder {
             disable_tagging: self.disable_tagging.get()?,
             checksum,
             copy_if_not_exists,
-            conditional_put: put_precondition,
+            conditional_put: self.conditional_put.get()?,
             encryption_headers,
             request_payer: self.request_payer.get()?,
         };
 
-        let client = Arc::new(S3Client::new(config)?);
+        let http_client = http.connect(&config.client_options)?;
+        let client = Arc::new(S3Client::new(config, http_client));
 
         Ok(AmazonS3 { client })
     }

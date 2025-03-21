@@ -235,13 +235,13 @@ impl ObjectStore for InMemory {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        let entry = self.entry(location).await?;
+        let entry = self.entry(location)?;
         let e_tag = entry.e_tag.to_string();
 
         let meta = ObjectMeta {
             location: location.clone(),
             last_modified: entry.last_modified,
-            size: entry.data.len(),
+            size: entry.data.len() as u64,
             e_tag: Some(e_tag),
             version: None,
         };
@@ -250,11 +250,14 @@ impl ObjectStore for InMemory {
         let (range, data) = match options.range {
             Some(range) => {
                 let r = range
-                    .as_range(entry.data.len())
+                    .as_range(entry.data.len() as u64)
                     .map_err(|source| Error::Range { source })?;
-                (r.clone(), entry.data.slice(r))
+                (
+                    r.clone(),
+                    entry.data.slice(r.start as usize..r.end as usize),
+                )
             }
-            None => (0..entry.data.len(), entry.data),
+            None => (0..entry.data.len() as u64, entry.data),
         };
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
 
@@ -266,27 +269,38 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn get_ranges(&self, location: &Path, ranges: &[Range<usize>]) -> Result<Vec<Bytes>> {
-        let entry = self.entry(location).await?;
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        let entry = self.entry(location)?;
         ranges
             .iter()
             .map(|range| {
                 let r = GetRange::Bounded(range.clone())
-                    .as_range(entry.data.len())
+                    .as_range(entry.data.len() as u64)
                     .map_err(|source| Error::Range { source })?;
-
-                Ok(entry.data.slice(r))
+                let r_end = usize::try_from(r.end).map_err(|_e| Error::Range {
+                    source: InvalidGetRange::TooLarge {
+                        requested: r.end,
+                        max: usize::MAX as u64,
+                    },
+                })?;
+                let r_start = usize::try_from(r.start).map_err(|_e| Error::Range {
+                    source: InvalidGetRange::TooLarge {
+                        requested: r.start,
+                        max: usize::MAX as u64,
+                    },
+                })?;
+                Ok(entry.data.slice(r_start..r_end))
             })
             .collect()
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let entry = self.entry(location).await?;
+        let entry = self.entry(location)?;
 
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: entry.last_modified,
-            size: entry.data.len(),
+            size: entry.data.len() as u64,
             e_tag: Some(entry.e_tag.to_string()),
             version: None,
         })
@@ -316,7 +330,7 @@ impl ObjectStore for InMemory {
                 Ok(ObjectMeta {
                     location: key.clone(),
                     last_modified: value.last_modified,
-                    size: value.data.len(),
+                    size: value.data.len() as u64,
                     e_tag: Some(value.e_tag.to_string()),
                     version: None,
                 })
@@ -361,7 +375,7 @@ impl ObjectStore for InMemory {
                 let object = ObjectMeta {
                     location: k.clone(),
                     last_modified: v.last_modified,
-                    size: v.data.len(),
+                    size: v.data.len() as u64,
                     e_tag: Some(v.e_tag.to_string()),
                     version: None,
                 };
@@ -376,7 +390,7 @@ impl ObjectStore for InMemory {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let entry = self.entry(from).await?;
+        let entry = self.entry(from)?;
         self.storage
             .write()
             .insert(to, entry.data, entry.attributes);
@@ -384,7 +398,7 @@ impl ObjectStore for InMemory {
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let entry = self.entry(from).await?;
+        let entry = self.entry(from)?;
         let mut storage = self.storage.write();
         if storage.map.contains_key(to) {
             return Err(Error::AlreadyExists {
@@ -469,7 +483,7 @@ impl InMemory {
         Self { storage }
     }
 
-    async fn entry(&self, location: &Path) -> Result<Entry> {
+    fn entry(&self, location: &Path) -> Result<Entry> {
         let storage = self.storage.read();
         let value = storage
             .map

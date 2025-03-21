@@ -18,8 +18,8 @@
 # under the License.
 #
 
-# This script removes all but the most recent versions of arrow-rs
-# from svn
+# This script removes all RCs and all but the most recent versions of
+# arrow-rs from svn.
 #
 # The older versions are in SVN history as well as available on the
 # archive page https://archive.apache.org/dist/
@@ -29,17 +29,35 @@
 
 set -e
 set -u
+set -o pipefail
 
-svn_base="https://dist.apache.org/repos/dist/release/arrow"
+echo "Remove all RCs"
+dev_base_url=https://dist.apache.org/repos/dist/dev/arrow
+old_rcs=$(
+  svn ls ${dev_base_url}/ | \
+  grep -E '^apache-arrow-rs-[0-9]' | \
+  sort --version-sort
+)
+for old_rc in $old_rcs; do
+  echo "Remove RC: ${old_rc}"
+  svn \
+    delete \
+    -m "Remove old Apache Arrow Rust RC: ${old_rc}" \
+    ${dev_base_url}/${old_rc}
+done
 
 echo "Remove all but the most recent version"
+release_base_url="https://dist.apache.org/repos/dist/release/arrow"
 old_releases=$(
-  svn ls ${svn_base} | \
+  svn ls ${release_base_url} | \
   grep -E '^arrow-rs-[0-9\.]+' | \
   sort --version-sort --reverse | \
   tail -n +2
 )
 for old_release_version in $old_releases; do
-  echo "Remove old release ${old_release_version}"
-  svn delete -m "Removing ${old_release_version}" ${svn_base}/${old_release_version}
+  echo "Remove old release: ${old_release_version}"
+  svn \
+    delete \
+    -m "Remove Apache Arrow Rust release: ${old_release_version}" \
+    ${release_base_url}/${old_release_version}
 done

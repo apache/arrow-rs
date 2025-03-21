@@ -18,6 +18,7 @@
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
+use crate::util::utf8::check_valid_utf8;
 use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
@@ -117,10 +118,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     ///
     /// [`Self::try_push`] can perform this validation check on insertion
     pub fn check_valid_utf8(&self, start_offset: usize) -> Result<()> {
-        match std::str::from_utf8(&self.values.as_slice()[start_offset..]) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
-        }
+        check_valid_utf8(&self.values.as_slice()[start_offset..])
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`

@@ -30,6 +30,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-GH-43605.parquet",
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
+    "ARROW-GH-45185.parquet",
     "README.md",
 ];
 
@@ -117,6 +118,16 @@ fn test_arrow_rs_gh_6229_dict_levels() {
     assert_eq!(
         err.to_string(),
         "External: Parquet argument error: Parquet error: Insufficient repetition levels read from column"
+    );
+}
+
+#[test]
+#[cfg(feature = "snap")]
+fn test_arrow_rs_gh_45185_dict_levels() {
+    let err = read_file("ARROW-GH-45185.parquet").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: first repetition level of batch must be 0"
     );
 }
 

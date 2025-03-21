@@ -37,7 +37,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -135,6 +135,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let mut output_len = 0;
     let mut list_has_nulls = false;
+    let mut list_has_slices = false;
 
     let lists = arrays
         .iter()
@@ -142,6 +143,8 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
         .inspect(|l| {
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
+            list_has_slices |= l.offsets()[0] > OffsetSize::zero()
+                || l.offsets().last().unwrap().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
 
@@ -156,10 +159,23 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
         NullBuffer::new(nulls.finish())
     });
 
-    let values: Vec<&dyn Array> = lists
-        .iter()
-        .map(|x| x.values().as_ref())
-        .collect::<Vec<_>>();
+    // If any of the lists have slices, we need to slice the values
+    // to ensure that the offsets are correct
+    let mut sliced_values;
+    let values: Vec<&dyn Array> = if list_has_slices {
+        sliced_values = Vec::with_capacity(lists.len());
+        for l in &lists {
+            // if the first offset is non-zero, we need to slice the values so when
+            // we concatenate them below only the relevant values are included
+            let offsets = l.offsets();
+            let start_offset = offsets[0].as_usize();
+            let end_offset = offsets.last().unwrap().as_usize();
+            sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
+        }
+        sliced_values.iter().map(|a| a.as_ref()).collect()
+    } else {
+        lists.iter().map(|x| x.values().as_ref()).collect()
+    };
 
     let concatenated_values = concat(values.as_slice())?;
 
@@ -207,9 +223,35 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
-        return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to concatenate arrays of different data types.".to_string(),
-        ));
+        // Create error message with up to 10 unique data types in the order they appear
+        let error_message = {
+            // 10 max unique data types to print and another 1 to know if there are more
+            let mut unique_data_types = HashSet::with_capacity(11);
+
+            let mut error_message =
+                format!("It is not possible to concatenate arrays of different data types ({d}");
+            unique_data_types.insert(d);
+
+            for array in arrays {
+                let is_unique = unique_data_types.insert(array.data_type());
+
+                if unique_data_types.len() == 11 {
+                    error_message.push_str(", ...");
+                    break;
+                }
+
+                if is_unique {
+                    error_message.push_str(", ");
+                    error_message.push_str(&array.data_type().to_string());
+                }
+            }
+
+            error_message.push_str(").");
+
+            error_message
+        };
+
+        return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
     match d {
@@ -324,9 +366,87 @@ mod tests {
     fn test_concat_incompatible_datatypes() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
             &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
-        assert!(re.is_err());
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
+    }
+
+    #[test]
+    fn test_concat_10_incompatible_datatypes_should_include_all_of_them() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32).");
+    }
+
+    #[test]
+    fn test_concat_11_incompatible_datatypes_should_only_include_10() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+    }
+
+    #[test]
+    fn test_concat_13_incompatible_datatypes_should_not_include_all_of_them() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float16Type>::new_null(3),
+            &BooleanArray::from(vec![Some(true), Some(false), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
     }
 
     #[test]
@@ -457,6 +577,66 @@ mod tests {
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
         let expected = list1.into_iter().chain(list2).chain(list3);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_slices() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]),
+            Some(vec![]), // In slice
+            None,         // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(1, 2);
+        let list1_values = list1.into_iter().skip(1).take(2);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is non zero
+        assert!(list1_array.offsets()[0].as_usize() > 0);
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_sliced_lengths() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]), // In slice
+            Some(vec![]),                                        // In slice
+            None,                                                // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(0, 3); // no offset, but not all values
+        let list1_values = list1.into_iter().take(3);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is zero, but the
+        // last offset doesn't cover the entire array
+        assert_eq!(list1_array.offsets()[0].as_usize(), 0);
+        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
@@ -664,6 +844,24 @@ mod tests {
     }
 
     #[test]
+    fn test_string_dictionary_array_nulls_in_values() {
+        let input_1_keys = Int32Array::from_iter_values([0, 2, 1, 3]);
+        let input_1_values = StringArray::from(vec![Some("foo"), None, Some("bar"), Some("fiz")]);
+        let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+
+        let input_2_keys = Int32Array::from_iter_values([0]);
+        let input_2_values = StringArray::from(vec![None, Some("hello")]);
+        let input_2 = DictionaryArray::new(input_2_keys, Arc::new(input_2_values));
+
+        let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
+
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_string_dictionary_merge() {
         let mut builder = StringDictionaryBuilder::<Int32Type>::new();
         for i in 0..20 {
@@ -830,7 +1028,7 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types.");
+        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
     }
 
     #[test]

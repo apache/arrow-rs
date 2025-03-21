@@ -19,6 +19,9 @@
 
 pub(crate) mod backoff;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod dns;
+
 #[cfg(test)]
 pub(crate) mod mock_server;
 
@@ -40,18 +43,30 @@ pub(crate) mod header;
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) mod s3;
 
+mod body;
+pub use body::{HttpRequest, HttpRequestBody, HttpResponse, HttpResponseBody};
+
+pub(crate) mod builder;
+
+mod connection;
+pub(crate) use connection::http_connector;
+#[cfg(not(target_arch = "wasm32"))]
+pub use connection::ReqwestConnector;
+pub use connection::{HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpService};
+
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) mod parts;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Client, ClientBuilder, NoProxy, Proxy, RequestBuilder};
-use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::{NoProxy, Proxy};
 
 use crate::config::{fmt_duration, ConfigValue};
 use crate::path::Path;
@@ -110,6 +125,10 @@ pub enum ClientConfigKey {
     ProxyCaCertificate,
     /// List of hosts that bypass proxy
     ProxyExcludes,
+    /// Randomize order addresses that the DNS resolution yields.
+    ///
+    /// This will spread the connections accross more servers.
+    RandomizeAddresses,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
@@ -137,6 +156,7 @@ impl AsRef<str> for ClientConfigKey {
             Self::ProxyUrl => "proxy_url",
             Self::ProxyCaCertificate => "proxy_ca_certificate",
             Self::ProxyExcludes => "proxy_excludes",
+            Self::RandomizeAddresses => "randomize_addresses",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
         }
@@ -163,6 +183,7 @@ impl FromStr for ClientConfigKey {
             "proxy_url" => Ok(Self::ProxyUrl),
             "proxy_ca_certificate" => Ok(Self::ProxyCaCertificate),
             "proxy_excludes" => Ok(Self::ProxyExcludes),
+            "randomize_addresses" => Ok(Self::RandomizeAddresses),
             "timeout" => Ok(Self::Timeout),
             "user_agent" => Ok(Self::UserAgent),
             _ => Err(super::Error::UnknownConfigurationKey {
@@ -178,8 +199,10 @@ impl FromStr for ClientConfigKey {
 /// This is used to configure the client to trust a specific certificate. See
 /// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Certificate(reqwest::tls::Certificate);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Certificate {
     /// Create a `Certificate` from a PEM encoded certificate.
     ///
@@ -226,6 +249,7 @@ impl Certificate {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
+    #[cfg(not(target_arch = "wasm32"))]
     root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
@@ -245,6 +269,7 @@ pub struct ClientOptions {
     http2_max_frame_size: Option<ConfigValue<u32>>,
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
+    randomize_addresses: ConfigValue<bool>,
 }
 
 impl Default for ClientOptions {
@@ -258,6 +283,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
+            #[cfg(not(target_arch = "wasm32"))]
             root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
@@ -280,6 +306,7 @@ impl Default for ClientOptions {
             // https://github.com/apache/arrow-rs/issues/5194
             http1_only: true.into(),
             http2_only: Default::default(),
+            randomize_addresses: true.into(),
         }
     }
 }
@@ -322,6 +349,9 @@ impl ClientOptions {
             ClientConfigKey::ProxyUrl => self.proxy_url = Some(value.into()),
             ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate = Some(value.into()),
             ClientConfigKey::ProxyExcludes => self.proxy_excludes = Some(value.into()),
+            ClientConfigKey::RandomizeAddresses => {
+                self.randomize_addresses.parse(value);
+            }
             ClientConfigKey::Timeout => self.timeout = Some(ConfigValue::Deferred(value.into())),
             ClientConfigKey::UserAgent => {
                 self.user_agent = Some(ConfigValue::Deferred(value.into()))
@@ -358,6 +388,7 @@ impl ClientOptions {
             ClientConfigKey::ProxyUrl => self.proxy_url.clone(),
             ClientConfigKey::ProxyCaCertificate => self.proxy_ca_certificate.clone(),
             ClientConfigKey::ProxyExcludes => self.proxy_excludes.clone(),
+            ClientConfigKey::RandomizeAddresses => Some(self.randomize_addresses.to_string()),
             ClientConfigKey::Timeout => self.timeout.as_ref().map(fmt_duration),
             ClientConfigKey::UserAgent => self
                 .user_agent
@@ -379,6 +410,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self
@@ -579,21 +611,21 @@ impl ClientOptions {
         }
     }
 
-    /// Create a [`Client`] with overrides optimised for metadata endpoint access
+    /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
     #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-    pub(crate) fn metadata_client(&self) -> Result<Client> {
+    pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
             .with_connect_timeout(Duration::from_secs(1))
-            .client()
     }
 
-    pub(crate) fn client(&self) -> Result<Client> {
-        let mut builder = ClientBuilder::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn client(&self) -> Result<reqwest::Client> {
+        let mut builder = reqwest::ClientBuilder::new();
 
         match &self.user_agent {
             Some(user_agent) => builder = builder.user_agent(user_agent.get()?),
@@ -671,9 +703,15 @@ impl ClientOptions {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
-        // Reqwest will remove the `Content-Length` header if it is configured to
-        // transparently decompress the body via the non-default `gzip` feature.
-        builder = builder.no_gzip();
+        // Explicitly disable compression, since it may be automatically enabled
+        // when certain reqwest features are enabled. Compression interferes
+        // with the `Content-Length` header, which is used to determine the
+        // size of objects.
+        builder = builder.no_gzip().no_brotli().no_zstd().no_deflate();
+
+        if self.randomize_addresses.get()? {
+            builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
+        }
 
         builder
             .https_only(!self.allow_http.get()?)
@@ -686,30 +724,43 @@ pub(crate) trait GetOptionsExt {
     fn with_get_options(self, options: GetOptions) -> Self;
 }
 
-impl GetOptionsExt for RequestBuilder {
+impl GetOptionsExt for HttpRequestBuilder {
     fn with_get_options(mut self, options: GetOptions) -> Self {
         use hyper::header::*;
 
-        if let Some(range) = options.range {
+        let GetOptions {
+            if_match,
+            if_none_match,
+            if_modified_since,
+            if_unmodified_since,
+            range,
+            version: _,
+            head: _,
+            extensions,
+        } = options;
+
+        if let Some(range) = range {
             self = self.header(RANGE, range.to_string());
         }
 
-        if let Some(tag) = options.if_match {
+        if let Some(tag) = if_match {
             self = self.header(IF_MATCH, tag);
         }
 
-        if let Some(tag) = options.if_none_match {
+        if let Some(tag) = if_none_match {
             self = self.header(IF_NONE_MATCH, tag);
         }
 
         const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
-        if let Some(date) = options.if_unmodified_since {
+        if let Some(date) = if_unmodified_since {
             self = self.header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
 
-        if let Some(date) = options.if_modified_since {
+        if let Some(date) = if_modified_since {
             self = self.header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
         }
+
+        self = self.extensions(extensions);
 
         self
     }
@@ -758,17 +809,17 @@ mod cloud {
     use crate::client::token::{TemporaryToken, TokenCache};
     use crate::RetryConfig;
 
-    /// A [`CredentialProvider`] that uses [`Client`] to fetch temporary tokens
+    /// A [`CredentialProvider`] that uses [`HttpClient`] to fetch temporary tokens
     #[derive(Debug)]
     pub(crate) struct TokenCredentialProvider<T: TokenProvider> {
         inner: T,
-        client: Client,
+        client: HttpClient,
         retry: RetryConfig,
         cache: TokenCache<Arc<T::Credential>>,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
-        pub(crate) fn new(inner: T, client: Client, retry: RetryConfig) -> Self {
+        pub(crate) fn new(inner: T, client: HttpClient, retry: RetryConfig) -> Self {
             Self {
                 inner,
                 client,
@@ -802,12 +853,13 @@ mod cloud {
 
         async fn fetch_token(
             &self,
-            client: &Client,
+            client: &HttpClient,
             retry: &RetryConfig,
         ) -> Result<TemporaryToken<Arc<Self::Credential>>>;
     }
 }
 
+use crate::client::builder::HttpRequestBuilder;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub(crate) use cloud::*;
 
