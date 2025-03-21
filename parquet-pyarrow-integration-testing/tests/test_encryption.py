@@ -17,6 +17,7 @@
 # under the License.
 
 import base64
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.parquet.encryption as pe
 from Crypto.Cipher import AES
@@ -37,11 +38,40 @@ def test_write_rust_read_python(tmp_path: Path):
     decryption_properties = crypto_factory.file_decryption_properties(
             kms_connection_config, decryption_config)
 
-    parquet_file = pq.ParquetFile(file_path,
-                              decryption_properties=decryption_properties)
+    parquet_file = pq.ParquetFile(
+            file_path, decryption_properties=decryption_properties)
     table = parquet_file.read()
 
     assert len(table) > 0
+
+
+def test_write_python_read_rust(tmp_path: Path):
+    file_path = tmp_path / "test.parquet"
+
+    crypto_factory = pe.CryptoFactory(kms_client_factory)
+
+    kms_connection_config = pe.KmsConnectionConfig()
+    encryption_config = pe.EncryptionConfiguration(
+        footer_key="kf",
+        column_keys={
+            "kc1": ["x"],
+            "kc2": ["y"],
+        })
+    encryption_properties = crypto_factory.file_encryption_properties(
+            kms_connection_config, encryption_config)
+
+    num_rows = 10
+    table = pa.Table.from_pydict({
+        "id": pa.array([i for i in range(num_rows)], type=pa.int32()),
+        "x": pa.array([i / 10.0 for i in range(num_rows)], type=pa.float32()),
+        "y": pa.array([i / 100.0 for i in range(num_rows)], type=pa.float32()),
+    })
+
+    with pq.ParquetWriter(file_path, table.schema,
+                         encryption_properties=encryption_properties) as writer:
+           writer.write_table(table)
+
+    rust.read_encrypted_parquet(file_path.as_posix())
 
 
 class TestKmsClient(pe.KmsClient):
