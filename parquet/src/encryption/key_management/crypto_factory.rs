@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::encryption::decrypt::FileDecryptionProperties;
-use crate::encryption::encrypt::{EncryptionKey, FileEncryptionProperties};
+use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
 use crate::encryption::key_management::key_wrapper::KeyWrapper;
 use crate::encryption::key_management::kms::{KmsClientFactory, KmsConnectionConfig};
@@ -327,19 +327,18 @@ impl CryptoFactory {
             &mut key_wrapper,
         )?;
 
-        let mut builder = FileEncryptionProperties::builder(footer_key.key().clone())
-            .with_footer_key_metadata(
-                footer_key
-                    .key_metadata()
-                    .expect("KMT generated keys must have key metadata")
-                    .clone(),
-            )
+        let mut builder = FileEncryptionProperties::builder(footer_key.key.clone())
+            .with_footer_key_metadata(footer_key.metadata.clone())
             .with_plaintext_footer(encryption_configuration.plaintext_footer);
 
         for (master_key_id, column_paths) in &encryption_configuration.column_keys {
             for column_path in column_paths {
                 let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
-                builder = builder.with_column_key(column_path.clone(), column_key);
+                builder = builder.with_column_key_and_metadata(
+                    column_path,
+                    column_key.key,
+                    column_key.metadata,
+                );
             }
         }
 
@@ -359,13 +358,25 @@ impl CryptoFactory {
         let key_metadata =
             key_wrapper.get_key_metadata(&key, master_key_identifier, is_footer_key)?;
 
-        Ok(EncryptionKey::new(key).with_metadata(key_metadata))
+        Ok(EncryptionKey::new(key, key_metadata))
+    }
+}
+
+struct EncryptionKey {
+    key: Vec<u8>,
+    metadata: Vec<u8>,
+}
+
+impl EncryptionKey {
+    pub fn new(key: Vec<u8>, metadata: Vec<u8>) -> Self {
+        Self { key, metadata }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_type::AsBytes;
     use crate::encryption::key_management::key_material::KeyMaterialBuilder;
     use crate::encryption::key_management::test_kms::TestKmsClientFactory;
 
@@ -379,8 +390,6 @@ mod tests {
             .file_decryption_properties(kms_config, config)
             .unwrap();
 
-        let key_retriever = decryption_props.key_retriever().unwrap();
-
         let expected_dek = "1234567890123450".as_bytes().to_vec();
         let kms = TestKmsClientFactory::with_default_keys()
             .create_client(&Default::default())
@@ -393,9 +402,10 @@ mod tests {
             .unwrap();
         let serialized_key_material = key_material.serialize().unwrap();
 
-        let dek = key_retriever
-            .retrieve_key(serialized_key_material.as_bytes())
-            .unwrap();
+        let dek = decryption_props
+            .footer_key(Some(serialized_key_material.as_bytes()))
+            .unwrap()
+            .into_owned();
 
         assert_eq!(dek, expected_dek);
     }
@@ -422,8 +432,6 @@ mod tests {
             .file_decryption_properties(kms_config.clone(), config)
             .unwrap();
 
-        let key_retriever = decryption_props.key_retriever().unwrap();
-
         let dek = "1234567890123450".as_bytes().to_vec();
         let kms = TestKmsClientFactory::with_default_keys()
             .create_client(&Default::default())
@@ -438,28 +446,32 @@ mod tests {
 
         assert_eq!(0, kms_factory.invocations().len());
 
-        key_retriever
-            .retrieve_key(serialized_key_material.as_bytes())
-            .unwrap();
+        decryption_props
+            .footer_key(Some(serialized_key_material.as_bytes()))
+            .unwrap()
+            .into_owned();
         assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
 
-        key_retriever
-            .retrieve_key(serialized_key_material.as_bytes())
-            .unwrap();
+        decryption_props
+            .footer_key(Some(serialized_key_material.as_bytes()))
+            .unwrap()
+            .into_owned();
         // Same client should have been reused
         assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
 
         kms_config.refresh_key_access_token("super_secret".to_owned());
 
-        key_retriever
-            .retrieve_key(serialized_key_material.as_bytes())
-            .unwrap();
+        decryption_props
+            .footer_key(Some(serialized_key_material.as_bytes()))
+            .unwrap()
+            .into_owned();
         // New key access token should have been used
         assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
 
-        key_retriever
-            .retrieve_key(serialized_key_material.as_bytes())
-            .unwrap();
+        decryption_props
+            .footer_key(Some(serialized_key_material.as_bytes()))
+            .unwrap()
+            .into_owned();
         assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
     }
 
@@ -507,31 +519,34 @@ mod tests {
         let decryption_properties = crypto_factory
             .file_decryption_properties(kms_config.clone(), Default::default())
             .unwrap();
-        let key_retriever = decryption_properties.key_retriever().unwrap();
 
         assert!(file_encryption_properties.encrypt_footer());
         assert!(file_encryption_properties.aad_prefix().is_none());
         assert_eq!(16, file_encryption_properties.footer_key().len());
 
-        let retrieved_footer_key = key_retriever
-            .retrieve_key(file_encryption_properties.footer_key_metadata().unwrap())
+        let retrieved_footer_key = decryption_properties
+            .footer_key(
+                file_encryption_properties
+                    .footer_key_metadata()
+                    .map(|k| k.as_bytes()),
+            )
             .unwrap();
         assert_eq!(
-            &file_encryption_properties.footer_key(),
-            &retrieved_footer_key
+            file_encryption_properties.footer_key(),
+            retrieved_footer_key.as_slice()
         );
 
         let column_keys = file_encryption_properties.column_keys();
         let mut all_columns: Vec<String> = column_keys.keys().cloned().collect();
         all_columns.sort();
         assert_eq!(vec!["x0", "x1", "x2", "x3"], all_columns);
-        for (_, column_key) in column_keys.iter() {
+        for (column_name, column_key) in column_keys.iter() {
             assert_eq!(16, column_key.key().len());
 
-            let retrieved_key = key_retriever
-                .retrieve_key(column_key.key_metadata().unwrap())
+            let retrieved_key = decryption_properties
+                .column_key(column_name, column_key.key_metadata().map(|k| k.as_bytes()))
                 .unwrap();
-            assert_eq!(column_key.key(), &retrieved_key);
+            assert_eq!(column_key.key(), retrieved_key.as_slice());
         }
 
         assert_eq!(1, kms_factory.invocations().len());

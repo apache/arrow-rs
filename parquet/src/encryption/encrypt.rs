@@ -28,7 +28,7 @@ use std::io::Write;
 use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
-struct EncryptionKey {
+pub(crate) struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
 }
@@ -46,11 +46,12 @@ impl EncryptionKey {
         self
     }
 
-    fn key(&self) -> &Vec<u8> {
+    pub fn key(&self) -> &Vec<u8> {
         &self.key
     }
 
-    pub fn key_metadata(&self) -> Option<&Vec<u8>> {
+    #[cfg(test)]
+    pub(crate) fn key_metadata(&self) -> Option<&Vec<u8>> {
         self.key_metadata.as_ref()
     }
 }
@@ -147,12 +148,12 @@ impl FileEncryptionProperties {
     }
 
     #[cfg(test)]
-    pub fn footer_key(&self) -> &[u8] {
+    pub(crate) fn footer_key(&self) -> &[u8] {
         &self.footer_key.key
     }
 
     #[cfg(test)]
-    pub fn column_keys(&self) -> &HashMap<String, EncryptionKey> {
+    pub(crate) fn column_keys(&self) -> &HashMap<String, EncryptionKey> {
         &self.column_keys
     }
 
