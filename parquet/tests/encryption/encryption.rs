@@ -22,7 +22,7 @@ use crate::encryption_util::verify_encryption_test_data;
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
-use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema};
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
@@ -527,13 +527,22 @@ fn test_write_encrypted_column() {
 
 #[test]
 fn test_write_encrypted_column_non_uniform() {
-    let struct_array_data = crate::struct_array(vec![
-        (Some(1), Some(6.0), Some(12.0)),
-        (Some(2), Some(8.5), None),
-        (None, Some(8.5), Some(14.0)),
+    let int_32: Int32Array = [Some(1), Some(6)].iter().collect();
+    let float_64: Float64Array = [None, Some(8.5)].iter().collect();
+    let struct_array = StructArray::from(vec![
+        (
+            Arc::new(Field::new("int64_col", DataType::Int32, true)),
+            Arc::new(int_32) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("float64_col", DataType::Float64, true)),
+            Arc::new(float_64) as ArrayRef,
+        ),
     ]);
+    let struct_array_data = Arc::new(struct_array);
+
     let schema = Arc::new(Schema::new(vec![Field::new(
-        "struct.",
+        "struct",
         struct_array_data.data_type().clone(),
         true,
     )]));
@@ -546,7 +555,7 @@ fn test_write_encrypted_column_non_uniform() {
     let footer_key = b"0123456789012345".to_vec();
     let column_key = b"1234567890123450".to_vec();
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-        .with_column_key("struct.", column_key.clone())
+        .with_column_key("struct", column_key.clone())
         .build();
 
     let props = builder
@@ -560,7 +569,7 @@ fn test_write_encrypted_column_non_uniform() {
     writer.close().unwrap();
 
     let decryption_properties = FileDecryptionProperties::builder(footer_key)
-        .with_column_key("struct.", column_key.clone())
+        .with_column_key("struct", column_key.clone())
         .build()
         .unwrap();
     let options = ArrowReaderOptions::default()
