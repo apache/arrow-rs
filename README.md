@@ -32,16 +32,14 @@ This repository contains the following crates:
 
 The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
 
-Note: previously the [`object-store`] crate was also part of this repository,
+Note: previously the [`object_store`] crate was also part of this repository,
 but it has been moved to the [arrow-rs-object-store repository]
-
 
 [apache arrow]: https://arrow.apache.org/
 [`arrow`]: https://crates.io/crates/arrow
 [`parquet`]: https://crates.io/crates/parquet
 [`parquet_derive`]: https://crates.io/crates/parquet-derive
 [`arrow-flight`]: https://crates.io/crates/arrow-flight
-[`object-store`]: https://crates.io/crates/object-store
 [arrow-rs-object-store repository]: https://github.com/apache/arrow-rs-object-store
 
 ## Release Versioning and Schedule
@@ -115,16 +113,18 @@ maintainers.
 
 There are several related crates in different repositories
 
-| Crate                    | Description                                 | Documentation                           |
-| ------------------------ | ------------------------------------------- | --------------------------------------- |
-| [`datafusion`]           | In-memory query engine with SQL support     | [(README)][datafusion-readme]           |
-| [`ballista`]             | Distributed query execution                 | [(README)][ballista-readme]             |
-| [`parquet_opendal`]      | Use [`opendal`] for [`parquet`] Arrow IO    | [(README)][parquet_opendal-readme]      |
+| Crate               | Description                                                  | Documentation                      |
+| ------------------- | ------------------------------------------------------------ | ---------------------------------- |
+| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)](object_store-readme)    |
+| [`datafusion`]      | In-memory query engine with SQL support                      | [(README)][datafusion-readme]      |
+| [`ballista`]        | Distributed query execution                                  | [(README)][ballista-readme]        |
+| [`parquet_opendal`] | Use [`opendal`] for [`parquet`] Arrow IO                     | [(README)][parquet_opendal-readme] |
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
 [`parquet_opendal`]: https://crates.io/crates/parquet_opendal
 [parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
+[object_store-readme]: https://github.com/apache/arrow-rs-object-store/blob/main/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
@@ -158,6 +158,7 @@ For design discussions we generally use GitHub issues.
 There is more information in the [contributing] guide.
 
 [rust]: https://www.rust-lang.org/
+[`object_store`]: https://crates.io/crates/object-store
 [arrow-readme]: arrow/README.md
 [contributing]: CONTRIBUTING.md
 [parquet-readme]: parquet/README.md
