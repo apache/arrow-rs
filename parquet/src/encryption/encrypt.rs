@@ -85,7 +85,6 @@ impl FileEncryptionProperties {
     }
 
     /// Checks if columns that are to be encrypted are present in schema
-    #[cfg(feature = "encryption")]
     pub(crate) fn validate_encrypted_column_names(
         &self,
         schema: &SchemaDescriptor,
