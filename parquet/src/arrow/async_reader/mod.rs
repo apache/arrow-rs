@@ -587,7 +587,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection: self.projection,
             selection: self.selection,
             schema,
-            reader: Some(reader),
+            reader_factory: Some(reader),
             state: StreamState::Init,
         })
     }
@@ -780,7 +780,7 @@ pub struct ParquetRecordBatchStream<T> {
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
-    reader: Option<ReaderFactory<T>>,
+    reader_factory: Option<ReaderFactory<T>>,
 
     state: StreamState<T>,
 }
@@ -842,7 +842,7 @@ where
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
 
-                    let reader_factory = self.reader.take().expect("lost reader");
+                    let reader_factory = self.reader_factory.take().expect("lost reader");
 
                     let (reader_factory, maybe_reader) = reader_factory
                         .read_row_group(
@@ -856,7 +856,7 @@ where
                             self.state = StreamState::Error;
                             err
                         })?;
-                    self.reader = Some(reader_factory);
+                    self.reader_factory = Some(reader_factory);
 
                     if let Some(reader) = maybe_reader {
                         return Ok(Some(reader));
@@ -891,7 +891,10 @@ where
                     None => {
                         // this is ugly, but works for now.
                         let filter = batch_reader.take_filter();
-                        self.reader.as_mut().unwrap().filter = filter;
+                        let Some(reader_factory) = self.reader_factory.as_mut() else {
+                            return Poll::Ready(Some(Err(ParquetError::General("Internal: Unexpected state".into()))))
+                        };
+                        reader_factory.filter = filter;
                         self.state = StreamState::Init
                     }
                 },
@@ -901,7 +904,7 @@ where
                         None => return Poll::Ready(None),
                     };
 
-                    let reader = self.reader.take().expect("lost reader");
+                    let reader = self.reader_factory.take().expect("lost reader");
 
                     let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
 
@@ -920,7 +923,7 @@ where
                 }
                 StreamState::Reading(f) => match ready!(f.poll_unpin(cx)) {
                     Ok((reader_factory, maybe_reader)) => {
-                        self.reader = Some(reader_factory);
+                        self.reader_factory = Some(reader_factory);
                         match maybe_reader {
                             // Read records from [`ParquetRecordBatchReader`]
                             Some(reader) => self.state = StreamState::Decoding(reader),
