@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use rand::distributions::uniform::SampleRange;
-use rand::{distributions::uniform::SampleUniform, Rng};
+use crate::util::rand::distributions::uniform::SampleRange;
+use crate::util::rand::{distributions::uniform::SampleUniform, Rng};
 
 use crate::array::*;
 use crate::error::{ArrowError, Result};
