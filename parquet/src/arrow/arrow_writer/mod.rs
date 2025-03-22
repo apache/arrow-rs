@@ -532,6 +532,7 @@ impl ArrowColumnChunk {
 /// Note: This is a low-level interface for applications that require fine-grained control
 /// of encoding, see [`ArrowWriter`] for a higher-level interface
 ///
+/// # Example: Encoding two Arrow Array's in Parallel
 /// ```
 /// // The arrow schema
 /// # use std::sync::Arc;

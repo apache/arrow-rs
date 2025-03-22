@@ -22,7 +22,12 @@
 //! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
 //! in-memory data.
 //!
-//!# Example of writing Arrow record batch to Parquet file
+//! Note: see the [`ArrowColumnWriter`] for a low level API  that supports
+//! writing columns within the same row group with multiple threads.
+//!
+//! [`ArrowColumnWriter`]: arrow_writer::ArrowColumnWriter
+//!
+//! # Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
