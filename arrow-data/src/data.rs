@@ -1018,7 +1018,7 @@ impl ArrayData {
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, list_size, list_size, self.data_type
+                        values_data.len, self.len, list_size, self.data_type
                     )));
                 }
 
