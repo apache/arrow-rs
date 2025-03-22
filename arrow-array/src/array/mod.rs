@@ -827,6 +827,8 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             dt => panic!("Unexpected data type for run_ends array {dt:?}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
+        DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
+        DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {dt:?}"),
