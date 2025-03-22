@@ -891,9 +891,8 @@ where
                     None => {
                         // this is ugly, but works for now.
                         let filter = batch_reader.take_filter();
-                        let Some(reader_factory) = self.reader_factory.as_mut() else {
-                            return Poll::Ready(Some(Err(ParquetError::General("Internal: Unexpected state".into()))))
-                        };
+                        let reader_factory =
+                            self.reader_factory.as_mut().expect("have reader factory");
                         reader_factory.filter = filter;
                         self.state = StreamState::Init
                     }
