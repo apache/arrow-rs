@@ -626,7 +626,9 @@ impl ParquetMetaDataReader {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
-            let meta = fetch.fetch(metadata_start as u64..(file_size - FOOTER_SIZE) as u64).await?;
+            let meta = fetch
+                .fetch(metadata_start as u64..(file_size - FOOTER_SIZE) as u64)
+                .await?;
             Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;

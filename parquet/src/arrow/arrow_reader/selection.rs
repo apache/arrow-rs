@@ -163,7 +163,7 @@ impl RowSelection {
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
     pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<u64>> {
-        let mut ranges:Vec<Range<u64>> = vec![];
+        let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
 
         let mut pages = page_locations.iter().peekable();

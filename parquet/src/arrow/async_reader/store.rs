@@ -151,17 +151,22 @@ impl AsyncFileReader for ParquetObjectReader {
             let usize_range = (range.start as usize)..(range.end as usize);
             store.get_range(path, usize_range)
         })
-
     }
 
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        self.spawn(|store, path| async move {
-            let ranges:Vec<Range<usize>> = ranges.into_iter().map(|r| r.start as usize..r.end as usize).collect();
-            store.get_ranges(path, &ranges).await
-        }.boxed())
+        self.spawn(|store, path| {
+            async move {
+                let ranges: Vec<Range<usize>> = ranges
+                    .into_iter()
+                    .map(|r| r.start as usize..r.end as usize)
+                    .collect();
+                store.get_ranges(path, &ranges).await
+            }
+            .boxed()
+        })
     }
 
     // This method doesn't directly call `self.spawn` because all of the IO that is done down the

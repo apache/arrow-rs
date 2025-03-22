@@ -166,9 +166,7 @@ impl InMemoryRowGroup {
         for (leaf_idx, meta) in self.metadata.columns().iter().enumerate() {
             if self.mask.leaf_included(leaf_idx) {
                 let (start, len) = meta.byte_range();
-                let data = reader
-                    .get_bytes(start..(start + len))
-                    .await?;
+                let data = reader.get_bytes(start..(start + len)).await?;
 
                 vs[leaf_idx] = Some(Arc::new(ColumnChunkData {
                     offset: start as usize,

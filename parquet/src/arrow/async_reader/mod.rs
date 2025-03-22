@@ -519,14 +519,14 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice((bitset_offset as usize - offset as  usize)..),
+            Some(_) => buffer.slice((bitset_offset as usize - offset as usize)..),
             None => {
                 let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
                 })?;
                 self.input
                     .0
-                    .get_bytes(bitset_offset ..bitset_offset  + bitset_length)
+                    .get_bytes(bitset_offset..bitset_offset + bitset_length)
                     .await?
             }
         };
@@ -984,7 +984,11 @@ impl InMemoryRowGroup<'_> {
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
                         length: metadata.column(idx).byte_range().1 as usize,
-                        data: offsets.into_iter().map(|x| {x as usize}).zip(chunks.into_iter()).collect(),
+                        data: offsets
+                            .into_iter()
+                            .map(|x| x as usize)
+                            .zip(chunks.into_iter())
+                            .collect(),
                     }))
                 }
             }
@@ -1195,8 +1199,14 @@ mod tests {
     impl AsyncFileReader for TestReader {
         fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
             let range = range.clone();
-            self.requests.lock().unwrap().push(range.start as usize..range.end as usize);
-            futures::future::ready(Ok(self.data.slice(range.start as usize..range.end as usize))).boxed()
+            self.requests
+                .lock()
+                .unwrap()
+                .push(range.start as usize..range.end as usize);
+            futures::future::ready(Ok(self
+                .data
+                .slice(range.start as usize..range.end as usize)))
+            .boxed()
         }
 
         fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
