@@ -57,15 +57,22 @@
 //! The [`arrow`] module allows reading and writing Parquet data to/from Arrow `RecordBatch`.
 //! This makes for a simple and performant interface to parquet data, whilst allowing workloads
 //! to leverage the wide range of data transforms provided by the [arrow] crate, and by the
-//! ecosystem of libraries and services using [Arrow] as an interop format.
+//! ecosystem of libraries and services using [Arrow] as an interop format. This module also
+//! contains low level APIs for encoding arrays with multiple threads.
+//!
+//! [`ArrowColumnWriter`]: arrow::arrow_writer::ArrowColumnWriter
 //!
 //! ## Read/Write Arrow Async
 //!
-//! When the `async` feature is enabled, [`arrow::async_reader`] and [`arrow::async_writer`]
+//! When the `async` feature is enabled, [`async_reader`] and [`async_writer`]
 //! provide the ability to read and write [`arrow`] data asynchronously. Additionally, with the
-//! `object_store` feature is enabled, [`ParquetObjectReader`](arrow::async_reader::ParquetObjectReader)
+//! `object_store` feature is enabled, [`ParquetObjectReader`]
 //! provides efficient integration with object storage services such as S3 via the [object_store]
 //! crate, automatically optimizing IO based on any predicates or projections provided.
+//!
+//! [`async_reader`]: arrow::async_reader
+//! [`async_writer`]: arrow::async_writer
+//! [`ParquetObjectReader`]: arrow::async_reader::ParquetObjectReader
 //!
 //! ## Read/Write Parquet
 //!
