@@ -269,19 +269,6 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             "array data type mismatch"
         );
 
-        unsafe {
-            self.append_array_unchecked(array);
-        }
-    }
-
-    /// Appends array values and null to this builder as is
-    /// (this means that underlying null values are copied as is).
-    ///
-    /// # Safety
-    ///
-    /// `self` data type and `array` data type must be the same
-    #[inline]
-    pub unsafe fn append_array_unchecked(&mut self, array: &PrimitiveArray<T>) {
         self.values_builder.append_slice(array.values());
         if let Some(null_buffer) = array.nulls() {
             self.null_buffer_builder.append_buffer(null_buffer);
@@ -709,17 +696,5 @@ mod tests {
 
         let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
         builder.append_array(&array)
-    }
-
-    #[test]
-    fn test_invalid_with_data_type_in_append_array_should_not_fail_with_unchecked() {
-        let array = {
-            let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
-            builder.append_value(1);
-            builder.finish()
-        };
-
-        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
-        unsafe { builder.append_array_unchecked(&array) }
     }
 }

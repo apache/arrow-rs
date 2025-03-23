@@ -181,50 +181,13 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
 }
 
 fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut capacity = 0;
-    let mut has_nulls = false;
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum());
 
     for array in arrays {
-        capacity += array.len();
-        has_nulls |= array.null_count() != 0;
+        builder.append_array(array.as_primitive());
     }
 
-    // If no nulls
-    if !has_nulls {
-        let values_buffer = {
-            let mut values_builder = MutableBuffer::new(capacity * std::mem::size_of::<T::Native>());
-
-            for array in arrays {
-                let primitive_array = array.as_primitive::<T>();
-                values_builder.extend_from_slice(primitive_array.values());
-            }
-
-            values_builder.into()
-        };
-
-        return Ok(Arc::new(PrimitiveArray::<T>::new(
-            values_buffer,
-            None,
-        )));
-    }
-
-    let mut null_buffer_builder = BooleanBufferBuilder::new(capacity);
-    let mut values_builder = MutableBuffer::new(capacity * std::mem::size_of::<T::Native>());
-
-    for array in arrays {
-        let primitive_array = array.as_primitive::<T>();
-        values_builder.extend_from_slice(primitive_array.values());
-        if let Some(null_buffer) = primitive_array.nulls() {
-            null_buffer_builder.append_buffer(null_buffer.inner());
-        } else {
-            null_buffer_builder.append_n(primitive_array.len(), true);
-        }
-    }
-
-    Ok(Arc::new(PrimitiveArray::<T>::new(
-        values_builder.into(),
-        Some(NullBuffer::new(null_buffer_builder.finish())),
-    )))
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
