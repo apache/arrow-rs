@@ -47,8 +47,7 @@ fn arrow_to_py_err(err: ArrowError) -> PyErr {
 
 /// Reads an encrypted Parquet file at the specified path
 #[pyfunction]
-fn read_encrypted_parquet(file_path: &Bound<PyString>) -> PyResult<()> {
-    let file_path: String = file_path.extract()?;
+fn read_encrypted_parquet(file_path: &str) -> PyResult<()> {
     let file = File::open(file_path)?;
 
     let client_factory = TestKmsClientFactory::with_default_keys();
@@ -80,14 +79,14 @@ fn read_encrypted_parquet(file_path: &Bound<PyString>) -> PyResult<()> {
 
 /// Writes an encrypted Parquet file to the specified path
 #[pyfunction]
-fn write_encrypted_parquet(file_path: &Bound<PyString>) -> PyResult<()> {
-    let file_path: String = file_path.extract()?;
+fn write_encrypted_parquet(file_path: &str, double_wrapping: bool) -> PyResult<()> {
     let file = File::create(file_path)?;
 
     let client_factory = TestKmsClientFactory::with_default_keys();
     let crypto_factory = CryptoFactory::new(client_factory);
 
     let encryption_config = EncryptionConfigurationBuilder::new("kf".into())
+        .set_double_wrapping(double_wrapping)
         .add_column_key("kc1".into(), vec!["x".into()])
         .add_column_key("kc2".into(), vec!["y".into()])
         .build();

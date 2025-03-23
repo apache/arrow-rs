@@ -17,19 +17,22 @@
 # under the License.
 
 import base64
+from pathlib import Path
+import pytest
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.parquet.encryption as pe
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
-from pathlib import Path
 
 import parquet_pyarrow_integration_testing as rust
 
 
-def test_write_rust_read_python(tmp_path: Path):
+@pytest.mark.parametrize("double_wrapping", [False, True])
+def test_write_rust_read_python(tmp_path: Path, double_wrapping: bool):
     file_path = tmp_path / "test.parquet"
-    rust.write_encrypted_parquet(file_path.as_posix())
+    rust.write_encrypted_parquet(file_path.as_posix(), double_wrapping)
 
     crypto_factory = pe.CryptoFactory(kms_client_factory)
 
@@ -45,18 +48,21 @@ def test_write_rust_read_python(tmp_path: Path):
     assert len(table) > 0
 
 
-def test_write_python_read_rust(tmp_path: Path):
+@pytest.mark.parametrize("double_wrapping", [False, True])
+def test_write_python_read_rust(tmp_path: Path, double_wrapping: bool):
     file_path = tmp_path / "test.parquet"
 
     crypto_factory = pe.CryptoFactory(kms_client_factory)
 
     kms_connection_config = pe.KmsConnectionConfig()
+
     encryption_config = pe.EncryptionConfiguration(
         footer_key="kf",
         column_keys={
             "kc1": ["x"],
             "kc2": ["y"],
-        })
+        },
+        double_wrapping=double_wrapping)
     encryption_properties = crypto_factory.file_encryption_properties(
             kms_connection_config, encryption_config)
 
@@ -74,7 +80,7 @@ def test_write_python_read_rust(tmp_path: Path):
     rust.read_encrypted_parquet(file_path.as_posix())
 
 
-class TestKmsClient(pe.KmsClient):
+class _TestKmsClient(pe.KmsClient):
     def __init__(self, _kms_connection_configuration):
       pe.KmsClient.__init__(self)
       self._keys = {
@@ -107,4 +113,4 @@ class TestKmsClient(pe.KmsClient):
 
 
 def kms_client_factory(kms_connection_configuration):
-   return TestKmsClient(kms_connection_configuration)
+   return _TestKmsClient(kms_connection_configuration)
