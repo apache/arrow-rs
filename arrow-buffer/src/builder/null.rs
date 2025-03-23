@@ -355,6 +355,18 @@ mod tests {
     }
 
     #[test]
+    fn test_append_buffers() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer1 = NullBuffer::from(&[true, true]);
+        let buffer2 = NullBuffer::from(&[true, true, false]);
+
+        builder.append_buffer(&buffer1);
+        builder.append_buffer(&buffer2);
+
+        assert_eq!(builder.as_slice().unwrap(), &[0b01111_u8]);
+    }
+
+    #[test]
     fn test_append_buffers_with_unaligned_length() {
         let mut builder = NullBufferBuilder::new(0);
         let buffer = NullBuffer::from(&[true, true, false, true, false]);
