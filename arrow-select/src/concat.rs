@@ -40,6 +40,21 @@ use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
 use std::{collections::HashSet, sync::Arc};
 
+fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
+    let mut item_capacity = 0;
+    let mut bytes_capacity = 0;
+    for array in arrays {
+        let a = array.as_bytes::<T>();
+
+        // Guaranteed to always have at least one element
+        let offsets = a.value_offsets();
+        bytes_capacity += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
+        item_capacity += a.len()
+    }
+
+    Capacities::Binary(item_capacity, Some(bytes_capacity))
+}
+
 fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     if let DataType::FixedSizeList(f, _) = data_type {
         let item_capacity = arrays.iter().map(|a| a.len()).sum();
@@ -201,18 +216,12 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 }
 
 fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut item_capacity = 0;
-    let mut data = 0;
-    for array in arrays {
-        let a = array.as_bytes::<T>();
+    let (item_capacity, bytes_capacity) = match binary_capacity::<T>(arrays) {
+        Capacities::Binary(item_capacity, Some(bytes_capacity)) => (item_capacity, bytes_capacity),
+        _ => unreachable!(),
+    };
 
-        // Guaranteed to always have at least one element
-        let offsets = a.value_offsets();
-        data += offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize();
-        item_capacity += a.len()
-    }
-
-    let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, data);
+    let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, bytes_capacity);
 
     for array in arrays {
         builder.append_array(array.as_bytes::<T>());
@@ -235,6 +244,10 @@ macro_rules! primitive_concat {
 
 fn get_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     match data_type {
+        DataType::Utf8 => binary_capacity::<Utf8Type>(arrays),
+        DataType::LargeUtf8 => binary_capacity::<LargeUtf8Type>(arrays),
+        DataType::Binary => binary_capacity::<BinaryType>(arrays),
+        DataType::LargeBinary => binary_capacity::<LargeBinaryType>(arrays),
         DataType::FixedSizeList(_, _) => fixed_size_list_capacity(arrays, data_type),
         _ => Capacities::Array(arrays.iter().map(|a| a.len()).sum()),
     }
