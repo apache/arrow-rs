@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Types for integrating with a Key Management Server to use with Parquet Modular Encryption
+
 use crate::errors::Result;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -151,6 +153,7 @@ impl Default for KmsConnectionConfigBuilder {
 
 /// Trait for factories that create KMS clients
 pub trait KmsClientFactory: Send {
+    /// Create a new [`KmsClient`] instance using the provided configuration
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef>;
 }
 

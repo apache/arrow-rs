@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! The key-management tools API for building file encryption and decryption properties
+//! that work with a Key Management Server.
+
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::encryption::key_management::key_unwrapper::KeyUnwrapper;
@@ -92,18 +95,19 @@ impl EncryptionConfiguration {
     /// Whether to store encryption key material inside Parquet file metadata,
     /// rather than in external JSON files.
     /// Using external key material allows for rotation of master keys.
+    /// Currently only internal key material is implemented.
     pub fn internal_key_material(&self) -> bool {
         self.internal_key_material
     }
 
     /// Number of bits for randomly generated data encryption keys.
-    /// May be 128, 192 or 256.
+    /// Currently only 128-bit keys are implemented.
     pub fn data_key_length_bits(&self) -> u32 {
         self.data_key_length_bits
     }
 }
 
-/// Builder for Parquet [`EncryptionConfiguration`].
+/// Builder for a Parquet [`EncryptionConfiguration`].
 pub struct EncryptionConfigurationBuilder {
     footer_key: String,
     column_keys: HashMap<String, Vec<String>>,
@@ -116,7 +120,7 @@ pub struct EncryptionConfigurationBuilder {
 }
 
 impl EncryptionConfigurationBuilder {
-    /// Create a new `EncryptionConfigurationBuilder` with default options
+    /// Create a new [`EncryptionConfigurationBuilder`] with default options
     pub fn new(footer_key: String) -> Self {
         Self {
             footer_key,
@@ -155,7 +159,8 @@ impl EncryptionConfigurationBuilder {
         self
     }
 
-    /// Set the encryption algorithm to use
+    /// Set the encryption algorithm to use.
+    /// Currently only [`EncryptionAlgorithm::AesGcmV1`] is supported.
     pub fn set_encryption_algorithm(mut self, algorithm: EncryptionAlgorithm) -> Self {
         self.encryption_algorithm = algorithm;
         self
@@ -183,28 +188,6 @@ impl EncryptionConfigurationBuilder {
     pub fn set_cache_lifetime(mut self, lifetime: Option<Duration>) -> Self {
         self.cache_lifetime = lifetime;
         self
-    }
-
-    /// Set whether to store encryption key material inside Parquet file metadata,
-    /// rather than in external JSON files.
-    /// Using external key material allows for rotation of master keys.
-    /// Defaults to False.
-    pub fn set_internal_key_material(mut self, internal_key_material: bool) -> Self {
-        self.internal_key_material = internal_key_material;
-        self
-    }
-
-    /// Set the number of bits for randomly generated data encryption keys.
-    /// May be 128, 192 or 256.
-    pub fn set_data_key_length_bits(mut self, key_length: u32) -> Result<Self> {
-        if ![128, 192, 256].contains(&key_length) {
-            return Err(general_err!(
-                "Invalid key length: {}. Expected 128, 192 or 256.",
-                key_length
-            ));
-        }
-        self.data_key_length_bits = key_length;
-        Ok(self)
     }
 }
 
@@ -239,7 +222,7 @@ pub struct DecryptionConfigurationBuilder {
 }
 
 impl DecryptionConfigurationBuilder {
-    /// Create a new `EncryptionConfigurationBuilder` with default options
+    /// Create a new [`DecryptionConfigurationBuilder`] with default options
     pub fn new() -> Self {
         Self {
             cache_lifetime: Some(Duration::from_secs(600)),
@@ -254,7 +237,7 @@ impl DecryptionConfigurationBuilder {
     }
 
     /// Set how long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, no caching is used.
+    /// and KMS clients. When None, objects are cached indefinitely.
     pub fn set_cache_lifetime(mut self, cache_lifetime: Option<Duration>) -> Self {
         self.cache_lifetime = cache_lifetime;
         self
@@ -274,7 +257,7 @@ pub struct CryptoFactory {
 }
 
 impl CryptoFactory {
-    /// Create a new CryptoFactory, providing a factory function for creating KMS clients
+    /// Create a new [`CryptoFactory`], providing a factory function for creating KMS clients
     pub fn new<T>(kms_client_factory: T) -> Self
     where
         T: KmsClientFactory + 'static,
@@ -298,6 +281,7 @@ impl CryptoFactory {
         FileDecryptionProperties::with_key_retriever(key_retriever).build()
     }
 
+    /// Create file encryption properties for a Parquet file
     pub fn file_encryption_properties(
         &self,
         kms_connection_config: Arc<KmsConnectionConfig>,

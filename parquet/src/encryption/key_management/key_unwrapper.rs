@@ -25,6 +25,7 @@ use crate::errors::{ParquetError, Result};
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
+/// Unwraps (decrypts) key encryption keys and data encryption keys using a KMS
 pub struct KeyUnwrapper {
     kms_manager: Arc<KmsManager>,
     kms_connection_config: Arc<KmsConnectionConfig>,

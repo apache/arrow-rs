@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! A KMS client implementation for use in tests, which is compatible
+//! with the C++ Arrow LocalWrapKmsClient
+
 use crate::encryption::key_management::kms::{
     KmsClient, KmsClientFactory, KmsClientRef, KmsConnectionConfig,
 };
@@ -27,14 +30,14 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// KMS client implementation for unit tests, which is compatible
-/// with the C++ Arrow LocalWrapKmsClient
+/// The test KMS client implementation
 pub struct TestKmsClient {
     key_map: HashMap<String, Vec<u8>>,
     keys_wrapped: Arc<Mutex<usize>>,
     keys_unwrapped: Arc<Mutex<usize>>,
 }
 
+/// Factory for building [`TestKmsClient`] instances
 pub struct TestKmsClientFactory {
     key_map: HashMap<String, Vec<u8>>,
     invocations: Mutex<Vec<String>>,
@@ -43,6 +46,8 @@ pub struct TestKmsClientFactory {
 }
 
 impl TestKmsClientFactory {
+    /// Create a new KMS client factory that uses the default "kf", "kc1" and "kc2" keys
+    /// conventionally used in tests.
     pub fn with_default_keys() -> Self {
         let mut key_map = HashMap::default();
         key_map.insert("kf".to_owned(), "0123456789012345".as_bytes().to_vec());
