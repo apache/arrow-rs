@@ -160,7 +160,7 @@ path = "./tests/arrow_reader/mod.rs"
 
 [[test]]
 name = "encryption"
-required-features = ["encryption"]
+required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
 
 [[bin]]
