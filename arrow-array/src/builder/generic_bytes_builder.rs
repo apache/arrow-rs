@@ -399,7 +399,7 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 mod tests {
     use super::*;
     use crate::array::Array;
-    use crate::{GenericStringArray, Int32Array};
+    use crate::GenericStringArray;
     use std::fmt::Write as _;
     use std::io::Write as _;
 
@@ -660,7 +660,17 @@ mod tests {
     #[test]
     fn test_append_array_with_nulls() {
         let input = vec![
-            Some("hello"), None, Some("how"), None, None, None, None, Some("I"), Some("am"), Some("doing"), Some("well")
+            Some("hello"),
+            None,
+            Some("how"),
+            None,
+            None,
+            None,
+            None,
+            Some("I"),
+            Some("am"),
+            Some("doing"),
+            Some("well"),
         ];
         let arr1 = GenericStringArray::<i32>::from(input[..3].to_vec());
         let arr2 = GenericStringArray::<i32>::from(input[3..7].to_vec());
@@ -689,7 +699,17 @@ mod tests {
     #[test]
     fn test_append_array_with_offset_not_starting_at_0() {
         let input = vec![
-            Some("hello"), None, Some("how"), None, None, None, None, Some("I"), Some("am"), Some("doing"), Some("well")
+            Some("hello"),
+            None,
+            Some("how"),
+            None,
+            None,
+            None,
+            None,
+            Some("I"),
+            Some("am"),
+            Some("doing"),
+            Some("well"),
         ];
         let full_array = GenericStringArray::<i32>::from(input);
         let sliced = full_array.slice(1, 4);
@@ -701,9 +721,7 @@ mod tests {
         builder.append_array(&sliced);
         let actual = builder.finish();
 
-        let expected = GenericStringArray::<i32>::from(vec![
-            None, Some("how"), None, None
-        ]);
+        let expected = GenericStringArray::<i32>::from(vec![None, Some("how"), None, None]);
 
         println!("actual: {:?}", actual);
         println!("expected: {:?}", expected);

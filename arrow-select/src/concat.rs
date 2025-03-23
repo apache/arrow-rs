@@ -35,11 +35,10 @@ use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder}
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, BufferBuilder, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
 use std::{collections::HashSet, sync::Arc};
-
 
 fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capacities {
     if let DataType::FixedSizeList(f, _) = data_type {
@@ -200,9 +199,7 @@ fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     Ok(Arc::new(builder.finish()))
 }
 
-fn concat_bytes<T: ByteArrayType>(
-    arrays: &[&dyn Array],
-) -> Result<ArrayRef, ArrowError> {
+fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     let mut item_capacity = 0;
     let mut data = 0;
     for array in arrays {
@@ -214,10 +211,7 @@ fn concat_bytes<T: ByteArrayType>(
         item_capacity += a.len()
     }
 
-    let mut builder = GenericByteBuilder::<T>::with_capacity(
-        item_capacity,
-        data
-    );
+    let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, data);
 
     for array in arrays {
         builder.append_array(array.as_bytes::<T>());
