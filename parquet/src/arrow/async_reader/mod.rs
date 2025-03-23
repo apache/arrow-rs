@@ -1035,11 +1035,11 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 .schema_descr()
                 .column(i);
 
-            if file_decryptor.is_column_encrypted(column_name.name()) {
-                let data_decryptor =
-                    file_decryptor.get_column_data_decryptor(column_name.name())?;
+            let column_path = column_name.path().string();
+            if file_decryptor.is_column_encrypted(&column_path) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(&column_path)?;
                 let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name())?;
+                    file_decryptor.get_column_metadata_decryptor(&column_path)?;
 
                 let crypto_context = CryptoContext::new(
                     self.row_group_idx,

@@ -535,7 +535,7 @@ fn test_write_encrypted_column() {
 }
 
 #[test]
-fn test_write_encrypted_column_non_uniform() {
+fn test_write_encrypted_struct_field() {
     let int_32: Int32Array = [Some(1), Some(6)].iter().collect();
     let float_64: Float64Array = [None, Some(8.5)].iter().collect();
     let struct_array = StructArray::from(vec![
@@ -551,7 +551,7 @@ fn test_write_encrypted_column_non_uniform() {
     let struct_array_data = Arc::new(struct_array);
 
     let schema = Arc::new(Schema::new(vec![Field::new(
-        ".struct.",
+        "struct_col",
         struct_array_data.data_type().clone(),
         true,
     )]));
@@ -560,11 +560,16 @@ fn test_write_encrypted_column_non_uniform() {
 
     let temp_file = tempfile::tempfile().unwrap();
 
+    // When configuring encryption keys for struct columns,
+    // keys need to be specified for each leaf-level Parquet column using the full "." separated
+    // column path.
     let builder = WriterProperties::builder();
     let footer_key = b"0123456789012345".to_vec();
-    let column_key = b"1234567890123450".to_vec();
+    let column_key_1 = b"1234567890123450".to_vec();
+    let column_key_2 = b"1234567890123451".to_vec();
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
-        .with_column_key(".struct.", column_key.clone())
+        .with_column_key("struct_col.int64_col", column_key_1.clone())
+        .with_column_key("struct_col.float64_col", column_key_2.clone())
         .build()
         .unwrap();
 
@@ -579,7 +584,8 @@ fn test_write_encrypted_column_non_uniform() {
     writer.close().unwrap();
 
     let decryption_properties = FileDecryptionProperties::builder(footer_key)
-        .with_column_key(".struct.", column_key.clone())
+        .with_column_key("struct_col.int64_col", column_key_1)
+        .with_column_key("struct_col.float64_col", column_key_2)
         .build()
         .unwrap();
     let options = ArrowReaderOptions::default()

@@ -706,15 +706,15 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
                 .schema_descr()
                 .column(self.column_idx);
 
-            if file_decryptor.is_column_encrypted(column_name.name()) {
-                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
+            let column_path = column_name.path().string();
+            if file_decryptor.is_column_encrypted(&column_path) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(&column_path);
                 let data_decryptor = match data_decryptor {
                     Ok(data_decryptor) => data_decryptor,
                     Err(err) => return Some(Err(err)),
                 };
 
-                let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name());
+                let metadata_decryptor = file_decryptor.get_column_metadata_decryptor(&column_path);
                 let metadata_decryptor = match metadata_decryptor {
                     Ok(metadata_decryptor) => metadata_decryptor,
                     Err(err) => return Some(Err(err)),
