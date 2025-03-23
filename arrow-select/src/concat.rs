@@ -180,7 +180,8 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
 }
 
 fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum())
+      .with_data_type(arrays[0].data_type().clone());
 
     for array in arrays {
         builder.append_array(array.as_primitive());
