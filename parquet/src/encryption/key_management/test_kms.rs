@@ -37,10 +37,23 @@ pub struct TestKmsClient {
     keys_unwrapped: Arc<Mutex<usize>>,
 }
 
+/// Properties from [`KmsConnectionConfig`] used to construct a KMS client
+#[derive(Clone, Debug, PartialEq)]
+pub struct KmsConnectionConfigDetails {
+    /// The KMS instance id
+    pub kms_instance_id: String,
+    /// The KMS instance URL
+    pub kms_instance_url: String,
+    /// The KMS key access token
+    pub key_access_token: String,
+    /// Arbitrary KMS configuration options
+    pub custom_kms_conf: HashMap<String, String>,
+}
+
 /// Factory for building [`TestKmsClient`] instances
 pub struct TestKmsClientFactory {
     key_map: HashMap<String, Vec<u8>>,
-    invocations: Mutex<Vec<String>>,
+    invocations: Mutex<Vec<KmsConnectionConfigDetails>>,
     keys_wrapped: Arc<Mutex<usize>>,
     keys_unwrapped: Arc<Mutex<usize>>,
 }
@@ -62,9 +75,9 @@ impl TestKmsClientFactory {
         }
     }
 
-    /// Get the access keys used to create clients.
+    /// Get the configuration details used to create clients.
     /// Provided for unit testing
-    pub fn invocations(&self) -> Vec<String> {
+    pub fn invocations(&self) -> Vec<KmsConnectionConfigDetails> {
         self.invocations.lock().unwrap().clone()
     }
 
@@ -83,7 +96,13 @@ impl KmsClientFactory for TestKmsClientFactory {
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
         {
             let mut invocations = self.invocations.lock().unwrap();
-            invocations.push(kms_connection_config.key_access_token().to_owned());
+            let details = KmsConnectionConfigDetails {
+                kms_instance_id: kms_connection_config.kms_instance_id().to_owned(),
+                kms_instance_url: kms_connection_config.kms_instance_url().to_owned(),
+                key_access_token: kms_connection_config.key_access_token(),
+                custom_kms_conf: kms_connection_config.custom_kms_conf().clone(),
+            };
+            invocations.push(details);
         }
         Ok(Arc::new(TestKmsClient::new(
             self.key_map.clone(),
@@ -94,6 +113,7 @@ impl KmsClientFactory for TestKmsClientFactory {
 }
 
 impl TestKmsClient {
+    /// Create a new [`TestKmsClient`]
     pub fn new(
         key_map: HashMap<String, Vec<u8>>,
         keys_wrapped: Arc<Mutex<usize>>,

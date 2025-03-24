@@ -59,10 +59,16 @@ impl<'a> KeyWrapper<'a> {
     ) -> Result<Vec<u8>> {
         let key_material_builder = if is_footer_key {
             let kms_config = &self.kms_connection_config;
-            KeyMaterialBuilder::for_footer_key(
-                kms_config.kms_instance_id().to_owned(),
-                kms_config.kms_instance_url().to_owned(),
-            )
+            // If instance ID or URL weren't provided, set them to non-empty default values
+            let mut kms_instance_id = kms_config.kms_instance_id().to_owned();
+            if kms_instance_id.is_empty() {
+                kms_instance_id.push_str("DEFAULT");
+            }
+            let mut kms_instance_url = kms_config.kms_instance_url().to_owned();
+            if kms_instance_url.is_empty() {
+                kms_instance_url.push_str("DEFAULT");
+            }
+            KeyMaterialBuilder::for_footer_key(kms_instance_id, kms_instance_url)
         } else {
             KeyMaterialBuilder::for_column_key()
         };

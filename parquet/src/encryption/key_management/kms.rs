@@ -36,15 +36,20 @@ pub trait KmsClient: Send + Sync {
 pub type KmsClientRef = Arc<dyn KmsClient>;
 
 /// Holds configuration options required to connect to a KMS
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct KmsConnectionConfig {
     kms_instance_url: String,
     kms_instance_id: String,
-    key_access_token: RwLock<String>,
+    key_access_token: Arc<RwLock<String>>,
     custom_kms_conf: HashMap<String, String>,
 }
 
 impl KmsConnectionConfig {
+    /// Create a builder for a [`KmsConnectionConfig`]
+    pub fn builder() -> KmsConnectionConfigBuilder {
+        KmsConnectionConfigBuilder::default()
+    }
+
     /// ID of the KMS instance to use for encryption,
     /// if multiple instances are available.
     pub fn kms_instance_id(&self) -> &str {
@@ -76,6 +81,16 @@ impl KmsConnectionConfig {
         let mut token = self.key_access_token.write().unwrap();
         *token = key_access_token;
     }
+
+    /// Modify the KMS instance ID to use
+    pub(crate) fn set_kms_instance_id(&mut self, kms_instance_id: String) {
+        self.kms_instance_id = kms_instance_id;
+    }
+
+    /// Modify the KMS instance URL to use
+    pub(crate) fn set_kms_instance_url(&mut self, kms_instance_url: String) {
+        self.kms_instance_url = kms_instance_url;
+    }
 }
 
 impl Default for KmsConnectionConfig {
@@ -96,8 +111,8 @@ impl KmsConnectionConfigBuilder {
     /// Create a new [`KmsConnectionConfigBuilder`] with default options
     pub fn new() -> Self {
         Self {
-            kms_instance_id: "DEFAULT".to_string(),
-            kms_instance_url: "DEFAULT".to_string(),
+            kms_instance_id: "".to_string(),
+            kms_instance_url: "".to_string(),
             key_access_token: "DEFAULT".to_string(),
             custom_kms_conf: Default::default(),
         }
@@ -108,7 +123,7 @@ impl KmsConnectionConfigBuilder {
         KmsConnectionConfig {
             kms_instance_id: self.kms_instance_id,
             kms_instance_url: self.kms_instance_url,
-            key_access_token: RwLock::new(self.key_access_token),
+            key_access_token: Arc::new(RwLock::new(self.key_access_token)),
             custom_kms_conf: self.custom_kms_conf,
         }
     }

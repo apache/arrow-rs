@@ -362,7 +362,9 @@ mod tests {
     use super::*;
     use crate::data_type::AsBytes;
     use crate::encryption::key_management::key_material::KeyMaterialBuilder;
-    use crate::encryption::key_management::test_kms::TestKmsClientFactory;
+    use crate::encryption::key_management::test_kms::{
+        KmsConnectionConfigDetails, TestKmsClientFactory,
+    };
 
     #[test]
     fn test_file_decryption_properties() {
@@ -422,41 +424,69 @@ mod tests {
             .unwrap();
 
         let wrapped_key = kms.wrap_key(&dek, "kc1").unwrap();
+
+        let footer_key_material =
+            KeyMaterialBuilder::for_footer_key("123".to_owned(), "https://example.com".to_owned())
+                .with_single_wrapped_key("kc1".to_owned(), wrapped_key.clone())
+                .build()
+                .unwrap();
+        let serialized_footer_key_material = footer_key_material.serialize().unwrap();
+
         let key_material = KeyMaterialBuilder::for_column_key()
             .with_single_wrapped_key("kc1".to_owned(), wrapped_key)
             .build()
             .unwrap();
         let serialized_key_material = key_material.serialize().unwrap();
 
+        let default_config = KmsConnectionConfigDetails {
+            kms_instance_id: "123".to_string(),
+            kms_instance_url: "https://example.com".to_string(),
+            key_access_token: "DEFAULT".to_string(),
+            custom_kms_conf: Default::default(),
+        };
+
+        let refreshed_config = KmsConnectionConfigDetails {
+            kms_instance_id: "123".to_string(),
+            kms_instance_url: "https://example.com".to_string(),
+            key_access_token: "super_secret".to_string(),
+            custom_kms_conf: Default::default(),
+        };
+
         assert_eq!(0, kms_factory.invocations().len());
 
         decryption_props
-            .footer_key(Some(serialized_key_material.as_bytes()))
+            .footer_key(Some(serialized_footer_key_material.as_bytes()))
             .unwrap()
             .into_owned();
-        assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
+        assert_eq!(vec![default_config.clone()], kms_factory.invocations());
 
         decryption_props
-            .footer_key(Some(serialized_key_material.as_bytes()))
+            .column_key("x", Some(serialized_key_material.as_bytes()))
             .unwrap()
             .into_owned();
         // Same client should have been reused
-        assert_eq!(vec!["DEFAULT"], kms_factory.invocations());
+        assert_eq!(vec![default_config.clone()], kms_factory.invocations());
 
         kms_config.refresh_key_access_token("super_secret".to_owned());
 
         decryption_props
-            .footer_key(Some(serialized_key_material.as_bytes()))
+            .column_key("x", Some(serialized_key_material.as_bytes()))
             .unwrap()
             .into_owned();
         // New key access token should have been used
-        assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
+        assert_eq!(
+            vec![default_config.clone(), refreshed_config.clone()],
+            kms_factory.invocations()
+        );
 
         decryption_props
-            .footer_key(Some(serialized_key_material.as_bytes()))
+            .column_key("x", Some(serialized_key_material.as_bytes()))
             .unwrap()
             .into_owned();
-        assert_eq!(vec!["DEFAULT", "super_secret"], kms_factory.invocations());
+        assert_eq!(
+            vec![default_config, refreshed_config],
+            kms_factory.invocations()
+        );
     }
 
     #[test]
@@ -547,7 +577,11 @@ mod tests {
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
-        let kms_config = Arc::new(KmsConnectionConfig::default());
+        let kms_config = Arc::new(
+            KmsConnectionConfig::builder()
+                .set_kms_instance_id("DEFAULT".to_owned())
+                .build(),
+        );
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(double_wrapping)
             .add_column_key("kc1".to_owned(), vec!["x0".to_owned(), "x1".to_owned()])
@@ -687,5 +721,93 @@ mod tests {
             retrieve_key(&props1);
             assert_eq!(3, kms_factory.keys_unwrapped());
         }
+    }
+
+    #[test]
+    fn test_get_kms_client_using_provided_config() {
+        // Connection configuration options provided at read time should take precedence over
+        // the KMS URL and ID in the footer key material.
+        let decryption_kms_config = KmsConnectionConfig::builder()
+            .set_kms_instance_id("456".to_owned())
+            .set_kms_instance_url("https://example.com/kms2/".to_owned())
+            .set_key_access_token("secret_2".to_owned())
+            .set_custom_kms_conf_option("test_key".to_owned(), "test_value_2".to_owned())
+            .build();
+
+        let details = get_kms_connection_config_for_decryption(decryption_kms_config);
+
+        assert_eq!(details.kms_instance_id, "456");
+        assert_eq!(details.kms_instance_url, "https://example.com/kms2/");
+        assert_eq!(details.key_access_token, "secret_2");
+        let mut expected_conf = HashMap::default();
+        expected_conf.insert("test_key".to_owned(), "test_value_2".to_owned());
+        assert_eq!(details.custom_kms_conf, expected_conf);
+    }
+
+    #[test]
+    fn test_get_kms_client_using_config_from_file() {
+        // When KMS config doesn't have the instance ID and URL,
+        // they should be retrieved from the file metadata.
+        // Other properties like the access key and custom configuration can only be provided
+        // at decryption time.
+        let decryption_kms_config = KmsConnectionConfig::builder()
+            .set_key_access_token("secret_2".to_owned())
+            .set_custom_kms_conf_option("test_key".to_owned(), "test_value_2".to_owned())
+            .build();
+
+        let details = get_kms_connection_config_for_decryption(decryption_kms_config);
+
+        assert_eq!(details.kms_instance_id, "123");
+        assert_eq!(details.kms_instance_url, "https://example.com/kms1/");
+        assert_eq!(details.key_access_token, "secret_2");
+        let mut expected_conf = HashMap::default();
+        expected_conf.insert("test_key".to_owned(), "test_value_2".to_owned());
+        assert_eq!(details.custom_kms_conf, expected_conf);
+    }
+
+    fn get_kms_connection_config_for_decryption(
+        decryption_kms_config: KmsConnectionConfig,
+    ) -> KmsConnectionConfigDetails {
+        let encryption_kms_config = Arc::new(
+            KmsConnectionConfig::builder()
+                .set_kms_instance_id("123".to_owned())
+                .set_kms_instance_url("https://example.com/kms1/".to_owned())
+                .set_key_access_token("secret_1".to_owned())
+                .set_custom_kms_conf_option("test_key".to_owned(), "test_value_1".to_owned())
+                .build(),
+        );
+
+        let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
+            .set_double_wrapping(true)
+            .build();
+
+        let file_encryption_properties = {
+            let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
+            let crypto_factory = CryptoFactory::new(kms_factory.clone());
+
+            crypto_factory
+                .file_encryption_properties(encryption_kms_config, &encryption_config)
+                .unwrap()
+        };
+
+        let kms_factory = Arc::new(TestKmsClientFactory::with_default_keys());
+        let crypto_factory = CryptoFactory::new(kms_factory.clone());
+
+        let decryption_kms_config = Arc::new(decryption_kms_config);
+        let decryption_properties = crypto_factory
+            .file_decryption_properties(decryption_kms_config, Default::default())
+            .unwrap();
+
+        let _ = decryption_properties
+            .footer_key(
+                file_encryption_properties
+                    .footer_key_metadata()
+                    .map(|k| k.as_bytes()),
+            )
+            .unwrap();
+
+        let mut invocations = kms_factory.invocations();
+        assert_eq!(invocations.len(), 1);
+        invocations.pop().unwrap()
     }
 }
