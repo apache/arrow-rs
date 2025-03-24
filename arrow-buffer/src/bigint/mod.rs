@@ -475,8 +475,8 @@ impl i256 {
     /// Interpret 4 `u64` digits, least significant first, as a [`i256`]
     fn from_digits(digits: [u64; 4]) -> Self {
         Self::from_parts(
-            digits[0] as u128 | (digits[1] as u128) << 64,
-            digits[2] as i128 | (digits[3] as i128) << 64,
+            digits[0] as u128 | ((digits[1] as u128) << 64),
+            digits[2] as i128 | ((digits[3] as i128) << 64),
         )
     }
 
@@ -746,7 +746,7 @@ impl Shl<u8> for i256 {
             self
         } else if rhs < 128 {
             Self {
-                high: self.high << rhs | (self.low >> (128 - rhs)) as i128,
+                high: (self.high << rhs) | (self.low >> (128 - rhs)) as i128,
                 low: self.low << rhs,
             }
         } else {
@@ -768,7 +768,7 @@ impl Shr<u8> for i256 {
         } else if rhs < 128 {
             Self {
                 high: self.high >> rhs,
-                low: self.low >> rhs | ((self.high as u128) << (128 - rhs)),
+                low: (self.low >> rhs) | ((self.high as u128) << (128 - rhs)),
             }
         } else {
             Self {

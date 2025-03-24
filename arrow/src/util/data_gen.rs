@@ -120,23 +120,33 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(unit, _) => {
-            match unit {
-                TimeUnit::Second => Arc::new(create_random_temporal_array::<TimestampSecondType>(
+        Timestamp(unit, tz) => match unit {
+            TimeUnit::Second => Arc::new(
+                create_random_temporal_array::<TimestampSecondType>(size, primitive_null_density)
+                    .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Millisecond => Arc::new(
+                create_random_temporal_array::<TimestampMillisecondType>(
                     size,
                     primitive_null_density,
-                )),
-                TimeUnit::Millisecond => Arc::new(create_random_temporal_array::<
-                    TimestampMillisecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Microsecond => Arc::new(create_random_temporal_array::<
-                    TimestampMicrosecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<
-                    TimestampNanosecondType,
-                >(size, primitive_null_density)),
-            }
-        }
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Microsecond => Arc::new(
+                create_random_temporal_array::<TimestampMicrosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Nanosecond => Arc::new(
+                create_random_temporal_array::<TimestampNanosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+        },
         Date32 => Arc::new(create_random_temporal_array::<Date32Type>(
             size,
             primitive_null_density,
@@ -521,7 +531,19 @@ mod tests {
     #[test]
     fn test_create_batch() {
         let size = 32;
-        let fields = vec![Field::new("a", DataType::Int32, true)];
+        let fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "timestamp_without_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "timestamp_with_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+        ];
         let schema = Schema::new(fields);
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
