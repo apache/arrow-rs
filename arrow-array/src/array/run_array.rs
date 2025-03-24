@@ -700,7 +700,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num = max_run_length.min(rand::rng().random_range(1..=max_run_length));
+            let num = max_run_length.min(rng.random_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
