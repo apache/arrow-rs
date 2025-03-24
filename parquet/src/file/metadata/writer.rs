@@ -176,6 +176,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             _ => self.row_groups,
         };
 
+        #[allow(unused_mut)]
         let mut file_metadata = crate::format::FileMetaData {
             num_rows,
             row_groups,
