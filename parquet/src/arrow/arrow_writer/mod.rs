@@ -839,7 +839,7 @@ fn get_column_writers_with_encryptor(
     Ok(writers)
 }
 
-/// Gets the [`ArrowColumnWriter`] for the given `data_type`
+/// Gets [`ArrowColumnWriter`] instances for different data types
 struct ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     row_group_index: usize,
@@ -893,6 +893,7 @@ impl ArrowColumnWriterFactory {
         Box::<ArrowPageWriter>::default()
     }
 
+    /// Gets the [`ArrowColumnWriter`] for the given `data_type`
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,

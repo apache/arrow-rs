@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Configuration and utilities for Parquet Modular Encryption
+
 use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
@@ -50,6 +52,7 @@ impl EncryptionKey {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Defines how data in a Parquet file should be encrypted
 pub struct FileEncryptionProperties {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
@@ -59,7 +62,7 @@ pub struct FileEncryptionProperties {
 }
 
 impl FileEncryptionProperties {
-    /// Create a new builder for encryption properties
+    /// Create a new builder for encryption properties with the given footer encryption key
     pub fn builder(footer_key: Vec<u8>) -> EncryptionPropertiesBuilder {
         EncryptionPropertiesBuilder::new(footer_key)
     }
@@ -76,14 +79,14 @@ impl FileEncryptionProperties {
 
     /// Retrieval of key used for encryption of footer and (possibly) columns
     pub fn footer_key(&self) -> &Vec<u8> {
-        self.footer_key.key.as_ref()
+        &self.footer_key.key
     }
 
-    /// Get the column names, keys, and metadata used in column_keys
+    /// Get the column names, keys, and metadata for columns to be encrypted
     pub fn column_keys(&self) -> (Vec<String>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        let mut column_names: Vec<String> = Vec::new();
-        let mut keys: Vec<Vec<u8>> = Vec::new();
-        let mut meta: Vec<Vec<u8>> = Vec::new();
+        let mut column_names: Vec<String> = Vec::with_capacity(self.column_keys.len());
+        let mut keys: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
+        let mut meta: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
         for (key, value) in self.column_keys.iter() {
             column_names.push(key.clone());
             keys.push(value.key.clone());
@@ -137,6 +140,7 @@ impl FileEncryptionProperties {
     }
 }
 
+/// Builder for [`FileEncryptionProperties`]
 pub struct EncryptionPropertiesBuilder {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
@@ -146,23 +150,18 @@ pub struct EncryptionPropertiesBuilder {
 }
 
 impl EncryptionPropertiesBuilder {
+    /// Create a new [`EncryptionPropertiesBuilder`] with the given footer encryption key
     pub fn new(footer_key: Vec<u8>) -> EncryptionPropertiesBuilder {
         Self {
             footer_key: EncryptionKey::new(footer_key),
             column_keys: HashMap::default(),
             aad_prefix: None,
             encrypt_footer: true,
-            store_aad_prefix: true,
+            store_aad_prefix: false,
         }
     }
 
-    /// Set if the footer should be encrypted. Defaults to false.
-    pub fn with_encrypt_footer(mut self, encrypt_footer: bool) -> Self {
-        self.encrypt_footer = encrypt_footer;
-        self
-    }
-
-    /// Set if the footer should be plaintest. Defaults to true.
+    /// Set if the footer should be stored in plaintext (not encrypted). Defaults to false.
     pub fn with_plaintext_footer(mut self, plaintext_footer: bool) -> Self {
         self.encrypt_footer = !plaintext_footer;
         self
@@ -174,20 +173,20 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
-    /// Set the key used for encryption of a column. Note that if no column keys are provided but
-    /// footer key is all columns will be encrypted with the footer key. If column keys are provided
-    /// only the columns with a key will be encrypted even if footer key is provided.
+    /// Set the key used for encryption of a column. Note that if no column keys are configured then
+    /// all columns will be encrypted with the footer key.
+    /// If any column keys are configured then only the columns with a key will be encrypted.
     pub fn with_column_key(mut self, column_name: &str, key: Vec<u8>) -> Self {
         self.column_keys
             .insert(column_name.to_string(), EncryptionKey::new(key));
         self
     }
 
-    /// Set the key used for encryption of a column and it's metadata. Key's metadata field is to
-    /// enable file readers to recover the key. For example, the key_metadata can keep a serialized
-    /// ID of a data key. Note that if no column keys are provided but footer key is all columns
-    /// will be encrypted with the footer key. If column keys are provided only the columns with
-    /// a key will be encrypted even if footer key is provided.
+    /// Set the key used for encryption of a column and its metadata. The Key's metadata field is to
+    /// enable file readers to recover the key. For example, the metadata can keep a serialized
+    /// ID of a data key. Note that if no column keys are configured then all columns
+    /// will be encrypted with the footer key. If any column keys are configured then only the
+    /// columns with a key will be encrypted.
     pub fn with_column_key_and_metadata(
         mut self,
         column_name: &str,
@@ -215,15 +214,15 @@ impl EncryptionPropertiesBuilder {
 
     /// AAD prefix string uniquely identifies the file and allows to differentiate it e.g. from
     /// older versions of the file or from other partition files in the same data set (table).
-    /// This string is optionally passed by a writer upon file creation. Not passing it will
-    /// in AAD prefix being an empty string.
+    /// This string is optionally passed by a writer upon file creation. When not specified, no
+    /// AAD prefix is used.
     pub fn with_aad_prefix(mut self, aad_prefix: Vec<u8>) -> Self {
         self.aad_prefix = Some(aad_prefix);
         self
     }
 
     /// Should the AAD prefix be stored in the file. If false, readers will need to provide the
-    /// AAD prefix to be able to decrypt data. Defaults to true.
+    /// AAD prefix to be able to decrypt data. Defaults to false.
     pub fn with_aad_prefix_storage(mut self, store_aad_prefix: bool) -> Self {
         self.store_aad_prefix = store_aad_prefix;
         self
@@ -242,6 +241,7 @@ impl EncryptionPropertiesBuilder {
 }
 
 #[derive(Debug)]
+/// The encryption configuration for a single Parquet file
 pub(crate) struct FileEncryptor {
     properties: FileEncryptionProperties,
     aad_file_unique: Vec<u8>,

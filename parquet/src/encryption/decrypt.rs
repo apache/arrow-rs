@@ -141,7 +141,7 @@ impl CryptoContext {
 pub struct FileDecryptionProperties {
     footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
-    pub(crate) aad_prefix: Option<Vec<u8>>,
+    aad_prefix: Option<Vec<u8>>,
 }
 
 impl FileDecryptionProperties {
@@ -150,12 +150,14 @@ impl FileDecryptionProperties {
         DecryptionPropertiesBuilder::new(footer_key)
     }
 
-    /// Retrieval of key used for encryption of footer and (possibly) columns
-    pub fn footer_key(&self) -> &Vec<u8> {
-        self.footer_key.as_ref()
+    /// Retrieval of key used for decryption of footer and (possibly) columns.
+    /// Provided for testing consumer code.
+    pub fn footer_key(&self) -> Option<Vec<u8>> {
+        Some(self.footer_key.clone())
     }
 
-    /// Get the column names, keys used in column_keys
+    /// Get the column names and associated decryption keys that have been configured.
+    /// Provided for testing consumer code.
     pub fn column_keys(&self) -> (Vec<String>, Vec<Vec<u8>>) {
         let mut column_names: Vec<String> = Vec::new();
         let mut keys: Vec<Vec<u8>> = Vec::new();

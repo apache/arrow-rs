@@ -737,7 +737,7 @@ impl ParquetMetaDataReader {
                     _ => Some(false),
                 }
                 .unwrap_or(false);
-                if supply_aad_prefix && file_decryption_properties.aad_prefix.is_none() {
+                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
                     return Err(general_err!(
                         "Parquet file was encrypted with AAD prefix that is not stored in the file"
                     ));
@@ -880,8 +880,8 @@ fn get_file_decryptor(
             let aad_file_unique = algo
                 .aad_file_unique
                 .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if file_decryption_properties.aad_prefix.is_some() {
-                file_decryption_properties.aad_prefix.clone().unwrap()
+            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
+                aad_prefix.clone()
             } else {
                 algo.aad_prefix.unwrap_or_default()
             };
