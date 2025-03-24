@@ -72,7 +72,7 @@ pub fn read_plaintext_footer_file_without_decryption_properties() {
 
     match record_reader.next() {
         Some(Err(ArrowError::ParquetError(s))) => {
-            assert_eq!(s, "Parquet error: Error reading column data. File may be corrupt or column decryptor may be missing");
+            assert!(s.contains("protocol error"));
         }
         _ => {
             panic!("Expected ArrowError::ParquetError");
@@ -137,7 +137,7 @@ pub async fn read_plaintext_footer_file_without_decryption_properties_async() {
 
     match record_reader.next().await {
         Some(Err(ParquetError::ArrowError(s))) => {
-            assert_eq!(s, "Parquet argument error: Parquet error: Error reading column data. File may be corrupt or column decryptor may be missing");
+            assert!(s.contains("protocol error"));
         }
         _ => {
             panic!("Expected ArrowError::ParquetError");

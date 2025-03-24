@@ -98,7 +98,7 @@ fn test_arrow_gh_41317() {
     let err = read_file("ARROW-GH-41317.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: Error reading column data. File may be corrupt or column decryptor may be missing"
+        "External: Parquet argument error: External: bad data"
     );
 }
 

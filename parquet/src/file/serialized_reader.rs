@@ -341,13 +341,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
     let mut prot = TCompactInputProtocol::new(input);
-    let page_header = PageHeader::read_from_in_protocol(&mut prot).map_err(|_| {
-        general_err!(
-            "Error reading column data. File may be corrupt or column decryptor may be missing"
-                .to_string()
-        )
-    })?;
-    Ok(page_header)
+    Ok(PageHeader::read_from_in_protocol(&mut prot)?)
 }
 
 #[cfg(feature = "encryption")]
