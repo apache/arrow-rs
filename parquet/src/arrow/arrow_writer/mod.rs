@@ -492,7 +492,7 @@ impl ArrowPageWriter {
 
 impl PageWriter for ArrowPageWriter {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let page = match self.page_encryptor.as_ref() {
+        let page = match &mut self.page_encryptor {
             #[cfg(feature = "encryption")]
             Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
             _ => page,
@@ -873,15 +873,17 @@ impl ArrowColumnWriterFactory {
         &self,
         column_descriptor: &ColumnDescPtr,
         column_index: usize,
-    ) -> Box<ArrowPageWriter> {
+    ) -> Result<Box<ArrowPageWriter>> {
         let column_path = column_descriptor.path().string();
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
             &self.file_encryptor,
             self.row_group_index,
             column_index,
-            column_path,
-        );
-        Box::new(ArrowPageWriter::default().with_encryptor(page_encryptor))
+            &column_path,
+        )?;
+        Ok(Box::new(
+            ArrowPageWriter::default().with_encryptor(page_encryptor),
+        ))
     }
 
     #[cfg(not(feature = "encryption"))]
@@ -889,8 +891,8 @@ impl ArrowColumnWriterFactory {
         &self,
         _column_descriptor: &ColumnDescPtr,
         _column_index: usize,
-    ) -> Box<ArrowPageWriter> {
-        Box::<ArrowPageWriter>::default()
+    ) -> Result<Box<ArrowPageWriter>> {
+        Ok(Box::<ArrowPageWriter>::default())
     }
 
     /// Gets the [`ArrowColumnWriter`] for the given `data_type`
@@ -901,36 +903,36 @@ impl ArrowColumnWriterFactory {
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
-        let col = |desc: &ColumnDescPtr| {
-            let page_writer = self.create_page_writer(desc, out.len());
+        let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+            let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
             let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
-            ArrowColumnWriter {
+            Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::Column(writer),
-            }
+            })
         };
 
-        let bytes = |desc: &ColumnDescPtr| {
-            let page_writer = self.create_page_writer(desc, out.len());
+        let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+            let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
             let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
-            ArrowColumnWriter {
+            Ok(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::ByteArray(writer),
-            }
+            })
         };
 
         match data_type {
-            _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())),
-            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())),
+            _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())?),
             ArrowDataType::LargeBinary
             | ArrowDataType::Binary
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
             | ArrowDataType::Utf8View => {
-                out.push(bytes(leaves.next().unwrap()))
+                out.push(bytes(leaves.next().unwrap())?)
             }
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
@@ -951,13 +953,13 @@ impl ArrowColumnWriterFactory {
             }
             ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
                 ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                    out.push(bytes(leaves.next().unwrap()))
+                    out.push(bytes(leaves.next().unwrap())?)
                 }
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
-                    out.push(bytes(leaves.next().unwrap()))
+                    out.push(bytes(leaves.next().unwrap())?)
                 }
                 _ => {
-                    out.push(col(leaves.next().unwrap()))
+                    out.push(col(leaves.next().unwrap())?)
                 }
             }
             _ => return Err(ParquetError::NYI(

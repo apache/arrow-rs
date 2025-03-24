@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::column::page::CompressedPage;
+use crate::encryption::ciphers::BlockEncryptor;
 use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
@@ -24,12 +25,12 @@ use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PageEncryptor {
     file_encryptor: Arc<FileEncryptor>,
+    block_encryptor: Box<dyn BlockEncryptor>,
     row_group_index: usize,
     column_index: usize,
-    column_path: String,
     page_index: usize,
 }
 
@@ -38,19 +39,20 @@ impl PageEncryptor {
         file_encryptor: &Option<Arc<FileEncryptor>>,
         row_group_index: usize,
         column_index: usize,
-        column_path: String,
-    ) -> Option<Self> {
+        column_path: &str,
+    ) -> Result<Option<Self>> {
         match file_encryptor {
-            Some(file_encryptor) if file_encryptor.is_column_encrypted(&column_path) => {
-                Some(Self {
+            Some(file_encryptor) if file_encryptor.is_column_encrypted(column_path) => {
+                let block_encryptor = file_encryptor.get_column_encryptor(column_path)?;
+                Ok(Some(Self {
                     file_encryptor: file_encryptor.clone(),
+                    block_encryptor,
                     row_group_index,
                     column_index,
-                    column_path,
                     page_index: 0,
-                })
+                }))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -58,7 +60,7 @@ impl PageEncryptor {
         self.page_index += 1;
     }
 
-    fn encrypt_page(&self, page: &CompressedPage) -> Result<Vec<u8>> {
+    fn encrypt_page(&mut self, page: &CompressedPage) -> Result<Vec<u8>> {
         let module_type = if page.compressed_page().is_data_page() {
             ModuleType::DataPage
         } else {
@@ -71,21 +73,18 @@ impl PageEncryptor {
             self.column_index,
             Some(self.page_index),
         )?;
-        let mut encryptor = self
-            .file_encryptor
-            .get_column_encryptor(&self.column_path)?;
-        let encrypted_buffer = encryptor.encrypt(page.data(), &aad)?;
+        let encrypted_buffer = self.block_encryptor.encrypt(page.data(), &aad)?;
 
         Ok(encrypted_buffer)
     }
 
-    pub fn encrypt_compressed_page(&self, page: CompressedPage) -> Result<CompressedPage> {
+    pub fn encrypt_compressed_page(&mut self, page: CompressedPage) -> Result<CompressedPage> {
         let encrypted_page = self.encrypt_page(&page)?;
         Ok(page.with_new_compressed_buffer(Bytes::from(encrypted_page)))
     }
 
     pub fn encrypt_page_header<W: Write>(
-        &self,
+        &mut self,
         page_header: &PageHeader,
         sink: &mut W,
     ) -> Result<()> {
@@ -108,10 +107,6 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
 
-        let mut encryptor = self
-            .file_encryptor
-            .get_column_encryptor(&self.column_path)?;
-
-        encrypt_object(page_header, &mut encryptor, sink, &aad)
+        encrypt_object(page_header, &mut self.block_encryptor, sink, &aad)
     }
 }

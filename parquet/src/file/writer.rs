@@ -613,8 +613,8 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
                     &file_encryptor,
                     row_group_index,
                     column_index,
-                    column.path().string(),
-                );
+                    &column.path().string(),
+                )?;
 
                 let page_writer = SerializedPageWriter::new(buf);
                 #[cfg(feature = "encryption")]
@@ -830,7 +830,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        match self.page_encryptor.as_ref() {
+        match self.page_encryptor.as_mut() {
             #[cfg(feature = "encryption")]
             Some(page_encryptor) => {
                 page_encryptor.encrypt_page_header(&header, &mut self.sink)?;
@@ -846,7 +846,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let page = match self.page_encryptor.as_ref() {
+        let page = match &mut self.page_encryptor {
             #[cfg(feature = "encryption")]
             Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
             _ => page,
