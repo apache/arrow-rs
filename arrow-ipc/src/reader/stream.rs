@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
@@ -42,6 +43,12 @@ pub struct StreamDecoder {
     buf: MutableBuffer,
     /// Whether or not array data in input buffers are required to be aligned
     require_alignment: bool,
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    ///
+    /// [`FileDecoder::with_skip_validation`]: crate::reader::FileDecoder::with_skip_validation
+    skip_validation: UnsafeFlag,
 }
 
 #[derive(Debug)]
@@ -235,6 +242,7 @@ impl StreamDecoder {
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
+                                self.skip_validation.clone(),
                             )?;
                             self.state = DecoderState::default();
                         }

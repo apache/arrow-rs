@@ -30,6 +30,8 @@ rust-version = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
+# See https://github.com/briansmith/ring/issues/918#issuecomment-2077788925
+ring = { version = "0.17", default-features = false, features = ["wasm32_unknown_unknown_js", "std"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
@@ -43,7 +45,6 @@ arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
-# Intentionally not a path dependency as object_store is released separately
 object_store = { version = "0.11.0", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
@@ -70,6 +71,7 @@ half = { version = "2.1", default-features = false, features = ["num-traits"] }
 sysinfo = { version = "0.33.0", optional = true, default-features = false, features = ["system"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
 simdutf8 = { version = "0.1.5", optional = true, default-features = false }
+ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -85,14 +87,6 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 object_store = { version = "0.11.0", default-features = false, features = ["azure"] }
-
-# TODO: temporary to fix parquet wasm build
-# upstream issue: https://github.com/gyscos/zstd-rs/issues/269
-[target.'cfg(target_family = "wasm")'.dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.14", optional = true, default-features = false }
-
-[target.'cfg(target_family = "wasm")'.dev-dependencies]
-zstd-sys = { version = ">=2.0.0, <2.0.14", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -118,13 +112,15 @@ async = ["futures", "tokio"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies
-zstd = ["dep:zstd", "zstd-sys"]
+zstd = ["dep:zstd"]
 # Display memory in example/write_parquet.rs
 sysinfo = ["dep:sysinfo"]
 # Verify 32-bit CRC checksum when decoding parquet pages
 crc = ["dep:crc32fast"]
 # Enable SIMD UTF-8 validation
 simdutf8 = ["dep:simdutf8"]
+# Enable Parquet modular encryption support
+encryption = ["dep:ring"]
 
 
 [[example]]
