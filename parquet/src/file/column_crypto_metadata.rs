@@ -20,7 +20,8 @@
 use crate::errors::Result;
 use crate::format::{
     ColumnCryptoMetaData as TColumnCryptoMetaData,
-    EncryptionWithColumnKey as TEncryptionWithColumnKey, EncryptionWithFooterKey,
+    EncryptionWithColumnKey as TEncryptionWithColumnKey,
+    EncryptionWithFooterKey as TEncryptionWithFooterKey,
 };
 
 /// ColumnCryptoMetadata for a column chunk
@@ -37,7 +38,7 @@ pub enum ColumnCryptoMetaData {
 pub struct EncryptionWithColumnKey {
     /// Path to the column in the Parquet schema
     pub path_in_schema: Vec<String>,
-    /// Metadata to allow retrieval of the column encryption key
+    /// Metadata required to retrieve the column encryption key
     pub key_metadata: Option<Vec<u8>>,
 }
 
@@ -63,7 +64,7 @@ pub fn try_from_thrift(
 pub fn to_thrift(column_crypto_metadata: &ColumnCryptoMetaData) -> TColumnCryptoMetaData {
     match column_crypto_metadata {
         ColumnCryptoMetaData::EncryptionWithFooterKey => {
-            TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(EncryptionWithFooterKey {})
+            TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(TEncryptionWithFooterKey {})
         }
         ColumnCryptoMetaData::EncryptionWithColumnKey(encryption_with_column_key) => {
             TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(TEncryptionWithColumnKey {

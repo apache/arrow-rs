@@ -744,6 +744,7 @@ impl ParquetMetaDataReader {
                 }
                 let decryptor = get_file_decryptor(
                     t_file_crypto_metadata.encryption_algorithm,
+                    t_file_crypto_metadata.key_metadata.as_deref(),
                     file_decryption_properties,
                 )?;
                 let footer_decryptor = decryptor.get_footer_decryptor();
@@ -774,7 +775,11 @@ impl ParquetMetaDataReader {
             file_decryption_properties,
         ) {
             // File has a plaintext footer but encryption algorithm is set
-            file_decryptor = Some(get_file_decryptor(algo, file_decryption_properties)?);
+            file_decryptor = Some(get_file_decryptor(
+                algo,
+                t_file_metadata.footer_signing_key_metadata.as_deref(),
+                file_decryption_properties,
+            )?);
         }
 
         let mut row_groups = Vec::new();
@@ -873,6 +878,7 @@ impl ParquetMetaDataReader {
 #[cfg(feature = "encryption")]
 fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
+    footer_key_metadata: Option<&[u8]>,
     file_decryption_properties: &FileDecryptionProperties,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
@@ -886,7 +892,12 @@ fn get_file_decryptor(
                 algo.aad_prefix.unwrap_or_default()
             };
 
-            FileDecryptor::new(file_decryption_properties, aad_file_unique, aad_prefix)
+            FileDecryptor::new(
+                file_decryption_properties,
+                footer_key_metadata,
+                aad_file_unique,
+                aad_prefix,
+            )
         }
         EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
             "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"

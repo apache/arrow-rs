@@ -103,17 +103,14 @@ use crate::encryption::{
 };
 use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
-#[cfg(feature = "encryption")]
-use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
-
-#[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata;
+use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
+#[cfg(feature = "encryption")]
+use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SizeStatistics, SortingColumn,
@@ -664,7 +661,10 @@ impl RowGroupMetaData {
                     }
                     Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
                         let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(column_name.as_str())?
+                        decryptor.get_column_metadata_decryptor(
+                            column_name.as_str(),
+                            crypto_metadata.key_metadata.as_deref(),
+                        )?
                     }
                     Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()?
@@ -680,10 +680,13 @@ impl RowGroupMetaData {
                 )?;
 
                 let buf = c.encrypted_column_metadata.clone().unwrap();
-                let decrypted_cc_buf =
-                    column_decryptor.decrypt(buf.as_slice(), column_aad.as_ref()).map_err(|_| {
-                        general_err!("Unable to decrypt column '{}', perhaps the column key is wrong or missing?",
-                            d.path().string())
+                let decrypted_cc_buf = column_decryptor
+                    .decrypt(buf.as_slice(), column_aad.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
+                            d.path().string()
+                        )
                     })?;
 
                 let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());

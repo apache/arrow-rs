@@ -700,36 +700,19 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
         #[cfg(feature = "encryption")]
         let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            let column_name = self
-                .metadata
-                .file_metadata()
-                .schema_descr()
-                .column(self.column_idx);
-
-            let column_path = column_name.path().string();
-            if file_decryptor.is_column_encrypted(&column_path) {
-                let data_decryptor = file_decryptor.get_column_data_decryptor(&column_path);
-                let data_decryptor = match data_decryptor {
-                    Ok(data_decryptor) => data_decryptor,
-                    Err(err) => return Some(Err(err)),
-                };
-
-                let metadata_decryptor = file_decryptor.get_column_metadata_decryptor(&column_path);
-                let metadata_decryptor = match metadata_decryptor {
-                    Ok(metadata_decryptor) => metadata_decryptor,
-                    Err(err) => return Some(Err(err)),
-                };
-
-                let crypto_context = CryptoContext::new(
-                    rg_idx,
-                    self.column_idx,
-                    data_decryptor,
-                    metadata_decryptor,
-                    file_decryptor.file_aad().clone(),
-                );
-                Some(Arc::new(crypto_context))
-            } else {
-                None
+            match meta.crypto_metadata() {
+                Some(crypto_metadata) => {
+                    match CryptoContext::for_column(
+                        file_decryptor,
+                        crypto_metadata,
+                        rg_idx,
+                        self.column_idx,
+                    ) {
+                        Ok(context) => Some(Arc::new(context)),
+                        Err(err) => return Some(Err(err)),
+                    }
+                }
+                None => None,
             }
         } else {
             None
@@ -1015,7 +998,7 @@ mod tests {
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96Type,
+        FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -1517,17 +1500,76 @@ mod tests {
     #[test]
     fn test_int96_single_column_reader_test() {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
-        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
-            2,
-            ConvertedType::NONE,
-            None,
-            |vals| {
+
+        type TypeHintAndConversionFunction =
+            (Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef);
+
+        let resolutions: Vec<TypeHintAndConversionFunction> = vec![
+            // Test without a specified ArrowType hint.
+            (None, |vals: &[Option<Int96>]| {
                 Arc::new(TimestampNanosecondArray::from_iter(
                     vals.iter().map(|x| x.map(|x| x.to_nanos())),
-                )) as _
-            },
-            encodings,
-        );
+                )) as ArrayRef
+            }),
+            // Test other TimeUnits as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Second, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampSecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Millisecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMillisecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_millis())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Microsecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMicrosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_micros())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Nanosecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampNanosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                    )) as ArrayRef
+                },
+            ),
+            // Test another timezone with TimeUnit as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(
+                    TimeUnit::Second,
+                    Some(Arc::from("-05:00")),
+                )),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(
+                        TimestampSecondArray::from_iter(
+                            vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                        )
+                        .with_timezone("-05:00"),
+                    ) as ArrayRef
+                },
+            ),
+        ];
+
+        resolutions.iter().for_each(|(arrow_type, converter)| {
+            run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+                2,
+                ConvertedType::NONE,
+                arrow_type.clone(),
+                converter,
+                encodings,
+            );
+        })
     }
 
     struct RandUtf8Gen {}
