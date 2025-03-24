@@ -60,6 +60,8 @@ macro_rules! repeat_pat {
 ///             k.as_ref() => (dictionary_key_size_helper, u8),
 ///             _ => unreachable!(),
 ///         },
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX,
 ///     }
 /// }
@@ -107,7 +109,7 @@ macro_rules! downcast_integer {
 /// with the corresponding array, along with match statements for any non integer array types
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array, cast::as_large_list_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_integer(array: &dyn Array) {
@@ -119,6 +121,12 @@ macro_rules! downcast_integer {
 ///         }
 ///         DataType::Utf8 => {
 ///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_large_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -167,6 +175,8 @@ macro_rules! downcast_integer_array {
 ///             k.data_type() => (run_end_size_helper, u8),
 ///             _ => unreachable!(),
 ///         },
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX,
 ///     }
 /// }
@@ -211,6 +221,8 @@ macro_rules! downcast_run_end_index {
 /// fn temporal_size(t: &DataType) -> u8 {
 ///     downcast_temporal! {
 ///         t => (temporal_size_helper, u8),
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX
 ///     }
 /// }
@@ -263,7 +275,7 @@ macro_rules! downcast_temporal {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array, cast::as_large_list_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_temporal(array: &dyn Array) {
@@ -275,6 +287,12 @@ macro_rules! downcast_temporal {
 ///         }
 ///         DataType::Utf8 => {
 ///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_large_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -319,6 +337,8 @@ macro_rules! downcast_temporal_array {
 /// fn primitive_size(t: &DataType) -> u8 {
 ///     downcast_primitive! {
 ///         t => (primitive_size_helper, u8),
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX
 ///     }
 /// }
@@ -395,7 +415,7 @@ macro_rules! downcast_primitive_array_helper {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array, cast::as_large_string_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_primitive(array: &dyn Array) {
@@ -407,6 +427,12 @@ macro_rules! downcast_primitive_array_helper {
 ///         }
 ///         DataType::Utf8 => {
 ///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_large_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -482,7 +508,7 @@ macro_rules! downcast_dictionary_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array, cast::as_large_string_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -497,6 +523,12 @@ macro_rules! downcast_dictionary_array_helper {
 ///         },
 ///         DataType::Utf8 => {
 ///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_large_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -584,7 +616,7 @@ macro_rules! downcast_run_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array, cast::as_large_string_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -599,6 +631,12 @@ macro_rules! downcast_run_array_helper {
 ///         },
 ///         DataType::Utf8 => {
 ///             for v in as_string_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_large_string_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
