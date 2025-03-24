@@ -17,35 +17,7 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::{types, RecordBatch};
-use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
-};
-
-use parquet::arrow::ArrowWriter;
-use parquet::encryption::decrypt::FileDecryptionProperties;
-use parquet::encryption::encrypt::FileEncryptionProperties;
-use parquet::errors::Result;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::WriterProperties;
-use std::fs::File;
-
-/// Tests reading an encrypted file from the parquet-testing repository
-pub(crate) fn verify_encryption_test_file_read(
-    file: File,
-    decryption_properties: FileDecryptionProperties,
-) {
-    let options =
-        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let record_reader = builder.build().unwrap();
-    let record_batches = record_reader
-        .map(|x| x.unwrap())
-        .collect::<Vec<RecordBatch>>();
-
-    verify_encryption_test_data(record_batches, metadata.metadata());
-}
 
 /// Verifies data read from an encrypted file from the parquet-testing repository
 pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &ParquetMetaData) {
@@ -110,44 +82,4 @@ pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &
     }
 
     assert_eq!(row_count, file_metadata.num_rows() as usize);
-}
-
-pub fn read_and_roundtrip_to_encrypted_file(
-    path: &str,
-    decryption_properties: FileDecryptionProperties,
-    encryption_properties: FileEncryptionProperties,
-) {
-    let temp_file = tempfile::tempfile().unwrap();
-
-    // read example data
-    let file = File::open(path).unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let batch_reader = builder.build().unwrap();
-    let batches = batch_reader
-        .collect::<Result<Vec<RecordBatch>, _>>()
-        .unwrap();
-
-    // write example data
-    let props = WriterProperties::builder()
-        .with_file_encryption_properties(encryption_properties)
-        .build();
-
-    let mut writer = ArrowWriter::try_new(
-        temp_file.try_clone().unwrap(),
-        metadata.schema().clone(),
-        Some(props),
-    )
-    .unwrap();
-    for batch in batches {
-        writer.write(&batch).unwrap();
-    }
-
-    writer.close().unwrap();
-
-    // check re-written example data
-    verify_encryption_test_file_read(temp_file, decryption_properties);
 }

@@ -17,7 +17,6 @@
 
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
-use crate::encryption_util::read_and_roundtrip_to_encrypted_file;
 use crate::encryption_util::verify_encryption_test_data;
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
@@ -612,4 +611,44 @@ fn test_write_encrypted_struct_field() {
             assert_eq!(read_column, written_column);
         }
     }
+}
+
+fn read_and_roundtrip_to_encrypted_file(
+    path: &str,
+    decryption_properties: FileDecryptionProperties,
+    encryption_properties: FileEncryptionProperties,
+) {
+    let temp_file = tempfile::tempfile().unwrap();
+
+    // read example data
+    let file = File::open(path).unwrap();
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+
+    // write example data
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+    .unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+
+    writer.close().unwrap();
+
+    // check re-written example data
+    verify_encryption_test_file_read(temp_file, decryption_properties);
 }
