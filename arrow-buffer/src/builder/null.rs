@@ -179,6 +179,20 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Append [`NullBuffer`] to this [`NullBufferBuilder`]
+    ///
+    /// This is useful when you want to concatenate two null buffers.
+    pub fn append_buffer(&mut self, buffer: &NullBuffer) {
+        if buffer.null_count() > 0 {
+            self.materialize_if_needed();
+        }
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.append_buffer(buffer.inner())
+        } else {
+            self.len += buffer.len();
+        }
+    }
+
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
@@ -338,5 +352,54 @@ mod tests {
         assert_eq!(builder.len(), 2);
         builder.truncate(1);
         assert_eq!(builder.len(), 1);
+    }
+
+    #[test]
+    fn test_append_buffers() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer1 = NullBuffer::from(&[true, true]);
+        let buffer2 = NullBuffer::from(&[true, true, false]);
+
+        builder.append_buffer(&buffer1);
+        builder.append_buffer(&buffer2);
+
+        assert_eq!(builder.as_slice().unwrap(), &[0b01111_u8]);
+    }
+
+    #[test]
+    fn test_append_buffers_with_unaligned_length() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true, true, false, true, false]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b01011_u8]);
+
+        let buffer = NullBuffer::from(&[false, false, true, true, true, false, false]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b10001011_u8, 0b0011_u8]);
+    }
+
+    #[test]
+    fn test_append_empty_buffer() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true, true, false, true]);
+        builder.append_buffer(&buffer);
+        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+
+        let buffer = NullBuffer::from(&[]);
+        builder.append_buffer(&buffer);
+
+        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+    }
+
+    #[test]
+    fn test_should_not_materialize_when_appending_all_valid_buffers() {
+        let mut builder = NullBufferBuilder::new(0);
+        let buffer = NullBuffer::from(&[true; 10]);
+        builder.append_buffer(&buffer);
+
+        let buffer = NullBuffer::from(&[true; 2]);
+        builder.append_buffer(&buffer);
+
+        assert_eq!(builder.finish(), None);
     }
 }
