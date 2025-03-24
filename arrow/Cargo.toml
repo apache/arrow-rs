@@ -29,13 +29,13 @@ include = [
     "src/**/*.rs",
     "tests/*.rs",
     "Cargo.toml",
+    "LICENSE.txt",
+    "NOTICE.txt",
 ]
 edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
-name = "arrow"
-path = "src/lib.rs"
 bench = false
 
 [dependencies]
@@ -58,7 +58,7 @@ pyo3 = { version = "0.23", default-features = false, optional = true }
 half = { version = "2.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
-features = ["prettyprint", "ipc_compression", "ffi", "pyarrow"]
+all-features = true
 
 [features]
 default = ["csv", "ipc", "json"]

@@ -47,10 +47,14 @@ pub enum DatePart {
     Quarter,
     /// Calendar year
     Year,
+    /// ISO year, computed as per ISO 8601
+    YearISO,
     /// Month in the year, in range `1..=12`
     Month,
-    /// ISO week of the year, in range `1..=53`
+    /// week of the year, in range `1..=53`, computed as per ISO 8601
     Week,
+    /// ISO week of the year, in range `1..=53`
+    WeekISO,
     /// Day of the month, in range `1..=31`
     Day,
     /// Day of the week, in range `0..=6`, where Sunday is `0`
@@ -91,8 +95,9 @@ where
     match part {
         DatePart::Quarter => |d| d.quarter() as i32,
         DatePart::Year => |d| d.year(),
+        DatePart::YearISO => |d| d.iso_week().year(),
         DatePart::Month => |d| d.month() as i32,
-        DatePart::Week => |d| d.iso_week().week() as i32,
+        DatePart::Week | DatePart::WeekISO => |d| d.iso_week().week() as i32,
         DatePart::Day => |d| d.day() as i32,
         DatePart::DayOfWeekSunday0 => |d| d.num_days_from_sunday(),
         DatePart::DayOfWeekMonday0 => |d| d.num_days_from_monday(),
@@ -102,7 +107,7 @@ where
         DatePart::Second => |d| d.second() as i32,
         DatePart::Millisecond => |d| (d.nanosecond() / 1_000_000) as i32,
         DatePart::Microsecond => |d| (d.nanosecond() / 1_000) as i32,
-        DatePart::Nanosecond => |d| (d.nanosecond()) as i32,
+        DatePart::Nanosecond => |d| d.nanosecond() as i32,
     }
 }
 
@@ -130,9 +135,14 @@ where
 /// let input: TimestampMicrosecondArray =
 ///     vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 ///
-/// let actual = date_part(&input, DatePart::Week).unwrap();
+/// let week = date_part(&input, DatePart::Week).unwrap();
+/// let week_iso = date_part(&input, DatePart::WeekISO).unwrap();
 /// let expected: Int32Array = vec![Some(4), None, Some(30)].into();
-/// assert_eq!(actual.as_ref(), &expected);
+/// assert_eq!(week.as_ref(), &expected);
+/// assert_eq!(week_iso.as_ref(), &expected);
+/// let year_iso = date_part(&input, DatePart::YearISO).unwrap();
+/// let expected: Int32Array = vec![Some(2021), None, Some(2024)].into();
+/// assert_eq!(year_iso.as_ref(), &expected);
 /// ```
 pub fn date_part(array: &dyn Array, part: DatePart) -> Result<ArrayRef, ArrowError> {
     downcast_temporal_array!(
@@ -430,6 +440,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalYearMonthType> {
 
             DatePart::Quarter
             | DatePart::Week
+            | DatePart::WeekISO
+            | DatePart::YearISO
             | DatePart::Day
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
@@ -460,6 +472,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalDayTimeType> {
 
             DatePart::Quarter
             | DatePart::Year
+            | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
@@ -495,6 +509,8 @@ impl ExtractDatePartExt for PrimitiveArray<IntervalMonthDayNanoType> {
             DatePart::Nanosecond => Ok(self.unary_opt(|d| d.nanoseconds.try_into().ok())),
 
             DatePart::Quarter
+            | DatePart::WeekISO
+            | DatePart::YearISO
             | DatePart::DayOfWeekSunday0
             | DatePart::DayOfWeekMonday0
             | DatePart::DayOfYear => {
@@ -523,6 +539,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
             ),
 
             DatePart::Year
+            | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -553,6 +571,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
             }
 
             DatePart::Year
+            | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -583,6 +603,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
             }
 
             DatePart::Year
+            | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -613,6 +635,8 @@ impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
             DatePart::Nanosecond => Ok(self.unary_opt(|d| d.try_into().ok())),
 
             DatePart::Year
+            | DatePart::YearISO
+            | DatePart::WeekISO
             | DatePart::Quarter
             | DatePart::Month
             | DatePart::DayOfWeekSunday0
@@ -634,12 +658,6 @@ pub(crate) use return_compute_error_with;
 
 // Internal trait, which is used for mapping values from DateLike structures
 trait ChronoDateExt {
-    /// Returns a value in range `1..=4` indicating the quarter this date falls into
-    fn quarter(&self) -> u32;
-
-    /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
-    fn quarter0(&self) -> u32;
-
     /// Returns the day of week; Monday is encoded as `0`, Tuesday as `1`, etc.
     fn num_days_from_monday(&self) -> i32;
 
@@ -648,14 +666,6 @@ trait ChronoDateExt {
 }
 
 impl<T: Datelike> ChronoDateExt for T {
-    fn quarter(&self) -> u32 {
-        self.quarter0() + 1
-    }
-
-    fn quarter0(&self) -> u32 {
-        self.month0() / 3
-    }
-
     fn num_days_from_monday(&self) -> i32 {
         self.weekday().num_days_from_monday() as i32
     }
@@ -2071,5 +2081,131 @@ mod tests {
         ensure_returns_error(&DurationMillisecondArray::from(vec![0]));
         ensure_returns_error(&DurationMicrosecondArray::from(vec![0]));
         ensure_returns_error(&DurationNanosecondArray::from(vec![0]));
+    }
+
+    const TIMESTAMP_SECOND_1970_01_01: i64 = 0;
+    const TIMESTAMP_SECOND_2018_01_01: i64 = 1_514_764_800;
+    const TIMESTAMP_SECOND_2019_02_20: i64 = 1_550_636_625;
+    const SECONDS_IN_DAY: i64 = 24 * 60 * 60;
+    // In 2018 the ISO year and calendar year start on the same date— 2018-01-01 or 2018-W01-1
+    #[test]
+    fn test_temporal_array_date64_week_iso() {
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(TIMESTAMP_SECOND_2018_01_01 * 1000),
+            Some(TIMESTAMP_SECOND_2019_02_20 * 1000),
+        ]
+        .into();
+
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1, actual.value(0));
+        assert_eq!(8, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_year_iso() {
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(TIMESTAMP_SECOND_2018_01_01 * 1000),
+            Some(TIMESTAMP_SECOND_2019_02_20 * 1000),
+        ]
+        .into();
+
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2018, actual.value(0));
+        assert_eq!(2019, actual.value(1));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_week_iso() {
+        let a = TimestampSecondArray::from(vec![
+            TIMESTAMP_SECOND_1970_01_01, // 0 and is Thursday
+            SECONDS_IN_DAY * 4,          //  Monday of week 2
+            SECONDS_IN_DAY * 4 - 1,      // Sunday of week 1
+        ]);
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1, actual.value(0));
+        assert_eq!(2, actual.value(1));
+        assert_eq!(1, actual.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_year_iso() {
+        let a = TimestampSecondArray::from(vec![
+            TIMESTAMP_SECOND_1970_01_01,
+            SECONDS_IN_DAY * 4,
+            SECONDS_IN_DAY * 4 - 1,
+        ]);
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(1970, actual.value(0));
+        assert_eq!(1970, actual.value(1));
+        assert_eq!(1970, actual.value(2));
+    }
+
+    const TIMESTAMP_SECOND_2015_12_28: i64 = 1_451_260_800;
+    const TIMESTAMP_SECOND_2016_01_03: i64 = 1_451_779_200;
+    // January 1st 2016 is a Friday, so 2015 week 53 runs from
+    // 2015-12-28 to 2016-01-03 inclusive, and
+    // 2016 week 1 runs from 2016-01-04 to 2016-01-10 inclusive.
+    #[test]
+    fn test_temporal_array_date64_week_iso_edge_cases() {
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(TIMESTAMP_SECOND_2015_12_28 * 1000),
+            Some(TIMESTAMP_SECOND_2016_01_03 * 1000),
+            Some((TIMESTAMP_SECOND_2016_01_03 + SECONDS_IN_DAY) * 1000),
+        ]
+        .into();
+
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(53, actual.value(0));
+        assert_eq!(53, actual.value(1));
+        assert_eq!(1, actual.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_year_iso_edge_cases() {
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(TIMESTAMP_SECOND_2015_12_28 * 1000),
+            Some(TIMESTAMP_SECOND_2016_01_03 * 1000),
+            Some((TIMESTAMP_SECOND_2016_01_03 + SECONDS_IN_DAY) * 1000),
+        ]
+        .into();
+
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2015, actual.value(0));
+        assert_eq!(2015, actual.value(1));
+        assert_eq!(2016, actual.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_week_iso_edge_cases() {
+        let a = TimestampSecondArray::from(vec![
+            TIMESTAMP_SECOND_2015_12_28,
+            TIMESTAMP_SECOND_2016_01_03,
+            TIMESTAMP_SECOND_2016_01_03 + SECONDS_IN_DAY,
+        ]);
+        let b = date_part(&a, DatePart::WeekISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(53, actual.value(0));
+        assert_eq!(53, actual.value(1));
+        assert_eq!(1, actual.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_year_iso_edge_cases() {
+        let a = TimestampSecondArray::from(vec![
+            TIMESTAMP_SECOND_2015_12_28,
+            TIMESTAMP_SECOND_2016_01_03,
+            TIMESTAMP_SECOND_2016_01_03 + SECONDS_IN_DAY,
+        ]);
+        let b = date_part(&a, DatePart::YearISO).unwrap();
+        let actual = b.as_primitive::<Int32Type>();
+        assert_eq!(2015, actual.value(0));
+        assert_eq!(2015, actual.value(1));
+        assert_eq!(2016, actual.value(2));
     }
 }
