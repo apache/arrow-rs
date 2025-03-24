@@ -109,7 +109,7 @@ macro_rules! downcast_integer {
 /// with the corresponding array, along with match statements for any non integer array types
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array, cast::as_large_list_array};
+/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_integer(array: &dyn Array) {
@@ -126,7 +126,7 @@ macro_rules! downcast_integer {
 ///         }
 ///         // You can also add a guard to the pattern
 ///         DataType::LargeUtf8 if true => {
-///             for v in as_large_string_array(array) {
+///             for v in as_largestring_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -275,7 +275,7 @@ macro_rules! downcast_temporal {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array, cast::as_large_list_array};
+/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_temporal(array: &dyn Array) {
@@ -292,7 +292,7 @@ macro_rules! downcast_temporal {
 ///         }
 ///         // You can also add a guard to the pattern
 ///         DataType::LargeUtf8 if true => {
-///             for v in as_large_string_array(array) {
+///             for v in as_largestring_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -415,7 +415,7 @@ macro_rules! downcast_primitive_array_helper {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array, cast::as_large_string_array};
+/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_primitive(array: &dyn Array) {
@@ -432,7 +432,7 @@ macro_rules! downcast_primitive_array_helper {
 ///         }
 ///         // You can also add a guard to the pattern
 ///         DataType::LargeUtf8 if true => {
-///             for v in as_large_string_array(array) {
+///             for v in as_largestring_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -508,7 +508,7 @@ macro_rules! downcast_dictionary_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array, cast::as_large_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -528,7 +528,7 @@ macro_rules! downcast_dictionary_array_helper {
 ///         }
 ///         // You can also add a guard to the pattern
 ///         DataType::LargeUtf8 if true => {
-///             for v in as_large_string_array(array) {
+///             for v in as_largestring_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
@@ -616,7 +616,7 @@ macro_rules! downcast_run_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array, cast::as_large_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -636,7 +636,7 @@ macro_rules! downcast_run_array_helper {
 ///         }
 ///         // You can also add a guard to the pattern
 ///         DataType::LargeUtf8 if true => {
-///             for v in as_large_string_array(array) {
+///             for v in as_largestring_array(array) {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
