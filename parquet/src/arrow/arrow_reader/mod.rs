@@ -700,36 +700,19 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
         #[cfg(feature = "encryption")]
         let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            let column_name = self
-                .metadata
-                .file_metadata()
-                .schema_descr()
-                .column(self.column_idx);
-
-            if file_decryptor.is_column_encrypted(column_name.name()) {
-                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
-                let data_decryptor = match data_decryptor {
-                    Ok(data_decryptor) => data_decryptor,
-                    Err(err) => return Some(Err(err)),
-                };
-
-                let metadata_decryptor =
-                    file_decryptor.get_column_metadata_decryptor(column_name.name());
-                let metadata_decryptor = match metadata_decryptor {
-                    Ok(metadata_decryptor) => metadata_decryptor,
-                    Err(err) => return Some(Err(err)),
-                };
-
-                let crypto_context = CryptoContext::new(
-                    rg_idx,
-                    self.column_idx,
-                    data_decryptor,
-                    metadata_decryptor,
-                    file_decryptor.file_aad().clone(),
-                );
-                Some(Arc::new(crypto_context))
-            } else {
-                None
+            match meta.crypto_metadata() {
+                Some(crypto_metadata) => {
+                    match CryptoContext::for_column(
+                        file_decryptor,
+                        crypto_metadata,
+                        rg_idx,
+                        self.column_idx,
+                    ) {
+                        Ok(context) => Some(Arc::new(context)),
+                        Err(err) => return Some(Err(err)),
+                    }
+                }
+                None => None,
             }
         } else {
             None
