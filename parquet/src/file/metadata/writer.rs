@@ -164,12 +164,16 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // But for simplicity we always set this field.
         let column_orders = Some(column_orders);
 
+        #[cfg(feature = "encryption")]
+        let mut unencrypted_row_groups = None;
+
         let row_groups = match self.file_encryptor.as_ref() {
             #[cfg(feature = "encryption")]
             Some(file_encryptor) => {
-                Self::encrypt_row_groups(self.row_groups.clone(), file_encryptor)?
+                unencrypted_row_groups = Some(self.row_groups.clone());
+                Self::encrypt_row_groups(self.row_groups, file_encryptor)?
             }
-            _ => self.row_groups.clone(),
+            _ => self.row_groups,
         };
 
         let mut file_metadata = crate::format::FileMetaData {
@@ -228,7 +232,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // Return unencrypted row_group for use in program
         // E.g. when collecting statistics.
         // Related to this see: https://github.com/apache/arrow-rs/issues/7254
-        file_metadata.row_groups = self.row_groups;
+        #[cfg(feature = "encryption")]
+        if let Some(row_groups) = unencrypted_row_groups {
+            file_metadata.row_groups = row_groups;
+        }
 
         Ok(file_metadata)
     }
