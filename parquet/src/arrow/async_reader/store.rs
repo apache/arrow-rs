@@ -147,6 +147,7 @@ impl ParquetObjectReader {
 
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+        let range = range.start as u64..range.end as u64;
         self.spawn(|store, path| store.get_range(path, range))
     }
 
@@ -154,6 +155,10 @@ impl AsyncFileReader for ParquetObjectReader {
     where
         Self: Send,
     {
+        let ranges = ranges
+            .into_iter()
+            .map(|range| range.start as u64..range.end as u64)
+            .collect::<Vec<_>>();
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 
@@ -165,7 +170,7 @@ impl AsyncFileReader for ParquetObjectReader {
     // `Self::get_bytes`.
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let file_size = self.meta.size;
+            let file_size = self.meta.size.try_into().expect("overflow");
             let metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
@@ -181,7 +186,7 @@ impl AsyncFileReader for ParquetObjectReader {
         options: &'a ArrowReaderOptions,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let file_size = self.meta.size;
+            let file_size = self.meta.size.try_into().expect("overflow");
             let metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
