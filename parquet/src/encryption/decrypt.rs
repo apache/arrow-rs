@@ -239,7 +239,7 @@ impl FileDecryptionProperties {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
                 None => Err(general_err!(
-                    "No column decryption key set for column '{}'",
+                    "No column decryption key set for encrypted column '{}'",
                     column_name
                 )),
                 Some(key) => Ok(Cow::Borrowed(key)),

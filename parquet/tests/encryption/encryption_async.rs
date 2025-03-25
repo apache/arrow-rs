@@ -120,7 +120,7 @@ async fn test_misspecified_encryption_keys() {
 
     // Missing column key
     check_for_error(
-        "Parquet error: No column decryption key set for column 'double_field'",
+        "Parquet error: No column decryption key set for encrypted column 'double_field'",
         &path,
         footer_key,
         "".as_bytes(),
