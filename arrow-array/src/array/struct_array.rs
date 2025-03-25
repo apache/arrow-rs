@@ -416,7 +416,7 @@ impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
 impl std::fmt::Debug for StructArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "StructArray")?;
-        writeln!(f, "-- validity: ")?;
+        writeln!(f, "-- validity:")?;
         writeln!(f, "[")?;
         print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
         writeln!(f, "]\n[")?;
@@ -756,6 +756,6 @@ mod tests {
                 (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
             ))),
         );
-        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity: \n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
+        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
     }
 }
