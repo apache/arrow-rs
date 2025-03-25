@@ -56,7 +56,7 @@
 //!
 //! The [`arrow`] module supports reading and writing Parquet data to/from
 //! Arrow `RecordBatch`es. Using Arrow is simple and performant, and allows workloads
-//! to leverage the wide range of data transforms provided by the [arrow] crate, the
+//! to leverage the wide range of data transforms provided by the [arrow] crate, and by the
 //! ecosystem of [Arrow] compatible systems.
 //!
 //! Most users will use [`ArrowWriter`] for writing and [`ParquetRecordBatchReaderBuilder`] for

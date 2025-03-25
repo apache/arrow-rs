@@ -19,7 +19,7 @@
 //!
 //! See the [crate-level documentation](crate) for more details.
 //!
-//! The  `async` API for writing [`RecordBatch`]es is
+//! The `async` API for writing [`RecordBatch`]es is
 //! similar to the [`sync` API](ArrowWriter), so please
 //! read the documentation there before using this API.
 //!
