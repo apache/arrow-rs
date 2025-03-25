@@ -114,7 +114,7 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
 }
 
 fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
-    if precision <= DECIMAL128_MAX_PRECISION as _ {
+    if precision <= DECIMAL128_MAX_PRECISION as i32 {
         decimal_128_type(scale, precision)
     } else {
         decimal_256_type(scale, precision)
