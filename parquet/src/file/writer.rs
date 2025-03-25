@@ -593,29 +593,16 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     {
         self.assert_previous_writer_closed()?;
 
-        #[cfg(feature = "encryption")]
-        let file_encryptor = self.file_encryptor.clone();
-        #[cfg(feature = "encryption")]
-        let row_group_index = self.row_group_index as usize;
-        #[cfg(feature = "encryption")]
-        let column_index = self.column_index;
+        let encryptor_context = self.get_page_encryptor_context();
 
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
                 let (buf, on_close) = self.get_on_close();
 
-                #[cfg(feature = "encryption")]
-                let page_encryptor = PageEncryptor::create_if_column_encrypted(
-                    &file_encryptor,
-                    row_group_index,
-                    column_index,
-                    &column.path().string(),
-                )?;
-
                 let page_writer = SerializedPageWriter::new(buf);
-                #[cfg(feature = "encryption")]
-                let page_writer = page_writer.with_page_encryptor(page_encryptor);
+                let page_writer =
+                    Self::set_page_writer_encryptor(&column, encryptor_context, page_writer)?;
 
                 Some(factory(
                     column,
@@ -750,6 +737,48 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         Ok(metadata)
     }
 
+    /// Get context required to create a [`PageEncryptor`] for a column
+    #[cfg(feature = "encryption")]
+    fn get_page_encryptor_context(&self) -> PageEncryptorContext {
+        PageEncryptorContext {
+            file_encryptor: self.file_encryptor.clone(),
+            row_group_index: self.row_group_index as usize,
+            column_index: self.column_index,
+        }
+    }
+
+    /// Set the [`PageEncryptor`] on a page writer if a column is encrypted
+    #[cfg(feature = "encryption")]
+    fn set_page_writer_encryptor<'b>(
+        column: &ColumnDescPtr,
+        context: PageEncryptorContext,
+        page_writer: SerializedPageWriter<'b, W>,
+    ) -> Result<SerializedPageWriter<'b, W>> {
+        let page_encryptor = PageEncryptor::create_if_column_encrypted(
+            &context.file_encryptor,
+            context.row_group_index,
+            context.column_index,
+            &column.path().string(),
+        )?;
+
+        Ok(page_writer.with_page_encryptor(page_encryptor))
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn get_page_encryptor_context(&self) -> PageEncryptorContext {
+        PageEncryptorContext {}
+    }
+
+    /// No-op implementation of setting a [`PageEncryptor`] for when encryption is disabled
+    #[cfg(not(feature = "encryption"))]
+    fn set_page_writer_encryptor<'b>(
+        _column: &ColumnDescPtr,
+        _context: PageEncryptorContext,
+        page_writer: SerializedPageWriter<'b, W>,
+    ) -> Result<SerializedPageWriter<'b, W>> {
+        Ok(page_writer)
+    }
+
     #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
         if self.column_index != self.column_chunks.len() {
@@ -759,6 +788,17 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
     }
 }
+
+/// Context required to create a [`PageEncryptor`] for a column
+#[cfg(feature = "encryption")]
+struct PageEncryptorContext {
+    file_encryptor: Option<Arc<FileEncryptor>>,
+    row_group_index: usize,
+    column_index: usize,
+}
+
+#[cfg(not(feature = "encryption"))]
+struct PageEncryptorContext {}
 
 /// A wrapper around a [`ColumnWriter`] that invokes a callback on [`Self::close`]
 pub struct SerializedColumnWriter<'a> {
