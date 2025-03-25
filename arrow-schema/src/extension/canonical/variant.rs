@@ -112,6 +112,8 @@ impl ExtensionType for Variant {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "canonical_extension_types")]
+    use crate::extension::CanonicalExtensionType;
     use crate::{
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
@@ -182,11 +184,15 @@ mod tests {
     #[test]
     fn variant_field_extension() {
         let mut field = Field::new("", DataType::Binary, false);
-        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
-        field.try_with_extension_type(variant).unwrap();
+        let variant = Variant::new(vec![1, 2, 3], vec![0]);
+        field.try_with_extension_type(variant.clone()).unwrap();
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_NAME_KEY),
             Some(&"arrow.variant".to_owned())
+        );
+        assert_eq!(
+            field.try_canonical_extension_type().unwrap(),
+            CanonicalExtensionType::Variant(variant)
         );
     }
 
@@ -200,5 +206,28 @@ mod tests {
         );
         field.extension_type::<Variant>();
     }
+
+    #[test]
+fn variant_encoding_decoding() {
+    let metadata = vec![1, 2, 3];
+    let value = vec![4, 5, 6];
+    let variant = Variant::new(metadata.clone(), value.clone());
+    
+    let field = Field::new("variant", DataType::Binary, false)
+        .with_extension_type(variant.clone());
+    
+    let recovered_extension = field.extension_type::<Variant>();
+    assert_eq!(recovered_extension.metadata(), &metadata);
+    
+    let encoded_value = value.clone();
+    
+    let reconstructed = Variant::new(
+        recovered_extension.metadata().to_vec(),
+        encoded_value
+    );
+    
+    assert_eq!(reconstructed.metadata(), &metadata);
+    assert_eq!(reconstructed.value(), &value);
+}
 
 }

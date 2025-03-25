@@ -79,6 +79,9 @@ pub enum CanonicalExtensionType {
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
     Bool8(Bool8),
+
+    /// The extension type for `Variant`.
+    Variant(Variant),
 }
 
 impl TryFrom<&Field> for CanonicalExtensionType {
@@ -95,6 +98,7 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
                 Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
                 Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
+                Variant::NAME => value.try_extension_type::<Variant>().map(Into::into),
                 _ => Err(ArrowError::InvalidArgumentError(format!("Unsupported canonical extension type: {name}"))),
             },
             // Name missing the expected prefix
@@ -140,5 +144,11 @@ impl From<Opaque> for CanonicalExtensionType {
 impl From<Bool8> for CanonicalExtensionType {
     fn from(value: Bool8) -> Self {
         CanonicalExtensionType::Bool8(value)
+    }
+}
+
+impl From<Variant> for CanonicalExtensionType {
+    fn from(value: Variant) -> Self {
+        CanonicalExtensionType::Variant(value)
     }
 }

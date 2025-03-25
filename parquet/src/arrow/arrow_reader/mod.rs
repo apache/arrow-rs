@@ -4435,7 +4435,7 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn test_variant_roundtrip() -> Result<()> {
-        use arrow_array::{BinaryArray, RecordBatch};
+        use arrow_array::{BinaryArray, Int32Array, RecordBatch};
         use arrow_schema::{DataType, Field, Schema};
         use arrow_schema::extension::Variant;
         use bytes::Bytes;
@@ -4471,10 +4471,20 @@ mod tests {
         
         let variant_array = BinaryArray::from(binary_data);
         
+        // Create a second column with Int32 values (9 rows to match the variant column)
+        let int_array = Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800, 900]);
+        
+        // Create schema with two columns
+        let schema = Schema::new(vec![
+            Field::new("variant_data", DataType::Binary, false)
+                .with_extension_type(Variant::new(variant_metadata.clone(), vec![])),
+            Field::new("int_data", DataType::Int32, false),
+        ]);
+        
+        // Create record batch with both columns (9×2)
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("variant_data", DataType::Binary, false)
-                .with_extension_type(Variant::new(variant_metadata.clone(), vec![]))])),
-            vec![Arc::new(variant_array)]
+            Arc::new(schema),
+            vec![Arc::new(variant_array), Arc::new(int_array)]
         )?;
         
         let mut buffer = Vec::with_capacity(1024);
@@ -4486,10 +4496,14 @@ mod tests {
         let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer.clone()))?;
         let parquet_schema = builder.parquet_schema();
         println!("Parquet schema: {:?}", parquet_schema);
-
         
-        let column = parquet_schema.columns()[0].clone();
-        assert_eq!(column.physical_type(), PhysicalType::BYTE_ARRAY);
+        // Verify variant column properties
+        let variant_column = parquet_schema.columns()[0].clone();
+        assert_eq!(variant_column.physical_type(), PhysicalType::BYTE_ARRAY);
+        
+        // Verify int column properties
+        let int_column = parquet_schema.columns()[1].clone();
+        assert_eq!(int_column.physical_type(), PhysicalType::INT32);
         
         let mut reader = builder.build()?;
         assert_eq!(batch.schema(), reader.schema());
@@ -4498,6 +4512,7 @@ mod tests {
         let out = reader.next().unwrap()?;
         assert_eq!(batch, out);
         
+        // Verify variant column data 
         let binary_array = out.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
         for (i, expected_json) in sample_json_values.iter().enumerate() {
             let data = binary_array.value(i);
@@ -4506,8 +4521,12 @@ mod tests {
             assert_eq!(actual_metadata, &variant_metadata);
             assert_eq!(std::str::from_utf8(actual_value).unwrap(), *expected_json);
         }
-  
         
+        // Verify int column data
+        let int_array = out.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+        for i in 0..9 {
+            assert_eq!(int_array.value(i), (i as i32 + 1) * 100);
+        }
         
         Ok(())
     }
