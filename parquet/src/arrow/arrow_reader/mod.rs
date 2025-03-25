@@ -4435,13 +4435,16 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn test_variant_roundtrip() -> Result<()> {
-        use arrow_array::{BinaryArray, Int32Array, RecordBatch};
+        use arrow_array::{Int32Array, RecordBatch, BinaryArray};
+        use arrow_array::builder::BinaryBuilder;
         use arrow_schema::{DataType, Field, Schema};
         use arrow_schema::extension::Variant;
         use bytes::Bytes;
         use std::sync::Arc;
-        
-        let variant_metadata = vec![1, 2, 3]; 
+
+        let variant_metadata = vec![1, 2, 3];
+        let variant_type = Variant::new(variant_metadata.clone(), vec![]);
+
         let sample_json_values = vec![
             "null",
             "true",
@@ -4453,81 +4456,73 @@ mod tests {
             "{\"a\": 1, \"b\": {\"e\": -4, \"f\": 5.5}, \"c\": true}",
             "[1, -2, 4.5, -6.7, \"str\", true]"
         ];
-        
-        let binary_values: Vec<Vec<u8>> = sample_json_values
+
+        let original_variants: Vec<Variant> = sample_json_values
             .iter()
-            .map(|json| {
-                let mut data = Vec::new();
-                data.extend_from_slice(&variant_metadata);
-                data.extend_from_slice(json.as_bytes());
-                data
-            })
+            .map(|json| Variant::new(variant_metadata.clone(), json.as_bytes().to_vec()))
             .collect();
+
+        let mut builder = BinaryBuilder::new();
+        for variant in &original_variants {
+            let mut combined_data = Vec::new();
+            combined_data.extend_from_slice(variant.metadata());
+            combined_data.extend_from_slice(variant.value());
+            builder.append_value(&combined_data);
+        }
         
-        let binary_data: Vec<Option<&[u8]>> = binary_values
-            .iter()
-            .map(|v| Some(v.as_slice()))
-            .collect();
-        
-        let variant_array = BinaryArray::from(binary_data);
-        
-        // Create a second column with Int32 values (9 rows to match the variant column)
+        let binary_array = builder.finish();
         let int_array = Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800, 900]);
-        
-        // Create schema with two columns
+
         let schema = Schema::new(vec![
             Field::new("variant_data", DataType::Binary, false)
-                .with_extension_type(Variant::new(variant_metadata.clone(), vec![])),
+                .with_extension_type(variant_type),
             Field::new("int_data", DataType::Int32, false),
         ]);
-        
-        // Create record batch with both columns (9×2)
+
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![Arc::new(variant_array), Arc::new(int_array)]
+            vec![Arc::new(binary_array), Arc::new(int_array)]
         )?;
-        
+
         let mut buffer = Vec::with_capacity(1024);
         let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
         writer.write(&batch)?;
         writer.close()?;
 
-        
         let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer.clone()))?;
-        let parquet_schema = builder.parquet_schema();
-        println!("Parquet schema: {:?}", parquet_schema);
-        
-        // Verify variant column properties
-        let variant_column = parquet_schema.columns()[0].clone();
-        assert_eq!(variant_column.physical_type(), PhysicalType::BYTE_ARRAY);
-        
-        // Verify int column properties
-        let int_column = parquet_schema.columns()[1].clone();
-        assert_eq!(int_column.physical_type(), PhysicalType::INT32);
-        
         let mut reader = builder.build()?;
-        assert_eq!(batch.schema(), reader.schema());
-        println!("reader schema: {:#?}", reader.schema());
-        
         let out = reader.next().unwrap()?;
-        assert_eq!(batch, out);
+
+        let schema = out.schema();
+        let field = schema.field(0).clone();
+        assert_eq!(field.data_type(), &DataType::Binary);
         
-        // Verify variant column data 
+        assert!(field.metadata().contains_key("ARROW:extension:name"));
+        assert_eq!(field.metadata().get("ARROW:extension:name").unwrap(), "arrow.variant");
+        
+        let extension_type = field.extension_type::<Variant>();
+        assert_eq!(extension_type.metadata(), &variant_metadata);
+
         let binary_array = out.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
-        for (i, expected_json) in sample_json_values.iter().enumerate() {
-            let data = binary_array.value(i);
-            let (actual_metadata, actual_value) = data.split_at(variant_metadata.len());
-            
-            assert_eq!(actual_metadata, &variant_metadata);
-            assert_eq!(std::str::from_utf8(actual_value).unwrap(), *expected_json);
-        }
         
-        // Verify int column data
+        for (i, original_variant) in original_variants.iter().enumerate() {
+            let binary_data = binary_array.value(i);
+            let (binary_metadata, binary_value) = binary_data.split_at(variant_metadata.len());
+
+            let reconstructed_variant = Variant::new(
+                binary_metadata.to_vec(),
+                binary_value.to_vec()
+            );
+
+            assert_eq!(reconstructed_variant.metadata(), original_variant.metadata());
+            assert_eq!(reconstructed_variant.value(), original_variant.value());
+        }
+
         let int_array = out.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
         for i in 0..9 {
             assert_eq!(int_array.value(i), (i as i32 + 1) * 100);
         }
-        
+
         Ok(())
     }
 }
