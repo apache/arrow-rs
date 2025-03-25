@@ -19,13 +19,16 @@ use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
 use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
-use crate::errors::{ParquetError, Result};
-use crate::format::{PageHeader, PageType};
+use crate::errors::ParquetError;
+use crate::errors::Result;
+use crate::format::PageHeader;
+use crate::format::PageType;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
 
 #[derive(Debug)]
+/// Encrypts page headers and page data for columns
 pub struct PageEncryptor {
     file_encryptor: Arc<FileEncryptor>,
     block_encryptor: Box<dyn BlockEncryptor>,
@@ -35,6 +38,7 @@ pub struct PageEncryptor {
 }
 
 impl PageEncryptor {
+    /// Create a [`PageEncryptor`] for a column if it should be encrypted
     pub fn create_if_column_encrypted(
         file_encryptor: &Option<Arc<FileEncryptor>>,
         row_group_index: usize,
@@ -56,6 +60,7 @@ impl PageEncryptor {
         }
     }
 
+    /// Update the page index after a page has been processed
     pub fn increment_page(&mut self) {
         self.page_index += 1;
     }
@@ -78,11 +83,13 @@ impl PageEncryptor {
         Ok(encrypted_buffer)
     }
 
+    /// Encrypt compressed column page data
     pub fn encrypt_compressed_page(&mut self, page: CompressedPage) -> Result<CompressedPage> {
         let encrypted_page = self.encrypt_page(&page)?;
         Ok(page.with_new_compressed_buffer(Bytes::from(encrypted_page)))
     }
 
+    /// Encrypt a column page header
     pub fn encrypt_page_header<W: Write>(
         &mut self,
         page_header: &PageHeader,

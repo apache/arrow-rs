@@ -27,6 +27,7 @@ use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::TCompactOutputProtocol;
 
+use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
 use crate::column::{
     page::{CompressedPage, PageWriteSpec, PageWriter},
@@ -37,8 +38,6 @@ use crate::data_type::DataType;
 use crate::encryption::encrypt::{
     get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
 };
-#[cfg(feature = "encryption")]
-use crate::encryption::page_encryptor::PageEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
@@ -46,8 +45,6 @@ use crate::file::reader::ChunkReader;
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
 use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
-#[cfg(not(feature = "encryption"))]
-use crate::util::never::Never;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written. The given [`Write`] is wrapped
@@ -805,8 +802,6 @@ pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
     #[cfg(feature = "encryption")]
     page_encryptor: Option<PageEncryptor>,
-    #[cfg(not(feature = "encryption"))]
-    page_encryptor: Option<Never>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
@@ -814,15 +809,9 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
         Self {
             sink,
+            #[cfg(feature = "encryption")]
             page_encryptor: None,
         }
-    }
-
-    #[cfg(feature = "encryption")]
-    /// Set the encryptor to use to encrypt page data
-    fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
-        self.page_encryptor = page_encryptor;
-        self
     }
 
     /// Serializes page header into Thrift.
@@ -830,12 +819,11 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        match self.page_encryptor.as_mut() {
-            #[cfg(feature = "encryption")]
-            Some(page_encryptor) => {
-                page_encryptor.encrypt_page_header(&header, &mut self.sink)?;
+        match self.page_encryptor_and_sink_mut() {
+            Some((page_encryptor, sink)) => {
+                page_encryptor.encrypt_page_header(&header, sink)?;
             }
-            _ => {
+            None => {
                 let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
                 header.write_to_out_protocol(&mut protocol)?;
             }
@@ -844,12 +832,43 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     }
 }
 
+#[cfg(feature = "encryption")]
+impl<'a, W: Write> SerializedPageWriter<'a, W> {
+    /// Set the encryptor to use to encrypt page data
+    fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
+        self.page_encryptor = page_encryptor;
+        self
+    }
+
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        self.page_encryptor.as_mut()
+    }
+
+    fn page_encryptor_and_sink_mut(
+        &mut self,
+    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+        self.page_encryptor.as_mut().map(|pe| (pe, &mut self.sink))
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+impl<'a, W: Write> SerializedPageWriter<'a, W> {
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        None
+    }
+
+    fn page_encryptor_and_sink_mut(
+        &mut self,
+    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+        None
+    }
+}
+
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let page = match &mut self.page_encryptor {
-            #[cfg(feature = "encryption")]
+        let page = match self.page_encryptor_mut() {
             Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
-            _ => page,
+            None => page,
         };
 
         let page_type = page.page_type();
@@ -868,8 +887,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
 
-        #[cfg(feature = "encryption")]
-        if let Some(page_encryptor) = self.page_encryptor.as_mut() {
+        if let Some(page_encryptor) = self.page_encryptor_mut() {
             if page.compressed_page().is_data_page() {
                 page_encryptor.increment_page();
             }
