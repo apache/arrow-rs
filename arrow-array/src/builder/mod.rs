@@ -514,8 +514,16 @@ pub fn new_empty_builder(data_type: &DataType, capacity: usize) -> Box<dyn Array
         DataType::Struct(_fields) => todo!(),
         DataType::Union(_union_fields, _union_mode) => todo!(),
         DataType::Dictionary(_data_type, _data_type1) => todo!(),
-        DataType::Decimal128(_, _) => Box::new(Decimal128Builder::with_capacity(capacity)) as _,
-        DataType::Decimal256(_, _) => Box::new(Decimal256Builder::with_capacity(capacity)) as _,
+        DataType::Decimal128(precision, scale) => Box::new(
+            Decimal128Builder::with_capacity(capacity)
+                .with_precision_and_scale(*precision, *scale)
+                .expect("Invalid precision / scale for Decimal128"),
+        ) as _,
+        DataType::Decimal256(precision, scale) => Box::new(
+            Decimal256Builder::with_capacity(capacity)
+                .with_precision_and_scale(*precision, *scale)
+                .expect("Invalid precision / scale for Decimal256"),
+        ) as _,
         DataType::Map(_field, _) => todo!(),
         DataType::RunEndEncoded(_field, _field1) => todo!(),
         dt => panic!("Unexpected data type {dt:?}"),
