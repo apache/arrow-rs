@@ -90,7 +90,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
         let encoded = b64_encode(e, a);
@@ -105,12 +105,12 @@ mod tests {
 
     #[test]
     fn test_b64() {
-        let mut rng = thread_rng();
-        let len = rng.gen_range(1024..1050);
+        let mut rng = rng();
+        let len = rng.random_range(1024..1050);
         let data: BinaryArray = (0..len)
             .map(|_| {
-                let len = rng.gen_range(0..16);
-                Some((0..len).map(|_| rng.gen()).collect::<Vec<u8>>())
+                let len = rng.random_range(0..16);
+                Some((0..len).map(|_| rng.random()).collect::<Vec<u8>>())
             })
             .collect();
 
