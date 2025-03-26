@@ -1074,6 +1074,25 @@ impl InMemoryRowGroup<'_> {
 
         Ok(())
     }
+
+    /// Returns a CachedPageReader if the specified column is included in the projection to cache
+    fn maybe_cached_reader(
+        &self,
+        column_idx: usize,
+        page_reader: SerializedPageReader<ColumnChunkData>,
+    ) -> Box<dyn PageReader> {
+        let Some(projection_to_cache) = &self.projection_to_cache else {
+            return Box::new(page_reader);
+        };
+        if !projection_to_cache.leaf_included(column_idx) {
+            return Box::new(page_reader);
+        }
+        Box::new(CachedPageReader::new(
+            page_reader,
+            self.cache.clone(),
+            column_idx,
+        ))
+    }
 }
 
 impl RowGroups for InMemoryRowGroup<'_> {
@@ -1092,12 +1111,6 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-
-                let cached_reader = if let Some(projection_to_cache) = &self.projection_to_cache {
-                    projection_to_cache.leaf_included(i)
-                } else {
-                    false
-                };
 
                 let column_metadata = self.metadata.row_group(self.row_group_idx).column(i);
                 let page_reader = SerializedPageReader::new(
@@ -1125,11 +1138,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                 #[cfg(feature = "encryption")]
                 let page_reader = page_reader.with_crypto_context(crypto_context);
 
-                let page_reader: Box<dyn PageReader> = if cached_reader {
-                    Box::new(CachedPageReader::new(page_reader, self.cache.clone(), i))
-                } else {
-                    Box::new(page_reader)
-                };
+                let page_reader = self.maybe_cached_reader(i, page_reader);
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),

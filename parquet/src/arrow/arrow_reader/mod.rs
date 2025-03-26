@@ -718,6 +718,7 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
             None
         };
 
+        // todo: add cache???
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
 
         #[cfg(feature = "encryption")]
