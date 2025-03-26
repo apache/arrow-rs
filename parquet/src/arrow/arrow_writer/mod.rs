@@ -270,7 +270,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             Some(in_progress) => in_progress,
             x => {
                 #[cfg(feature = "encryption")]
-                let row_group_writer = ArrowRowGroupWriter::new_with_encryptor(
+                let row_group_writer = ArrowRowGroupWriter::new(
                     self.writer.schema_descr(),
                     self.writer.properties(),
                     &self.arrow_schema,
@@ -760,7 +760,7 @@ impl ArrowRowGroupWriter {
     }
 
     #[cfg(feature = "encryption")]
-    fn new_with_encryptor(
+    fn new(
         parquet: &SchemaDescriptor,
         props: &WriterPropertiesPtr,
         arrow: &SchemaRef,

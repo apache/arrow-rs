@@ -181,27 +181,10 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
 
-        #[cfg(feature = "encryption")]
-        let file_encryptor = match properties.file_encryption_properties.as_ref() {
-            None => None,
-            Some(encryption_props) => Some(Arc::new(FileEncryptor::new(encryption_props.clone())?)),
-        };
-
         let schema_descriptor = SchemaDescriptor::new(schema.clone());
 
         #[cfg(feature = "encryption")]
-        if let Some(file_encryption_properties) = properties.file_encryption_properties.as_ref() {
-            file_encryption_properties.validate_encrypted_column_names(&schema_descriptor)?;
-        }
-
-        #[cfg(feature = "encryption")]
-        if let Some(ref file_encryption_properties) = properties.file_encryption_properties {
-            if !file_encryption_properties.encrypt_footer() {
-                return Err(general_err!(
-                    "Writing encrypted files with plaintext footers is not supported yet"
-                ));
-            }
-        }
+        let file_encryptor = Self::get_file_encryptor(&properties, &schema_descriptor)?;
 
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
@@ -219,6 +202,28 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             #[cfg(feature = "encryption")]
             file_encryptor,
         })
+    }
+
+    #[cfg(feature = "encryption")]
+    fn get_file_encryptor(
+        properties: &WriterPropertiesPtr,
+        schema_descriptor: &SchemaDescriptor,
+    ) -> Result<Option<Arc<FileEncryptor>>> {
+        if let Some(file_encryption_properties) = &properties.file_encryption_properties {
+            file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
+
+            if !file_encryption_properties.encrypt_footer() {
+                return Err(general_err!(
+                    "Writing encrypted files with plaintext footers is not supported yet"
+                ));
+            }
+
+            Ok(Some(Arc::new(FileEncryptor::new(
+                file_encryption_properties.clone(),
+            )?)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Creates new row group from this file writer.
@@ -303,13 +308,17 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.finish()
     }
 
-    #[allow(unused_variables)]
     /// Writes magic bytes at the beginning of the file.
+    #[cfg(not(feature = "encryption"))]
+    fn start_file(_properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        buf.write_all(get_file_magic())?;
+        Ok(())
+    }
+
+    /// Writes magic bytes at the beginning of the file.
+    #[cfg(feature = "encryption")]
     fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
-        #[cfg(feature = "encryption")]
         let magic = get_file_magic(properties.file_encryption_properties.as_ref());
-        #[cfg(not(feature = "encryption"))]
-        let magic = get_file_magic();
 
         buf.write_all(magic)?;
         Ok(())
@@ -686,13 +695,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
-        #[cfg(feature = "encryption")]
-        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
-            builder = builder.set_column_crypto_metadata(get_column_crypto_metadata(
-                file_encryptor.properties(),
-                &metadata.column_descr_ptr(),
-            ));
-        }
+        builder = self.set_column_crypto_metadata(builder, &metadata);
         close.metadata = builder.build()?;
 
         if let Some(offsets) = close.offset_index.as_mut() {
@@ -737,6 +740,23 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         Ok(metadata)
     }
 
+    /// Set the column crypto metadata for a column chunk
+    #[cfg(feature = "encryption")]
+    fn set_column_crypto_metadata(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+        metadata: &ColumnChunkMetaData,
+    ) -> ColumnChunkMetaDataBuilder {
+        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
+            builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                file_encryptor.properties(),
+                &metadata.column_descr_ptr(),
+            ))
+        } else {
+            builder
+        }
+    }
+
     /// Get context required to create a [`PageEncryptor`] for a column
     #[cfg(feature = "encryption")]
     fn get_page_encryptor_context(&self) -> PageEncryptorContext {
@@ -762,6 +782,16 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         )?;
 
         Ok(page_writer.with_page_encryptor(page_encryptor))
+    }
+
+    /// No-op implementation of setting the column crypto metadata for a column chunk
+    #[cfg(not(feature = "encryption"))]
+    fn set_column_crypto_metadata(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+        _metadata: &ColumnChunkMetaData,
+    ) -> ColumnChunkMetaDataBuilder {
+        builder
     }
 
     #[cfg(not(feature = "encryption"))]

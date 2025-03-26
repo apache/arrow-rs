@@ -109,7 +109,6 @@ use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
-#[cfg(feature = "encryption")]
 use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
@@ -1253,14 +1252,6 @@ impl ColumnChunkMetaData {
     pub fn to_thrift(&self) -> ColumnChunk {
         let column_metadata = self.to_column_metadata_thrift();
 
-        #[cfg(feature = "encryption")]
-        let crypto_metadata = self
-            .column_crypto_metadata
-            .as_ref()
-            .map(column_crypto_metadata::to_thrift);
-        #[cfg(not(feature = "encryption"))]
-        let crypto_metadata = None;
-
         ColumnChunk {
             file_path: self.file_path().map(|s| s.to_owned()),
             file_offset: self.file_offset,
@@ -1269,7 +1260,7 @@ impl ColumnChunkMetaData {
             offset_index_length: self.offset_index_length,
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
-            crypto_metadata,
+            crypto_metadata: self.column_crypto_metadata_thrift(),
             encrypted_column_metadata: None,
         }
     }
@@ -1325,6 +1316,18 @@ impl ColumnChunkMetaData {
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
         ColumnChunkMetaDataBuilder::from(self)
+    }
+
+    #[cfg(feature = "encryption")]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        self.column_crypto_metadata
+            .as_ref()
+            .map(column_crypto_metadata::to_thrift)
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        None
     }
 }
 
