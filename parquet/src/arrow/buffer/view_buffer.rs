@@ -37,6 +37,11 @@ impl ViewBuffer {
         self.views.is_empty()
     }
 
+    /// Reserve capacity for `additional` views
+    pub fn reserve_views(&mut self, additional: usize) {
+        self.views.reserve(additional);
+    }
+
     pub fn append_block(&mut self, block: Buffer) -> u32 {
         let block_id = self.buffers.len() as u32;
         self.buffers.push(block);
