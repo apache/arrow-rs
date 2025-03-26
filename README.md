@@ -78,7 +78,7 @@ arrow-rs, parquet and object_store are built and tested with stable Rust, and wi
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
 
-E.g
+E.g.
 
 in Apr 2025 we will release version 55.0.0 which might have a version bump. But the Rust version selected in this case will be at most version 1.81.
 
