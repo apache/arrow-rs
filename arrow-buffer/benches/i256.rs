@@ -47,8 +47,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let numerators: Vec<_> = (0..SIZE)
         .map(|_| {
-            let high = rng.gen_range(1000..i128::MAX);
-            let low = rng.gen();
+            let high = rng.random_range(1000..i128::MAX);
+            let low = rng.random();
             i256::from_parts(low, high)
         })
         .collect();
@@ -56,7 +56,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let divisors: Vec<_> = numerators
         .iter()
         .map(|n| {
-            let quotient = rng.gen_range(1..100_i32);
+            let quotient = rng.random_range(1..100_i32);
             n.wrapping_div(i256::from(quotient))
         })
         .collect();
@@ -70,7 +70,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let divisors: Vec<_> = (0..SIZE)
-        .map(|_| i256::from(rng.gen_range(1..100_i32)))
+        .map(|_| i256::from(rng.random_range(1..100_i32)))
         .collect();
 
     c.bench_function("i256_div_rem small divisor", |b| {
