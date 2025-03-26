@@ -558,7 +558,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let batch_size = self
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
-        let reader = ReaderFactory {
+        let reader_factory = ReaderFactory {
             input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
@@ -569,7 +569,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
-        let projected_fields = match reader.fields.as_deref().map(|pf| &pf.arrow_type) {
+        let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
             Some(DataType::Struct(fields)) => {
                 fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
             }
@@ -585,7 +585,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection: self.projection,
             selection: self.selection,
             schema,
-            reader: Some(reader),
+            reader_factory: Some(reader_factory),
             state: StreamState::Init,
         })
     }
@@ -765,7 +765,7 @@ pub struct ParquetRecordBatchStream<T> {
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
-    reader: Option<ReaderFactory<T>>,
+    reader_factory: Option<ReaderFactory<T>>,
 
     state: StreamState<T>,
 }
@@ -827,7 +827,7 @@ where
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
 
-                    let reader_factory = self.reader.take().expect("lost reader");
+                    let reader_factory = self.reader_factory.take().expect("lost reader factory");
 
                     let (reader_factory, maybe_reader) = reader_factory
                         .read_row_group(
@@ -841,7 +841,7 @@ where
                             self.state = StreamState::Error;
                             err
                         })?;
-                    self.reader = Some(reader_factory);
+                    self.reader_factory = Some(reader_factory);
 
                     if let Some(reader) = maybe_reader {
                         return Ok(Some(reader));
@@ -881,7 +881,7 @@ where
                         None => return Poll::Ready(None),
                     };
 
-                    let reader = self.reader.take().expect("lost reader");
+                    let reader = self.reader_factory.take().expect("lost reader factory");
 
                     let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
 
@@ -900,7 +900,7 @@ where
                 }
                 StreamState::Reading(f) => match ready!(f.poll_unpin(cx)) {
                     Ok((reader_factory, maybe_reader)) => {
-                        self.reader = Some(reader_factory);
+                        self.reader_factory = Some(reader_factory);
                         match maybe_reader {
                             // Read records from [`ParquetRecordBatchReader`]
                             Some(reader) => self.state = StreamState::Decoding(reader),
