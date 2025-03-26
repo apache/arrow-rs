@@ -270,6 +270,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_simple_without_file_length() {
+        let (meta, store) = get_meta_store().await;
+        let object_reader = ParquetObjectReader::new(store, meta.location, None);
+
+        let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
+            .await
+            .unwrap();
+        let batches: Vec<_> = builder.build().unwrap().try_collect().await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 8);
+    }
+
+    #[tokio::test]
     async fn test_not_found() {
         let (mut meta, store) = get_meta_store().await;
         meta.location = Path::from("I don't exist.parquet");
