@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetRecordBatchStreamBuilder`]:  `async` API for reading Parquet files as
-//! [`RecordBatch`]es
+//! `async` API for reading Parquet files as [`RecordBatch`]es
 //!
-//! This can be used to decode a Parquet file in streaming fashion (without
-//! downloading the whole file at once) from a remote source, such as an object store.
+//! See the [crate-level documentation](crate) for more details.
 //!
 //! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
@@ -269,8 +267,11 @@ pub struct AsyncReader<T>(T);
 
 /// A builder for reading parquet files from an `async` source as  [`ParquetRecordBatchStream`]
 ///
-/// This builder  handles reading the parquet file metadata, allowing consumers
-/// to use this information to select what specific columns, row groups, etc...
+/// This can be used to decode a Parquet file in streaming fashion (without
+/// downloading the whole file at once) from a remote source, such as an object store.
+///
+/// This builder handles reading the parquet file metadata, allowing consumers
+/// to use this information to select what specific columns, row groups, etc.
 /// they wish to be read by the resulting stream.
 ///
 /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
