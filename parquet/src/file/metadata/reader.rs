@@ -682,19 +682,16 @@ impl ParquetMetaDataReader {
         fetch: &mut F,
         prefetch: usize,
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
-        let suffix = fetch.fetch_suffix(prefetch).await?;
+        let suffix = fetch.fetch_suffix(prefetch.max(FOOTER_SIZE)).await?;
         let suffix_len = suffix.len();
 
-        // TODO: not sure how to restore this error handling here
-
-        // let fetch_len = file_size - footer_start;
-        // if suffix_len < fetch_len {
-        //     return Err(eof_err!(
-        //         "metadata requires {} bytes, but could only read {}",
-        //         fetch_len,
-        //         suffix_len
-        //     ));
-        // }
+        if suffix_len < FOOTER_SIZE {
+            return Err(eof_err!(
+                "footer metadata requires {} bytes, but could only read {}",
+                FOOTER_SIZE,
+                suffix_len
+            ));
+        }
 
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
@@ -702,20 +699,19 @@ impl ParquetMetaDataReader {
         let footer = Self::decode_footer_tail(&footer)?;
         let length = footer.metadata_length();
 
-        // TODO: not sure how to restore this error handling here
-
-        // if file_size < length + FOOTER_SIZE {
-        //     return Err(eof_err!(
-        //         "file size of {} is less than footer + metadata {}",
-        //         file_size,
-        //         length + FOOTER_SIZE
-        //     ));
-        // }
-
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let metadata_offset = length + FOOTER_SIZE;
         if length > suffix_len - FOOTER_SIZE {
             let meta = fetch.fetch_suffix(metadata_offset).await?;
+
+            if meta.len() < metadata_offset {
+                return Err(eof_err!(
+                    "metadata requires {} bytes, but could only read {}",
+                    metadata_offset,
+                    meta.len()
+                ));
+            }
+
             Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
             let metadata_start = suffix_len - metadata_offset;
