@@ -32,7 +32,7 @@ pub(crate) struct RowNumberReader {
 impl RowNumberReader {
     pub(crate) fn try_new<I>(row_groups: impl IntoIterator<Item = I>) -> Result<Self>
     where
-        I: TryInto<RowGroupSize, Error=ParquetError>,
+        I: TryInto<RowGroupSize, Error = ParquetError>,
     {
         let row_groups = RowGroupSizeIterator::try_new(row_groups)?;
         Ok(Self {
@@ -83,10 +83,15 @@ struct RowGroupSizeIterator {
 impl RowGroupSizeIterator {
     fn try_new<I>(row_groups: impl IntoIterator<Item = I>) -> Result<Self>
     where
-        I: TryInto<RowGroupSize, Error=ParquetError>,
+        I: TryInto<RowGroupSize, Error = ParquetError>,
     {
         Ok(Self {
-            row_groups: VecDeque::from(row_groups.into_iter().map(TryInto::try_into).collect::<Result<Vec<_>>>()?),
+            row_groups: VecDeque::from(
+                row_groups
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
         })
     }
 }
@@ -140,7 +145,9 @@ impl TryFrom<&RowGroupMetaData> for RowGroupSize {
 
     fn try_from(rg: &RowGroupMetaData) -> Result<Self, Self::Error> {
         Ok(Self {
-            first_row_number: rg.first_row_number().ok_or(ParquetError::RowGroupMetaDataMissingRowNumber)?,
+            first_row_number: rg
+                .first_row_number()
+                .ok_or(ParquetError::RowGroupMetaDataMissingRowNumber)?,
             num_rows: rg.num_rows(),
         })
     }

@@ -40,8 +40,8 @@ mod list_array;
 mod map_array;
 mod null_array;
 mod primitive_array;
-mod struct_array;
 mod row_number;
+mod struct_array;
 
 #[cfg(test)]
 mod test_util;

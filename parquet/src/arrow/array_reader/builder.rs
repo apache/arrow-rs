@@ -61,7 +61,8 @@ pub fn build_array_reader(
                 ));
                 Ok(reader)
             })
-        }).transpose()?
+        })
+        .transpose()?
         .unwrap_or_else(|| make_empty_array_reader(row_groups.num_rows()));
 
     Ok(reader)
