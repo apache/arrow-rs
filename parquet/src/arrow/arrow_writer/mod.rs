@@ -530,7 +530,7 @@ impl ArrowColumnChunk {
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
 /// Note: This is a low-level interface for applications that require
-/// fine-grained control of encoding such as encoding using multiple threads,
+/// fine-grained control of encoding (e.g. encoding using multiple threads),
 /// see [`ArrowWriter`] for a higher-level interface
 ///
 /// ```
@@ -560,8 +560,8 @@ impl ArrowColumnChunk {
 ///
 /// // Spawn a worker thread for each column
 /// //
-/// // Note: This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better
-/// // iterator is a tuple of (thread handle, send channel)
+/// // Note: This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better.
+/// // The `map` produces an iterator of type `tuple of (thread handle, send channel)`.
 /// let mut workers: Vec<_> = col_writers
 ///     .into_iter()
 ///     .map(|mut col_writer| {
