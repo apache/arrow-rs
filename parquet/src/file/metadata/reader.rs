@@ -40,7 +40,7 @@ use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
-use crate::arrow::async_reader::MetadataFetch;
+use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
@@ -403,6 +403,20 @@ impl ParquetMetaDataReader {
         self.finish()
     }
 
+    /// Given a [`MetadataSuffixFetch`], parse and return the [`ParquetMetaData`] in a single pass.
+    ///
+    /// This call will consume `self`.
+    ///
+    /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
+    /// performed by this function.
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn load_via_suffix_and_finish<F: MetadataSuffixFetch>(
+        mut self,
+        fetch: F,
+    ) -> Result<ParquetMetaData> {
+        self.try_load_via_suffix(fetch).await?;
+        self.finish()
+    }
     /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
     /// given a [`MetadataFetch`].
     ///
@@ -416,6 +430,30 @@ impl ParquetMetaDataReader {
     ) -> Result<()> {
         let (metadata, remainder) = self
             .load_metadata(&mut fetch, file_size, self.get_prefetch_size())
+            .await?;
+
+        self.metadata = Some(metadata);
+
+        // we can return if page indexes aren't requested
+        if !self.column_index && !self.offset_index {
+            return Ok(());
+        }
+
+        self.load_page_index_with_remainder(fetch, remainder).await
+    }
+
+    /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
+    /// given a [`MetadataSuffixFetch`].
+    ///
+    /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
+    /// performed by this function.
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn try_load_via_suffix<F: MetadataSuffixFetch>(
+        &mut self,
+        mut fetch: F,
+    ) -> Result<()> {
+        let (metadata, remainder) = self
+            .load_metadata_via_suffix(&mut fetch, self.get_prefetch_size())
             .await?;
 
         self.metadata = Some(metadata);
@@ -634,6 +672,57 @@ impl ParquetMetaDataReader {
             Ok((
                 self.decode_footer_metadata(slice, &footer)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
+            ))
+        }
+    }
+
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    async fn load_metadata_via_suffix<F: MetadataSuffixFetch>(
+        &self,
+        fetch: &mut F,
+        prefetch: usize,
+    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
+        let suffix = fetch.fetch_suffix(prefetch).await?;
+        let suffix_len = suffix.len();
+
+        // TODO: not sure how to restore this error handling here
+
+        // let fetch_len = file_size - footer_start;
+        // if suffix_len < fetch_len {
+        //     return Err(eof_err!(
+        //         "metadata requires {} bytes, but could only read {}",
+        //         fetch_len,
+        //         suffix_len
+        //     ));
+        // }
+
+        let mut footer = [0; FOOTER_SIZE];
+        footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
+
+        let footer = Self::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
+
+        // TODO: not sure how to restore this error handling here
+
+        // if file_size < length + FOOTER_SIZE {
+        //     return Err(eof_err!(
+        //         "file size of {} is less than footer + metadata {}",
+        //         file_size,
+        //         length + FOOTER_SIZE
+        //     ));
+        // }
+
+        // Did not fetch the entire file metadata in the initial read, need to make a second request
+        let metadata_offset = length + FOOTER_SIZE;
+        if length > suffix_len - FOOTER_SIZE {
+            let meta = fetch.fetch_suffix(metadata_offset).await?;
+            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
+        } else {
+            let metadata_start = suffix_len - metadata_offset;
+            let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
+            Ok((
+                self.decode_footer_metadata(slice, &footer)?,
+                Some((0, suffix.slice(..metadata_start))),
             ))
         }
     }
