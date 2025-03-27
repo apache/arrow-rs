@@ -118,7 +118,7 @@ pub fn pretty_format_columns(
 /// Create a visual representation of [`ArrayRef`] with formatting options.
 ///
 /// See [`pretty_format_batches_with_options`] for an example
-fn pretty_format_columns_with_options(
+pub fn pretty_format_columns_with_options(
     col_name: &str,
     results: &[ArrayRef],
     options: &FormatOptions,
