@@ -98,7 +98,7 @@ lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
 arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
-arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
+arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types", "arrow-array?/canonical_extension_types"]
 # Enable CLI tools
 cli = ["json", "base64", "clap", "arrow-csv", "serde"]
 # Enable JSON APIs

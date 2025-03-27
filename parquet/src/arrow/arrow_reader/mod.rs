@@ -4435,12 +4435,14 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn test_variant_roundtrip() -> Result<()> {
-        use arrow_array::{Int32Array, RecordBatch, BinaryArray};
-        use arrow_array::builder::BinaryBuilder;
+        use arrow_array::{Int32Array, RecordBatch, Array};
+        use arrow_array::VariantArray;
         use arrow_schema::{DataType, Field, Schema};
         use arrow_schema::extension::Variant;
         use bytes::Bytes;
         use std::sync::Arc;
+        use crate::arrow::arrow_writer::ArrowWriter;
+        use crate::file::properties::{WriterProperties, EnabledStatistics};
 
         let variant_metadata = vec![1, 2, 3];
         let variant_type = Variant::new(variant_metadata.clone(), vec![]);
@@ -4462,30 +4464,31 @@ mod tests {
             .map(|json| Variant::new(variant_metadata.clone(), json.as_bytes().to_vec()))
             .collect();
 
-        let mut builder = BinaryBuilder::new();
-        for variant in &original_variants {
-            let mut combined_data = Vec::new();
-            combined_data.extend_from_slice(variant.metadata());
-            combined_data.extend_from_slice(variant.value());
-            builder.append_value(&combined_data);
-        }
+        // Use VariantArray directly
+        let variant_array = VariantArray::from_variants(variant_type.clone(), original_variants.clone())
+            .expect("Failed to create VariantArray");
         
-        let binary_array = builder.finish();
         let int_array = Int32Array::from(vec![100, 200, 300, 400, 500, 600, 700, 800, 900]);
 
         let schema = Schema::new(vec![
-            Field::new("variant_data", DataType::Binary, false)
-                .with_extension_type(variant_type),
+            variant_array.to_field("variant_data"),
             Field::new("int_data", DataType::Int32, false),
         ]);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![Arc::new(binary_array), Arc::new(int_array)]
+            vec![Arc::new(variant_array), Arc::new(int_array)]
         )?;
 
+        // Configure writer properties for better compatibility with VariantArray
+        let props = WriterProperties::builder()
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false) 
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))?;
         writer.write(&batch)?;
         writer.close()?;
 
@@ -4503,19 +4506,16 @@ mod tests {
         let extension_type = field.extension_type::<Variant>();
         assert_eq!(extension_type.metadata(), &variant_metadata);
 
-        let binary_array = out.column(0).as_any().downcast_ref::<BinaryArray>().unwrap();
+        // Try to convert the output column back to a VariantArray
+        let variant_array = VariantArray::from_data(
+            out.column(0).to_data(),
+            variant_type
+        ).expect("Failed to create VariantArray from output data");
         
-        for (i, original_variant) in original_variants.iter().enumerate() {
-            let binary_data = binary_array.value(i);
-            let (binary_metadata, binary_value) = binary_data.split_at(variant_metadata.len());
-
-            let reconstructed_variant = Variant::new(
-                binary_metadata.to_vec(),
-                binary_value.to_vec()
-            );
-
-            assert_eq!(reconstructed_variant.metadata(), original_variant.metadata());
-            assert_eq!(reconstructed_variant.value(), original_variant.value());
+        for i in 0..original_variants.len() {
+            let variant = variant_array.value(i).expect("Failed to get variant");
+            assert_eq!(variant.metadata(), original_variants[i].metadata());
+            assert_eq!(variant.value(), original_variants[i].value());
         }
 
         let int_array = out.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
