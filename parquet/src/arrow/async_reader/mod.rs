@@ -60,9 +60,6 @@ mod arrow_reader;
 mod metadata;
 pub use metadata::*;
 
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::CryptoContext;
-
 #[cfg(feature = "object_store")]
 mod store;
 
@@ -853,9 +850,8 @@ where
                             self.batch_size,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|_| {
                             self.state = StreamState::Error;
-                            err
                         })?;
                     self.reader_factory = Some(reader_factory);
 
@@ -1100,6 +1096,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
         self.row_count
     }
 
+    /// Return chunks for column i
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -1111,32 +1108,19 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-
-                let column_metadata = self.metadata.row_group(self.row_group_idx).column(i);
+                let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
                 let page_reader = SerializedPageReader::new(
                     data.clone(),
-                    column_metadata,
+                    column_chunk_metadata,
                     self.row_count,
                     page_locations,
                 )?;
-
-                #[cfg(feature = "encryption")]
-                let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-                    match column_metadata.crypto_metadata() {
-                        Some(crypto_metadata) => Some(Arc::new(CryptoContext::for_column(
-                            file_decryptor,
-                            crypto_metadata,
-                            self.row_group_idx,
-                            i,
-                        )?)),
-                        None => None,
-                    }
-                } else {
-                    None
-                };
-
-                #[cfg(feature = "encryption")]
-                let page_reader = page_reader.with_crypto_context(crypto_context);
+                let page_reader = page_reader.add_crypto_context(
+                    self.row_group_idx,
+                    i,
+                    self.metadata,
+                    column_chunk_metadata,
+                )?;
 
                 let page_reader = self.maybe_cached_reader(i, page_reader);
 

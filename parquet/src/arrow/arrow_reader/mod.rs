@@ -33,7 +33,7 @@ use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
-use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -682,13 +682,11 @@ struct ReaderPageIterator<T: ChunkReader> {
     metadata: Arc<ParquetMetaData>,
 }
 
-impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
-    type Item = Result<Box<dyn PageReader>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rg_idx = self.row_groups.next()?;
+impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
+    /// Return the next SerializedPageReader
+    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
-        let meta = rg.column(self.column_idx);
+        let column_chunk_metadata = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
         // `offset_index` may not exist and `i[rg_idx]` will be empty.
         // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
@@ -697,34 +695,27 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
-
-        #[cfg(feature = "encryption")]
-        let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
-            match meta.crypto_metadata() {
-                Some(crypto_metadata) => {
-                    match CryptoContext::for_column(
-                        file_decryptor,
-                        crypto_metadata,
-                        rg_idx,
-                        self.column_idx,
-                    ) {
-                        Ok(context) => Some(Arc::new(context)),
-                        Err(err) => return Some(Err(err)),
-                    }
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
-
         // todo: add cache???
-        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
 
-        #[cfg(feature = "encryption")]
-        let ret = ret.map(|reader| reader.with_crypto_context(crypto_context));
+        SerializedPageReader::new(reader, column_chunk_metadata, total_rows, page_locations)?
+            .add_crypto_context(
+                rg_idx,
+                self.column_idx,
+                self.metadata.as_ref(),
+                column_chunk_metadata,
+            )
+    }
+}
 
-        Some(ret.map(|x| Box::new(x) as _))
+impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
+    type Item = Result<Box<dyn PageReader>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rg_idx = self.row_groups.next()?;
+        let page_reader = self
+            .next_page_reader(rg_idx)
+            .map(|page_reader| Box::new(page_reader) as _);
+        Some(page_reader)
     }
 }
 
