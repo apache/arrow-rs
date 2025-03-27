@@ -288,7 +288,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
             metadata
                 .columns()
                 .iter()
-                .map(|col| Sbbf::read_from_column_chunk(col, chunk_reader.clone()))
+                .map(|col| Sbbf::read_from_column_chunk(col, &*chunk_reader))
                 .collect::<Result<Vec<_>>>()?
         } else {
             iter::repeat(None).take(metadata.columns().len()).collect()
