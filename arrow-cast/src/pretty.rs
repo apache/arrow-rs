@@ -31,13 +31,70 @@ use arrow_schema::ArrowError;
 
 use crate::display::{ArrayFormatter, FormatOptions};
 
-/// Create a visual representation of record batches
+/// Create a visual representation of [`RecordBatch`]es
+///
+/// Uses default values for display. See [`pretty_format_batches_with_options`]
+/// for more control.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_cast::pretty::pretty_format_batches;
+/// # let batch = RecordBatch::try_from_iter(vec![
+/// #       ("a", Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef),
+/// #       ("b", Arc::new(StringArray::from(vec![Some("a"), Some("b"), None, Some("d"), Some("e")]))),
+/// # ]).unwrap();
+/// // Note, returned object implements `Display`
+/// let pretty_table = pretty_format_batches(&[batch]).unwrap();
+/// let table_str = format!("Batches:\n{}", pretty_table);
+/// assert_eq!(table_str,
+/// r#"Batches:
+/// +---+---+
+/// | a | b |
+/// +---+---+
+/// | 1 | a |
+/// | 2 | b |
+/// | 3 |   |
+/// | 4 | d |
+/// | 5 | e |
+/// +---+---+"#);
+/// ```
 pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     pretty_format_batches_with_options(results, &options)
 }
 
-/// Create a visual representation of record batches
+/// Create a visual representation of [`RecordBatch`]es with formatting options.
+///
+/// # Arguments
+/// * `results` - A slice of record batches to display
+/// * `options` - [`FormatOptions`] that control the resulting display
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_cast::display::FormatOptions;
+/// # use arrow_cast::pretty::{pretty_format_batches, pretty_format_batches_with_options};
+/// # let batch = RecordBatch::try_from_iter(vec![
+/// #       ("a", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+/// #       ("b", Arc::new(StringArray::from(vec![Some("a"), None]))),
+/// # ]).unwrap();
+/// let options = FormatOptions::new()
+///   .with_null("<NULL>");
+/// // Note, returned object implements `Display`
+/// let pretty_table = pretty_format_batches_with_options(&[batch], &options).unwrap();
+/// let table_str = format!("Batches:\n{}", pretty_table);
+/// assert_eq!(table_str,
+/// r#"Batches:
+/// +---+--------+
+/// | a | b      |
+/// +---+--------+
+/// | 1 | a      |
+/// | 2 | <NULL> |
+/// +---+--------+"#);
+/// ```
 pub fn pretty_format_batches_with_options(
     results: &[RecordBatch],
     options: &FormatOptions,
@@ -45,7 +102,11 @@ pub fn pretty_format_batches_with_options(
     create_table(results, options)
 }
 
-/// Create a visual representation of columns
+/// Create a visual representation of [`ArrayRef`]
+///
+/// Uses default values for display. See [`pretty_format_columns_with_options`]
+///
+/// See [`pretty_format_batches`] for an example
 pub fn pretty_format_columns(
     col_name: &str,
     results: &[ArrayRef],
@@ -54,7 +115,9 @@ pub fn pretty_format_columns(
     pretty_format_columns_with_options(col_name, results, &options)
 }
 
-/// Utility function to create a visual representation of columns with options
+/// Create a visual representation of [`ArrayRef`] with formatting options.
+///
+/// See [`pretty_format_batches_with_options`] for an example
 fn pretty_format_columns_with_options(
     col_name: &str,
     results: &[ArrayRef],
