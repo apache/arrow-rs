@@ -74,7 +74,7 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.81"
 
 [workspace.dependencies]
 arrow = { version = "54.3.1", path = "./arrow", default-features = false }
