@@ -390,6 +390,32 @@ mod tests {
         )
         .unwrap();
 
+        let array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader, None).unwrap();
+
+        // Create arrow types
+        let arrow_type = DataType::Struct(Fields::from(vec![Field::new(
+            "b_struct",
+            DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
+            true,
+        )]));
+
+        assert_eq!(array_reader.get_data_type(), &arrow_type);
+    }
+
+    #[test]
+    fn test_create_array_reader_with_row_numbers() {
+        let file = get_test_file("nulls.snappy.parquet");
+        let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let file_metadata = file_reader.metadata().file_metadata();
+        let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
+            file_metadata.schema_descr(),
+            ProjectionMask::all(),
+            file_metadata.key_value_metadata(),
+        )
+        .unwrap();
+
         let array_reader =
             build_array_reader(fields.as_ref(), &mask, &file_reader, Some("row_number")).unwrap();
 
