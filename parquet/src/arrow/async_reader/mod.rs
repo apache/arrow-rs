@@ -659,7 +659,7 @@ where
                     self.fields.as_deref(),
                     predicate_projection,
                     &row_group,
-                    self.row_number_column.clone(),
+                    self.row_number_column.as_deref(),
                 )?;
 
                 selection = Some(evaluate_predicate(
@@ -714,7 +714,7 @@ where
                 self.fields.as_deref(),
                 &projection,
                 &row_group,
-                self.row_number_column.clone(),
+                self.row_number_column.as_deref(),
             )?,
             selection,
         );

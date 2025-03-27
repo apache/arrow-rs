@@ -638,7 +638,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     self.fields.as_deref(),
                     predicate.projection(),
                     &reader,
-                    self.row_number_column.clone(),
+                    self.row_number_column.as_deref(),
                 )?;
 
                 selection = Some(evaluate_predicate(
@@ -654,7 +654,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             self.fields.as_deref(),
             &self.projection,
             &reader,
-            self.row_number_column,
+            self.row_number_column.as_deref(),
         )?;
 
         // If selection is empty, truncate

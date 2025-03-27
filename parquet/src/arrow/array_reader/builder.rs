@@ -39,12 +39,10 @@ pub fn build_array_reader(
     field: Option<&ParquetField>,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
-    row_number_column: Option<String>,
+    row_number_column: Option<&str>,
 ) -> Result<Box<dyn ArrayReader>> {
     let reader = field
-        .and_then(|field| {
-            build_reader(field, mask, row_groups, row_number_column.clone()).transpose()
-        })
+        .and_then(|field| build_reader(field, mask, row_groups, row_number_column).transpose())
         .or_else(|| {
             row_number_column.map(|column| {
                 let row_number_reader = build_row_number_reader(row_groups)?;
@@ -72,7 +70,7 @@ fn build_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
-    row_number_column: Option<String>,
+    row_number_column: Option<&str>,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     match field.field_type {
         ParquetFieldType::Primitive { .. } => build_primitive_reader(field, mask, row_groups),
@@ -325,7 +323,7 @@ fn build_struct_reader(
     field: &ParquetField,
     mask: &ProjectionMask,
     row_groups: &dyn RowGroups,
-    row_number_column: Option<String>,
+    row_number_column: Option<&str>,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
     let arrow_fields = match &field.arrow_type {
         DataType::Struct(children) => children,
@@ -392,13 +390,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = build_array_reader(
-            fields.as_ref(),
-            &mask,
-            &file_reader,
-            Some("row_number".to_string()),
-        )
-        .unwrap();
+        let array_reader =
+            build_array_reader(fields.as_ref(), &mask, &file_reader, Some("row_number")).unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(Fields::from(vec![
