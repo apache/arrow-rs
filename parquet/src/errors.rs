@@ -17,6 +17,7 @@
 
 //! Common Parquet errors and macros.
 
+use core::num::TryFromIntError;
 use std::error::Error;
 use std::{cell, io, result, str};
 
@@ -27,6 +28,7 @@ use arrow_schema::ArrowError;
 // Note: we don't implement PartialEq as the semantics for the
 // external variant are not well defined (#4469)
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -47,6 +49,9 @@ pub enum ParquetError {
     IndexOutOfBound(usize, usize),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
+    /// Returned when a function needs more data to complete properly. The `usize` field indicates
+    /// the total number of bytes required, not the number of additional bytes.
+    NeedMoreData(usize),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -63,6 +68,7 @@ impl std::fmt::Display for ParquetError {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
+            ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
         }
     }
 }
@@ -73,6 +79,12 @@ impl Error for ParquetError {
             ParquetError::External(e) => Some(e.as_ref()),
             _ => None,
         }
+    }
+}
+
+impl From<TryFromIntError> for ParquetError {
+    fn from(e: TryFromIntError) -> ParquetError {
+        ParquetError::General(format!("Integer overflow: {e}"))
     }
 }
 
@@ -106,7 +118,6 @@ impl From<str::Utf8Error> for ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
-
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
@@ -117,6 +128,13 @@ impl From<ArrowError> for ParquetError {
 #[cfg(feature = "object_store")]
 impl From<object_store::Error> for ParquetError {
     fn from(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl From<ring::error::Unspecified> for ParquetError {
+    fn from(e: ring::error::Unspecified) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }

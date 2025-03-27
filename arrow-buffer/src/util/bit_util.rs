@@ -26,7 +26,7 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
-    debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
+    debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
         .expect("failed to round to next highest power of 2")
         & !(factor - 1)
@@ -153,7 +153,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if b {
                 set_bit(&mut buf[..], i)
@@ -197,7 +197,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if b {
                 unsafe {
@@ -221,7 +221,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if !b {
                 unsafe {
@@ -247,7 +247,7 @@ mod tests {
         let mut v = HashSet::new();
         let mut rng = seedable_rng();
         for _ in 0..NUM_SETS {
-            let offset = rng.gen_range(0..8 * NUM_BYTES);
+            let offset = rng.random_range(0..8 * NUM_BYTES);
             v.insert(offset);
             set_bit(&mut buffer[..], offset);
         }

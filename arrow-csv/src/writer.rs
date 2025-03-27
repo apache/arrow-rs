@@ -256,14 +256,6 @@ impl WriterBuilder {
         Self::default()
     }
 
-    /// Set whether to write headers
-    #[deprecated(note = "Use Self::with_header")]
-    #[doc(hidden)]
-    pub fn has_headers(mut self, has_headers: bool) -> Self {
-        self.has_header = has_headers;
-        self
-    }
-
     /// Set whether to write the CSV file with a header
     pub fn with_header(mut self, header: bool) -> Self {
         self.has_header = header;
@@ -395,17 +387,6 @@ impl WriterBuilder {
     /// Get the value to represent null in output
     pub fn null(&self) -> &str {
         self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE)
-    }
-
-    /// Use RFC3339 format for date/time/timestamps (default)
-    #[deprecated(note = "Use WriterBuilder::default()")]
-    pub fn with_rfc3339(mut self) -> Self {
-        self.date_format = None;
-        self.datetime_format = None;
-        self.time_format = None;
-        self.timestamp_format = None;
-        self.timestamp_tz_format = None;
-        self
     }
 
     /// Create a new `Writer`

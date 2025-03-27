@@ -53,7 +53,7 @@ impl<'a> BitIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitIterator<'a> {
+impl Iterator for BitIterator<'_> {
     type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -73,9 +73,9 @@ impl<'a> Iterator for BitIterator<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for BitIterator<'a> {}
+impl ExactSizeIterator for BitIterator<'_> {}
 
-impl<'a> DoubleEndedIterator for BitIterator<'a> {
+impl DoubleEndedIterator for BitIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_offset == self.end_offset {
             return None;
@@ -92,6 +92,8 @@ impl<'a> DoubleEndedIterator for BitIterator<'a> {
 ///
 /// Returns `(usize, usize)` each representing an interval where the corresponding
 /// bits in the provides mask are set
+///
+/// the first value is the start of the range (inclusive) and the second value is the end of the range (exclusive)
 ///
 #[derive(Debug)]
 pub struct BitSliceIterator<'a> {
@@ -138,7 +140,7 @@ impl<'a> BitSliceIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitSliceIterator<'a> {
+impl Iterator for BitSliceIterator<'_> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -211,7 +213,7 @@ impl<'a> BitIndexIterator<'a> {
     }
 }
 
-impl<'a> Iterator for BitIndexIterator<'a> {
+impl Iterator for BitIndexIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {

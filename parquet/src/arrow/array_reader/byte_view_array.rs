@@ -27,6 +27,7 @@ use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use crate::util::utf8::check_valid_utf8;
 use arrow_array::{builder::make_view, ArrayRef};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
@@ -290,7 +291,7 @@ impl ByteViewArrayDecoder {
 
 /// Decoder from [`Encoding::PLAIN`] data to [`ViewBuffer`]
 pub struct ByteViewArrayDecoderPlain {
-    buf: Bytes,
+    buf: Buffer,
     offset: usize,
 
     validate_utf8: bool,
@@ -308,7 +309,7 @@ impl ByteViewArrayDecoderPlain {
         validate_utf8: bool,
     ) -> Self {
         Self {
-            buf,
+            buf: Buffer::from(buf),
             offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
             validate_utf8,
@@ -316,14 +317,19 @@ impl ByteViewArrayDecoderPlain {
     }
 
     pub fn read(&mut self, output: &mut ViewBuffer, len: usize) -> Result<usize> {
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let buf = arrow_buffer::Buffer::from_bytes(self.buf.clone().into());
-        let block_id = output.append_block(buf);
+        // avoid creating a new buffer if the last buffer is the same as the current buffer
+        // This is especially useful when row-level filtering is applied, where we call lots of small `read` over the same buffer.
+        let block_id = {
+            if output.buffers.last().is_some_and(|x| x.ptr_eq(&self.buf)) {
+                output.buffers.len() as u32 - 1
+            } else {
+                output.append_block(self.buf.clone())
+            }
+        };
 
         let to_read = len.min(self.max_remaining_values);
 
-        let buf = self.buf.as_ref();
+        let buf: &[u8] = self.buf.as_ref();
         let mut read = 0;
         output.views.reserve(to_read);
 
@@ -399,7 +405,7 @@ impl ByteViewArrayDecoderPlain {
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
-        let buf = self.buf.as_ref();
+        let buf: &[u8] = self.buf.as_ref();
 
         while self.offset < self.buf.len() && skip != to_skip {
             if self.offset + 4 > buf.len() {
@@ -549,9 +555,8 @@ impl ByteViewArrayDecoderDeltaLength {
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_read];
 
-        // Here we convert `bytes::Bytes` into `arrow_buffer::Bytes`, which is zero copy
-        // Then we convert `arrow_buffer::Bytes` into `arrow_buffer:Buffer`, which is also zero copy
-        let bytes = arrow_buffer::Buffer::from_bytes(self.data.clone().into());
+        // Zero copy convert `bytes::Bytes` into `arrow_buffer::Buffer`
+        let bytes = Buffer::from(self.data.clone());
         let block_id = output.append_block(bytes);
 
         let mut current_offset = self.data_offset;
@@ -677,14 +682,6 @@ impl ByteViewArrayDecoderDelta {
     }
 }
 
-/// Check that `val` is a valid UTF-8 sequence
-pub fn check_valid_utf8(val: &[u8]) -> Result<()> {
-    match std::str::from_utf8(val) {
-        Ok(_) => Ok(()),
-        Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::StringViewArray;
@@ -692,12 +689,13 @@ mod tests {
 
     use crate::{
         arrow::{
-            array_reader::test_util::{byte_array_all_encodings, utf8_column},
+            array_reader::test_util::{byte_array_all_encodings, encode_byte_array, utf8_column},
             buffer::view_buffer::ViewBuffer,
             record_reader::buffer::ValuesBuffer,
         },
         basic::Encoding,
         column::reader::decoder::ColumnValueDecoder,
+        data_type::ByteArray,
     };
 
     use super::*;
@@ -747,5 +745,24 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn test_byte_view_array_plain_decoder_reuse_buffer() {
+        let byte_array = vec!["hello", "world", "large payload over 12 bytes", "b"];
+        let byte_array: Vec<ByteArray> = byte_array.into_iter().map(|x| x.into()).collect();
+        let pages = encode_byte_array(Encoding::PLAIN, &byte_array);
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteViewArrayColumnValueDecoder::new(&column_desc);
+
+        let mut view_buffer = ViewBuffer::default();
+        decoder.set_data(Encoding::PLAIN, pages, 4, None).unwrap();
+        decoder.read(&mut view_buffer, 1).unwrap();
+        decoder.read(&mut view_buffer, 1).unwrap();
+        assert_eq!(view_buffer.buffers.len(), 1);
+
+        decoder.read(&mut view_buffer, 1).unwrap();
+        assert_eq!(view_buffer.buffers.len(), 1);
     }
 }

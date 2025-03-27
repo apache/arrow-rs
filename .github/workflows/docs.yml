@@ -21,11 +21,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs and changes to master
+# trigger for all PRs and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 jobs:
@@ -70,8 +70,8 @@ jobs:
           path: target/doc
 
   deploy:
-    # Only deploy if a push to master
-    if: github.ref_name == 'master' && github.event_name == 'push'
+    # Only deploy if a push to main
+    if: github.ref_name == 'main' && github.event_name == 'push'
     needs: docs
     permissions:
       contents: write
@@ -90,7 +90,7 @@ jobs:
           cp .asf.yaml ./website/build/.asf.yaml
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4.0.0
-        if: github.event_name == 'push' && github.ref_name == 'master'
+        if: github.event_name == 'push' && github.ref_name == 'main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: website/build

@@ -21,10 +21,11 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary_impl, read_record_batch_impl};
+use crate::reader::{read_dictionary_impl, RecordBatchDecoder};
 use crate::{MessageHeader, CONTINUATION_MARKER};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -42,6 +43,12 @@ pub struct StreamDecoder {
     buf: MutableBuffer,
     /// Whether or not array data in input buffers are required to be aligned
     require_alignment: bool,
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    ///
+    /// [`FileDecoder::with_skip_validation`]: crate::reader::FileDecoder::with_skip_validation
+    skip_validation: UnsafeFlag,
 }
 
 #[derive(Debug)]
@@ -211,15 +218,15 @@ impl StreamDecoder {
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
-                            let batch = read_record_batch_impl(
+                            let batch = RecordBatchDecoder::try_new(
                                 &body,
                                 batch,
                                 schema,
                                 &self.dictionaries,
-                                None,
                                 &version,
-                                self.require_alignment,
-                            )?;
+                            )?
+                            .with_require_alignment(self.require_alignment)
+                            .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
                         }
@@ -235,6 +242,7 @@ impl StreamDecoder {
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
+                                self.skip_validation.clone(),
                             )?;
                             self.state = DecoderState::default();
                         }
@@ -324,6 +332,7 @@ mod tests {
             "test1",
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
+                #[allow(deprecated)]
                 Arc::new(Field::new_dict(
                     "values".to_string(),
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -353,6 +362,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
+                #[allow(deprecated)]
                 IpcWriteOptions::default().with_preserve_dict_id(false),
             )
             .expect("Failed to create StreamWriter");

@@ -52,28 +52,47 @@
 //! The [`schema`] module provides APIs to work with Parquet schemas. The
 //! [`file::metadata`] module provides APIs to work with Parquet metadata.
 //!
-//! ## Read/Write Arrow
+//! ## Reading and Writing Arrow (`arrow` feature)
 //!
-//! The [`arrow`] module allows reading and writing Parquet data to/from Arrow `RecordBatch`.
-//! This makes for a simple and performant interface to parquet data, whilst allowing workloads
+//! The [`arrow`] module supports reading and writing Parquet data to/from
+//! Arrow `RecordBatch`es. Using Arrow is simple and performant, and allows workloads
 //! to leverage the wide range of data transforms provided by the [arrow] crate, and by the
-//! ecosystem of libraries and services using [Arrow] as an interop format.
+//! ecosystem of [Arrow] compatible systems.
 //!
-//! ## Read/Write Arrow Async
+//! Most users will use [`ArrowWriter`] for writing and [`ParquetRecordBatchReaderBuilder`] for
+//! reading.
 //!
-//! When the `async` feature is enabled, [`arrow::async_reader`] and [`arrow::async_writer`]
-//! provide the ability to read and write [`arrow`] data asynchronously. Additionally, with the
-//! `object_store` feature is enabled, [`ParquetObjectReader`](arrow::async_reader::ParquetObjectReader)
+//! Lower level APIs include [`ArrowColumnWriter`] for writing using multiple
+//! threads, and [`RowFilter`] to apply filters during decode.
+//!
+//! [`ArrowWriter`]: arrow::arrow_writer::ArrowWriter
+//! [`ParquetRecordBatchReaderBuilder`]: arrow::arrow_reader::ParquetRecordBatchReaderBuilder
+//! [`ArrowColumnWriter`]: arrow::arrow_writer::ArrowColumnWriter
+//! [`RowFilter`]: arrow::arrow_reader::RowFilter
+//!
+//! ## `async` Reading and Writing Arrow (`async` feature)
+//!
+//! The [`async_reader`] and [`async_writer`] modules provide async APIs to
+//! read and write `RecordBatch`es  asynchronously.
+//!
+//! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
+//! for reading. When the `object_store` feature is enabled, [`ParquetObjectReader`]
 //! provides efficient integration with object storage services such as S3 via the [object_store]
 //! crate, automatically optimizing IO based on any predicates or projections provided.
 //!
-//! ## Read/Write Parquet
+//! [`async_reader`]: arrow::async_reader
+//! [`async_writer`]: arrow::async_writer
+//! [`AsyncArrowWriter`]: arrow::async_writer::AsyncArrowWriter
+//! [`ParquetRecordBatchStreamBuilder`]: arrow::async_reader::ParquetRecordBatchStreamBuilder
+//! [`ParquetObjectReader`]: arrow::async_reader::ParquetObjectReader
 //!
-//! Workloads needing finer-grained control, or avoid a dependence on arrow,
-//! can use the lower-level APIs in [`mod@file`]. These APIs expose the underlying parquet
-//! data model, and therefore require knowledge of the underlying parquet format,
-//! including the details of [Dremel] record shredding and [Logical Types]. Most workloads
-//! should prefer the arrow interfaces.
+//! ## Read/Write Parquet Directly
+//!
+//! Workloads needing finer-grained control, or to avoid a dependence on arrow,
+//! can use the APIs in [`mod@file`] directly. These APIs  are harder to use
+//! as they directly use the underlying Parquet data model, and require knowledge
+//! of the Parquet format, including the details of [Dremel] record shredding
+//! and [Logical Types].
 //!
 //! [arrow]: https://docs.rs/arrow/latest/arrow/index.html
 //! [Arrow]: https://arrow.apache.org/
@@ -82,6 +101,11 @@
 //! [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
 //! [object_store]: https://docs.rs/object_store/latest/object_store/
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 /// Defines a an item with an experimental public API
 ///
@@ -131,12 +155,19 @@ pub mod data_type;
 pub use self::encodings::{decoding, encoding};
 
 experimental!(#[macro_use] mod util);
+
+pub use util::utf8;
+
 #[cfg(feature = "arrow")]
 pub mod arrow;
 pub mod column;
 experimental!(mod compression);
 experimental!(mod encodings);
 pub mod bloom_filter;
+
+#[cfg(feature = "encryption")]
+experimental!(pub mod encryption);
+
 pub mod file;
 pub mod record;
 pub mod schema;

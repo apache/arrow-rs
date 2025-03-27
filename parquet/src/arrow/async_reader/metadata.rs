@@ -69,7 +69,7 @@ pub trait MetadataFetch {
     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
-impl<'a, T: AsyncFileReader> MetadataFetch for &'a mut T {
+impl<T: AsyncFileReader> MetadataFetch for &mut T {
     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
     }
@@ -113,13 +113,14 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = ParquetMetaDataReader::decode_footer(&footer)?;
+        let footer = ParquetMetaDataReader::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
 
         if file_size < length + FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(
                 "file size of {} is less than footer + metadata {}",
                 file_size,
-                length + 8
+                length + FOOTER_SIZE
             )));
         }
 

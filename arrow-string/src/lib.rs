@@ -15,9 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![warn(missing_docs)]
 //! Arrow string kernels
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![warn(missing_docs)]
+
+mod binary_like;
+mod binary_predicate;
 pub mod concat_elements;
 pub mod length;
 pub mod like;

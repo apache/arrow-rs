@@ -30,7 +30,7 @@ use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::rank::rank;
+use crate::rank::{can_rank, rank};
 pub use arrow_schema::SortOptions;
 
 /// Sort the `ArrayRef` using `SortOptions`.
@@ -188,15 +188,6 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
             indices.partition(|index| array.is_valid(*index as usize))
         }
     }
-}
-
-/// Whether `arrow_ord::rank` can rank an array of given data type.
-fn can_rank(data_type: &DataType) -> bool {
-    data_type.is_primitive()
-        || matches!(
-            data_type,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary
-        )
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.
@@ -794,18 +785,25 @@ impl LexicographicalComparator {
 mod tests {
     use super::*;
     use arrow_array::builder::{
-        FixedSizeListBuilder, Int64Builder, ListBuilder, PrimitiveRunBuilder,
+        BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
+        PrimitiveRunBuilder,
     };
     use arrow_buffer::{i256, NullBuffer};
     use arrow_schema::Field;
     use half::f16;
     use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
     use rand::{Rng, RngCore, SeedableRng};
 
-    fn create_decimal128_array(data: Vec<Option<i128>>) -> Decimal128Array {
+    fn create_decimal_array<T: DecimalType>(
+        data: Vec<Option<usize>>,
+        precision: u8,
+        scale: i8,
+    ) -> PrimitiveArray<T> {
         data.into_iter()
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(23, 6)
+            .map(|x| x.and_then(T::Native::from_usize))
+            .collect::<PrimitiveArray<T>>()
+            .with_precision_and_scale(precision, scale)
             .unwrap()
     }
 
@@ -816,13 +814,15 @@ mod tests {
             .unwrap()
     }
 
-    fn test_sort_to_indices_decimal128_array(
-        data: Vec<Option<i128>>,
+    fn test_sort_to_indices_decimal_array<T: DecimalType>(
+        data: Vec<Option<usize>>,
         options: Option<SortOptions>,
         limit: Option<usize>,
         expected_data: Vec<u32>,
+        precision: u8,
+        scale: i8,
     ) {
-        let output = create_decimal128_array(data);
+        let output = create_decimal_array::<T>(data, precision, scale);
         let expected = UInt32Array::from(expected_data);
         let output = sort_to_indices(&(Arc::new(output) as ArrayRef), options, limit).unwrap();
         assert_eq!(output, expected)
@@ -840,14 +840,16 @@ mod tests {
         assert_eq!(output, expected)
     }
 
-    fn test_sort_decimal128_array(
-        data: Vec<Option<i128>>,
+    fn test_sort_decimal_array<T: DecimalType>(
+        data: Vec<Option<usize>>,
         options: Option<SortOptions>,
         limit: Option<usize>,
-        expected_data: Vec<Option<i128>>,
+        expected_data: Vec<Option<usize>>,
+        p: u8,
+        s: i8,
     ) {
-        let output = create_decimal128_array(data);
-        let expected = Arc::new(create_decimal128_array(expected_data)) as ArrayRef;
+        let output = create_decimal_array::<T>(data, p, s);
+        let expected = Arc::new(create_decimal_array::<T>(expected_data, p, s)) as ArrayRef;
         let output = match limit {
             Some(_) => sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap(),
             _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
@@ -1550,17 +1552,396 @@ mod tests {
         );
     }
 
+    /// Test sort boolean on each permutation of with/without limit and GenericListArray/FixedSizeListArray
+    ///
+    /// The input data must have the same length for all list items so that we can test FixedSizeListArray
+    ///
+    fn test_every_config_sort_boolean_list_arrays(
+        data: Vec<Option<Vec<Option<bool>>>>,
+        options: Option<SortOptions>,
+        expected_data: Vec<Option<Vec<Option<bool>>>>,
+    ) {
+        let first_length = data
+            .iter()
+            .find_map(|x| x.as_ref().map(|x| x.len()))
+            .unwrap_or(0);
+        let first_non_match_length = data
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.len()).unwrap_or(first_length))
+            .position(|x| x != first_length);
+
+        assert_eq!(
+            first_non_match_length, None,
+            "All list items should have the same length {first_length}, input data is invalid"
+        );
+
+        let first_non_match_length = expected_data
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.len()).unwrap_or(first_length))
+            .position(|x| x != first_length);
+
+        assert_eq!(
+            first_non_match_length, None,
+            "All list items should have the same length {first_length}, expected data is invalid"
+        );
+
+        let limit = expected_data.len().saturating_div(2);
+
+        for &with_limit in &[false, true] {
+            let (limit, expected_data) = if with_limit {
+                (
+                    Some(limit),
+                    expected_data.iter().take(limit).cloned().collect(),
+                )
+            } else {
+                (None, expected_data.clone())
+            };
+
+            for &fixed_length in &[None, Some(first_length as i32)] {
+                test_sort_boolean_list_arrays(
+                    data.clone(),
+                    options,
+                    limit,
+                    expected_data.clone(),
+                    fixed_length,
+                );
+            }
+        }
+    }
+
+    fn test_sort_boolean_list_arrays(
+        data: Vec<Option<Vec<Option<bool>>>>,
+        options: Option<SortOptions>,
+        limit: Option<usize>,
+        expected_data: Vec<Option<Vec<Option<bool>>>>,
+        fixed_length: Option<i32>,
+    ) {
+        fn build_fixed_boolean_list_array(
+            data: Vec<Option<Vec<Option<bool>>>>,
+            fixed_length: i32,
+        ) -> ArrayRef {
+            let mut builder = FixedSizeListBuilder::new(
+                BooleanBuilder::with_capacity(fixed_length as usize),
+                fixed_length,
+            );
+            for sublist in data {
+                match sublist {
+                    Some(sublist) => {
+                        builder.values().extend(sublist);
+                        builder.append(true);
+                    }
+                    None => {
+                        builder
+                            .values()
+                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                        builder.append(false);
+                    }
+                }
+            }
+            Arc::new(builder.finish()) as ArrayRef
+        }
+
+        fn build_generic_boolean_list_array<OffsetSize: OffsetSizeTrait>(
+            data: Vec<Option<Vec<Option<bool>>>>,
+        ) -> ArrayRef {
+            let mut builder = GenericListBuilder::<OffsetSize, _>::new(BooleanBuilder::new());
+            builder.extend(data);
+            Arc::new(builder.finish()) as ArrayRef
+        }
+
+        // for FixedSizedList
+        if let Some(length) = fixed_length {
+            let input = build_fixed_boolean_list_array(data.clone(), length);
+            let sorted = match limit {
+                Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+                _ => sort(&(input as ArrayRef), options).unwrap(),
+            };
+            let expected = build_fixed_boolean_list_array(expected_data.clone(), length);
+
+            assert_eq!(&sorted, &expected);
+        }
+
+        // for List
+        let input = build_generic_boolean_list_array::<i32>(data.clone());
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = build_generic_boolean_list_array::<i32>(expected_data.clone());
+
+        assert_eq!(&sorted, &expected);
+
+        // for LargeList
+        let input = build_generic_boolean_list_array::<i64>(data.clone());
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            _ => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = build_generic_boolean_list_array::<i64>(expected_data.clone());
+
+        assert_eq!(&sorted, &expected);
+    }
+
     #[test]
-    fn test_sort_indices_decimal128() {
+    fn test_sort_list_of_booleans() {
+        // These are all the possible combinations of boolean values
+        // There are 3^3 + 1 = 28 possible combinations (3 values to permutate - [true, false, null] and 1 None value)
+        #[rustfmt::skip]
+        let mut cases = vec![
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        None]),
+            None,
+        ];
+
+        cases.shuffle(&mut StdRng::seed_from_u64(42));
+
+        // The order is false, true, null
+        #[rustfmt::skip]
+        let expected_descending_false_nulls_first_false = vec![
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        None]),
+            None,
+        ];
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            expected_descending_false_nulls_first_false,
+        );
+
+        // The order is null, false, true
+        #[rustfmt::skip]
+        let expected_descending_false_nulls_first_true = vec![
+            None,
+
+            Some(vec![None,        None,        None]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        Some(true)]),
+
+            Some(vec![None,        Some(false), None]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), Some(true)]),
+
+            Some(vec![None,        Some(true),  None]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  Some(true)]),
+
+            Some(vec![Some(false), None,        None]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        Some(true)]),
+
+            Some(vec![Some(false), Some(false), None]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+
+            Some(vec![Some(false), Some(true),  None]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+
+            Some(vec![Some(true),  None,        None]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        Some(true)]),
+
+            Some(vec![Some(true),  Some(false), None]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+
+            Some(vec![Some(true),  Some(true),  None]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+        ];
+
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            expected_descending_false_nulls_first_true,
+        );
+
+        // The order is true, false, null
+        #[rustfmt::skip]
+        let expected_descending_true_nulls_first_false = vec![
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+            Some(vec![Some(true),  Some(true),  None]),
+
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+            Some(vec![Some(true),  Some(false), None]),
+
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+            Some(vec![Some(true),  None,        None]),
+
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+            Some(vec![Some(false), Some(true),  None]),
+
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+            Some(vec![Some(false), Some(false), None]),
+
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+            Some(vec![Some(false), None,        None]),
+
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+            Some(vec![None,        Some(true),  None]),
+
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+            Some(vec![None,        Some(false), None]),
+
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+            Some(vec![None,        None,        None]),
+
+            None,
+        ];
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            expected_descending_true_nulls_first_false,
+        );
+
+        // The order is null, true, false
+        #[rustfmt::skip]
+        let expected_descending_true_nulls_first_true = vec![
+            None,
+
+            Some(vec![None,        None,        None]),
+            Some(vec![None,        None,        Some(true)]),
+            Some(vec![None,        None,        Some(false)]),
+
+            Some(vec![None,        Some(true),  None]),
+            Some(vec![None,        Some(true),  Some(true)]),
+            Some(vec![None,        Some(true),  Some(false)]),
+
+            Some(vec![None,        Some(false), None]),
+            Some(vec![None,        Some(false), Some(true)]),
+            Some(vec![None,        Some(false), Some(false)]),
+
+            Some(vec![Some(true),  None,        None]),
+            Some(vec![Some(true),  None,        Some(true)]),
+            Some(vec![Some(true),  None,        Some(false)]),
+
+            Some(vec![Some(true),  Some(true),  None]),
+            Some(vec![Some(true),  Some(true),  Some(true)]),
+            Some(vec![Some(true),  Some(true),  Some(false)]),
+
+            Some(vec![Some(true),  Some(false), None]),
+            Some(vec![Some(true),  Some(false), Some(true)]),
+            Some(vec![Some(true),  Some(false), Some(false)]),
+
+            Some(vec![Some(false), None,        None]),
+            Some(vec![Some(false), None,        Some(true)]),
+            Some(vec![Some(false), None,        Some(false)]),
+
+            Some(vec![Some(false), Some(true),  None]),
+            Some(vec![Some(false), Some(true),  Some(true)]),
+            Some(vec![Some(false), Some(true),  Some(false)]),
+
+            Some(vec![Some(false), Some(false), None]),
+            Some(vec![Some(false), Some(false), Some(true)]),
+            Some(vec![Some(false), Some(false), Some(false)]),
+        ];
+        // Testing with limit false and fixed_length None
+        test_every_config_sort_boolean_list_arrays(
+            cases.clone(),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            expected_descending_true_nulls_first_true,
+        );
+    }
+
+    fn test_sort_indices_decimal<T: DecimalType>(precision: u8, scale: i8) {
         // decimal default
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             None,
             vec![0, 6, 4, 2, 3, 5, 1],
+            precision,
+            scale,
         );
         // decimal descending
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1568,9 +1949,11 @@ mod tests {
             }),
             None,
             vec![1, 5, 3, 2, 4, 0, 6],
+            precision,
+            scale,
         );
         // decimal null_first and descending
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1578,9 +1961,11 @@ mod tests {
             }),
             None,
             vec![0, 6, 1, 5, 3, 2, 4],
+            precision,
+            scale,
         );
         // decimal null_first
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1588,16 +1973,20 @@ mod tests {
             }),
             None,
             vec![0, 6, 4, 2, 3, 5, 1],
+            precision,
+            scale,
         );
         // limit
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             Some(3),
             vec![0, 6, 4],
+            precision,
+            scale,
         );
         // limit descending
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1605,9 +1994,11 @@ mod tests {
             }),
             Some(3),
             vec![1, 5, 3],
+            precision,
+            scale,
         );
         // limit descending null_first
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1615,9 +2006,11 @@ mod tests {
             }),
             Some(3),
             vec![0, 6, 1],
+            precision,
+            scale,
         );
         // limit null_first
-        test_sort_to_indices_decimal128_array(
+        test_sort_to_indices_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1625,85 +2018,19 @@ mod tests {
             }),
             Some(3),
             vec![0, 6, 4],
+            precision,
+            scale,
         );
     }
 
     #[test]
-    fn test_sort_indices_decimal256() {
-        let data = vec![
-            None,
-            Some(i256::from_i128(5)),
-            Some(i256::from_i128(2)),
-            Some(i256::from_i128(3)),
-            Some(i256::from_i128(1)),
-            Some(i256::from_i128(4)),
-            None,
-        ];
+    fn test_sort_indices_decimal128() {
+        test_sort_indices_decimal::<Decimal128Type>(23, 6);
+    }
 
-        // decimal default
-        test_sort_to_indices_decimal256_array(data.clone(), None, None, vec![0, 6, 4, 2, 3, 5, 1]);
-        // decimal descending
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: false,
-            }),
-            None,
-            vec![1, 5, 3, 2, 4, 0, 6],
-        );
-        // decimal null_first and descending
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: true,
-            }),
-            None,
-            vec![0, 6, 1, 5, 3, 2, 4],
-        );
-        // decimal null_first
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-            None,
-            vec![0, 6, 4, 2, 3, 5, 1],
-        );
-        // limit
-        test_sort_to_indices_decimal256_array(data.clone(), None, Some(3), vec![0, 6, 4]);
-        // limit descending
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: false,
-            }),
-            Some(3),
-            vec![1, 5, 3],
-        );
-        // limit descending null_first
-        test_sort_to_indices_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: true,
-            }),
-            Some(3),
-            vec![0, 6, 1],
-        );
-        // limit null_first
-        test_sort_to_indices_decimal256_array(
-            data,
-            Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-            Some(3),
-            vec![0, 6, 4],
-        );
+    #[test]
+    fn test_sort_indices_decimal256() {
+        test_sort_indices_decimal::<Decimal256Type>(53, 6);
     }
 
     #[test]
@@ -1756,17 +2083,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_sort_decimal128() {
+    fn test_sort_decimal<T: DecimalType>(precision: u8, scale: i8) {
         // decimal default
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             None,
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
+            precision,
+            scale,
         );
         // decimal descending
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1774,9 +2102,11 @@ mod tests {
             }),
             None,
             vec![Some(5), Some(4), Some(3), Some(2), Some(1), None, None],
+            precision,
+            scale,
         );
         // decimal null_first and descending
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1784,9 +2114,11 @@ mod tests {
             }),
             None,
             vec![None, None, Some(5), Some(4), Some(3), Some(2), Some(1)],
+            precision,
+            scale,
         );
         // decimal null_first
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1794,16 +2126,20 @@ mod tests {
             }),
             None,
             vec![None, None, Some(1), Some(2), Some(3), Some(4), Some(5)],
+            precision,
+            scale,
         );
         // limit
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             None,
             Some(3),
             vec![None, None, Some(1)],
+            precision,
+            scale,
         );
         // limit descending
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1811,9 +2147,11 @@ mod tests {
             }),
             Some(3),
             vec![Some(5), Some(4), Some(3)],
+            precision,
+            scale,
         );
         // limit descending null_first
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: true,
@@ -1821,9 +2159,11 @@ mod tests {
             }),
             Some(3),
             vec![None, None, Some(5)],
+            precision,
+            scale,
         );
         // limit null_first
-        test_sort_decimal128_array(
+        test_sort_decimal_array::<T>(
             vec![None, Some(5), Some(2), Some(3), Some(1), Some(4), None],
             Some(SortOptions {
                 descending: false,
@@ -1831,118 +2171,19 @@ mod tests {
             }),
             Some(3),
             vec![None, None, Some(1)],
+            precision,
+            scale,
         );
     }
 
     #[test]
+    fn test_sort_decimal128() {
+        test_sort_decimal::<Decimal128Type>(23, 6);
+    }
+
+    #[test]
     fn test_sort_decimal256() {
-        let data = vec![
-            None,
-            Some(i256::from_i128(5)),
-            Some(i256::from_i128(2)),
-            Some(i256::from_i128(3)),
-            Some(i256::from_i128(1)),
-            Some(i256::from_i128(4)),
-            None,
-        ];
-        // decimal default
-        test_sort_decimal256_array(
-            data.clone(),
-            None,
-            None,
-            [None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // decimal descending
-        test_sort_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: false,
-            }),
-            None,
-            [Some(5), Some(4), Some(3), Some(2), Some(1), None, None]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // decimal null_first and descending
-        test_sort_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: true,
-            }),
-            None,
-            [None, None, Some(5), Some(4), Some(3), Some(2), Some(1)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // decimal null_first
-        test_sort_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-            None,
-            [None, None, Some(1), Some(2), Some(3), Some(4), Some(5)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // limit
-        test_sort_decimal256_array(
-            data.clone(),
-            None,
-            Some(3),
-            [None, None, Some(1)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // limit descending
-        test_sort_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: false,
-            }),
-            Some(3),
-            [Some(5), Some(4), Some(3)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // limit descending null_first
-        test_sort_decimal256_array(
-            data.clone(),
-            Some(SortOptions {
-                descending: true,
-                nulls_first: true,
-            }),
-            Some(3),
-            [None, None, Some(5)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
-        // limit null_first
-        test_sort_decimal256_array(
-            data,
-            Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-            Some(3),
-            [None, None, Some(1)]
-                .iter()
-                .map(|v| v.map(i256::from_i128))
-                .collect(),
-        );
+        test_sort_decimal::<Decimal256Type>(53, 6);
     }
 
     #[test]
@@ -3910,7 +4151,7 @@ mod tests {
     fn test_partial_rand_sort() {
         let size = 1000u32;
         let mut rng = StdRng::seed_from_u64(42);
-        let mut before: Vec<u32> = (0..size).map(|_| rng.gen::<u32>()).collect();
+        let mut before: Vec<u32> = (0..size).map(|_| rng.random::<u32>()).collect();
         let mut d = before.clone();
         let last = (rng.next_u32() % size) as usize;
         d.sort_unstable();

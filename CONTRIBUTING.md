@@ -112,16 +112,16 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
-- `../testing` (sourced from https://github.com/apache/arrow-testing)
+- `./parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `./testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their
 standard location. The following environment variables can be used to override the location:
 
 ```bash
 # Optionally specify a different location for test data
-export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
-export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
+export PARQUET_TEST_DATA=$(cd ./parquet-testing/data; pwd)
+export ARROW_TEST_DATA=$(cd ./testing/data; pwd)
 ```
 
 From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
@@ -138,7 +138,7 @@ cargo test
 cargo test -p arrow
 ```
 
-For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/master/.github/workflows). Here are some examples of additional tests you may want to run:
+For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/main/.github/workflows). Here are some examples of additional tests you may want to run:
 
 ```bash
 # run tests for the parquet crate
@@ -217,13 +217,13 @@ cargo bench -p arrow-cast --bench parse_time
 To set the baseline for your benchmarks, use the --save-baseline flag:
 
 ```bash
-git checkout master
+git checkout main
 
-cargo bench --bench parse_time -- --save-baseline master
+cargo bench --bench parse_time -- --save-baseline main
 
 git checkout feature
 
-cargo bench --bench parse_time -- --baseline master
+cargo bench --bench parse_time -- --baseline main
 ```
 
 ## Git Pre-Commit Hook

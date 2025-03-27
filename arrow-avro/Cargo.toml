@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_avro"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["deflate", "snappy", "zstd"]
@@ -39,11 +41,9 @@ deflate = ["flate2"]
 snappy = ["snap", "crc"]
 
 [dependencies]
-arrow-array = { workspace = true  }
-arrow-buffer = { workspace = true  }
-arrow-cast = { workspace = true  }
-arrow-data = { workspace = true  }
-arrow-schema = { workspace = true  }
+arrow-schema = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-array = { workspace = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.188", features = ["derive"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
@@ -51,6 +51,5 @@ snap = { version = "1.0", default-features = false, optional = true }
 zstd = { version = "0.13", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
 
-
 [dev-dependencies]
-
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }

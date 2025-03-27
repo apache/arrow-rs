@@ -20,18 +20,26 @@ use std::{io::Read, ops::Range, sync::Arc};
 use bytes::Bytes;
 
 use crate::basic::ColumnOrder;
+#[cfg(feature = "encryption")]
+use crate::encryption::{
+    decrypt::{FileDecryptionProperties, FileDecryptor},
+    modules::create_footer_aad,
+};
+
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
-use crate::file::{FOOTER_SIZE, PARQUET_MAGIC};
+use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
+#[cfg(feature = "encryption")]
+use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
-#[cfg(feature = "async")]
+#[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::MetadataFetch;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -68,6 +76,28 @@ pub struct ParquetMetaDataReader {
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
+    #[cfg(feature = "encryption")]
+    file_decryption_properties: Option<FileDecryptionProperties>,
+}
+
+/// Describes how the footer metadata is stored
+///
+/// This is parsed from the last 8 bytes of the Parquet file
+pub struct FooterTail {
+    metadata_length: usize,
+    encrypted_footer: bool,
+}
+
+impl FooterTail {
+    /// The length of the footer metadata in bytes
+    pub fn metadata_length(&self) -> usize {
+        self.metadata_length
+    }
+
+    /// Whether the footer metadata is encrypted
+    pub fn is_encrypted_footer(&self) -> bool {
+        self.encrypted_footer
+    }
 }
 
 impl ParquetMetaDataReader {
@@ -126,6 +156,18 @@ impl ParquetMetaDataReader {
         self
     }
 
+    /// Provide the FileDecryptionProperties to use when decrypting the file.
+    ///
+    /// This is only necessary when the file is encrypted.
+    #[cfg(feature = "encryption")]
+    pub fn with_decryption_properties(
+        mut self,
+        properties: Option<&FileDecryptionProperties>,
+    ) -> Self {
+        self.file_decryption_properties = properties.cloned();
+        self
+    }
+
     /// Indicates whether this reader has a [`ParquetMetaData`] internally.
     pub fn has_metadata(&self) -> bool {
         self.metadata.is_some()
@@ -178,8 +220,10 @@ impl ParquetMetaDataReader {
     ///
     /// # Errors
     ///
-    /// This function will return [`ParquetError::IndexOutOfBound`] in the event `reader` does not
-    /// provide enough data to fully parse the metadata (see example below).
+    /// This function will return [`ParquetError::NeedMoreData`] in the event `reader` does not
+    /// provide enough data to fully parse the metadata (see example below). The returned error
+    /// will be populated with a `usize` field indicating the number of bytes required from the
+    /// tail of the file to completely parse the requested metadata.
     ///
     /// Other errors returned include [`ParquetError::General`] and [`ParquetError::EOF`].
     ///
@@ -192,11 +236,13 @@ impl ParquetMetaDataReader {
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
     /// let file = open_parquet_file("some_path.parquet");
     /// let len = file.len() as usize;
-    /// let bytes = get_bytes(&file, 1000..len);
+    /// // Speculatively read 1 kilobyte from the end of the file
+    /// let bytes = get_bytes(&file, len - 1024..len);
     /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
     /// match reader.try_parse_sized(&bytes, len) {
     ///     Ok(_) => (),
-    ///     Err(ParquetError::IndexOutOfBound(needed, _)) => {
+    ///     Err(ParquetError::NeedMoreData(needed)) => {
+    ///         // Read the needed number of bytes from the end of the file
     ///         let bytes = get_bytes(&file, len - needed..len);
     ///         reader.try_parse_sized(&bytes, len).unwrap();
     ///     }
@@ -204,15 +250,44 @@ impl ParquetMetaDataReader {
     /// }
     /// let metadata = reader.finish().unwrap();
     /// ```
+    ///
+    /// Note that it is possible for the file metadata to be completely read, but there are
+    /// insufficient bytes available to read the page indexes. [`Self::has_metadata()`] can be used
+    /// to test for this. In the event the file metadata is present, re-parsing of the file
+    /// metadata can be skipped by using [`Self::read_page_indexes_sized()`], as shown below.
+    /// ```no_run
+    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::errors::ParquetError;
+    /// # use crate::parquet::file::reader::Length;
+    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<usize>) -> bytes::Bytes { unimplemented!(); }
+    /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+    /// let file = open_parquet_file("some_path.parquet");
+    /// let len = file.len() as usize;
+    /// // Speculatively read 1 kilobyte from the end of the file
+    /// let mut bytes = get_bytes(&file, len - 1024..len);
+    /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
+    /// // Loop until `bytes` is large enough
+    /// loop {
+    ///     match reader.try_parse_sized(&bytes, len) {
+    ///         Ok(_) => break,
+    ///         Err(ParquetError::NeedMoreData(needed)) => {
+    ///             // Read the needed number of bytes from the end of the file
+    ///             bytes = get_bytes(&file, len - needed..len);
+    ///             // If file metadata was read only read page indexes, otherwise continue loop
+    ///             if reader.has_metadata() {
+    ///                 reader.read_page_indexes_sized(&bytes, len);
+    ///                 break;
+    ///             }
+    ///         }
+    ///         _ => panic!("unexpected error")
+    ///     }
+    /// }
+    /// let metadata = reader.finish().unwrap();
+    /// ```
     pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: usize) -> Result<()> {
         self.metadata = match self.parse_metadata(reader) {
             Ok(metadata) => Some(metadata),
-            // FIXME: throughout this module ParquetError::IndexOutOfBound is used to indicate the
-            // need for more data. This is not it's intended use. The plan is to add a NeedMoreData
-            // value to the enum, but this would be a breaking change. This will be done as
-            // 54.0.0 draws nearer.
-            // https://github.com/apache/arrow-rs/issues/6447
-            Err(ParquetError::IndexOutOfBound(needed, _)) => {
+            Err(ParquetError::NeedMoreData(needed)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
                 if file_size == reader.len() as usize || needed > file_size {
@@ -223,7 +298,7 @@ impl ParquetMetaDataReader {
                     ));
                 } else {
                     // Ask for a larger buffer
-                    return Err(ParquetError::IndexOutOfBound(needed, file_size));
+                    return Err(ParquetError::NeedMoreData(needed));
                 }
             }
             Err(e) => return Err(e),
@@ -246,7 +321,8 @@ impl ParquetMetaDataReader {
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
     /// This variant is used when `reader` cannot access the entire Parquet file (e.g. it is
     /// a [`Bytes`] struct containing the tail of the file).
-    /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`].
+    /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`]. Like
+    /// [`Self::try_parse_sized()`] this function may return [`ParquetError::NeedMoreData`].
     pub fn read_page_indexes_sized<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -269,7 +345,6 @@ impl ParquetMetaDataReader {
 
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
-            self.empty_page_indexes();
             return Ok(());
         };
 
@@ -285,10 +360,7 @@ impl ParquetMetaDataReader {
                 ));
             } else {
                 // Ask for a larger buffer
-                return Err(ParquetError::IndexOutOfBound(
-                    file_size - range.start,
-                    file_size,
-                ));
+                return Err(ParquetError::NeedMoreData(file_size - range.start));
             }
         }
 
@@ -321,7 +393,7 @@ impl ParquetMetaDataReader {
     ///
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_and_finish<F: MetadataFetch>(
         mut self,
         fetch: F,
@@ -336,14 +408,15 @@ impl ParquetMetaDataReader {
     ///
     /// See [`Self::with_prefetch_hint`] for a discussion of how to reduce the number of fetches
     /// performed by this function.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn try_load<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
         file_size: usize,
     ) -> Result<()> {
-        let (metadata, remainder) =
-            Self::load_metadata(&mut fetch, file_size, self.get_prefetch_size()).await?;
+        let (metadata, remainder) = self
+            .load_metadata(&mut fetch, file_size, self.get_prefetch_size())
+            .await?;
 
         self.metadata = Some(metadata);
 
@@ -357,12 +430,12 @@ impl ParquetMetaDataReader {
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
         self.load_page_index_with_remainder(fetch, None).await
     }
 
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
         mut fetch: F,
@@ -382,7 +455,9 @@ impl ParquetMetaDataReader {
         let bytes = match &remainder {
             Some((remainder_start, remainder)) if *remainder_start <= range.start => {
                 let offset = range.start - *remainder_start;
-                remainder.slice(offset..range.end - *remainder_start + offset)
+                let end = offset + range.end - range.start;
+                assert!(end <= remainder.len());
+                remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
             _ => fetch.fetch(range.start..range.end).await?,
@@ -446,20 +521,6 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
-    /// Set the column_index and offset_indexes to empty `Vec` for backwards compatibility
-    ///
-    /// See <https://github.com/apache/arrow-rs/pull/6451>  for details
-    fn empty_page_indexes(&mut self) {
-        let metadata = self.metadata.as_mut().unwrap();
-        let num_row_groups = metadata.num_row_groups();
-        if self.column_index {
-            metadata.set_column_index(Some(vec![vec![]; num_row_groups]));
-        }
-        if self.offset_index {
-            metadata.set_offset_index(Some(vec![vec![]; num_row_groups]));
-        }
-    }
-
     fn range_for_page_index(&self) -> Option<Range<usize>> {
         // sanity check
         self.metadata.as_ref()?;
@@ -484,10 +545,7 @@ impl ParquetMetaDataReader {
         // check file is large enough to hold footer
         let file_size = chunk_reader.len();
         if file_size < (FOOTER_SIZE as u64) {
-            return Err(ParquetError::IndexOutOfBound(
-                FOOTER_SIZE,
-                file_size as usize,
-            ));
+            return Err(ParquetError::NeedMoreData(FOOTER_SIZE));
         }
 
         let mut footer = [0_u8; 8];
@@ -495,25 +553,26 @@ impl ParquetMetaDataReader {
             .get_read(file_size - 8)?
             .read_exact(&mut footer)?;
 
-        let metadata_len = Self::decode_footer(&footer)?;
+        let footer = Self::decode_footer_tail(&footer)?;
+        let metadata_len = footer.metadata_length();
         let footer_metadata_len = FOOTER_SIZE + metadata_len;
         self.metadata_size = Some(footer_metadata_len);
 
         if footer_metadata_len > file_size as usize {
-            return Err(ParquetError::IndexOutOfBound(
-                footer_metadata_len,
-                file_size as usize,
-            ));
+            return Err(ParquetError::NeedMoreData(footer_metadata_len));
         }
 
         let start = file_size - footer_metadata_len as u64;
-        Self::decode_metadata(chunk_reader.get_bytes(start, metadata_len)?.as_ref())
+        self.decode_footer_metadata(
+            chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
+            &footer,
+        )
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
     /// been provided, then return that value if it is larger than the size of the Parquet
     /// file footer (8 bytes). Otherwise returns `8`.
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     fn get_prefetch_size(&self) -> usize {
         if let Some(prefetch) = self.prefetch_hint {
             if prefetch > FOOTER_SIZE {
@@ -523,8 +582,9 @@ impl ParquetMetaDataReader {
         FOOTER_SIZE
     }
 
-    #[cfg(feature = "async")]
+    #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_metadata<F: MetadataFetch>(
+        &self,
         fetch: &mut F,
         file_size: usize,
         prefetch: usize,
@@ -552,7 +612,8 @@ impl ParquetMetaDataReader {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = Self::decode_footer(&footer)?;
+        let footer = Self::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
 
         if file_size < length + FOOTER_SIZE {
             return Err(eof_err!(
@@ -566,58 +627,162 @@ impl ParquetMetaDataReader {
         if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
             let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
-            Ok((Self::decode_metadata(&meta)?, None))
+            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
             Ok((
-                Self::decode_metadata(slice)?,
+                self.decode_footer_metadata(slice, &footer)?,
                 Some((footer_start, suffix.slice(..metadata_start))),
             ))
         }
     }
 
-    /// Decodes the Parquet footer returning the metadata length in bytes
+    /// Decodes the end of the Parquet footer
     ///
-    /// A parquet footer is 8 bytes long and has the following layout:
+    /// There are 8 bytes at the end of the Parquet footer with the following layout:
     /// * 4 bytes for the metadata length
-    /// * 4 bytes for the magic bytes 'PAR1'
+    /// * 4 bytes for the magic bytes 'PAR1' or 'PARE' (encrypted footer)
     ///
     /// ```text
-    /// +-----+--------+
-    /// | len | 'PAR1' |
-    /// +-----+--------+
+    /// +-----+------------------+
+    /// | len | 'PAR1' or 'PARE' |
+    /// +-----+------------------+
     /// ```
-    pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
-        // check this is indeed a parquet file
-        if slice[4..] != PARQUET_MAGIC {
+    pub fn decode_footer_tail(slice: &[u8; FOOTER_SIZE]) -> Result<FooterTail> {
+        let magic = &slice[4..];
+        let encrypted_footer = if magic == PARQUET_MAGIC_ENCR_FOOTER {
+            true
+        } else if magic == PARQUET_MAGIC {
+            false
+        } else {
             return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-        }
-
+        };
         // get the metadata length from the footer
         let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
-        // u32 won't be larger than usize in most cases
-        Ok(metadata_len as usize)
+        Ok(FooterTail {
+            // u32 won't be larger than usize in most cases
+            metadata_length: metadata_len as usize,
+            encrypted_footer,
+        })
+    }
+
+    /// Decodes the Parquet footer, returning the metadata length in bytes
+    #[deprecated(note = "use decode_footer_tail instead")]
+    pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
+        Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
 
     /// Decodes [`ParquetMetaData`] from the provided bytes.
     ///
-    /// Typically this is used to decode the metadata from the end of a parquet
-    /// file. The format of `buf` is the Thift compact binary protocol, as specified
+    /// Typically, this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
     /// by the [Parquet Spec].
     ///
+    /// This method handles using either `decode_metadata` or
+    /// `decode_metadata_with_encryption` depending on whether the encryption
+    /// feature is enabled.
+    ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-    pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
+    pub(crate) fn decode_footer_metadata(
+        &self,
+        buf: &[u8],
+        footer_tail: &FooterTail,
+    ) -> Result<ParquetMetaData> {
+        #[cfg(feature = "encryption")]
+        let result = Self::decode_metadata_with_encryption(
+            buf,
+            footer_tail.is_encrypted_footer(),
+            self.file_decryption_properties.as_ref(),
+        );
+        #[cfg(not(feature = "encryption"))]
+        let result = {
+            if footer_tail.is_encrypted_footer() {
+                Err(general_err!(
+                    "Parquet file has an encrypted footer but the encryption feature is disabled"
+                ))
+            } else {
+                Self::decode_metadata(buf)
+            }
+        };
+        result
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
+    ///
+    /// Typically this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
+    /// ciphers as specfied in the [Parquet Encryption Spec].
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
+    #[cfg(feature = "encryption")]
+    fn decode_metadata_with_encryption(
+        buf: &[u8],
+        encrypted_footer: bool,
+        file_decryption_properties: Option<&FileDecryptionProperties>,
+    ) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
+        let mut file_decryptor = None;
+        let decrypted_fmd_buf;
+
+        if encrypted_footer {
+            if let Some(file_decryption_properties) = file_decryption_properties {
+                let t_file_crypto_metadata: TFileCryptoMetaData =
+                    TFileCryptoMetaData::read_from_in_protocol(&mut prot)
+                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+                let decryptor = get_file_decryptor(
+                    t_file_crypto_metadata.encryption_algorithm,
+                    t_file_crypto_metadata.key_metadata.as_deref(),
+                    file_decryption_properties,
+                )?;
+                let footer_decryptor = decryptor.get_footer_decryptor();
+                let aad_footer = create_footer_aad(decryptor.file_aad())?;
+
+                decrypted_fmd_buf = footer_decryptor?
+                    .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Provided footer key and AAD were unable to decrypt parquet footer"
+                        )
+                    })?;
+                prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
+
+                file_decryptor = Some(decryptor);
+            } else {
+                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
+            }
+        }
+
         let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
+
+        if let (Some(algo), Some(file_decryption_properties)) = (
+            t_file_metadata.encryption_algorithm,
+            file_decryption_properties,
+        ) {
+            // File has a plaintext footer but encryption algorithm is set
+            file_decryptor = Some(get_file_decryptor(
+                algo,
+                t_file_metadata.footer_signing_key_metadata.as_deref(),
+                file_decryption_properties,
+            )?);
+        }
+
         let mut row_groups = Vec::new();
         for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
+            let r = RowGroupMetaData::from_encrypted_thrift(
+                schema_descr.clone(),
+                rg,
+                file_decryptor.as_ref(),
+            )?;
+            row_groups.push(r);
         }
-        let column_orders = Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr);
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
         let file_metadata = FileMetaData::new(
             t_file_metadata.version,
@@ -627,6 +792,44 @@ impl ParquetMetaDataReader {
             schema_descr,
             column_orders,
         );
+        let mut metadata = ParquetMetaData::new(file_metadata, row_groups);
+
+        metadata.with_file_decryptor(file_decryptor);
+
+        Ok(metadata)
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Typically this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec].
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
+        let mut prot = TCompactSliceInputProtocol::new(buf);
+
+        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
+        let schema = types::from_thrift(&t_file_metadata.schema)?;
+        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
+
+        let mut row_groups = Vec::new();
+        for rg in t_file_metadata.row_groups {
+            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
+        }
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
+
+        let file_metadata = FileMetaData::new(
+            t_file_metadata.version,
+            t_file_metadata.num_rows,
+            t_file_metadata.created_by,
+            t_file_metadata.key_value_metadata,
+            schema_descr,
+            column_orders,
+        );
+
         Ok(ParquetMetaData::new(file_metadata, row_groups))
     }
 
@@ -635,15 +838,13 @@ impl ParquetMetaDataReader {
     fn parse_column_orders(
         t_column_orders: Option<Vec<TColumnOrder>>,
         schema_descr: &SchemaDescriptor,
-    ) -> Option<Vec<ColumnOrder>> {
+    ) -> Result<Option<Vec<ColumnOrder>>> {
         match t_column_orders {
             Some(orders) => {
                 // Should always be the case
-                assert_eq!(
-                    orders.len(),
-                    schema_descr.num_columns(),
-                    "Column order length mismatch"
-                );
+                if orders.len() != schema_descr.num_columns() {
+                    return Err(general_err!("Column order length mismatch"));
+                };
                 let mut res = Vec::new();
                 for (i, column) in schema_descr.columns().iter().enumerate() {
                     match orders[i] {
@@ -657,10 +858,40 @@ impl ParquetMetaDataReader {
                         }
                     }
                 }
-                Some(res)
+                Ok(Some(res))
             }
-            None => None,
+            None => Ok(None),
         }
+    }
+}
+
+#[cfg(feature = "encryption")]
+fn get_file_decryptor(
+    encryption_algorithm: EncryptionAlgorithm,
+    footer_key_metadata: Option<&[u8]>,
+    file_decryption_properties: &FileDecryptionProperties,
+) -> Result<FileDecryptor> {
+    match encryption_algorithm {
+        EncryptionAlgorithm::AESGCMV1(algo) => {
+            let aad_file_unique = algo
+                .aad_file_unique
+                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
+            let aad_prefix = if file_decryption_properties.aad_prefix.is_some() {
+                file_decryption_properties.aad_prefix.clone().unwrap()
+            } else {
+                algo.aad_prefix.unwrap_or_default()
+            };
+
+            FileDecryptor::new(
+                file_decryption_properties,
+                footer_key_metadata,
+                aad_file_unique,
+                aad_prefix,
+            )
+        }
+        EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
+            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
+        )),
     }
 }
 
@@ -682,7 +913,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::IndexOutOfBound(8, _)));
+        assert!(matches!(err, ParquetError::NeedMoreData(8)));
     }
 
     #[test]
@@ -701,7 +932,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::IndexOutOfBound(263, _)));
+        assert!(matches!(err, ParquetError::NeedMoreData(263)));
     }
 
     #[test]
@@ -731,7 +962,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr),
+            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr).unwrap(),
             Some(vec![
                 ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
                 ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
@@ -740,20 +971,21 @@ mod tests {
 
         // Test when no column orders are defined.
         assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(None, &schema_descr),
+            ParquetMetaDataReader::parse_column_orders(None, &schema_descr).unwrap(),
             None
         );
     }
 
     #[test]
-    #[should_panic(expected = "Column order length mismatch")]
     fn test_metadata_column_orders_len_mismatch() {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
         let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
 
-        ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
+        let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
+        assert!(res.is_err());
+        assert!(format!("{:?}", res.unwrap_err()).contains("Column order length mismatch"));
     }
 
     #[test]
@@ -794,7 +1026,7 @@ mod tests {
         // should fail
         match reader.try_parse_sized(&bytes, len).unwrap_err() {
             // expected error, try again with provided bounds
-            ParquetError::IndexOutOfBound(needed, _) => {
+            ParquetError::NeedMoreData(needed) => {
                 let bytes = bytes_for_range(len - needed..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 let metadata = reader.finish().unwrap();
@@ -803,6 +1035,26 @@ mod tests {
             }
             _ => panic!("unexpected error"),
         };
+
+        // not enough for file metadata, but keep trying until page indexes are read
+        let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let mut bytes = bytes_for_range(452505..len);
+        loop {
+            match reader.try_parse_sized(&bytes, len) {
+                Ok(_) => break,
+                Err(ParquetError::NeedMoreData(needed)) => {
+                    bytes = bytes_for_range(len - needed..len);
+                    if reader.has_metadata() {
+                        reader.read_page_indexes_sized(&bytes, len).unwrap();
+                        break;
+                    }
+                }
+                _ => panic!("unexpected error"),
+            }
+        }
+        let metadata = reader.finish().unwrap();
+        assert!(metadata.column_index.is_some());
+        assert!(metadata.offset_index.is_some());
 
         // not enough for page index but lie about file size
         let bytes = bytes_for_range(323584..len);
@@ -818,7 +1070,7 @@ mod tests {
         // should fail
         match reader.try_parse_sized(&bytes, len).unwrap_err() {
             // expected error, try again with provided bounds
-            ParquetError::IndexOutOfBound(needed, _) => {
+            ParquetError::NeedMoreData(needed) => {
                 let bytes = bytes_for_range(len - needed..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 reader.finish().unwrap();
@@ -851,8 +1103,7 @@ mod tests {
     }
 }
 
-#[cfg(feature = "async")]
-#[cfg(test)]
+#[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
     use bytes::Bytes;
@@ -1018,6 +1269,42 @@ mod async_tests {
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
             .with_prefetch_hint(Some(130650))
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch more than enough but less than the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len - 1000)) // prefetch entire file
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len)) // prefetch entire file
+            .load_and_finish(f, len)
+            .await
+            .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+
+        // Prefetch more than the entire file
+        fetch_count.store(0, Ordering::SeqCst);
+        let f = MetadataFetchFn(&mut fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .with_prefetch_hint(Some(len + 1000)) // prefetch entire file
             .load_and_finish(f, len)
             .await
             .unwrap();

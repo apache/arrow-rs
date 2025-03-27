@@ -34,10 +34,10 @@ use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values}
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_schema::{ArrowError, DataType, SchemaRef};
-use std::sync::Arc;
+use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
+use std::{collections::HashSet, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -129,6 +129,70 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
+fn concat_lists<OffsetSize: OffsetSizeTrait>(
+    arrays: &[&dyn Array],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let mut output_len = 0;
+    let mut list_has_nulls = false;
+    let mut list_has_slices = false;
+
+    let lists = arrays
+        .iter()
+        .map(|x| x.as_list::<OffsetSize>())
+        .inspect(|l| {
+            output_len += l.len();
+            list_has_nulls |= l.null_count() != 0;
+            list_has_slices |= l.offsets()[0] > OffsetSize::zero()
+                || l.offsets().last().unwrap().as_usize() < l.values().len();
+        })
+        .collect::<Vec<_>>();
+
+    let lists_nulls = list_has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    // If any of the lists have slices, we need to slice the values
+    // to ensure that the offsets are correct
+    let mut sliced_values;
+    let values: Vec<&dyn Array> = if list_has_slices {
+        sliced_values = Vec::with_capacity(lists.len());
+        for l in &lists {
+            // if the first offset is non-zero, we need to slice the values so when
+            // we concatenate them below only the relevant values are included
+            let offsets = l.offsets();
+            let start_offset = offsets[0].as_usize();
+            let end_offset = offsets.last().unwrap().as_usize();
+            sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
+        }
+        sliced_values.iter().map(|a| a.as_ref()).collect()
+    } else {
+        lists.iter().map(|x| x.values().as_ref()).collect()
+    };
+
+    let concatenated_values = concat(values.as_slice())?;
+
+    // Merge value offsets from the lists
+    let value_offset_buffer =
+        OffsetBuffer::<OffsetSize>::from_lengths(lists.iter().flat_map(|x| x.offsets().lengths()));
+
+    let array = GenericListArray::<OffsetSize>::try_new(
+        Arc::clone(field),
+        value_offset_buffer,
+        concatenated_values,
+        lists_nulls,
+    )?;
+
+    Ok(Arc::new(array))
+}
+
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
         return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
@@ -159,18 +223,50 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
 
     let d = arrays[0].data_type();
     if arrays.iter().skip(1).any(|array| array.data_type() != d) {
-        return Err(ArrowError::InvalidArgumentError(
-            "It is not possible to concatenate arrays of different data types.".to_string(),
-        ));
-    }
-    if let DataType::Dictionary(k, _) = d {
-        downcast_integer! {
-            k.as_ref() => (dict_helper, arrays),
-            _ => unreachable!("illegal dictionary key type {k}")
+        // Create error message with up to 10 unique data types in the order they appear
+        let error_message = {
+            // 10 max unique data types to print and another 1 to know if there are more
+            let mut unique_data_types = HashSet::with_capacity(11);
+
+            let mut error_message =
+                format!("It is not possible to concatenate arrays of different data types ({d}");
+            unique_data_types.insert(d);
+
+            for array in arrays {
+                let is_unique = unique_data_types.insert(array.data_type());
+
+                if unique_data_types.len() == 11 {
+                    error_message.push_str(", ...");
+                    break;
+                }
+
+                if is_unique {
+                    error_message.push_str(", ");
+                    error_message.push_str(&array.data_type().to_string());
+                }
+            }
+
+            error_message.push_str(").");
+
+            error_message
         };
-    } else {
-        let capacity = get_capacity(arrays, d);
-        concat_fallback(arrays, capacity)
+
+        return Err(ArrowError::InvalidArgumentError(error_message));
+    }
+
+    match d {
+        DataType::Dictionary(k, _) => {
+            downcast_integer! {
+                k.as_ref() => (dict_helper, arrays),
+                _ => unreachable!("illegal dictionary key type {k}")
+            }
+        }
+        DataType::List(field) => concat_lists::<i32>(arrays, field),
+        DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        _ => {
+            let capacity = get_capacity(arrays, d);
+            concat_fallback(arrays, capacity)
+        }
     }
 }
 
@@ -228,8 +324,9 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::StringDictionaryBuilder;
+    use arrow_array::builder::{GenericListBuilder, StringDictionaryBuilder};
     use arrow_schema::{Field, Schema};
+    use std::fmt::Debug;
 
     #[test]
     fn test_concat_empty_vec() {
@@ -269,9 +366,87 @@ mod tests {
     fn test_concat_incompatible_datatypes() {
         let re = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
             &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
-        assert!(re.is_err());
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
+    }
+
+    #[test]
+    fn test_concat_10_incompatible_datatypes_should_include_all_of_them() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32).");
+    }
+
+    #[test]
+    fn test_concat_11_incompatible_datatypes_should_only_include_10() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+    }
+
+    #[test]
+    fn test_concat_13_incompatible_datatypes_should_not_include_all_of_them() {
+        let re = concat(&[
+            &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(2), None]),
+            // 2 string to make sure we only mention unique types
+            &StringArray::from(vec![Some("hello"), Some("bar"), Some("world")]),
+            &StringArray::from(vec![Some("hey"), Some(""), Some("you")]),
+            // Another type to make sure we are showing all the incompatible types
+            &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int8Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<Int16Type>::from(vec![Some(-1), Some(2), None]),
+            &PrimitiveArray::<UInt8Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt32Type>::from(vec![Some(1), Some(2), None]),
+            // Non unique
+            &PrimitiveArray::<UInt16Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<UInt64Type>::from(vec![Some(1), Some(2), None]),
+            &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
+            &PrimitiveArray::<Float16Type>::new_null(3),
+            &BooleanArray::from(vec![Some(true), Some(false), None]),
+        ]);
+
+        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
     }
 
     #[test]
@@ -402,6 +577,66 @@ mod tests {
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
 
         let expected = list1.into_iter().chain(list2).chain(list3);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_slices() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]),
+            Some(vec![]), // In slice
+            None,         // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(1, 2);
+        let list1_values = list1.into_iter().skip(1).take(2);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is non zero
+        assert!(list1_array.offsets()[0].as_usize() > 0);
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
+        let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_primitive_list_arrays_sliced_lengths() {
+        let list1 = vec![
+            Some(vec![Some(-1), Some(-1), Some(2), None, None]), // In slice
+            Some(vec![]),                                        // In slice
+            None,                                                // In slice
+            Some(vec![Some(10)]),
+        ];
+        let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
+        let list1_array = list1_array.slice(0, 3); // no offset, but not all values
+        let list1_values = list1.into_iter().take(3);
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None, Some(101)]),
+            Some(vec![Some(102)]),
+        ];
+        let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
+
+        // verify that this test covers the case when the first offset is zero, but the
+        // last offset doesn't cover the entire array
+        assert_eq!(list1_array.offsets()[0].as_usize(), 0);
+        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        let array_result = concat(&[&list1_array, &list2_array]).unwrap();
+
+        let expected = list1_values.chain(list2);
         let array_expected = ListArray::from_iter_primitive::<Int64Type, _, _>(expected);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
@@ -609,6 +844,24 @@ mod tests {
     }
 
     #[test]
+    fn test_string_dictionary_array_nulls_in_values() {
+        let input_1_keys = Int32Array::from_iter_values([0, 2, 1, 3]);
+        let input_1_values = StringArray::from(vec![Some("foo"), None, Some("bar"), Some("fiz")]);
+        let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+
+        let input_2_keys = Int32Array::from_iter_values([0]);
+        let input_2_values = StringArray::from(vec![None, Some("hello")]);
+        let input_2 = DictionaryArray::new(input_2_keys, Arc::new(input_2_values));
+
+        let expected = vec![Some("foo"), Some("bar"), None, Some("fiz"), None];
+
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let dictionary = concat.as_dictionary::<Int32Type>();
+        let actual = collect_string_dictionary(dictionary);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_string_dictionary_merge() {
         let mut builder = StringDictionaryBuilder::<Int32Type>::new();
         for i in 0..20 {
@@ -775,7 +1028,7 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types.");
+        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
     }
 
     #[test]
@@ -849,5 +1102,120 @@ mod tests {
         let dict_b = DictionaryArray::new(keys, Arc::new(values));
         let array = concat(&[&dict_a, &dict_b]).unwrap();
         assert_eq!(array.null_count(), 10);
+        assert_eq!(array.logical_null_count(), 10);
+    }
+
+    #[test]
+    fn concat_dictionary_list_array_simple() {
+        let scalars = vec![
+            create_single_row_list_of_dict(vec![Some("a")]),
+            create_single_row_list_of_dict(vec![Some("a")]),
+            create_single_row_list_of_dict(vec![Some("b")]),
+        ];
+
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(vec![
+            // Row 1
+            Some(vec![Some("a")]),
+            Some(vec![Some("a")]),
+            Some(vec![Some("b")]),
+        ]);
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    #[test]
+    fn concat_many_dictionary_list_arrays() {
+        let number_of_unique_values = 8;
+        let scalars = (0..80000)
+            .map(|i| {
+                create_single_row_list_of_dict(vec![Some(
+                    (i % number_of_unique_values).to_string(),
+                )])
+            })
+            .collect::<Vec<_>>();
+
+        let arrays = scalars
+            .iter()
+            .map(|a| a as &(dyn Array))
+            .collect::<Vec<_>>();
+        let concat_res = concat(arrays.as_slice()).unwrap();
+
+        let expected_list = create_list_of_dict(
+            (0..80000)
+                .map(|i| Some(vec![Some((i % number_of_unique_values).to_string())]))
+                .collect::<Vec<_>>(),
+        );
+
+        let list = concat_res.as_list::<i32>();
+
+        // Assert that the list is equal to the expected list
+        list.iter().zip(expected_list.iter()).for_each(|(a, b)| {
+            assert_eq!(a, b);
+        });
+
+        assert_dictionary_has_unique_values::<_, StringArray>(
+            list.values().as_dictionary::<Int32Type>(),
+        );
+    }
+
+    fn create_single_row_list_of_dict(
+        list_items: Vec<Option<impl AsRef<str>>>,
+    ) -> GenericListArray<i32> {
+        let rows = list_items.into_iter().map(Some).collect();
+
+        create_list_of_dict(vec![rows])
+    }
+
+    fn create_list_of_dict(
+        rows: Vec<Option<Vec<Option<impl AsRef<str>>>>>,
+    ) -> GenericListArray<i32> {
+        let mut builder =
+            GenericListBuilder::<i32, _>::new(StringDictionaryBuilder::<Int32Type>::new());
+
+        for row in rows {
+            builder.append_option(row);
+        }
+
+        builder.finish()
+    }
+
+    fn assert_dictionary_has_unique_values<'a, K, V>(array: &'a DictionaryArray<K>)
+    where
+        K: ArrowDictionaryKeyType,
+        V: Sync + Send + 'static,
+        &'a V: ArrayAccessor + IntoIterator,
+
+        <&'a V as ArrayAccessor>::Item: Default + Clone + PartialEq + Debug + Ord,
+        <&'a V as IntoIterator>::Item: Clone + PartialEq + Debug + Ord,
+    {
+        let dict = array.downcast_dict::<V>().unwrap();
+        let mut values = dict.values().into_iter().collect::<Vec<_>>();
+
+        // remove duplicates must be sorted first so we can compare
+        values.sort();
+
+        let mut unique_values = values.clone();
+
+        unique_values.dedup();
+
+        assert_eq!(
+            values, unique_values,
+            "There are duplicates in the value list (the value list here is sorted which is only for the assertion)"
+        );
     }
 }

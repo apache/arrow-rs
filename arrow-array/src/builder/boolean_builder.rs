@@ -123,6 +123,13 @@ impl BooleanBuilder {
         self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
+    /// Appends n `additional` bits of value `v` into the buffer
+    #[inline]
+    pub fn append_n(&mut self, additional: usize, v: bool) {
+        self.values_builder.append_n(additional, v);
+        self.null_buffer_builder.append_n_non_nulls(additional);
+    }
+
     /// Appends values from a slice of type `T` and a validity boolean slice.
     ///
     /// Returns an error if the slices are of different lengths
@@ -324,5 +331,19 @@ mod tests {
             &values,
             &[false, false, true, false, false, true, true, false]
         )
+    }
+
+    #[test]
+    fn test_boolean_array_builder_append_n() {
+        let mut builder = BooleanBuilder::new();
+        builder.append_n(3, true);
+        builder.append_n(2, false);
+        let array = builder.finish();
+        assert_eq!(3, array.true_count());
+        assert_eq!(2, array.false_count());
+        assert_eq!(0, array.null_count());
+
+        let values = array.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
+        assert_eq!(&values, &[true, true, true, false, false])
     }
 }

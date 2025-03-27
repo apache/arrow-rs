@@ -50,6 +50,10 @@ use num::{One, Zero};
 ///
 /// For selecting values by index from multiple arrays see [`crate::interleave`]
 ///
+/// Note that this kernel, similar to other kernels in this crate,
+/// will avoid allocating where not necessary. Consequently
+/// the returned array may share buffers with the inputs
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
@@ -78,20 +82,16 @@ pub fn take(
     options: Option<TakeOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     let options = options.unwrap_or_default();
-    macro_rules! helper {
-        ($t:ty, $values:expr, $indices:expr, $options:expr) => {{
-            let indices = indices.as_primitive::<$t>();
-            if $options.check_bounds {
-                check_bounds($values.len(), indices)?;
+    downcast_integer_array!(
+        indices => {
+            if options.check_bounds {
+                check_bounds(values.len(), indices)?;
             }
             let indices = indices.to_indices();
-            take_impl($values, &indices)
-        }};
-    }
-    downcast_integer! {
-        indices.data_type() => (helper, values, indices, options),
+            take_impl(values, &indices)
+        },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
-    }
+    )
 }
 
 /// For each [ArrayRef] in the [`Vec<ArrayRef>`], take elements by index and create a new
@@ -250,7 +250,12 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
                 })
                 .collect();
 
-            Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
+            if fields.is_empty() {
+                let nulls = NullBuffer::new(BooleanBuffer::new(is_valid, 0, indices.len()));
+                Ok(Arc::new(StructArray::new_empty_fields(indices.len(), Some(nulls))))
+            } else {
+                Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
+            }
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             values => Ok(Arc::new(take_dict(values, indices)?)),
@@ -424,22 +429,25 @@ fn take_bits<I: ArrowPrimitiveType>(
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
     let len = indices.len();
-    let mut output_buffer = MutableBuffer::new_null(len);
-    let output_slice = output_buffer.as_slice_mut();
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
-        Some(nulls) => nulls.valid_indices().for_each(|idx| {
-            if values.value(indices.value(idx).as_usize()) {
-                bit_util::set_bit(output_slice, idx);
-            }
-        }),
-        None => indices.values().iter().enumerate().for_each(|(i, index)| {
-            if values.value(index.as_usize()) {
-                bit_util::set_bit(output_slice, i);
-            }
-        }),
+        Some(nulls) => {
+            let mut output_buffer = MutableBuffer::new_null(len);
+            let output_slice = output_buffer.as_slice_mut();
+            nulls.valid_indices().for_each(|idx| {
+                if values.value(indices.value(idx).as_usize()) {
+                    bit_util::set_bit(output_slice, idx);
+                }
+            });
+            BooleanBuffer::new(output_buffer.into(), 0, len)
+        }
+        None => {
+            BooleanBuffer::collect_bool(len, |idx: usize| {
+                // SAFETY: idx<indices.len()
+                values.value(unsafe { indices.value_unchecked(idx).as_usize() })
+            })
+        }
     }
-    BooleanBuffer::new(output_buffer.into(), 0, indices.len())
 }
 
 /// `take` implementation for boolean arrays
@@ -1599,7 +1607,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, false)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, false)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1665,7 +1673,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, true)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1732,7 +1740,7 @@ mod tests {
             let value_offsets = Buffer::from_slice_ref(&value_offsets);
             // Construct a list array from the above two
             let list_data_type =
-                DataType::$list_data_type(Arc::new(Field::new("item", DataType::Int32, true)));
+                DataType::$list_data_type(Arc::new(Field::new_list_field(DataType::Int32, true)));
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
@@ -1897,7 +1905,8 @@ mod tests {
         // Construct offsets
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1960,6 +1969,15 @@ mod tests {
         ]);
 
         assert_eq!(&expected, actual);
+
+        let nulls = NullBuffer::from(&[false, true, false, true, false, true]);
+        let empty_struct_arr = StructArray::new_empty_fields(6, Some(nulls));
+        let index = UInt32Array::from(vec![0, 2, 1, 4]);
+        let actual = take(&empty_struct_arr, &index, None).unwrap();
+
+        let expected_nulls = NullBuffer::from(&[false, false, true, false]);
+        let expected_struct_arr = StructArray::new_empty_fields(4, Some(expected_nulls));
+        assert_eq!(&expected_struct_arr, actual.as_struct());
     }
 
     #[test]
@@ -2215,7 +2233,7 @@ mod tests {
     fn test_take_fixed_size_list_null_indices() {
         let indices = Int32Array::from_iter([Some(0), None]);
         let values = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
-        let arr_field = Arc::new(Field::new("item", values.data_type().clone(), true));
+        let arr_field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
         let values = FixedSizeListArray::try_new(arr_field, 2, values, None).unwrap();
 
         let r = take(&values, &indices, None).unwrap();

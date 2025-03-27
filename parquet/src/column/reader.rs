@@ -185,31 +185,6 @@ where
         }
     }
 
-    /// Reads a batch of values of at most `batch_size`, returning a tuple containing the
-    /// actual number of non-null values read, followed by the corresponding number of levels,
-    /// i.e, the total number of values including nulls, empty lists, etc...
-    ///
-    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// `values` will be contiguously populated with the non-null values. Note that if the column
-    /// is not required, this may be less than either `batch_size` or the number of levels read
-    #[deprecated(note = "Use read_records")]
-    pub fn read_batch(
-        &mut self,
-        batch_size: usize,
-        def_levels: Option<&mut D::Buffer>,
-        rep_levels: Option<&mut R::Buffer>,
-        values: &mut V::Buffer,
-    ) -> Result<(usize, usize)> {
-        let (_, values, levels) = self.read_records(batch_size, def_levels, rep_levels, values)?;
-
-        Ok((values, levels))
-    }
-
     /// Read up to `max_records` whole records, returning the number of complete
     /// records, non-null values and levels decoded. All levels for a given record
     /// will be read, i.e. the next repetition level, if any, will be 0
@@ -277,7 +252,7 @@ where
                     let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
 
                     if levels_read != levels_to_read {
-                        return Err(general_err!("insufficient definition levels read from column - expected {rep_levels}, got {read}"));
+                        return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
                     }
 
                     values_read
@@ -608,7 +583,7 @@ fn parse_v1_level(
 mod tests {
     use super::*;
 
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;

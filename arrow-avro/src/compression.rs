@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use flate2::read;
 use std::io;
 use std::io::Read;
 
@@ -35,7 +34,7 @@ impl CompressionCodec {
         match self {
             #[cfg(feature = "deflate")]
             CompressionCodec::Deflate => {
-                let mut decoder = read::DeflateDecoder::new(block);
+                let mut decoder = flate2::read::DeflateDecoder::new(block);
                 let mut out = Vec::new();
                 decoder.read_to_end(&mut out)?;
                 Ok(out)

@@ -305,7 +305,7 @@ impl<'a, 'b> ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
+impl SerializeMap for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -329,7 +329,7 @@ impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeStruct for ObjectSerializer<'a, 'b> {
+impl SerializeStruct for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -368,7 +368,7 @@ impl<'a, 'b> ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
+impl SerializeSeq for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -385,7 +385,7 @@ impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
+impl SerializeTuple for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
@@ -402,7 +402,7 @@ impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTupleStruct for ListSerializer<'a, 'b> {
+impl SerializeTupleStruct for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 

@@ -133,6 +133,7 @@
 //! ```
 //!
 
+use crate::StructMode;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -153,6 +154,7 @@ use crate::reader::map_array::MapArrayDecoder;
 use crate::reader::null_array::NullArrayDecoder;
 use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
+use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
@@ -166,6 +168,7 @@ mod primitive_array;
 mod schema;
 mod serializer;
 mod string_array;
+mod string_view_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
@@ -176,6 +179,7 @@ pub struct ReaderBuilder {
     coerce_primitive: bool,
     strict_mode: bool,
     is_field: bool,
+    struct_mode: StructMode,
 
     schema: SchemaRef,
 }
@@ -195,6 +199,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             is_field: false,
+            struct_mode: Default::default(),
             schema,
         }
     }
@@ -235,6 +240,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             is_field: true,
+            struct_mode: Default::default(),
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -246,13 +252,6 @@ impl ReaderBuilder {
 
     /// Sets if the decoder should coerce primitive values (bool and number) into string
     /// when the Schema's column is Utf8 or LargeUtf8.
-    #[deprecated(note = "Use with_coerce_primitive")]
-    pub fn coerce_primitive(self, coerce_primitive: bool) -> Self {
-        self.with_coerce_primitive(coerce_primitive)
-    }
-
-    /// Sets if the decoder should coerce primitive values (bool and number) into string
-    /// when the Schema's column is Utf8 or LargeUtf8.
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
@@ -260,11 +259,24 @@ impl ReaderBuilder {
         }
     }
 
-    /// Sets if the decoder should return an error if it encounters a column not present
-    /// in `schema`
+    /// Sets if the decoder should return an error if it encounters a column not
+    /// present in `schema`. If `struct_mode` is `ListOnly` the value of
+    /// `strict_mode` is effectively `true`. It is required for all fields of
+    /// the struct to be in the list: without field names, there is no way to
+    /// determine which field is missing.
     pub fn with_strict_mode(self, strict_mode: bool) -> Self {
         Self {
             strict_mode,
+            ..self
+        }
+    }
+
+    /// Set the [`StructMode`] for the reader, which determines whether structs
+    /// can be decoded from JSON as objects or lists. For more details refer to
+    /// the enum documentation. Default is to use `ObjectOnly`.
+    pub fn with_struct_mode(self, struct_mode: StructMode) -> Self {
+        Self {
+            struct_mode,
             ..self
         }
     }
@@ -287,7 +299,13 @@ impl ReaderBuilder {
             }
         };
 
-        let decoder = make_decoder(data_type, self.coerce_primitive, self.strict_mode, nullable)?;
+        let decoder = make_decoder(
+            data_type,
+            self.coerce_primitive,
+            self.strict_mode,
+            nullable,
+            self.struct_mode,
+        )?;
 
         let num_fields = self.schema.flattened_fields().len();
 
@@ -599,11 +617,27 @@ impl Decoder {
         self.tape_decoder.serialize(rows)
     }
 
+    /// True if the decoder is currently part way through decoding a record.
+    pub fn has_partial_record(&self) -> bool {
+        self.tape_decoder.has_partial_row()
+    }
+
+    /// The number of unflushed records, including the partially decoded record (if any).
+    pub fn len(&self) -> usize {
+        self.tape_decoder.num_buffered_rows()
+    }
+
+    /// True if there are no records to flush, i.e. [`Self::len`] is zero.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Flushes the currently buffered data to a [`RecordBatch`]
     ///
-    /// Returns `Ok(None)` if no buffered data
+    /// Returns `Ok(None)` if no buffered data, i.e. [`Self::is_empty`] is true.
     ///
-    /// Note: if called part way through decoding a record, this will return an error
+    /// Note: This will return an error if called part way through decoding a record,
+    /// i.e. [`Self::has_partial_record`] is true.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         let tape = self.tape_decoder.finish()?;
 
@@ -650,6 +684,7 @@ fn make_decoder(
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
+    struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
@@ -691,18 +726,23 @@ fn make_decoder(
         DataType::Time32(TimeUnit::Millisecond) => primitive_decoder!(Time32MillisecondType, data_type),
         DataType::Time64(TimeUnit::Microsecond) => primitive_decoder!(Time64MicrosecondType, data_type),
         DataType::Time64(TimeUnit::Nanosecond) => primitive_decoder!(Time64NanosecondType, data_type),
+        DataType::Duration(TimeUnit::Nanosecond) => primitive_decoder!(DurationNanosecondType, data_type),
+        DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
+        DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
+        DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
         DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
+        DataType::Utf8View => Ok(Box::new(StringViewArrayDecoder::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
             Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
         }
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -714,11 +754,11 @@ mod tests {
     use std::io::{BufReader, Cursor, Seek};
 
     use arrow_array::cast::AsArray;
-    use arrow_array::{Array, BooleanArray, Float64Array, ListArray, StringArray};
+    use arrow_array::{Array, BooleanArray, Float64Array, ListArray, StringArray, StringViewArray};
     use arrow_buffer::{ArrowNativeType, Buffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_data::ArrayDataBuilder;
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Fields};
 
     use super::*;
 
@@ -782,6 +822,20 @@ mod tests {
             Field::new("e", DataType::Date64, true),
         ]));
 
+        let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+        assert!(decoder.is_empty());
+        assert_eq!(decoder.len(), 0);
+        assert!(!decoder.has_partial_record());
+        assert_eq!(decoder.decode(buf.as_bytes()).unwrap(), 221);
+        assert!(!decoder.is_empty());
+        assert_eq!(decoder.len(), 6);
+        assert!(!decoder.has_partial_record());
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 6);
+        assert!(decoder.is_empty());
+        assert_eq!(decoder.len(), 0);
+        assert!(!decoder.has_partial_record());
+
         let batches = do_read(buf, 1024, false, false, schema);
         assert_eq!(batches.len(), 1);
 
@@ -841,6 +895,145 @@ mod tests {
         assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
         assert!(col1.is_null(3));
         assert!(col1.is_null(4));
+
+        let col2 = batches[0].column(1).as_string::<i64>();
+        assert_eq!(col2.null_count(), 1);
+        assert_eq!(col2.value(0), "2");
+        assert_eq!(col2.value(1), "shoo");
+        assert_eq!(col2.value(2), "\t😁foo");
+        assert!(col2.is_null(3));
+        assert_eq!(col2.value(4), "");
+    }
+
+    #[test]
+    fn test_long_string_view_allocation() {
+        // The JSON input contains field "a" with different string lengths.
+        // According to the implementation in the decoder:
+        // - For a string, capacity is only increased if its length > 12 bytes.
+        // Therefore, for:
+        // Row 1: "short" (5 bytes) -> capacity += 0
+        // Row 2: "this is definitely long" (24 bytes) -> capacity += 24
+        // Row 3: "hello" (5 bytes) -> capacity += 0
+        // Row 4: "\nfoobar😀asfgÿ" (17 bytes) -> capacity += 17
+        // Expected total capacity = 24 + 17 = 41
+        let expected_capacity: usize = 41;
+
+        let buf = r#"
+        {"a": "short", "b": "dummy"}
+        {"a": "this is definitely long", "b": "dummy"}
+        {"a": "hello", "b": "dummy"}
+        {"a": "\nfoobar😀asfgÿ", "b": "dummy"}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8View, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1, "Expected one record batch");
+
+        // Get the first column ("a") as a StringViewArray.
+        let col_a = batches[0].column(0);
+        let string_view_array = col_a
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("Column should be a StringViewArray");
+
+        // Retrieve the underlying data buffer from the array.
+        // The builder pre-allocates capacity based on the sum of lengths for long strings.
+        let data_buffer = string_view_array.to_data().buffers()[0].len();
+
+        // Check that the allocated capacity is at least what we expected.
+        // (The actual buffer may be larger than expected due to rounding or internal allocation strategies.)
+        assert!(
+            data_buffer >= expected_capacity,
+            "Data buffer length ({}) should be at least {}",
+            data_buffer,
+            expected_capacity
+        );
+
+        // Additionally, verify that the decoded values are correct.
+        assert_eq!(string_view_array.value(0), "short");
+        assert_eq!(string_view_array.value(1), "this is definitely long");
+        assert_eq!(string_view_array.value(2), "hello");
+        assert_eq!(string_view_array.value(3), "\nfoobar😀asfgÿ");
+    }
+
+    /// Test the memory capacity allocation logic when converting numeric types to strings.
+    #[test]
+    fn test_numeric_view_allocation() {
+        // For numeric types, the expected capacity calculation is as follows:
+        // Row 1: 123456789  -> Number converts to the string "123456789" (length 9), 9 <= 12, so no capacity is added.
+        // Row 2: 1000000000000 -> Treated as an I64 number; its string is "1000000000000" (length 13),
+        //                        which is >12 and its absolute value is > 999_999_999_999, so 13 bytes are added.
+        // Row 3: 3.1415 -> F32 number, a fixed estimate of 10 bytes is added.
+        // Row 4: 2.718281828459045 -> F64 number, a fixed estimate of 10 bytes is added.
+        // Total expected capacity = 13 + 10 + 10 = 33 bytes.
+        let expected_capacity: usize = 33;
+
+        let buf = r#"
+    {"n": 123456789}
+    {"n": 1000000000000}
+    {"n": 3.1415}
+    {"n": 2.718281828459045}
+    "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Utf8View, true)]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1, "Expected one record batch");
+
+        let col_n = batches[0].column(0);
+        let string_view_array = col_n
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("Column should be a StringViewArray");
+
+        // Check that the underlying data buffer capacity is at least the expected value.
+        let data_buffer = string_view_array.to_data().buffers()[0].len();
+        assert!(
+            data_buffer >= expected_capacity,
+            "Data buffer length ({}) should be at least {}",
+            data_buffer,
+            expected_capacity
+        );
+
+        // Verify that the converted string values are correct.
+        // Note: The format of the number converted to a string should match the actual implementation.
+        assert_eq!(string_view_array.value(0), "123456789");
+        assert_eq!(string_view_array.value(1), "1000000000000");
+        assert_eq!(string_view_array.value(2), "3.1415");
+        assert_eq!(string_view_array.value(3), "2.718281828459045");
+    }
+
+    #[test]
+    fn test_string_with_uft8view() {
+        let buf = r#"
+        {"a": "1", "b": "2"}
+        {"a": "hello", "b": "shoo"}
+        {"b": "\t😁foo", "a": "\nfoobar\ud83d\ude00\u0061\u0073\u0066\u0067\u00FF"}
+
+        {"b": null}
+        {"b": "", "a": null}
+
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8View, true),
+            Field::new("b", DataType::LargeUtf8, true),
+        ]));
+
+        let batches = do_read(buf, 1024, false, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_string_view();
+        assert_eq!(col1.null_count(), 2);
+        assert_eq!(col1.value(0), "1");
+        assert_eq!(col1.value(1), "hello");
+        assert_eq!(col1.value(2), "\nfoobar😀asfgÿ");
+        assert!(col1.is_null(3));
+        assert!(col1.is_null(4));
+        assert_eq!(col1.data_type(), &DataType::Utf8View);
 
         let col2 = batches[0].column(1).as_string::<i64>();
         assert_eq!(col2.null_count(), 1);
@@ -1330,6 +1523,37 @@ mod tests {
         test_time::<Time64NanosecondType>();
     }
 
+    fn test_duration<T: ArrowTemporalType>() {
+        let buf = r#"
+        {"a": 1, "b": "2"}
+        {"a": 3, "b": null}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", T::DATA_TYPE, true),
+            Field::new("b", T::DATA_TYPE, true),
+        ]));
+
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+
+        let col_a = batches[0].column_by_name("a").unwrap().as_primitive::<T>();
+        assert_eq!(col_a.null_count(), 0);
+        assert_eq!(col_a.values(), &[1, 3].map(T::Native::usize_as));
+
+        let col2 = batches[0].column_by_name("b").unwrap().as_primitive::<T>();
+        assert_eq!(col2.null_count(), 1);
+        assert_eq!(col2.values(), &[2, 0].map(T::Native::usize_as));
+    }
+
+    #[test]
+    fn test_durations() {
+        test_duration::<DurationNanosecondType>();
+        test_duration::<DurationMicrosecondType>();
+        test_duration::<DurationMillisecondType>();
+        test_duration::<DurationSecondType>();
+    }
+
     #[test]
     fn test_delta_checkpoint() {
         let json = "{\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}";
@@ -1726,12 +1950,12 @@ mod tests {
         assert_eq!(&DataType::Int64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
             b.1.data_type()
         );
         let c = schema.column_with_name("c").unwrap();
         assert_eq!(
-            &DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
             c.1.data_type()
         );
         let d = schema.column_with_name("d").unwrap();
@@ -1770,7 +1994,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
             true,
         )]));
 
@@ -1794,9 +2018,8 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "items",
-            DataType::List(FieldRef::new(Field::new(
-                "item",
-                DataType::List(FieldRef::new(Field::new("item", DataType::Null, true))),
+            DataType::List(FieldRef::new(Field::new_list_field(
+                DataType::List(FieldRef::new(Field::new_list_field(DataType::Null, true))),
                 true,
             ))),
             true,
@@ -2107,6 +2330,14 @@ mod tests {
             true,
         )]));
 
+        let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+        let _ = decoder.decode(r#"{"a": { "child":"#.as_bytes()).unwrap();
+        assert!(decoder.tape_decoder.has_partial_row());
+        assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
+        let _ = decoder.flush().unwrap_err();
+        assert!(decoder.tape_decoder.has_partial_row());
+        assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
+
         let parse_err = |s: &str| {
             ReaderBuilder::new(schema.clone())
                 .build(Cursor::new(s.as_bytes()))
@@ -2314,6 +2545,267 @@ mod tests {
                 ]
             )
             .unwrap()
+        );
+    }
+
+    // Parse the given `row` in `struct_mode` as a type given by fields.
+    //
+    // If as_struct == true, wrap the fields in a Struct field with name "r".
+    // If as_struct == false, wrap the fields in a Schema.
+    fn _parse_structs(
+        row: &str,
+        struct_mode: StructMode,
+        fields: Fields,
+        as_struct: bool,
+    ) -> Result<RecordBatch, ArrowError> {
+        let builder = if as_struct {
+            ReaderBuilder::new_with_field(Field::new("r", DataType::Struct(fields), true))
+        } else {
+            ReaderBuilder::new(Arc::new(Schema::new(fields)))
+        };
+        builder
+            .with_struct_mode(struct_mode)
+            .build(Cursor::new(row.as_bytes()))
+            .unwrap()
+            .next()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_struct_decoding_list_length() {
+        use arrow_array::array;
+
+        let row = "[1, 2]";
+
+        let mut fields = vec![Field::new("a", DataType::Int32, true)];
+        let too_few_fields = Fields::from(fields.clone());
+        fields.push(Field::new("b", DataType::Int32, true));
+        let correct_fields = Fields::from(fields.clone());
+        fields.push(Field::new("c", DataType::Int32, true));
+        let too_many_fields = Fields::from(fields.clone());
+
+        let parse = |fields: Fields, as_struct: bool| {
+            _parse_structs(row, StructMode::ListOnly, fields, as_struct)
+        };
+
+        let expected_row = StructArray::new(
+            correct_fields.clone(),
+            vec![
+                Arc::new(array::Int32Array::from(vec![1])),
+                Arc::new(array::Int32Array::from(vec![2])),
+            ],
+            None,
+        );
+        let row_field = Field::new("r", DataType::Struct(correct_fields.clone()), true);
+
+        assert_eq!(
+            parse(too_few_fields.clone(), true).unwrap_err().to_string(),
+            "Json error: found extra columns for 1 fields".to_string()
+        );
+        assert_eq!(
+            parse(too_few_fields, false).unwrap_err().to_string(),
+            "Json error: found extra columns for 1 fields".to_string()
+        );
+        assert_eq!(
+            parse(correct_fields.clone(), true).unwrap(),
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![row_field])),
+                vec![Arc::new(expected_row.clone())]
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            parse(correct_fields, false).unwrap(),
+            RecordBatch::from(expected_row)
+        );
+        assert_eq!(
+            parse(too_many_fields.clone(), true)
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 2 columns for 3 fields".to_string()
+        );
+        assert_eq!(
+            parse(too_many_fields, false).unwrap_err().to_string(),
+            "Json error: found 2 columns for 3 fields".to_string()
+        );
+    }
+
+    #[test]
+    fn test_struct_decoding() {
+        use arrow_array::builder;
+
+        let nested_object_json = r#"{"a": {"b": [1, 2], "c": {"d": 3}}}"#;
+        let nested_list_json = r#"[[[1, 2], {"d": 3}]]"#;
+        let nested_mixed_json = r#"{"a": [[1, 2], {"d": 3}]}"#;
+
+        let struct_fields = Fields::from(vec![
+            Field::new("b", DataType::new_list(DataType::Int32, true), true),
+            Field::new_map(
+                "c",
+                "entries",
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
+                false,
+                false,
+            ),
+        ]);
+
+        let list_array =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1), Some(2)])]);
+
+        let map_array = {
+            let mut map_builder = builder::MapBuilder::new(
+                None,
+                builder::StringBuilder::new(),
+                builder::Int32Builder::new(),
+            );
+            map_builder.keys().append_value("d");
+            map_builder.values().append_value(3);
+            map_builder.append(true).unwrap();
+            map_builder.finish()
+        };
+
+        let struct_array = StructArray::new(
+            struct_fields.clone(),
+            vec![Arc::new(list_array), Arc::new(map_array)],
+            None,
+        );
+
+        let fields = Fields::from(vec![Field::new("a", DataType::Struct(struct_fields), true)]);
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let expected = RecordBatch::try_new(schema.clone(), vec![Arc::new(struct_array)]).unwrap();
+
+        let parse = |row: &str, struct_mode: StructMode| {
+            _parse_structs(row, struct_mode, fields.clone(), false)
+        };
+
+        assert_eq!(
+            parse(nested_object_json, StructMode::ObjectOnly).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse(nested_list_json, StructMode::ObjectOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected { got [[[1, 2], {\"d\": 3}]]".to_owned()
+        );
+        assert_eq!(
+            parse(nested_mixed_json, StructMode::ObjectOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': expected { got [[1, 2], {\"d\": 3}]".to_owned()
+        );
+
+        assert_eq!(
+            parse(nested_list_json, StructMode::ListOnly).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse(nested_object_json, StructMode::ListOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected [ got {\"a\": {\"b\": [1, 2]\"c\": {\"d\": 3}}}".to_owned()
+        );
+        assert_eq!(
+            parse(nested_mixed_json, StructMode::ListOnly)
+                .unwrap_err()
+                .to_string(),
+            "Json error: expected [ got {\"a\": [[1, 2], {\"d\": 3}]}".to_owned()
+        );
+    }
+
+    // Test cases:
+    // [] -> RecordBatch row with no entries.  Schema = [('a', Int32)] -> Error
+    // [] -> RecordBatch row with no entries. Schema = [('r', [('a', Int32)])] -> Error
+    // [] -> StructArray row with no entries. Fields [('a', Int32')] -> Error
+    // [[]] -> RecordBatch row with empty struct entry. Schema = [('r', [('a', Int32)])] -> Error
+    #[test]
+    fn test_struct_decoding_empty_list() {
+        let int_field = Field::new("a", DataType::Int32, true);
+        let struct_field = Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            true,
+        );
+
+        let parse = |row: &str, as_struct: bool, field: Field| {
+            _parse_structs(
+                row,
+                StructMode::ListOnly,
+                Fields::from(vec![field]),
+                as_struct,
+            )
+        };
+
+        // Missing fields
+        assert_eq!(
+            parse("[]", true, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[]", false, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[]", false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: found 0 columns for 1 fields".to_owned()
+        );
+        assert_eq!(
+            parse("[[]]", false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': found 0 columns for 1 fields".to_owned()
+        );
+    }
+
+    #[test]
+    fn test_decode_list_struct_with_wrong_types() {
+        let int_field = Field::new("a", DataType::Int32, true);
+        let struct_field = Field::new(
+            "r",
+            DataType::Struct(Fields::from(vec![int_field.clone()])),
+            true,
+        );
+
+        let parse = |row: &str, as_struct: bool, field: Field| {
+            _parse_structs(
+                row,
+                StructMode::ListOnly,
+                Fields::from(vec![field]),
+                as_struct,
+            )
+        };
+
+        // Wrong values
+        assert_eq!(
+            parse(r#"[["a"]]"#, false, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"[["a"]]"#, true, struct_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'r': whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"["a"]"#, true, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
+        );
+        assert_eq!(
+            parse(r#"["a"]"#, false, int_field.clone())
+                .unwrap_err()
+                .to_string(),
+            "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
         );
     }
 }

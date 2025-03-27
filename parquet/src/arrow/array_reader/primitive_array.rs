@@ -23,11 +23,14 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::Decimal256Array;
 use arrow_array::{
-    builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array,
-    UInt64Array,
+    builder::{
+        TimestampMicrosecondBufferBuilder, TimestampMillisecondBufferBuilder,
+        TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
+    },
+    ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+    Int32Array, Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
 use arrow_data::ArrayDataBuilder;
@@ -37,13 +40,13 @@ use std::sync::Arc;
 
 /// Provides conversion from `Vec<T>` to `Buffer`
 pub trait IntoBuffer {
-    fn into_buffer(self) -> Buffer;
+    fn into_buffer(self, target_type: &ArrowType) -> Buffer;
 }
 
 macro_rules! native_buffer {
     ($($t:ty),*) => {
         $(impl IntoBuffer for Vec<$t> {
-            fn into_buffer(self) -> Buffer {
+            fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
                 Buffer::from_vec(self)
             }
         })*
@@ -52,18 +55,44 @@ macro_rules! native_buffer {
 native_buffer!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 
 impl IntoBuffer for Vec<bool> {
-    fn into_buffer(self) -> Buffer {
+    fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
         BooleanBuffer::from_iter(self).into_inner()
     }
 }
 
 impl IntoBuffer for Vec<Int96> {
-    fn into_buffer(self) -> Buffer {
-        let mut builder = TimestampNanosecondBufferBuilder::new(self.len());
-        for v in self {
-            builder.append(v.to_nanos())
+    fn into_buffer(self, target_type: &ArrowType) -> Buffer {
+        match target_type {
+            ArrowType::Timestamp(TimeUnit::Second, _) => {
+                let mut builder = TimestampSecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_seconds())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Millisecond, _) => {
+                let mut builder = TimestampMillisecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_millis())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Microsecond, _) => {
+                let mut builder = TimestampMicrosecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_micros())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let mut builder = TimestampNanosecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_nanos())
+                }
+                builder.finish()
+            }
+            _ => unreachable!("Invalid target_type for Int96."),
         }
-        builder.finish()
     }
 }
 
@@ -161,8 +190,11 @@ where
             PhysicalType::FLOAT => ArrowType::Float32,
             PhysicalType::DOUBLE => ArrowType::Float64,
             PhysicalType::INT96 => match target_type {
+                ArrowType::Timestamp(TimeUnit::Second, _) => target_type.clone(),
+                ArrowType::Timestamp(TimeUnit::Millisecond, _) => target_type.clone(),
+                ArrowType::Timestamp(TimeUnit::Microsecond, _) => target_type.clone(),
                 ArrowType::Timestamp(TimeUnit::Nanosecond, _) => target_type.clone(),
-                _ => unreachable!("INT96 must be timestamp nanosecond"),
+                _ => unreachable!("INT96 must be a timestamp."),
             },
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!("PrimitiveArrayReaders don't support complex physical types");
@@ -172,7 +204,10 @@ where
         // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
-        let record_data = self.record_reader.consume_record_data().into_buffer();
+        let record_data = self
+            .record_reader
+            .consume_record_data()
+            .into_buffer(target_type);
 
         let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
@@ -194,7 +229,22 @@ where
             },
             PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)),
             PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)),
-            PhysicalType::INT96 => Arc::new(TimestampNanosecondArray::from(array_data)),
+            PhysicalType::INT96 => match target_type {
+                ArrowType::Timestamp(TimeUnit::Second, _) => {
+                    Arc::new(TimestampSecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Millisecond, _) => {
+                    Arc::new(TimestampMillisecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Microsecond, _) => {
+                    Arc::new(TimestampMicrosecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    Arc::new(TimestampNanosecondArray::from(array_data))
+                }
+                _ => unreachable!("INT96 must be a timestamp."),
+            },
+
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!("PrimitiveArrayReaders don't support complex physical types");
             }
@@ -208,10 +258,10 @@ where
         // As there is not always a 1:1 mapping between Arrow and Parquet, there
         // are datatypes which we must convert explicitly.
         // These are:
-        // - date64: we should cast int32 to date32, then date32 to date64.
-        // - decimal: cast in32 to decimal, int64 to decimal
+        // - date64: cast int32 to date32, then date32 to date64.
+        // - decimal: cast int32 to decimal, int64 to decimal
         let array = match target_type {
-            ArrowType::Date64 => {
+            ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
                 arrow_cast::cast(&a, target_type)?
@@ -270,6 +320,59 @@ where
 
                 Arc::new(array) as ArrayRef
             }
+            ArrowType::Dictionary(_, value_type) => match value_type.as_ref() {
+                ArrowType::Decimal128(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i as i128)
+                            as Decimal128Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(|i| i as i128)
+                            as Decimal128Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                ArrowType::Decimal256(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(i256::from)
+                            as Decimal256Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(i256::from)
+                            as Decimal256Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                _ => arrow_cast::cast(&array, target_type)?,
+            },
             _ => arrow_cast::cast(&array, target_type)?,
         };
 
@@ -305,10 +408,10 @@ mod tests {
     use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
     use arrow::datatypes::ArrowPrimitiveType;
-    use arrow_array::{Array, PrimitiveArray};
+    use arrow_array::{Array, Date32Array, PrimitiveArray};
 
-    use arrow::datatypes::DataType::Decimal128;
-    use rand::distributions::uniform::SampleUniform;
+    use arrow::datatypes::DataType::{Date32, Decimal128};
+    use rand::distr::uniform::SampleUniform;
     use std::collections::VecDeque;
 
     #[allow(clippy::too_many_arguments)]
@@ -781,6 +884,56 @@ mod tests {
                 .with_precision_and_scale(34, 0)
                 .unwrap();
             assert_ne!(array, &data_decimal_array)
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_reader_date32_type() {
+        // parquet `INT32` to date
+        let message_type = "
+            message test_schema {
+                REQUIRED INT32 date1 (DATE);
+        }
+        ";
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+
+        // create the array reader
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int32Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                -99999999,
+                99999999,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator = InMemoryPageIterator::new(page_lists);
+
+            let mut array_reader =
+                PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
+                    .unwrap();
+
+            // read data from the reader
+            // the data type is date
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(array.data_type(), &Date32);
+            let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+            let data_date_array = data[0..50]
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Date32Array>();
+            assert_eq!(array, &data_date_array);
         }
     }
 }

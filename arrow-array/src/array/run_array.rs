@@ -44,23 +44,22 @@ use crate::{
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
-/// │ │        A        │  │    2    │ │     │        A        │     
+/// │ │        A        │  │    2    │ │     │        A        │
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
-/// │        values          run_ends  │     │        B        │     
+/// │        values          run_ends  │     │        B        │
 ///                                          ├─────────────────┤
-/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │     
+/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │
 ///                                          ├─────────────────┤
 ///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
 ///               length = 3                 └─────────────────┘
-///  
+///
 ///                                             Logical array
 ///                                                Contents
 /// ```
-
 pub struct RunArray<R: RunEndIndexType> {
     data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
@@ -331,6 +330,11 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         self.run_ends.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.run_ends.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.run_ends.offset()
     }
@@ -525,15 +529,15 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
 }
 
 // Manually implement `Clone` to avoid `V: Clone` type constraint
-impl<'a, R: RunEndIndexType, V> Clone for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V> Clone for TypedRunArray<'_, R, V> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, R: RunEndIndexType, V> Copy for TypedRunArray<'a, R, V> {}
+impl<R: RunEndIndexType, V> Copy for TypedRunArray<'_, R, V> {}
 
-impl<'a, R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V> std::fmt::Debug for TypedRunArray<'_, R, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "TypedRunArray({:?})", self.run_array)
     }
@@ -556,7 +560,7 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
     }
 }
 
-impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
+impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {
         self.run_array
     }
@@ -595,6 +599,10 @@ impl<'a, R: RunEndIndexType, V: Sync> Array for TypedRunArray<'a, R, V> {
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
         self.run_array.logical_nulls()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.run_array.logical_null_count()
     }
 
     fn is_nullable(&self) -> bool {
@@ -654,8 +662,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rand::rng;
     use rand::seq::SliceRandom;
-    use rand::thread_rng;
     use rand::Rng;
 
     use super::*;
@@ -683,7 +691,7 @@ mod tests {
         ];
         let mut result: Vec<Option<i32>> = Vec::with_capacity(size);
         let mut ix = 0;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         // run length can go up to 8. Cap the max run length for smaller arrays to size / 2.
         let max_run_length = 8_usize.min(1_usize.max(size / 2));
         while result.len() < size {
@@ -692,7 +700,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rng.random_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -778,6 +786,7 @@ mod tests {
 
         assert_eq!(array.len(), 20);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
 
         assert_eq!(
             "RunArray {run_ends: [20], values: PrimitiveArray<UInt32>\n[\n  1,\n]}\n",
@@ -799,6 +808,7 @@ mod tests {
 
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         let array: RunArray<Int16Type> = test.into_iter().collect();
         assert_eq!(
@@ -814,6 +824,7 @@ mod tests {
 
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
 
         let run_ends = array.run_ends();
         assert_eq!(&[1, 2, 3, 4], run_ends.values());
@@ -826,6 +837,7 @@ mod tests {
 
         assert_eq!(array.len(), 6);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 3);
 
         let run_ends = array.run_ends();
         assert_eq!(&[1, 2, 3, 5, 6], run_ends.values());
@@ -842,6 +854,7 @@ mod tests {
 
         assert_eq!(array.len(), 3);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 3);
 
         let run_ends = array.run_ends();
         assert_eq!(3, run_ends.len());
@@ -862,6 +875,7 @@ mod tests {
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
         assert_eq!(array.len(), 4);
         assert_eq!(array.values().null_count(), 1);
 
@@ -986,7 +1000,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             let physical_indices = run_array.get_physical_indices(&logical_indices).unwrap();
@@ -1022,7 +1036,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(slice_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             // test for offset = 0 and slice length = slice_len

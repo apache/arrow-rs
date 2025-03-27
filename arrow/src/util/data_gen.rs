@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
-use rand::distributions::uniform::SampleRange;
-use rand::{distributions::uniform::SampleUniform, Rng};
+use rand::{
+    distr::uniform::{SampleRange, SampleUniform},
+    Rng,
+};
 
 use crate::array::*;
 use crate::error::{ArrowError, Result};
@@ -118,23 +120,33 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(unit, _) => {
-            match unit {
-                TimeUnit::Second => Arc::new(create_random_temporal_array::<TimestampSecondType>(
+        Timestamp(unit, tz) => match unit {
+            TimeUnit::Second => Arc::new(
+                create_random_temporal_array::<TimestampSecondType>(size, primitive_null_density)
+                    .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Millisecond => Arc::new(
+                create_random_temporal_array::<TimestampMillisecondType>(
                     size,
                     primitive_null_density,
-                )),
-                TimeUnit::Millisecond => Arc::new(create_random_temporal_array::<
-                    TimestampMillisecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Microsecond => Arc::new(create_random_temporal_array::<
-                    TimestampMicrosecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<
-                    TimestampNanosecondType,
-                >(size, primitive_null_density)),
-            }
-        }
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Microsecond => Arc::new(
+                create_random_temporal_array::<TimestampMicrosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Nanosecond => Arc::new(
+                create_random_temporal_array::<TimestampNanosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+        },
         Date32 => Arc::new(create_random_temporal_array::<Date32Type>(
             size,
             primitive_null_density,
@@ -370,7 +382,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     offsets.push(current_offset);
 
     (0..size).for_each(|_| {
-        current_offset += rng.gen_range(min..max);
+        current_offset += rng.random_range(min..max);
         offsets.push(current_offset);
     });
 
@@ -383,7 +395,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
     {
         let mut_slice = mut_buf.as_slice_mut();
         (0..size).for_each(|i| {
-            if rng.gen::<f32>() >= null_density {
+            if rng.random::<f32>() >= null_density {
                 bit_util::set_bit(mut_slice, i)
             }
         })
@@ -402,7 +414,7 @@ pub trait RandomTemporalValue: ArrowTemporalType {
     where
         Self::Native: SampleUniform,
     {
-        rng.gen_range(Self::value_range())
+        rng.random_range(Self::value_range())
     }
 
     /// Generate a random value of the type
@@ -503,7 +515,7 @@ where
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 Some(T::random(&mut rng))
@@ -519,7 +531,19 @@ mod tests {
     #[test]
     fn test_create_batch() {
         let size = 32;
-        let fields = vec![Field::new("a", DataType::Int32, true)];
+        let fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "timestamp_without_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "timestamp_with_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+        ];
         let schema = Schema::new(fields);
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
@@ -538,7 +562,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, false))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::LargeUtf8, false))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -551,6 +575,7 @@ mod tests {
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
         for array in batch.columns() {
             assert_eq!(array.null_count(), 0);
+            assert_eq!(array.logical_null_count(), 0);
         }
         // Test that the list's child values are non-null
         let b_array = batch.column(1);
@@ -568,10 +593,8 @@ mod tests {
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new(
-                        "item",
+                DataType::LargeList(Arc::new(Field::new_list_field(
+                    DataType::List(Arc::new(Field::new_list_field(
                         DataType::FixedSizeBinary(6),
                         true,
                     ))),
@@ -710,6 +733,7 @@ mod tests {
         assert_eq!(array.len(), 100);
         // Map field is not null
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         // Maps have multiple values like a list, so internal arrays are longer
         assert!(array.as_map().keys().len() > array.len());
         assert!(array.as_map().values().len() > array.len());

@@ -43,7 +43,7 @@ fn to_py_err(err: ArrowError) -> PyErr {
 #[pyfunction]
 fn double(array: &Bound<PyAny>, py: Python) -> PyResult<PyObject> {
     // import
-    let array = make_array(ArrayData::from_pyarrow_bound(&array)?);
+    let array = make_array(ArrayData::from_pyarrow_bound(array)?);
 
     // perform some operation
     let array = array

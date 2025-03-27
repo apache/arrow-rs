@@ -30,23 +30,23 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_csv"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
-arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 csv = { version = "1.1", default-features = false }
 csv-core = { version = "0.1" }
 lazy_static = { version = "1.4", default-features = false }
-lexical-core = { version = "1.0", default-features = false }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
 
 [dev-dependencies]
+arrow-buffer = { workspace = true }
 tempfile = "3.3"
 futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }

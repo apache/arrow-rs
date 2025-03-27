@@ -27,7 +27,7 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
-If any code has been merged to master that has a breaking API change, as defined
+If any code has been merged to main that has a breaking API change, as defined
 in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
@@ -46,24 +46,24 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
 
 ## Prepare CHANGELOG and version:
 
-Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
+Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
 Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v README.md`
 git commit -a -m 'Update version'
 
 # ensure your github token is available
@@ -72,6 +72,8 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
+# commit the intial changes
+git commit -a -m 'Create changelog'
 
 # run automated script to copy labels to issues based on referenced PRs
 # (NOTE 1:  this must be done by a committer / other who has
@@ -80,14 +82,12 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # NOTE 2: this must be done after creating the initial CHANGELOG file
 python dev/release/label_issues.py
 
-# review change log / edit issues and labels if needed, rerun
-git commit -a -m 'Create changelog'
-
-# Manually edit ./dev/release/update_change_log.sh to reflect the release version
-# Create the changelog
+# review change log / edit issues and labels if needed, rerun, repeat as necessary
+# note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
 CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
-# Review change log / edit issues and labels if needed, rerun
-git commit -a -m 'Create changelog'
+
+# Commit the changes
+git commit -a -m 'Update changelog'
 
 git push
 ```
@@ -96,7 +96,7 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-Merge this PR to `master` prior to the next step.
+Merge this PR to `main` prior to the next step.
 
 ## Prepare release candidate tarball
 
@@ -115,7 +115,7 @@ Create and push the tag thusly:
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version> apache/main
 # push tag to apache
 git push apache <version>
 ```
@@ -200,6 +200,14 @@ Rust Arrow Crates:
 ```
 
 Congratulations! The release is now official!
+
+### Check the GitHub release
+
+The [`release.yml`] workflow automatically creates a github release for the tag.
+Check that the release is created and contains the correct changelog here:
+https://github.com/apache/arrow-rs/releases
+
+[`release.yml`]: https://github.com/apache/arrow-rs/blob/main/.github/workflows/release.yml#L1-L0
 
 ### Publish on Crates.io
 

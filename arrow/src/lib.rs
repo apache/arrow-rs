@@ -336,7 +336,7 @@
 //!
 //! If you think you have found an instance where this is possible, please file
 //! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/master/arrow#safety).
+//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! # Higher-level Processing
 //!
@@ -362,6 +362,11 @@
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]

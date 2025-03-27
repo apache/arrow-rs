@@ -261,7 +261,7 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(create_decimal_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
         make_dictionary_primitive::<Int8Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal128Type>(vec![1, 2]),
@@ -315,7 +315,7 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 
     // Construct a fixed size list array from the above two
     let list_data_type =
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2);
+        DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2);
     let list_data = ArrayData::builder(list_data_type)
         .len(5)
         .add_child_data(value_data)
@@ -325,11 +325,11 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 }
 
 fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
-    let values: [u8; 15] = *b"hellotherearrow";
+    let values: &[u8; 15] = b"hellotherearrow";
 
     let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
         .len(3)
-        .add_buffer(Buffer::from(&values[..]))
+        .add_buffer(Buffer::from(values))
         .build()
         .unwrap();
     FixedSizeBinaryArray::from(array_data)
@@ -348,7 +348,7 @@ fn make_list_array() -> ListArray {
     let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
     // Construct a list array from the above two
-    let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+    let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -371,7 +371,8 @@ fn make_large_list_array() -> LargeListArray {
     let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
 
     // Construct a list array from the above two
-    let list_data_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+    let list_data_type =
+        DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -410,7 +411,7 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
-fn create_decimal_array(
+fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
     scale: i8,
@@ -466,12 +467,12 @@ fn get_all_types() -> Vec<DataType> {
         LargeBinary,
         Utf8,
         LargeUtf8,
-        List(Arc::new(Field::new("item", DataType::Int8, true))),
-        List(Arc::new(Field::new("item", DataType::Utf8, true))),
-        FixedSizeList(Arc::new(Field::new("item", DataType::Int8, true)), 10),
-        FixedSizeList(Arc::new(Field::new("item", DataType::Utf8, false)), 10),
-        LargeList(Arc::new(Field::new("item", DataType::Int8, true))),
-        LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
+        List(Arc::new(Field::new_list_field(DataType::Int8, true))),
+        List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        FixedSizeList(Arc::new(Field::new_list_field(DataType::Int8, true)), 10),
+        FixedSizeList(Arc::new(Field::new_list_field(DataType::Utf8, false)), 10),
+        LargeList(Arc::new(Field::new_list_field(DataType::Int8, true))),
+        LargeList(Arc::new(Field::new_list_field(DataType::Utf8, false))),
         Struct(Fields::from(vec![
             Field::new("f1", DataType::Int32, true),
             Field::new("f2", DataType::Utf8, true),

@@ -17,9 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -27,12 +24,16 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -252,6 +253,9 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
+    /// If encryption is enabled, the file decryption properties can be provided
+    #[cfg(feature = "encryption")]
+    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ArrowReaderOptions {
@@ -317,7 +321,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -341,6 +345,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
+    }
+
+    /// Provide the file decryption properties to use when reading encrypted parquet files.
+    ///
+    /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) -> Self {
+        Self {
+            file_decryption_properties: Some(file_decryption_properties),
+            ..self
+        }
     }
 }
 
@@ -380,9 +398,11 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(options.page_index)
-            .parse_and_finish(reader)?;
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -553,6 +573,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -670,14 +691,38 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let meta = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
         // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
+        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
+        #[cfg(feature = "encryption")]
+        let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
+            match meta.crypto_metadata() {
+                Some(crypto_metadata) => {
+                    match CryptoContext::for_column(
+                        file_decryptor,
+                        crypto_metadata,
+                        rg_idx,
+                        self.column_idx,
+                    ) {
+                        Ok(context) => Some(Arc::new(context)),
+                        Err(err) => return Some(Err(err)),
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+
+        #[cfg(feature = "encryption")]
+        let ret = ret.map(|reader| reader.with_crypto_context(crypto_context));
+
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -926,18 +971,18 @@ mod tests {
     use bytes::Bytes;
     use half::f16;
     use num::PrimInt;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
-        Decimal128Type, Decimal256Type, DecimalType, Float16Type, Float32Type, Float64Type,
-        Time32MillisecondType, Time64MicrosecondType,
+        Date32Type, Date64Type, Decimal128Type, Decimal256Type, DecimalType, Float16Type,
+        Float32Type, Float64Type, Time32MillisecondType, Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
-    use arrow_data::ArrayDataBuilder;
+    use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
     };
@@ -953,7 +998,7 @@ mod tests {
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96Type,
+        FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -982,6 +1027,21 @@ mod tests {
         let original_schema = Arc::clone(builder.schema());
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), [2]);
+        let reader = builder.with_projection(mask).build().unwrap();
+
+        // Verify that the schema was correctly parsed
+        assert_eq!(1, reader.schema().fields().len());
+        assert_eq!(original_schema.fields()[1], reader.schema().fields()[0]);
+    }
+
+    #[test]
+    fn test_arrow_reader_single_column_by_name() {
+        let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let original_schema = Arc::clone(builder.schema());
+
+        let mask = ProjectionMask::columns(builder.parquet_schema(), ["blog_id"]);
         let reader = builder.with_projection(mask).build().unwrap();
 
         // Verify that the schema was correctly parsed
@@ -1272,12 +1332,123 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_date32_roundtrip() -> Result<()> {
+        use arrow_array::Date32Array;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "date32",
+            ArrowDataType::Date32,
+            false,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+
+        let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), None)?;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![
+                -1_000_000, -100_000, -10_000, -1_000, 0, 1_000, 10_000, 100_000, 1_000_000,
+            ]))],
+        )?;
+
+        writer.write(&original)?;
+        writer.close()?;
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let ret = reader.next().unwrap()?;
+        assert_eq!(ret, original);
+
+        // Ensure can be downcast to the correct type
+        ret.column(0).as_primitive::<Date32Type>();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_date64_roundtrip() -> Result<()> {
+        use arrow_array::Date64Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("small-date64", ArrowDataType::Date64, false),
+            Field::new("big-date64", ArrowDataType::Date64, false),
+            Field::new("invalid-date64", ArrowDataType::Date64, false),
+        ]));
+
+        let mut default_buf = Vec::with_capacity(1024);
+        let mut coerce_buf = Vec::with_capacity(1024);
+
+        let coerce_props = WriterProperties::builder().set_coerce_types(true).build();
+
+        let mut default_writer = ArrowWriter::try_new(&mut default_buf, schema.clone(), None)?;
+        let mut coerce_writer =
+            ArrowWriter::try_new(&mut coerce_buf, schema.clone(), Some(coerce_props))?;
+
+        static NUM_MILLISECONDS_IN_DAY: i64 = 1000 * 60 * 60 * 24;
+
+        let original = RecordBatch::try_new(
+            schema,
+            vec![
+                // small-date64
+                Arc::new(Date64Array::from(vec![
+                    -1_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    -1_000 * NUM_MILLISECONDS_IN_DAY,
+                    0,
+                    1_000 * NUM_MILLISECONDS_IN_DAY,
+                    1_000_000 * NUM_MILLISECONDS_IN_DAY,
+                ])),
+                // big-date64
+                Arc::new(Date64Array::from(vec![
+                    -10_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    -1_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    0,
+                    1_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                    10_000_000_000 * NUM_MILLISECONDS_IN_DAY,
+                ])),
+                // invalid-date64
+                Arc::new(Date64Array::from(vec![
+                    -1_000_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    -1_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    1,
+                    1_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                    1_000_000 * NUM_MILLISECONDS_IN_DAY + 1,
+                ])),
+            ],
+        )?;
+
+        default_writer.write(&original)?;
+        coerce_writer.write(&original)?;
+
+        default_writer.close()?;
+        coerce_writer.close()?;
+
+        let mut default_reader = ParquetRecordBatchReader::try_new(Bytes::from(default_buf), 1024)?;
+        let mut coerce_reader = ParquetRecordBatchReader::try_new(Bytes::from(coerce_buf), 1024)?;
+
+        let default_ret = default_reader.next().unwrap()?;
+        let coerce_ret = coerce_reader.next().unwrap()?;
+
+        // Roundtrip should be successful when default writer used
+        assert_eq!(default_ret, original);
+
+        // Only small-date64 should roundtrip successfully when coerce_types writer is used
+        assert_eq!(coerce_ret.column(0), original.column(0));
+        assert_ne!(coerce_ret.column(1), original.column(1));
+        assert_ne!(coerce_ret.column(2), original.column(2));
+
+        // Ensure both can be downcast to the correct type
+        default_ret.column(0).as_primitive::<Date64Type>();
+        coerce_ret.column(0).as_primitive::<Date64Type>();
+
+        Ok(())
+    }
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
         fn gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
-            thread_rng().fill_bytes(&mut v);
+            rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
         }
     }
@@ -1329,17 +1500,76 @@ mod tests {
     #[test]
     fn test_int96_single_column_reader_test() {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
-        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
-            2,
-            ConvertedType::NONE,
-            None,
-            |vals| {
+
+        type TypeHintAndConversionFunction =
+            (Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef);
+
+        let resolutions: Vec<TypeHintAndConversionFunction> = vec![
+            // Test without a specified ArrowType hint.
+            (None, |vals: &[Option<Int96>]| {
                 Arc::new(TimestampNanosecondArray::from_iter(
                     vals.iter().map(|x| x.map(|x| x.to_nanos())),
-                )) as _
-            },
-            encodings,
-        );
+                )) as ArrayRef
+            }),
+            // Test other TimeUnits as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Second, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampSecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Millisecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMillisecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_millis())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Microsecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMicrosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_micros())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Nanosecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampNanosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                    )) as ArrayRef
+                },
+            ),
+            // Test another timezone with TimeUnit as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(
+                    TimeUnit::Second,
+                    Some(Arc::from("-05:00")),
+                )),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(
+                        TimestampSecondArray::from_iter(
+                            vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                        )
+                        .with_timezone("-05:00"),
+                    ) as ArrayRef
+                },
+            ),
+        ];
+
+        resolutions.iter().for_each(|(arrow_type, converter)| {
+            run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+                2,
+                ConvertedType::NONE,
+                arrow_type.clone(),
+                converter,
+                encodings,
+            );
+        })
     }
 
     struct RandUtf8Gen {}
@@ -1537,13 +1767,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // https://github.com/apache/arrow-rs/issues/2253
     fn test_decimal_list() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new(
-            "item",
+        let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new_list_field(
             decimals.data_type().clone(),
             false,
         ))))
@@ -1933,10 +2161,13 @@ mod tests {
         fn with_row_selections(self) -> Self {
             assert!(self.row_filter.is_none(), "Must set row selection first");
 
-            let mut rng = thread_rng();
-            let step = rng.gen_range(self.record_batch_size..self.num_rows);
-            let row_selections =
-                create_test_selection(step, self.num_row_groups * self.num_rows, rng.gen::<bool>());
+            let mut rng = rng();
+            let step = rng.random_range(self.record_batch_size..self.num_rows);
+            let row_selections = create_test_selection(
+                step,
+                self.num_row_groups * self.num_rows,
+                rng.random::<bool>(),
+            );
             Self {
                 row_selections: Some(row_selections),
                 ..self
@@ -1949,9 +2180,9 @@ mod tests {
                 None => self.num_row_groups * self.num_rows,
             };
 
-            let mut rng = thread_rng();
+            let mut rng = rng();
             Self {
-                row_filter: Some((0..row_count).map(|_| rng.gen_bool(0.9)).collect()),
+                row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                 ..self
             }
         }
@@ -2165,7 +2396,7 @@ mod tests {
         //according to null_percent generate def_levels
         let (repetition, def_levels) = match opts.null_percent.as_ref() {
             Some(null_percent) => {
-                let mut rng = thread_rng();
+                let mut rng = rng();
 
                 let def_levels: Vec<Vec<i16>> = (0..opts.num_row_groups)
                     .map(|_| {
@@ -2445,6 +2676,59 @@ mod tests {
         ]);
 
         // Tests for #1652 and #1654
+        assert_eq!(&expected_schema, projected_reader.schema().as_ref());
+
+        for batch in projected_reader {
+            let batch = batch.unwrap();
+            assert_eq!(batch.schema().as_ref(), &expected_schema);
+        }
+    }
+
+    #[test]
+    // same as test_read_structs but constructs projection mask via column names
+    fn test_read_structs_by_name() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/nested_structs.rust.parquet");
+        let file = File::open(&path).unwrap();
+        let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
+
+        for batch in record_batch_reader {
+            batch.unwrap();
+        }
+
+        let file = File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        let mask = ProjectionMask::columns(
+            builder.parquet_schema(),
+            ["roll_num.count", "PC_CUR.mean", "PC_CUR.sum"],
+        );
+        let projected_reader = builder
+            .with_projection(mask)
+            .with_batch_size(60)
+            .build()
+            .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new(
+                "roll_num",
+                ArrowDataType::Struct(Fields::from(vec![Field::new(
+                    "count",
+                    ArrowDataType::UInt64,
+                    false,
+                )])),
+                false,
+            ),
+            Field::new(
+                "PC_CUR",
+                ArrowDataType::Struct(Fields::from(vec![
+                    Field::new("mean", ArrowDataType::Int64, false),
+                    Field::new("sum", ArrowDataType::Int64, false),
+                ])),
+                false,
+            ),
+        ]);
+
         assert_eq!(&expected_schema, projected_reader.schema().as_ref());
 
         for batch in projected_reader {
@@ -2874,7 +3158,7 @@ mod tests {
 
         let arrow_field = Field::new(
             "emptylist",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Null, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Null, true))),
             true,
         );
 
@@ -3346,7 +3630,7 @@ mod tests {
     fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Int32, true))),
+            ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Int32, true))),
             true,
         )]));
 
@@ -3584,9 +3868,7 @@ mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            // FIXME: this test will fail when metadata parsing returns `None` for missing page
-            // indexes. https://github.com/apache/arrow-rs/issues/6447
-            assert!(builder.metadata().offset_index().unwrap()[0].is_empty());
+            assert!(builder.metadata().offset_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);
@@ -3905,7 +4187,7 @@ mod tests {
     fn test_list_selection() {
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new("item", ArrowDataType::Utf8, true),
+            Field::new_list_field(ArrowDataType::Utf8, true),
             false,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -3958,10 +4240,14 @@ mod tests {
 
     #[test]
     fn test_list_selection_fuzz() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
-            Field::new_list("item", Field::new("item", ArrowDataType::Int32, true), true),
+            Field::new_list(
+                Field::LIST_FIELD_DEFAULT_NAME,
+                Field::new_list_field(ArrowDataType::Int32, true),
+                true,
+            ),
             true,
         )]));
         let mut buf = Vec::with_capacity(1024);
@@ -3970,26 +4256,26 @@ mod tests {
         let mut list_a_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
 
         for _ in 0..2048 {
-            if rng.gen_bool(0.2) {
+            if rng.random_bool(0.2) {
                 list_a_builder.append(false);
                 continue;
             }
 
-            let list_a_len = rng.gen_range(0..10);
+            let list_a_len = rng.random_range(0..10);
             let list_b_builder = list_a_builder.values();
 
             for _ in 0..list_a_len {
-                if rng.gen_bool(0.2) {
+                if rng.random_bool(0.2) {
                     list_b_builder.append(false);
                     continue;
                 }
 
-                let list_b_len = rng.gen_range(0..10);
+                let list_b_len = rng.random_range(0..10);
                 let int_builder = list_b_builder.values();
                 for _ in 0..list_b_len {
-                    match rng.gen_bool(0.2) {
+                    match rng.random_bool(0.2) {
                         true => int_builder.append_null(),
-                        false => int_builder.append_value(rng.gen()),
+                        false => int_builder.append_value(rng.random()),
                     }
                 }
                 list_b_builder.append(true)
@@ -4064,5 +4350,94 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_read_old_nested_list() {
+        use arrow::datatypes::DataType;
+        use arrow::datatypes::ToByteSlice;
+
+        let testdata = arrow::util::test_util::parquet_test_data();
+        // message my_record {
+        //     REQUIRED group a (LIST) {
+        //         REPEATED group array (LIST) {
+        //             REPEATED INT32 array;
+        //         }
+        //     }
+        // }
+        // should be read as list<list<int32>>
+        let path = format!("{testdata}/old_list_structure.parquet");
+        let test_file = File::open(path).unwrap();
+
+        // create expected ListArray
+        let a_values = Int32Array::from(vec![1, 2, 3, 4]);
+
+        // Construct a buffer for value offsets, for the nested array: [[1, 2], [3, 4]]
+        let a_value_offsets = arrow::buffer::Buffer::from([0, 2, 4].to_byte_slice());
+
+        // Construct a list array from the above two
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
+            "array",
+            DataType::Int32,
+            false,
+        ))))
+        .len(2)
+        .add_buffer(a_value_offsets)
+        .add_child_data(a_values.into_data())
+        .build()
+        .unwrap();
+        let a = ListArray::from(a_list_data);
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
+        let mut reader = builder.build().unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 1);
+        assert_eq!(out.num_columns(), 1);
+        // grab first column
+        let c0 = out.column(0);
+        let c0arr = c0.as_any().downcast_ref::<ListArray>().unwrap();
+        // get first row: [[1, 2], [3, 4]]
+        let r0 = c0arr.value(0);
+        let r0arr = r0.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(r0arr, &a);
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/map_no_value.parquet");
+        let file = File::open(path).unwrap();
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 3);
+        // my_map_no_v and my_list columns should now be equivalent
+        let c0 = out.column(1).as_list::<i32>();
+        let c1 = out.column(2).as_list::<i32>();
+        assert_eq!(c0.len(), c1.len());
+        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 }

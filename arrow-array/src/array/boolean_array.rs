@@ -308,12 +308,23 @@ impl Array for BooleanArray {
         self.values.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         self.values.offset()
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -329,7 +340,7 @@ impl Array for BooleanArray {
     }
 }
 
-impl<'a> ArrayAccessor for &'a BooleanArray {
+impl ArrayAccessor for &BooleanArray {
     type Item = bool;
 
     fn value(&self, index: usize) -> Self::Item {
@@ -468,7 +479,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -656,11 +667,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_true_false_count() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for _ in 0..10 {
             // No nulls
-            let d: Vec<_> = (0..2000).map(|_| rng.gen_bool(0.5)).collect();
+            let d: Vec<_> = (0..2000).map(|_| rng.random_bool(0.5)).collect();
             let b = BooleanArray::from(d.clone());
 
             let expected_true = d.iter().filter(|x| **x).count();
@@ -669,7 +680,7 @@ mod tests {
 
             // With nulls
             let d: Vec<_> = (0..2000)
-                .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
+                .map(|_| rng.random_bool(0.5).then(|| rng.random_bool(0.5)))
                 .collect();
             let b = BooleanArray::from(d.clone());
 

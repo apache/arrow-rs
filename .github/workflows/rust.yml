@@ -22,11 +22,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs and changes to master
+# trigger for all PRs and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 jobs:
@@ -101,18 +101,16 @@ jobs:
       - name: Format arrow
         run: cargo fmt --all -- --check
       - name: Format parquet
-        # Many modules in parquet are skipped, so check parquet separately. If this check fails, run:
-        #   cargo fmt -p parquet -- --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
-        # from the top level arrow-rs directory and check in the result.
+        # Many modules in parquet are skipped, so check parquet separately
         # https://github.com/apache/arrow-rs/issues/6179
         working-directory: parquet
-        run: cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
-      - name: Format object_store
-        working-directory: object_store
-        run: cargo fmt --all -- --check
+        run: |
+          # if this fails, run this from the parquet directory:
+          # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
+          cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
 
   msrv:
-    name: Verify MSRV
+    name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -122,24 +120,20 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
         run: cargo install cargo-msrv
-      - name: Downgrade arrow dependencies
-        run: cargo update -p ahash --precise 0.8.7
-      - name: Check arrow
-        working-directory: arrow
-        run: cargo msrv --log-target stdout verify
-      - name: Check parquet
-        working-directory: parquet
-        run: cargo msrv --log-target stdout verify
-      - name: Check arrow-flight
-        working-directory: arrow-flight
-        run: cargo msrv --log-target stdout verify
-      - name: Downgrade object_store dependencies
-        working-directory: object_store
-        # Necessary because tokio 1.30.0 updates MSRV to 1.63
-        # and url 2.5.1, updates to 1.67
+      - name: Downgrade arrow-pyarrow-integration-testing dependencies
+        working-directory: arrow-pyarrow-integration-testing
+        # Necessary because half 2.5 requires rust 1.81 or newer
         run: |
-          cargo update -p tokio --precise 1.29.1
-          cargo update -p url --precise 2.5.0
-      - name: Check object_store
-        working-directory: object_store
-        run: cargo msrv --log-target stdout verify
+          cargo update -p half --precise 2.4.0
+      - name: Downgrade workspace dependencies
+        # Necessary because half 2.5 requires rust 1.81 or newer
+        run: |
+          cargo update -p half --precise 2.4.0
+      - name: Check all packages
+        run: |
+          # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies
+          find . -mindepth 2 -name Cargo.toml | while read -r dir
+          do
+            echo "Checking package '$dir'"
+            cargo msrv verify --manifest-path "$dir" --output-format=json || exit 1
+          done

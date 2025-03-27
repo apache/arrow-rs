@@ -30,12 +30,10 @@ use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
 use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
 
-use super::schema::{
-    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
-    arrow_to_parquet_schema_with_root, decimal_length_from_precision,
-};
+use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::arrow::ArrowSchemaConverter;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
@@ -61,6 +59,7 @@ mod levels;
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
 ///
+/// # Example: Writing `RecordBatch`es
 /// ```
 /// # use std::sync::Arc;
 /// # use bytes::Bytes;
@@ -82,11 +81,11 @@ mod levels;
 /// assert_eq!(to_write, read);
 /// ```
 ///
-/// ## Memory Limiting
+/// # Memory Usage and Limiting
 ///
-/// The nature of parquet forces buffering of an entire row group before it can
+/// The nature of Parquet requires buffering of an entire row group before it can
 /// be flushed to the underlying writer. Data is mostly buffered in its encoded
-/// form, reducing memory usage. However, some data such as dictionary keys or
+/// form, reducing memory usage. However, some data such as dictionary keys,
 /// large strings or very nested data may still result in non-trivial memory
 /// usage.
 ///
@@ -180,11 +179,12 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
-        let schema = match options.schema_root {
-            Some(s) => arrow_to_parquet_schema_with_root(&arrow_schema, &s)?,
-            None => arrow_to_parquet_schema(&arrow_schema)?,
-        };
         let mut props = options.properties;
+        let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
+        if let Some(schema_root) = &options.schema_root {
+            converter = converter.schema_root(schema_root);
+        }
+        let schema = converter.convert(&arrow_schema)?;
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -390,9 +390,9 @@ impl ArrowWriterOptions {
     }
 
     /// Set the name of the root parquet schema element (defaults to `"arrow_schema"`)
-    pub fn with_schema_root(self, name: String) -> Self {
+    pub fn with_schema_root(self, schema_root: String) -> Self {
         Self {
-            schema_root: Some(name),
+            schema_root: Some(schema_root),
             ..self
         }
     }
@@ -530,18 +530,20 @@ impl ArrowColumnChunk {
 
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
-/// Note: This is a low-level interface for applications that require fine-grained control
-/// of encoding, see [`ArrowWriter`] for a higher-level interface
+/// Note: This is a low-level interface for applications that require
+/// fine-grained control of encoding (e.g. encoding using multiple threads),
+/// see [`ArrowWriter`] for a higher-level interface
 ///
+/// # Example: Encoding two Arrow Array's in Parallel
 /// ```
 /// // The arrow schema
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
-/// # use parquet::arrow::arrow_to_parquet_schema;
-/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers};
+/// # use parquet::arrow::ArrowSchemaConverter;
+/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers, ArrowColumnChunk};
 /// # use parquet::file::properties::WriterProperties;
-/// # use parquet::file::writer::SerializedFileWriter;
+/// # use parquet::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 /// #
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("i32", DataType::Int32, false),
@@ -549,22 +551,30 @@ impl ArrowColumnChunk {
 /// ]));
 ///
 /// // Compute the parquet schema
-/// let parquet_schema = arrow_to_parquet_schema(schema.as_ref()).unwrap();
 /// let props = Arc::new(WriterProperties::default());
+/// let parquet_schema = ArrowSchemaConverter::new()
+///   .with_coerce_types(props.coerce_types())
+///   .convert(&schema)
+///   .unwrap();
 ///
 /// // Create writers for each of the leaf columns
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
 ///
 /// // Spawn a worker thread for each column
-/// // This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better
+/// //
+/// // Note: This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better.
+/// // The `map` produces an iterator of type `tuple of (thread handle, send channel)`.
 /// let mut workers: Vec<_> = col_writers
 ///     .into_iter()
 ///     .map(|mut col_writer| {
 ///         let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
 ///         let handle = std::thread::spawn(move || {
+///             // receive Arrays to encode via the channel
 ///             for col in recv {
 ///                 col_writer.write(&col)?;
 ///             }
+///             // once the input is complete, close the writer
+///             // to return the newly created ArrowColumnChunk
 ///             col_writer.close()
 ///         });
 ///         (handle, send)
@@ -573,19 +583,23 @@ impl ArrowColumnChunk {
 ///
 /// // Create parquet writer
 /// let root_schema = parquet_schema.root_schema_ptr();
-/// let mut out = Vec::with_capacity(1024); // This could be a File
-/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone()).unwrap();
+/// // write to memory in the example, but this could be a File
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
+///   .unwrap();
 ///
 /// // Start row group
-/// let mut row_group = writer.next_row_group().unwrap();
+/// let mut row_group_writer: SerializedRowGroupWriter<'_, _> = writer
+///   .next_row_group()
+///   .unwrap();
 ///
-/// // Columns to encode
+/// // Create some example input columns to encode
 /// let to_write = vec![
 ///     Arc::new(Int32Array::from_iter_values([1, 2, 3])) as _,
 ///     Arc::new(Float32Array::from_iter_values([1., 45., -1.])) as _,
 /// ];
 ///
-/// // Spawn work to encode columns
+/// // Send the input columns to the workers
 /// let mut worker_iter = workers.iter_mut();
 /// for (arr, field) in to_write.iter().zip(&schema.fields) {
 ///     for leaves in compute_leaves(field, arr).unwrap() {
@@ -593,13 +607,16 @@ impl ArrowColumnChunk {
 ///     }
 /// }
 ///
-/// // Finish up parallel column encoding
+/// // Wait for the workers to complete encoding, and append
+/// // the resulting column chunks to the row group (and the file)
 /// for (handle, send) in workers {
 ///     drop(send); // Drop send side to signal termination
-///     let chunk = handle.join().unwrap().unwrap();
-///     chunk.append_to_row_group(&mut row_group).unwrap();
+///     // wait for the worker to send the completed chunk
+///     let chunk: ArrowColumnChunk = handle.join().unwrap().unwrap();
+///     chunk.append_to_row_group(&mut row_group_writer).unwrap();
 /// }
-/// row_group.close().unwrap();
+/// // Close the row group which writes to the underlying file
+/// row_group_writer.close().unwrap();
 ///
 /// let metadata = writer.close().unwrap();
 /// assert_eq!(metadata.num_rows, 3);
@@ -841,6 +858,27 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int32Type>(|v| v.as_i128() as i32);
                     write_primitive(typed, array.values(), levels)
                 }
+                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+                    ArrowDataType::Decimal128(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal128Type>()
+                            .unary::<_, Int32Type>(|v| v as i32);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    ArrowDataType::Decimal256(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal256Type>()
+                            .unary::<_, Int32Type>(|v| v.as_i128() as i32);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    _ => {
+                        let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
+                        let array = array.as_primitive::<Int32Type>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -858,6 +896,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
             match column.data_type() {
+                ArrowDataType::Date64 => {
+                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+
+                    let array = array.as_primitive::<Int64Type>();
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Int64 => {
                     let array = column.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
@@ -883,6 +927,27 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)
                 }
+                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+                    ArrowDataType::Decimal128(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal128Type>()
+                            .unary::<_, Int64Type>(|v| v as i64);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    ArrowDataType::Decimal256(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal256Type>()
+                            .unary::<_, Int64Type>(|v| v.as_i128() as i64);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    _ => {
+                        let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+                        let array = array.as_primitive::<Int64Type>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
@@ -1082,10 +1147,12 @@ mod tests {
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
+    use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer};
+    use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
+    use half::f16;
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -1194,7 +1261,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             true,
         )]);
 
@@ -1206,8 +1273,7 @@ mod tests {
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))
@@ -1234,7 +1300,7 @@ mod tests {
         // define schema
         let schema = Schema::new(vec![Field::new(
             "a",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             false,
         )]);
 
@@ -1246,8 +1312,7 @@ mod tests {
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
 
         // Construct a list array from the above two
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))
@@ -1365,12 +1430,12 @@ mod tests {
         let struct_field_f = Arc::new(Field::new("f", DataType::Float32, true));
         let struct_field_g = Arc::new(Field::new_list(
             "g",
-            Field::new("item", DataType::Int16, true),
+            Field::new_list_field(DataType::Int16, true),
             false,
         ));
         let struct_field_h = Arc::new(Field::new_list(
             "h",
-            Field::new("item", DataType::Int16, false),
+            Field::new_list_field(DataType::Int16, false),
             true,
         ));
         let struct_field_e = Arc::new(Field::new_struct(
@@ -1615,6 +1680,85 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_2_level_struct_mixed_null_2() {
+        // tests writing <struct<struct<primitive>>, where the primitive columns are non-null.
+        let field_c = Field::new("c", DataType::Int32, false);
+        let field_d = Field::new("d", DataType::FixedSizeBinary(4), false);
+        let field_e = Field::new(
+            "e",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        );
+
+        let field_b = Field::new(
+            "b",
+            DataType::Struct(vec![field_c, field_d, field_e].into()),
+            false,
+        );
+        let type_a = DataType::Struct(vec![field_b.clone()].into());
+        let field_a = Field::new("a", type_a, true);
+        let schema = Schema::new(vec![field_a.clone()]);
+
+        // create data
+        let c = Int32Array::from_iter_values(0..6);
+        let d = FixedSizeBinaryArray::try_from_iter(
+            ["aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff"].into_iter(),
+        )
+        .expect("four byte values");
+        let e = Int32DictionaryArray::from_iter(["one", "two", "three", "four", "five", "one"]);
+        let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+            .len(6)
+            .add_child_data(c.into_data())
+            .add_child_data(d.into_data())
+            .add_child_data(e.into_data())
+            .build()
+            .unwrap();
+        let b = StructArray::from(b_data);
+        let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+            .len(6)
+            .null_bit_buffer(Some(Buffer::from([0b00100101])))
+            .add_child_data(b.into_data())
+            .build()
+            .unwrap();
+        let a = StructArray::from(a_data);
+
+        assert_eq!(a.null_count(), 3);
+        assert_eq!(a.column(0).null_count(), 0);
+
+        // build a record batch
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+        roundtrip(batch, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn test_empty_dict() {
+        let struct_fields = Fields::from(vec![Field::new(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]);
+
+        let schema = Schema::new(vec![Field::new_struct(
+            "struct",
+            struct_fields.clone(),
+            true,
+        )]);
+        let dictionary = Arc::new(DictionaryArray::new(
+            Int32Array::new_null(5),
+            Arc::new(StringArray::new_null(0)),
+        ));
+
+        let s = StructArray::new(
+            struct_fields,
+            vec![dictionary],
+            Some(NullBuffer::new_null(5)),
+        );
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(s)]).unwrap();
+        roundtrip(batch, None);
+    }
+    #[test]
     fn arrow_writer_page_size() {
         let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
@@ -1664,7 +1808,7 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap();
+        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
 
         let page_locations = offset_indexes[0].page_locations.clone();
 
@@ -1675,6 +1819,44 @@ mod tests {
             10,
             "Expected 9 pages but got {page_locations:#?}"
         );
+    }
+
+    #[test]
+    fn arrow_writer_float_nans() {
+        let f16_field = Field::new("a", DataType::Float16, false);
+        let f32_field = Field::new("b", DataType::Float32, false);
+        let f64_field = Field::new("c", DataType::Float64, false);
+        let schema = Schema::new(vec![f16_field, f32_field, f64_field]);
+
+        let f16_values = (0..MEDIUM_SIZE)
+            .map(|i| {
+                Some(if i % 2 == 0 {
+                    f16::NAN
+                } else {
+                    f16::from_f32(i as f32)
+                })
+            })
+            .collect::<Float16Array>();
+
+        let f32_values = (0..MEDIUM_SIZE)
+            .map(|i| Some(if i % 2 == 0 { f32::NAN } else { i as f32 }))
+            .collect::<Float32Array>();
+
+        let f64_values = (0..MEDIUM_SIZE)
+            .map(|i| Some(if i % 2 == 0 { f64::NAN } else { i as f64 }))
+            .collect::<Float64Array>();
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(f16_values),
+                Arc::new(f32_values),
+                Arc::new(f64_values),
+            ],
+        )
+        .unwrap();
+
+        roundtrip(batch, None);
     }
 
     const SMALL_SIZE: usize = 7;
@@ -1735,7 +1917,11 @@ mod tests {
     }
 
     fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
-        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| assert_eq!(a, b))
+        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| {
+            a.validate_full().expect("valid expected data");
+            b.validate_full().expect("valid actual data");
+            assert_eq!(a, b)
+        })
     }
 
     struct RoundTripOptions {
@@ -2294,7 +2480,7 @@ mod tests {
 
     #[test]
     fn null_list_single_column() {
-        let null_field = Field::new("item", DataType::Null, true);
+        let null_field = Field::new_list_field(DataType::Null, true);
         let list_field = Field::new("emptylist", DataType::List(Arc::new(null_field)), true);
 
         let schema = Schema::new(vec![list_field]);
@@ -2302,8 +2488,7 @@ mod tests {
         // Build [[], null, [null, null]]
         let a_values = NullArray::new(2);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 0, 0, 2].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Null,
             true,
         ))))
@@ -2332,8 +2517,7 @@ mod tests {
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
-        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new(
-            "item",
+        let a_list_data = ArrayData::builder(DataType::List(Arc::new(Field::new_list_field(
             DataType::Int32,
             false,
         ))))
@@ -2407,6 +2591,56 @@ mod tests {
     }
 
     #[test]
+    fn list_and_map_coerced_names() {
+        // Create map and list with non-Parquet naming
+        let list_field =
+            Field::new_list("my_list", Field::new("item", DataType::Int32, false), false);
+        let map_field = Field::new_map(
+            "my_map",
+            "entries",
+            Field::new("keys", DataType::Int32, false),
+            Field::new("values", DataType::Int32, true),
+            false,
+            true,
+        );
+
+        let list_array = create_random_array(&list_field, 100, 0.0, 0.0).unwrap();
+        let map_array = create_random_array(&map_field, 100, 0.0, 0.0).unwrap();
+
+        let arrow_schema = Arc::new(Schema::new(vec![list_field, map_field]));
+
+        // Write data to Parquet but coerce names to match spec
+        let props = Some(WriterProperties::builder().set_coerce_types(true).build());
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), arrow_schema.clone(), props).unwrap();
+
+        let batch = RecordBatch::try_new(arrow_schema, vec![list_array, map_array]).unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        // Coerced name of "item" should be "element"
+        assert_eq!(file_metadata.schema[3].name, "element");
+        // Coerced name of "entries" should be "key_value"
+        assert_eq!(file_metadata.schema[5].name, "key_value");
+        // Coerced name of "keys" should be "key"
+        assert_eq!(file_metadata.schema[6].name, "key");
+        // Coerced name of "values" should be "value"
+        assert_eq!(file_metadata.schema[7].name, "value");
+
+        // Double check schema after reading from the file
+        let reader = SerializedFileReader::new(file).unwrap();
+        let file_schema = reader.metadata().file_metadata().schema();
+        let fields = file_schema.get_fields();
+        let list_field = &fields[0].get_fields()[0];
+        assert_eq!(list_field.get_fields()[0].name(), "element");
+        let map_field = &fields[1].get_fields()[0];
+        assert_eq!(map_field.name(), "key_value");
+        assert_eq!(map_field.get_fields()[0].name(), "key");
+        assert_eq!(map_field.get_fields()[1].name(), "value");
+    }
+
+    #[test]
     fn fallback_flush_data_page() {
         //tests if the Fallback::flush_data_page clears all buffers correctly
         let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
@@ -2451,6 +2685,7 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -2472,6 +2707,7 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
@@ -2492,8 +2728,55 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_decimal128_dictionary() {
+        let integers = vec![12345, 56789, 34567];
+
+        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+        let values = Decimal128Array::from(integers.clone())
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+
+        let array = DictionaryArray::new(keys, Arc::new(values));
+        one_column_roundtrip(Arc::new(array.clone()), true);
+
+        let values = Decimal128Array::from(integers)
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+
+        let array = array.with_values(Arc::new(values));
+        one_column_roundtrip(Arc::new(array), true);
+    }
+
+    #[test]
+    fn arrow_writer_decimal256_dictionary() {
+        let integers = vec![
+            i256::from_i128(12345),
+            i256::from_i128(56789),
+            i256::from_i128(34567),
+        ];
+
+        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+        let values = Decimal256Array::from(integers.clone())
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+
+        let array = DictionaryArray::new(keys, Arc::new(values));
+        one_column_roundtrip(Arc::new(array.clone()), true);
+
+        let values = Decimal256Array::from(integers)
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+
+        let array = array.with_values(Arc::new(values));
+        one_column_roundtrip(Arc::new(array), true);
+    }
+
+    #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
+        #[allow(deprecated)]
         let schema = Arc::new(Schema::new(vec![Field::new_dict(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
@@ -3228,5 +3511,35 @@ mod tests {
             err,
             "Arrow: Incompatible type. Field 'temperature' has type Float64, array has type Int32"
         );
+    }
+
+    #[test]
+    // https://github.com/apache/arrow-rs/issues/6988
+    fn test_roundtrip_empty_schema() {
+        // create empty record batch with empty schema
+        let empty_batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::default().with_row_count(Some(0)),
+        )
+        .unwrap();
+
+        // write to parquet
+        let mut parquet_bytes: Vec<u8> = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut parquet_bytes, empty_batch.schema(), None).unwrap();
+        writer.write(&empty_batch).unwrap();
+        writer.close().unwrap();
+
+        // read from parquet
+        let bytes = Bytes::from(parquet_bytes);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        assert_eq!(reader.schema(), &empty_batch.schema());
+        let batches: Vec<_> = reader
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 0);
     }
 }

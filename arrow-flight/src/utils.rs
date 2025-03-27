@@ -17,8 +17,7 @@
 
 //! Utilities to assist with reading and writing Arrow data as Flight messages
 
-use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
-use bytes::Bytes;
+use crate::{FlightData, SchemaAsIpc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,30 +26,6 @@ use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::{reader, root_as_message, writer, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-
-/// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
-/// and a `FlightData` representing the bytes of the batch's values
-#[deprecated(
-    since = "30.0.0",
-    note = "Use IpcDataGenerator directly with DictionaryTracker to avoid re-sending dictionaries"
-)]
-pub fn flight_data_from_arrow_batch(
-    batch: &RecordBatch,
-    options: &IpcWriteOptions,
-) -> (Vec<FlightData>, FlightData) {
-    let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
-
-    let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, options)
-        .expect("DictionaryTracker configured above to not error on replacement");
-
-    let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
-    let flight_batch = encoded_batch.into();
-
-    (flight_dictionaries, flight_batch)
-}
 
 /// Convert a slice of wire protocol `FlightData`s into a vector of `RecordBatch`es
 pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBatch>, ArrowError> {
@@ -104,41 +79,6 @@ pub fn flight_data_to_arrow_batch(
         })?
 }
 
-/// Convert a `Schema` to `SchemaResult` by converting to an IPC message
-#[deprecated(
-    since = "4.4.0",
-    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).try_into()"
-)]
-pub fn flight_schema_from_arrow_schema(
-    schema: &Schema,
-    options: &IpcWriteOptions,
-) -> Result<SchemaResult, ArrowError> {
-    SchemaAsIpc::new(schema, options).try_into()
-}
-
-/// Convert a `Schema` to `FlightData` by converting to an IPC message
-#[deprecated(
-    since = "4.4.0",
-    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
-)]
-pub fn flight_data_from_arrow_schema(schema: &Schema, options: &IpcWriteOptions) -> FlightData {
-    SchemaAsIpc::new(schema, options).into()
-}
-
-/// Convert a `Schema` to bytes in the format expected in `FlightInfo.schema`
-#[deprecated(
-    since = "4.4.0",
-    note = "Use TryFrom trait, e.g.: SchemaAsIpc::new(schema, options).try_into()"
-)]
-pub fn ipc_message_from_arrow_schema(
-    schema: &Schema,
-    options: &IpcWriteOptions,
-) -> Result<Bytes, ArrowError> {
-    let message = SchemaAsIpc::new(schema, options).try_into()?;
-    let IpcMessage(vals) = message;
-    Ok(vals)
-}
-
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 pub fn batches_to_flight_data(
     schema: &Schema,
@@ -150,6 +90,7 @@ pub fn batches_to_flight_data(
     let mut flight_data = vec![];
 
     let data_gen = writer::IpcDataGenerator::default();
+    #[allow(deprecated)]
     let mut dictionary_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
 

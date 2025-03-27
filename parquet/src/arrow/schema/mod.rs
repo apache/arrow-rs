@@ -15,13 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Provides API for converting parquet schema to arrow schema and vice versa.
-//!
-//! The main interfaces for converting parquet schema to arrow schema  are
-//! `parquet_to_arrow_schema`, `parquet_to_arrow_schema_by_columns` and
-//! `parquet_to_arrow_field`.
-//!
-//! The interfaces for converting arrow schema to parquet schema is coming.
+//! Converting Parquet schema <--> Arrow schema: [`ArrowSchemaConverter`] and [parquet_to_arrow_schema]
 
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -29,6 +23,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
+#[cfg(feature = "arrow_canonical_extension_types")]
+use arrow_schema::extension::{Json, Uuid};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
@@ -176,8 +172,9 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 }
 
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
-fn encode_arrow_schema(schema: &Schema) -> String {
+pub fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
+    #[allow(deprecated)]
     let mut dictionary_tracker =
         writer::DictionaryTracker::new_with_preserve_dict_id(true, options.preserve_dict_id());
     let data_gen = writer::IpcDataGenerator::default();
@@ -197,7 +194,7 @@ fn encode_arrow_schema(schema: &Schema) -> String {
 
 /// Mutates writer metadata by storing the encoded Arrow schema.
 /// If there is an existing Arrow schema metadata, it is replaced.
-pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
+pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
     let encoded = encode_arrow_schema(schema);
 
     let schema_kv = KeyValue {
@@ -225,23 +222,134 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut 
     }
 }
 
+/// Converter for Arrow schema to Parquet schema
+///
+/// Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_schema::{Field, Schema, DataType};
+/// # use parquet::arrow::ArrowSchemaConverter;
+/// use parquet::schema::types::{SchemaDescriptor, Type};
+/// use parquet::basic; // note there are two `Type`s in the following example
+/// // create an Arrow Schema
+/// let arrow_schema = Schema::new(vec![
+///   Field::new("a", DataType::Int64, true),
+///   Field::new("b", DataType::Date32, true),
+/// ]);
+/// // convert the Arrow schema to a Parquet schema
+/// let parquet_schema = ArrowSchemaConverter::new()
+///   .convert(&arrow_schema)
+///   .unwrap();
+///
+/// let expected_parquet_schema = SchemaDescriptor::new(
+///   Arc::new(
+///     Type::group_type_builder("arrow_schema")
+///       .with_fields(vec![
+///         Arc::new(
+///          Type::primitive_type_builder("a", basic::Type::INT64)
+///           .build().unwrap()
+///         ),
+///         Arc::new(
+///          Type::primitive_type_builder("b", basic::Type::INT32)
+///           .with_converted_type(basic::ConvertedType::DATE)
+///           .with_logical_type(Some(basic::LogicalType::Date))
+///           .build().unwrap()
+///         ),
+///      ])
+///      .build().unwrap()
+///   )
+/// );
+/// assert_eq!(parquet_schema, expected_parquet_schema);
+/// ```
+#[derive(Debug)]
+pub struct ArrowSchemaConverter<'a> {
+    /// Name of the root schema in Parquet
+    schema_root: &'a str,
+    /// Should we coerce Arrow types to compatible Parquet types?
+    ///
+    /// See docs on [Self::with_coerce_types]`
+    coerce_types: bool,
+}
+
+impl Default for ArrowSchemaConverter<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> ArrowSchemaConverter<'a> {
+    /// Create a new converter
+    pub fn new() -> Self {
+        Self {
+            schema_root: "arrow_schema",
+            coerce_types: false,
+        }
+    }
+
+    /// Should Arrow types be coerced into Parquet native types (default `false`).
+    ///
+    /// Setting this option to `true` will result in Parquet files that can be
+    /// read by more readers, but may lose precision for Arrow types such as
+    /// [`DataType::Date64`] which have no direct [corresponding Parquet type].
+    ///
+    /// By default, this converter does not coerce to native Parquet types. Enabling type
+    /// coercion allows for meaningful representations that do not require
+    /// downstream readers to consider the embedded Arrow schema, and can allow
+    /// for greater compatibility with other Parquet implementations. However,
+    /// type coercion also prevents data from being losslessly round-tripped.
+    ///
+    /// # Discussion
+    ///
+    /// Some Arrow types such as `Date64`, `Timestamp` and `Interval` have no
+    /// corresponding Parquet logical type. Thus, they can not be losslessly
+    /// round-tripped when stored using the appropriate Parquet logical type.
+    /// For example, some Date64 values may be truncated when stored with
+    /// parquet's native 32 bit date type.
+    ///
+    /// For [`List`] and [`Map`] types, some Parquet readers expect certain
+    /// schema elements to have specific names (earlier versions of the spec
+    /// were somewhat ambiguous on this point). Type coercion will use the names
+    /// prescribed by the Parquet specification, potentially losing naming
+    /// metadata from the Arrow schema.
+    ///
+    /// [`List`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
+    /// [`Map`]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#maps
+    /// [corresponding Parquet type]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
+    ///
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Set the root schema element name (defaults to `"arrow_schema"`).
+    pub fn schema_root(mut self, schema_root: &'a str) -> Self {
+        self.schema_root = schema_root;
+        self
+    }
+
+    /// Convert the specified Arrow [`Schema`] to the desired Parquet [`SchemaDescriptor`]
+    ///
+    /// See example in [`ArrowSchemaConverter`]
+    pub fn convert(&self, schema: &Schema) -> Result<SchemaDescriptor> {
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| arrow_to_parquet_type(field, self.coerce_types).map(Arc::new))
+            .collect::<Result<_>>()?;
+        let group = Type::group_type_builder(self.schema_root)
+            .with_fields(fields)
+            .build()?;
+        Ok(SchemaDescriptor::new(Arc::new(group)))
+    }
+}
+
 /// Convert arrow schema to parquet schema
 ///
 /// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`arrow_to_parquet_schema_with_root`]
+/// overridden with [`ArrowSchemaConverter`]
+#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
 pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    arrow_to_parquet_schema_with_root(schema, "arrow_schema")
-}
-
-/// Convert arrow schema to parquet schema specifying the name of the root schema element
-pub fn arrow_to_parquet_schema_with_root(schema: &Schema, root: &str) -> Result<SchemaDescriptor> {
-    let fields = schema
-        .fields()
-        .iter()
-        .map(|field| arrow_to_parquet_type(field).map(Arc::new))
-        .collect::<Result<_>>()?;
-    let group = Type::group_type_builder(root).with_fields(fields).build()?;
-    Ok(SchemaDescriptor::new(Arc::new(group)))
+    ArrowSchemaConverter::new().convert(schema)
 }
 
 fn parse_key_value_metadata(
@@ -274,12 +382,26 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     let mut ret = Field::new(parquet_column.name(), field.arrow_type, field.nullable);
 
     let basic_info = parquet_column.self_type().get_basic_info();
+    let mut meta = HashMap::with_capacity(if cfg!(feature = "arrow_canonical_extension_types") {
+        2
+    } else {
+        1
+    });
     if basic_info.has_id() {
-        let mut meta = HashMap::with_capacity(1);
         meta.insert(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             basic_info.id().to_string(),
         );
+    }
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    if let Some(logical_type) = basic_info.logical_type() {
+        match logical_type {
+            LogicalType::Uuid => ret.try_with_extension_type(Uuid)?,
+            LogicalType::Json => ret.try_with_extension_type(Json::default())?,
+            _ => {}
+        }
+    }
+    if !meta.is_empty() {
         ret.set_metadata(meta);
     }
 
@@ -298,7 +420,12 @@ pub fn decimal_length_from_precision(precision: u8) -> usize {
 }
 
 /// Convert an arrow field to a parquet `Type`
-fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
+fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
+    const PARQUET_LIST_ELEMENT_NAME: &str = "element";
+    const PARQUET_MAP_STRUCT_NAME: &str = "key_value";
+    const PARQUET_KEY_FIELD_NAME: &str = "key";
+    const PARQUET_VALUE_FIELD_NAME: &str = "value";
+
     let name = field.name().as_str();
     let repetition = if field.is_nullable() {
         Repetition::OPTIONAL
@@ -415,12 +542,20 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        // date64 is cast to date32 (#1666)
-        DataType::Date64 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::Date))
-            .with_repetition(repetition)
-            .with_id(id)
-            .build(),
+        DataType::Date64 => {
+            if coerce_types {
+                Type::primitive_type_builder(name, PhysicalType::INT32)
+                    .with_logical_type(Some(LogicalType::Date))
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            } else {
+                Type::primitive_type_builder(name, PhysicalType::INT64)
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()
+            }
+        }
         DataType::Time32(TimeUnit::Second) => {
             // Cannot represent seconds in LogicalType
             Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -471,6 +606,16 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(*length)
+                .with_logical_type(
+                    #[cfg(feature = "arrow_canonical_extension_types")]
+                    // If set, map arrow uuid extension type to parquet uuid logical type.
+                    field
+                        .try_extension_type::<Uuid>()
+                        .ok()
+                        .map(|_| LogicalType::Uuid),
+                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
+                    None,
+                )
                 .build()
         }
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
@@ -504,21 +649,51 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(LogicalType::String))
+                .with_logical_type({
+                    #[cfg(feature = "arrow_canonical_extension_types")]
+                    {
+                        // Use the Json logical type if the canonical Json
+                        // extension type is set on this field.
+                        field
+                            .try_extension_type::<Json>()
+                            .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
+                    }
+                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
+                    Some(LogicalType::String)
+                })
                 .with_repetition(repetition)
                 .with_id(id)
                 .build()
         }
         DataType::Utf8View => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::String))
+            .with_logical_type({
+                #[cfg(feature = "arrow_canonical_extension_types")]
+                {
+                    // Use the Json logical type if the canonical Json
+                    // extension type is set on this field.
+                    field
+                        .try_extension_type::<Json>()
+                        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
+                }
+                #[cfg(not(feature = "arrow_canonical_extension_types"))]
+                Some(LogicalType::String)
+            })
             .with_repetition(repetition)
             .with_id(id)
             .build(),
         DataType::List(f) | DataType::FixedSizeList(f, _) | DataType::LargeList(f) => {
+            let field_ref = if coerce_types && f.name() != PARQUET_LIST_ELEMENT_NAME {
+                // Ensure proper naming per the Parquet specification
+                let ff = f.as_ref().clone().with_name(PARQUET_LIST_ELEMENT_NAME);
+                Arc::new(arrow_to_parquet_type(&ff, coerce_types)?)
+            } else {
+                Arc::new(arrow_to_parquet_type(f, coerce_types)?)
+            };
+
             Type::group_type_builder(name)
                 .with_fields(vec![Arc::new(
                     Type::group_type_builder("list")
-                        .with_fields(vec![Arc::new(arrow_to_parquet_type(f)?)])
+                        .with_fields(vec![field_ref])
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
@@ -537,7 +712,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             // recursively convert children to types/nodes
             let fields = fields
                 .iter()
-                .map(|f| arrow_to_parquet_type(f).map(Arc::new))
+                .map(|f| arrow_to_parquet_type(f, coerce_types).map(Arc::new))
                 .collect::<Result<_>>()?;
             Type::group_type_builder(name)
                 .with_fields(fields)
@@ -547,13 +722,29 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Map(field, _) => {
             if let DataType::Struct(struct_fields) = field.data_type() {
+                // If coercing then set inner struct name to "key_value"
+                let map_struct_name = if coerce_types {
+                    PARQUET_MAP_STRUCT_NAME
+                } else {
+                    field.name()
+                };
+
+                // If coercing then ensure struct fields are named "key" and "value"
+                let fix_map_field = |name: &str, fld: &Arc<Field>| -> Result<Arc<Type>> {
+                    if coerce_types && fld.name() != name {
+                        let f = fld.as_ref().clone().with_name(name);
+                        Ok(Arc::new(arrow_to_parquet_type(&f, coerce_types)?))
+                    } else {
+                        Ok(Arc::new(arrow_to_parquet_type(fld, coerce_types)?))
+                    }
+                };
+                let key_field = fix_map_field(PARQUET_KEY_FIELD_NAME, &struct_fields[0])?;
+                let val_field = fix_map_field(PARQUET_VALUE_FIELD_NAME, &struct_fields[1])?;
+
                 Type::group_type_builder(name)
                     .with_fields(vec![Arc::new(
-                        Type::group_type_builder(field.name())
-                            .with_fields(vec![
-                                Arc::new(arrow_to_parquet_type(&struct_fields[0])?),
-                                Arc::new(arrow_to_parquet_type(&struct_fields[1])?),
-                            ])
+                        Type::group_type_builder(map_struct_name)
+                            .with_fields(vec![key_field, val_field])
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
@@ -571,7 +762,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
-            arrow_to_parquet_type(&dict_field)
+            arrow_to_parquet_type(&dict_field, coerce_types)
         }
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
             "Converting RunEndEncodedType to parquet not supported",
@@ -1256,6 +1447,17 @@ mod tests {
         for i in 0..arrow_fields.len() {
             assert_eq!(&arrow_fields[i], converted_fields[i].as_ref());
         }
+
+        let mask =
+            ProjectionMask::columns(&parquet_schema, ["group2.leaf4", "group1.leaf1", "leaf5"]);
+        let converted_arrow_schema =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
+        let converted_fields = converted_arrow_schema.fields();
+
+        assert_eq!(arrow_fields.len(), converted_fields.len());
+        for i in 0..arrow_fields.len() {
+            assert_eq!(&arrow_fields[i], converted_fields[i].as_ref());
+        }
     }
 
     #[test]
@@ -1409,6 +1611,81 @@ mod tests {
     }
 
     #[test]
+    fn test_coerced_map_list() {
+        // Create Arrow schema with non-Parquet naming
+        let arrow_fields = vec![
+            Field::new_list(
+                "my_list",
+                Field::new("item", DataType::Boolean, true),
+                false,
+            ),
+            Field::new_map(
+                "my_map",
+                "entries",
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::Int32, true),
+                false,
+                true,
+            ),
+        ];
+        let arrow_schema = Schema::new(arrow_fields);
+
+        // Create Parquet schema with coerced names
+        let message_type = "
+        message parquet_schema {
+            REQUIRED GROUP my_list (LIST) {
+                REPEATED GROUP list {
+                    OPTIONAL BOOLEAN element;
+                }
+            }
+            OPTIONAL GROUP my_map (MAP) {
+                REPEATED GROUP key_value {
+                    REQUIRED BINARY key (STRING);
+                    OPTIONAL INT32 value;
+                }
+            }
+        }
+        ";
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema)
+            .unwrap();
+        assert_eq!(
+            parquet_schema.columns().len(),
+            converted_arrow_schema.columns().len()
+        );
+
+        // Create Parquet schema without coerced names
+        let message_type = "
+        message parquet_schema {
+            REQUIRED GROUP my_list (LIST) {
+                REPEATED GROUP list {
+                    OPTIONAL BOOLEAN item;
+                }
+            }
+            OPTIONAL GROUP my_map (MAP) {
+                REPEATED GROUP entries {
+                    REQUIRED BINARY keys (STRING);
+                    OPTIONAL INT32 values;
+                }
+            }
+        }
+        ";
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(false)
+            .convert(&arrow_schema)
+            .unwrap();
+        assert_eq!(
+            parquet_schema.columns().len(),
+            converted_arrow_schema.columns().len()
+        );
+    }
+
+    #[test]
     fn test_field_to_column_desc() {
         let message_type = "
         message arrow_schema {
@@ -1557,7 +1834,7 @@ mod tests {
             Field::new("decimal256", DataType::Decimal256(39, 2), false),
         ];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
+        let converted_arrow_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
 
         assert_eq!(
             parquet_schema.columns().len(),
@@ -1594,9 +1871,10 @@ mod tests {
             false,
         )];
         let arrow_schema = Schema::new(arrow_fields);
-        let converted_arrow_schema = arrow_to_parquet_schema(&arrow_schema);
+        let converted_arrow_schema = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema);
 
-        assert!(converted_arrow_schema.is_err());
         converted_arrow_schema.unwrap();
     }
 
@@ -1665,7 +1943,7 @@ mod tests {
                 Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
                 Field::new_list(
                     "c21",
-                    Field::new("item", DataType::Boolean, true)
+                    Field::new_list_field(DataType::Boolean, true)
                         .with_metadata(meta(&[("Key", "Bar"), (PARQUET_FIELD_ID_META_KEY, "5")])),
                     false,
                 )
@@ -1673,7 +1951,7 @@ mod tests {
                 Field::new(
                     "c22",
                     DataType::FixedSizeList(
-                        Arc::new(Field::new("item", DataType::Boolean, true)),
+                        Arc::new(Field::new_list_field(DataType::Boolean, true)),
                         5,
                     ),
                     false,
@@ -1682,8 +1960,7 @@ mod tests {
                     "c23",
                     Field::new_large_list(
                         "inner",
-                        Field::new(
-                            "item",
+                        Field::new_list_field(
                             DataType::Struct(
                                 vec![
                                     Field::new("a", DataType::Int16, true),
@@ -1714,6 +1991,7 @@ mod tests {
                 // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
                 // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
                 // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "c31",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1728,8 +2006,7 @@ mod tests {
                     "c34",
                     Field::new_list(
                         "inner",
-                        Field::new(
-                            "item",
+                        Field::new_list_field(
                             DataType::Struct(
                                 vec![
                                     Field::new("a", DataType::Int16, true),
@@ -1762,7 +2039,7 @@ mod tests {
                         .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "8")])),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true)
+                        Field::new_list_field(DataType::Utf8, true)
                             .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "10")])),
                         true,
                     )
@@ -1777,7 +2054,7 @@ mod tests {
                     Field::new("my_key", DataType::Utf8, false),
                     Field::new_list(
                         "my_value",
-                        Field::new("item", DataType::Utf8, true)
+                        Field::new_list_field(DataType::Utf8, true)
                             .with_metadata(meta(&[(PARQUET_FIELD_ID_META_KEY, "11")])),
                         true,
                     ),
@@ -1868,7 +2145,9 @@ mod tests {
         // don't pass metadata so field ids are read from Parquet and not from serialized Arrow schema
         let arrow_schema = crate::arrow::parquet_to_arrow_schema(&schema_descriptor, None)?;
 
-        let parq_schema_descr = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let parq_schema_descr = ArrowSchemaConverter::new()
+            .with_coerce_types(true)
+            .convert(&arrow_schema)?;
         let parq_fields = parq_schema_descr.root_schema().get_fields();
         assert_eq!(parq_fields.len(), 2);
         assert_eq!(parq_fields[0].get_basic_info().id(), 1);
@@ -1931,5 +2210,54 @@ mod tests {
     #[test]
     fn test_get_arrow_schema_from_metadata() {
         assert!(get_arrow_schema_from_metadata("").is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn arrow_uuid_to_parquet_uuid() -> Result<()> {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "uuid",
+            DataType::FixedSizeBinary(16),
+            false,
+        )
+        .with_extension_type(Uuid)]);
+
+        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
+
+        assert_eq!(
+            parquet_schema.column(0).logical_type(),
+            Some(LogicalType::Uuid)
+        );
+
+        // TODO: roundtrip
+        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        // assert_eq!(arrow_schema.field(0).try_extension_type::<Uuid>()?, Uuid);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn arrow_json_to_parquet_json() -> Result<()> {
+        let arrow_schema = Schema::new(vec![
+            Field::new("json", DataType::Utf8, false).with_extension_type(Json::default())
+        ]);
+
+        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
+
+        assert_eq!(
+            parquet_schema.column(0).logical_type(),
+            Some(LogicalType::Json)
+        );
+
+        // TODO: roundtrip
+        // https://github.com/apache/arrow-rs/issues/7063
+        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        // assert_eq!(
+        //     arrow_schema.field(0).try_extension_type::<Json>()?,
+        //     Json::default()
+        // );
+
+        Ok(())
     }
 }

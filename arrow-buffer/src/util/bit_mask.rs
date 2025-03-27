@@ -127,16 +127,16 @@ unsafe fn set_upto_64bits(
 }
 
 /// # Safety
-/// The caller must ensure all arguments are within the valid range.
+/// The caller must ensure `data` has `offset..(offset + 8)` range, and `count <= 8`.
 #[inline]
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
-    let mut tmp = std::mem::MaybeUninit::<u64>::new(0);
+    let mut tmp: u64 = 0;
     let src = data.as_ptr().add(offset);
     unsafe {
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr() as *mut u8, count);
-        tmp.assume_init()
+        std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
     }
+    tmp
 }
 
 /// # Safety
@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
-    use rand::{Fill, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, TryRngCore};
     use std::fmt::Display;
 
     #[test]
@@ -275,7 +275,7 @@ mod tests {
 
     /// prints a byte slice as a binary string like "01010101 10101010"
     struct BinaryFormatter<'a>(&'a [u8]);
-    impl<'a> Display for BinaryFormatter<'a> {
+    impl Display for BinaryFormatter<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             for byte in self.0 {
                 write!(f, "{:08b} ", byte)?;
@@ -322,20 +322,20 @@ mod tests {
             // -------------------+-----------------+-------
 
             // length of data to copy
-            let len = rng.gen_range(0..=200);
+            let len = rng.random_range(0..=200);
 
             // randomly pick where we will write to
-            let offset_write_bits = rng.gen_range(0..=200);
+            let offset_write_bits = rng.random_range(0..=200);
             let offset_write_bytes = if offset_write_bits % 8 == 0 {
                 offset_write_bits / 8
             } else {
                 (offset_write_bits / 8) + 1
             };
-            let extra_write_data_bytes = rng.gen_range(0..=5); // ensure 0 shows up often
+            let extra_write_data_bytes = rng.random_range(0..=5); // ensure 0 shows up often
 
             // randomly decide where we will read from
-            let extra_read_data_bytes = rng.gen_range(0..=5); // make sure 0 shows up often
-            let offset_read_bits = rng.gen_range(0..=200);
+            let extra_read_data_bytes = rng.random_range(0..=5); // make sure 0 shows up often
+            let offset_read_bits = rng.random_range(0..=200);
             let offset_read_bytes = if offset_read_bits % 8 != 0 {
                 (offset_read_bits / 8) + 1
             } else {
@@ -356,7 +356,7 @@ mod tests {
             self.data
                 .resize(offset_read_bytes + len + extra_read_data_bytes, 0);
             // fill source data with random bytes
-            self.data.try_fill(rng).unwrap();
+            rng.try_fill_bytes(self.data.as_mut_slice()).unwrap();
             self.offset_read = offset_read_bits;
 
             self.len = len;
