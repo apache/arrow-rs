@@ -78,7 +78,6 @@ impl KmsManager {
     }
 
     fn clear_expired_entries(&self, cleanup_interval: Option<Duration>) {
-        // TODO: Only check if cache duration has passed since last clean
         if let Some(cleanup_interval) = cleanup_interval {
             self.kms_client_cache.clear_expired(cleanup_interval);
             self.kek_caches.clear_expired(cleanup_interval);

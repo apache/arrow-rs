@@ -21,7 +21,6 @@ use parquet::encryption::decrypt::KeyRetriever;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
-use std::fs::File;
 use std::sync::Mutex;
 
 /// Verifies data read from an encrypted file from the parquet-testing repository

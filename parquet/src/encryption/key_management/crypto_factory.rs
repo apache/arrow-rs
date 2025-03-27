@@ -326,7 +326,7 @@ impl CryptoFactory {
             }
         }
 
-        Ok(builder.build())
+        builder.build()
     }
 
     fn generate_key(
@@ -573,7 +573,9 @@ mod tests {
             .file_encryption_properties(kms_config.clone(), &encryption_config)
             .unwrap();
 
-        assert!(file_encryption_properties.column_keys().is_empty());
+        let (column_names, column_keys, _) = file_encryption_properties.column_keys();
+        assert!(column_names.is_empty());
+        assert!(column_keys.is_empty());
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
@@ -615,17 +617,20 @@ mod tests {
             retrieved_footer_key.as_slice()
         );
 
-        let column_keys = file_encryption_properties.column_keys();
-        let mut all_columns: Vec<String> = column_keys.keys().cloned().collect();
+        let (column_names, column_keys, key_metadata) = file_encryption_properties.column_keys();
+        let mut all_columns: Vec<String> = column_names.clone();
         all_columns.sort();
         assert_eq!(vec!["x0", "x1", "x2", "x3"], all_columns);
-        for (column_name, column_key) in column_keys.iter() {
-            assert_eq!(16, column_key.key().len());
+        for col_idx in 0..column_keys.len() {
+            let column_name = &column_names[col_idx];
+            let column_key = &column_keys[col_idx];
+            let key_metadata = &key_metadata[col_idx];
 
+            assert_eq!(16, column_key.len());
             let retrieved_key = decryption_properties
-                .column_key(column_name, column_key.key_metadata().map(|k| k.as_bytes()))
+                .column_key(column_name, Some(key_metadata))
                 .unwrap();
-            assert_eq!(column_key.key(), retrieved_key.as_slice());
+            assert_eq!(column_key, retrieved_key.as_slice());
         }
 
         assert_eq!(1, kms_factory.invocations().len());

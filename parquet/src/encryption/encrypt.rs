@@ -28,7 +28,7 @@ use std::io::Write;
 use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EncryptionKey {
+struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
 }
@@ -46,13 +46,8 @@ impl EncryptionKey {
         self
     }
 
-    pub fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Vec<u8> {
         &self.key
-    }
-
-    #[cfg(test)]
-    pub(crate) fn key_metadata(&self) -> Option<&Vec<u8>> {
-        self.key_metadata.as_ref()
     }
 }
 
@@ -145,16 +140,6 @@ impl FileEncryptionProperties {
     /// Should the AAD prefix be stored in the file
     pub fn store_aad_prefix(&self) -> bool {
         self.store_aad_prefix && self.aad_prefix.is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn footer_key(&self) -> &[u8] {
-        &self.footer_key.key
-    }
-
-    #[cfg(test)]
-    pub(crate) fn column_keys(&self) -> &HashMap<String, EncryptionKey> {
-        &self.column_keys
     }
 
     /// Checks if columns that are to be encrypted are present in schema
