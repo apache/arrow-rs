@@ -263,9 +263,6 @@ impl<W: Write + Send> ArrowWriter<W> {
             return Ok(());
         }
 
-        #[cfg(feature = "encryption")]
-        let row_group_index = self.flushed_row_groups().len();
-
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
             x => {
@@ -274,7 +271,7 @@ impl<W: Write + Send> ArrowWriter<W> {
                     self.writer.schema_descr(),
                     self.writer.properties(),
                     &self.arrow_schema,
-                    row_group_index,
+                    self.writer.flushed_row_groups().len(),
                     self.writer.file_encryptor(),
                 )?;
                 #[cfg(not(feature = "encryption"))]
@@ -504,10 +501,7 @@ impl PageWriter for ArrowPageWriter {
             None => page,
         };
 
-        let data = page.compressed_page().buffer().clone();
-
         let page_header = page.to_thrift_header();
-
         let header = {
             let mut header = Vec::with_capacity(1024);
 
@@ -529,6 +523,7 @@ impl PageWriter for ArrowPageWriter {
 
         let mut buf = self.buffer.try_lock().unwrap();
 
+        let data = page.compressed_page().buffer().clone();
         let compressed_size = data.len() + header.len();
 
         let mut spec = PageWriteSpec::new();

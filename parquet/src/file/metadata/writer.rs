@@ -425,15 +425,71 @@ struct MetadataObjectWriter {
 }
 
 impl MetadataObjectWriter {
-    #[cfg(feature = "encryption")]
+    #[inline]
+    fn write_object(object: &impl TSerializable, sink: impl Write) -> Result<()> {
+        let mut protocol = TCompactOutputProtocol::new(sink);
+        object.write_to_out_protocol(&mut protocol)?;
+        Ok(())
+    }
+}
+
+/// Implementations of [`MetadataObjectWriter`] methods for when encryption is disabled
+#[cfg(not(feature = "encryption"))]
+impl MetadataObjectWriter {
+    /// Write [`FileMetaData`] in Thrift format
+    fn write_file_metadata(&self, file_metadata: &FileMetaData, sink: impl Write) -> Result<()> {
+        Self::write_object(file_metadata, sink)
+    }
+
+    /// Write a column [`OffsetIndex`] in Thrift format
+    fn write_offset_index(
+        &self,
+        offset_index: &OffsetIndex,
+        _column_chunk: &ColumnChunk,
+        _row_group_idx: usize,
+        _column_idx: usize,
+        sink: impl Write,
+    ) -> Result<()> {
+        Self::write_object(offset_index, sink)
+    }
+
+    /// Write a column [`ColumnIndex`] in Thrift format
+    fn write_column_index(
+        &self,
+        column_index: &ColumnIndex,
+        _column_chunk: &ColumnChunk,
+        _row_group_idx: usize,
+        _column_idx: usize,
+        sink: impl Write,
+    ) -> Result<()> {
+        Self::write_object(column_index, sink)
+    }
+
+    /// No-op implementation of row-group metadata encryption
+    fn apply_row_group_encryption(
+        &self,
+        row_groups: Vec<RowGroup>,
+    ) -> Result<(Vec<RowGroup>, Option<Vec<RowGroup>>)> {
+        Ok((row_groups, None))
+    }
+
+    /// Get the "magic" bytes identifying the file type
+    pub fn get_file_magic(&self) -> &[u8; 4] {
+        get_file_magic()
+    }
+}
+
+/// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
+#[cfg(feature = "encryption")]
+impl MetadataObjectWriter {
+    /// Set the file encryptor to use
     fn with_file_encryptor(mut self, encryptor: Option<Arc<FileEncryptor>>) -> Self {
         self.file_encryptor = encryptor;
         self
     }
 
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
-    #[cfg(feature = "encryption")]
-    pub fn write_file_metadata(
+    fn write_file_metadata(
         &self,
         file_metadata: &FileMetaData,
         mut sink: impl Write,
@@ -455,8 +511,7 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format, possibly encrypting it if required
-    #[cfg(feature = "encryption")]
-    pub fn write_offset_index(
+    fn write_offset_index(
         &self,
         offset_index: &OffsetIndex,
         column_chunk: &ColumnChunk,
@@ -479,8 +534,7 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
-    #[cfg(feature = "encryption")]
-    pub fn write_column_index(
+    fn write_column_index(
         &self,
         column_index: &ColumnIndex,
         column_chunk: &ColumnChunk,
@@ -505,8 +559,7 @@ impl MetadataObjectWriter {
     /// If encryption is enabled and configured, encrypt row group metadata.
     /// Returns a tuple of the row group metadata to write,
     /// and possibly unencrypted metadata to be returned to clients if data was encrypted.
-    #[cfg(feature = "encryption")]
-    pub fn apply_row_group_encryption(
+    fn apply_row_group_encryption(
         &self,
         row_groups: Vec<RowGroup>,
     ) -> Result<(Vec<RowGroup>, Option<Vec<RowGroup>>)> {
@@ -521,8 +574,7 @@ impl MetadataObjectWriter {
     }
 
     /// Get the "magic" bytes identifying the file type
-    #[cfg(feature = "encryption")]
-    pub fn get_file_magic(&self) -> &[u8; 4] {
+    fn get_file_magic(&self) -> &[u8; 4] {
         get_file_magic(
             self.file_encryptor
                 .as_ref()
@@ -530,64 +582,6 @@ impl MetadataObjectWriter {
         )
     }
 
-    /// Write [`FileMetaData`] in Thrift format
-    #[cfg(not(feature = "encryption"))]
-    pub fn write_file_metadata(
-        &self,
-        file_metadata: &FileMetaData,
-        sink: impl Write,
-    ) -> Result<()> {
-        Self::write_object(file_metadata, sink)
-    }
-
-    /// Write a column [`OffsetIndex`] in Thrift format
-    #[cfg(not(feature = "encryption"))]
-    pub fn write_offset_index(
-        &self,
-        offset_index: &OffsetIndex,
-        _column_chunk: &ColumnChunk,
-        _row_group_idx: usize,
-        _column_idx: usize,
-        sink: impl Write,
-    ) -> Result<()> {
-        Self::write_object(offset_index, sink)
-    }
-
-    /// Write a column [`ColumnIndex`] in Thrift format
-    #[cfg(not(feature = "encryption"))]
-    pub fn write_column_index(
-        &self,
-        column_index: &ColumnIndex,
-        _column_chunk: &ColumnChunk,
-        _row_group_idx: usize,
-        _column_idx: usize,
-        sink: impl Write,
-    ) -> Result<()> {
-        Self::write_object(column_index, sink)
-    }
-
-    /// No-op implementation of row-group encryption for when encryption is disabled
-    #[cfg(not(feature = "encryption"))]
-    pub fn apply_row_group_encryption(
-        &self,
-        row_groups: Vec<RowGroup>,
-    ) -> Result<(Vec<RowGroup>, Option<Vec<RowGroup>>)> {
-        Ok((row_groups, None))
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    pub fn get_file_magic(&self) -> &[u8; 4] {
-        get_file_magic()
-    }
-
-    #[inline]
-    fn write_object(object: &impl TSerializable, mut sink: impl Write) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut sink);
-        object.write_to_out_protocol(&mut protocol)?;
-        Ok(())
-    }
-
-    #[cfg(feature = "encryption")]
     fn write_object_with_encryption(
         object: &impl TSerializable,
         mut sink: impl Write,
@@ -631,7 +625,6 @@ impl MetadataObjectWriter {
         }
     }
 
-    #[cfg(feature = "encryption")]
     fn file_crypto_metadata(
         file_encryptor: &FileEncryptor,
     ) -> Result<crate::format::FileCryptoMetaData> {
@@ -655,7 +648,6 @@ impl MetadataObjectWriter {
         })
     }
 
-    #[cfg(feature = "encryption")]
     fn encrypt_row_groups(
         row_groups: Vec<RowGroup>,
         file_encryptor: &Arc<FileEncryptor>,
@@ -678,7 +670,6 @@ impl MetadataObjectWriter {
             .collect()
     }
 
-    #[cfg(feature = "encryption")]
     /// Apply column encryption to column chunk metadata
     fn encrypt_column_chunk(
         mut column_chunk: ColumnChunk,
