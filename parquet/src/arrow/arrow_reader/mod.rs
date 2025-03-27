@@ -246,9 +246,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// Include file row numbers in the output with the given column name
     ///
     /// This will add a column to the output record batch with the file row number
-    pub fn with_row_number_column(self, row_number_column: Option<String>) -> Self {
+    pub fn with_row_number_column(self, row_number_column: impl Into<String>) -> Self {
         Self {
-            row_number_column,
+            row_number_column: Some(row_number_column.into()),
             ..self
         }
     }
@@ -4447,7 +4447,7 @@ pub(crate) mod tests {
             options,
         )
         .expect("reader builder with schema")
-        .with_row_number_column(Some("row_number".to_string()))
+        .with_row_number_column("row_number")
         .build()
         .expect("reader with schema");
 
@@ -4488,7 +4488,7 @@ pub(crate) mod tests {
         metadata.fields = None;
 
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
-            .with_row_number_column(Some("row_number".to_string()))
+            .with_row_number_column("row_number")
             .build()
             .expect("reader with schema");
 
@@ -4522,7 +4522,7 @@ pub(crate) mod tests {
                     .unwrap()
                     .with_row_selection(selection)
                     .with_batch_size(batch_size)
-                    .with_row_number_column(Some("row_number".to_string()))
+                    .with_row_number_column("row_number")
                     .build()
                     .expect("Could not create reader");
                 reader
@@ -4543,7 +4543,7 @@ pub(crate) mod tests {
                     .with_row_selection(selection)
                     .with_batch_size(batch_size)
                     .with_row_filter(row_filter.expect("No filter"))
-                    .with_row_number_column(Some("row_number".to_string()))
+                    .with_row_number_column("row_number")
                     .build()
                     .expect("Could not create reader");
                 reader

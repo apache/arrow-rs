@@ -2488,7 +2488,7 @@ mod tests {
                         .unwrap()
                         .with_row_selection(selection)
                         .with_batch_size(batch_size)
-                        .with_row_number_column(Some("row_number".to_string()))
+                        .with_row_number_column("row_number")
                         .build()
                         .expect("Could not create reader");
                     reader.try_collect::<Vec<_>>().await.unwrap()
@@ -2514,7 +2514,7 @@ mod tests {
                         .with_row_selection(selection)
                         .with_row_filter(row_filter.expect("No row filter"))
                         .with_batch_size(batch_size)
-                        .with_row_number_column(Some("row_number".to_string()))
+                        .with_row_number_column("row_number")
                         .build()
                         .expect("Could not create reader");
                     reader.try_collect::<Vec<_>>().await.unwrap()
