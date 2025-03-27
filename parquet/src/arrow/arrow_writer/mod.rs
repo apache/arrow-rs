@@ -139,6 +139,9 @@ pub struct ArrowWriter<W: Write> {
     /// The schema is used to verify that each record batch written has the correct schema
     arrow_schema: SchemaRef,
 
+    /// Creates new [`ArrowRowGroupWriter`] instances as required
+    row_group_writer_factory: ArrowRowGroupWriterFactory,
+
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
 }
@@ -197,10 +200,13 @@ impl<W: Write + Send> ArrowWriter<W> {
         let file_writer =
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::new(props))?;
 
+        let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&file_writer);
+
         Ok(Self {
             writer: file_writer,
             in_progress: None,
             arrow_schema,
+            row_group_writer_factory,
             max_row_group_size,
         })
     }
@@ -265,23 +271,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
-            x => {
-                #[cfg(feature = "encryption")]
-                let row_group_writer = ArrowRowGroupWriter::new(
-                    self.writer.schema_descr(),
-                    self.writer.properties(),
-                    &self.arrow_schema,
-                    self.writer.flushed_row_groups().len(),
-                    self.writer.file_encryptor(),
-                )?;
-                #[cfg(not(feature = "encryption"))]
-                let row_group_writer = ArrowRowGroupWriter::new(
-                    self.writer.schema_descr(),
-                    self.writer.properties(),
-                    &self.arrow_schema,
-                )?;
-                x.insert(row_group_writer)
-            }
+            x => x.insert(self.row_group_writer_factory.create_row_group_writer(
+                self.writer.schema_descr(),
+                self.writer.properties(),
+                &self.arrow_schema,
+                self.writer.flushed_row_groups().len(),
+            )?),
         };
 
         // If would exceed max_row_group_size, split batch
@@ -740,40 +735,12 @@ struct ArrowRowGroupWriter {
 }
 
 impl ArrowRowGroupWriter {
-    #[cfg(not(feature = "encryption"))]
-    fn new(
-        parquet: &SchemaDescriptor,
-        props: &WriterPropertiesPtr,
-        arrow: &SchemaRef,
-    ) -> Result<Self> {
-        let writers = get_column_writers(parquet, props, arrow)?;
-        Ok(Self {
+    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
+        Self {
             writers,
             schema: arrow.clone(),
             buffered_rows: 0,
-        })
-    }
-
-    #[cfg(feature = "encryption")]
-    fn new(
-        parquet: &SchemaDescriptor,
-        props: &WriterPropertiesPtr,
-        arrow: &SchemaRef,
-        row_group_index: usize,
-        file_encryptor: Option<Arc<FileEncryptor>>,
-    ) -> Result<Self> {
-        let writers = get_column_writers_with_encryptor(
-            parquet,
-            props,
-            arrow,
-            file_encryptor,
-            row_group_index,
-        )?;
-        Ok(Self {
-            writers,
-            schema: arrow.clone(),
-            buffered_rows: 0,
-        })
+        }
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -792,6 +759,55 @@ impl ArrowRowGroupWriter {
             .into_iter()
             .map(|writer| writer.close())
             .collect()
+    }
+}
+
+struct ArrowRowGroupWriterFactory {
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
+}
+
+impl ArrowRowGroupWriterFactory {
+    #[cfg(feature = "encryption")]
+    fn new<W: Write + Send>(file_writer: &SerializedFileWriter<W>) -> Self {
+        Self {
+            file_encryptor: file_writer.file_encryptor(),
+        }
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn new<W: Write + Send>(_file_writer: &SerializedFileWriter<W>) -> Self {
+        Self {}
+    }
+
+    #[cfg(feature = "encryption")]
+    fn create_row_group_writer(
+        &self,
+        parquet: &SchemaDescriptor,
+        props: &WriterPropertiesPtr,
+        arrow: &SchemaRef,
+        row_group_index: usize,
+    ) -> Result<ArrowRowGroupWriter> {
+        let writers = get_column_writers_with_encryptor(
+            parquet,
+            props,
+            arrow,
+            self.file_encryptor.clone(),
+            row_group_index,
+        )?;
+        Ok(ArrowRowGroupWriter::new(writers, arrow))
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn create_row_group_writer(
+        &self,
+        parquet: &SchemaDescriptor,
+        props: &WriterPropertiesPtr,
+        arrow: &SchemaRef,
+        _row_group_index: usize,
+    ) -> Result<ArrowRowGroupWriter> {
+        let writers = get_column_writers(parquet, props, arrow)?;
+        Ok(ArrowRowGroupWriter::new(writers, arrow))
     }
 }
 
