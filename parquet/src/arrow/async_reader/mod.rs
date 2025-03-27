@@ -110,8 +110,8 @@ pub trait AsyncFileReader: Send {
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, decrypting, etc...
     ///
-    /// No default here because options under encryption are significant, and we want
-    /// the end-user to be explicit.
+    /// No default because options under encryption are significant.
+    /// We want the end-user to be explicit about what they want here.
     fn get_metadata_with_options<'a>(
         &'a mut self,
         options: &'a ArrowReaderOptions,
