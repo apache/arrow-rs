@@ -145,9 +145,9 @@ impl TryFrom<&RowGroupMetaData> for RowGroupSize {
 
     fn try_from(rg: &RowGroupMetaData) -> Result<Self, Self::Error> {
         Ok(Self {
-            first_row_number: rg
-                .first_row_number()
-                .ok_or(ParquetError::RowGroupMetaDataMissingRowNumber)?,
+            first_row_number: rg.first_row_number().ok_or(ParquetError::General(
+                "Row group missing row number".to_string(),
+            ))?,
             num_rows: rg.num_rows(),
         })
     }
