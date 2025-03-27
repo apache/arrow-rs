@@ -4442,7 +4442,7 @@ mod tests {
         use bytes::Bytes;
         use std::sync::Arc;
         use crate::arrow::arrow_writer::ArrowWriter;
-        use crate::file::properties::{WriterProperties, EnabledStatistics};
+        // use crate::file::properties::{WriterProperties, EnabledStatistics};
 
         let variant_metadata = vec![1, 2, 3];
         let variant_type = Variant::new(variant_metadata.clone(), vec![]);
@@ -4481,20 +4481,31 @@ mod tests {
         )?;
 
         // Configure writer properties for better compatibility with VariantArray
-        let props = WriterProperties::builder()
-            .set_compression(crate::basic::Compression::UNCOMPRESSED)
-            .set_dictionary_enabled(false) 
-            .set_statistics_enabled(EnabledStatistics::None)
-            .build();
+        // let props = WriterProperties::builder()
+        //     .set_compression(crate::basic::Compression::UNCOMPRESSED)
+        //     .set_dictionary_enabled(false) 
+        //     .set_statistics_enabled(EnabledStatistics::None)
+        //     .build();
 
         let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))?;
+        // let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))?;
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
         writer.write(&batch)?;
         writer.close()?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer.clone()))?;
         let mut reader = builder.build()?;
         let out = reader.next().unwrap()?;
+
+        println!("RecordBatch schema: {:?}", out.schema());
+println!("First column field: {:?}", out.schema().field(0));
+println!("First column array type_id: {:?}", out.column(0).as_any().type_id());
+println!("Is first column VariantArray: {}", out.column(0).as_any().is::<VariantArray>());
+println!("Is first column BinaryArray: {}", out.column(0).as_any().is::<BinaryArray>());
+let type_name = std::any::type_name_of_val(out.column(0).as_ref());
+println!("Actual type name: {}", type_name);
+
+
 
         let schema = out.schema();
         let field = schema.field(0).clone();
@@ -4506,11 +4517,12 @@ mod tests {
         let extension_type = field.extension_type::<Variant>();
         assert_eq!(extension_type.metadata(), &variant_metadata);
 
-        // Try to convert the output column back to a VariantArray
         let variant_array = VariantArray::from_data(
             out.column(0).to_data(),
             variant_type
         ).expect("Failed to create VariantArray from output data");
+        // let variant_array = out.column(0).as_any().downcast_ref::<VariantArray>().unwrap();
+
         
         for i in 0..original_variants.len() {
             let variant = variant_array.value(i).expect("Failed to get variant");

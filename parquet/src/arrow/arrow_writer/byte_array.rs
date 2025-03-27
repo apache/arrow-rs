@@ -615,7 +615,6 @@ fn encode_variant_array(
     indices: &[usize],
     encoder: &mut ByteArrayEncoder,
 ) {
-    use arrow_schema::extension::Variant;
 
     // Update statistics and bloom filter
     if encoder.statistics_enabled != EnabledStatistics::None {
@@ -643,7 +642,7 @@ fn encode_variant_array(
                         max_val = Some(byte_array.clone());
                     }
                 },
-                Err(_) => continue, // Skip errors in value retrieval
+                Err(_) => continue, 
             }
         }
 
