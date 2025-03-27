@@ -973,7 +973,7 @@ mod tests {
     use num::PrimInt;
     use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
-
+    use arrow::compute::kernels::numeric;
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -1570,6 +1570,43 @@ mod tests {
                 encodings,
             );
         })
+    }
+
+    #[test]
+    fn test_int96_from_spark_file() {
+        use arrow_schema::DataType::Timestamp;
+        let test_data = arrow::util::test_util::parquet_test_data();
+        let path = format!("{test_data}/int96_from_spark.parquet");
+        let file = File::open(path).unwrap();
+
+        let supplied_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
+
+        let mut record_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+                .unwrap()
+                .build()
+                .unwrap();
+
+        // let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
+
+        let batch = record_reader.next().unwrap().unwrap();
+        println!("{:?}", batch);
+        assert_eq!(batch.num_rows(), 6);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.column(0).null_count(), 1);
+        let to_type = arrow_schema::DataType::Int64;
+
+        println!("{:?}", batch.column(0).data_type());
+        // println!("{:?}", to_type);
+
+        let thing = arrow_cast::cast(batch.column(0), &to_type).unwrap();
+
+        println!("{:?}", thing);
     }
 
     struct RandUtf8Gen {}
