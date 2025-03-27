@@ -4497,16 +4497,6 @@ mod tests {
         let mut reader = builder.build()?;
         let out = reader.next().unwrap()?;
 
-        println!("RecordBatch schema: {:?}", out.schema());
-println!("First column field: {:?}", out.schema().field(0));
-println!("First column array type_id: {:?}", out.column(0).as_any().type_id());
-println!("Is first column VariantArray: {}", out.column(0).as_any().is::<VariantArray>());
-println!("Is first column BinaryArray: {}", out.column(0).as_any().is::<BinaryArray>());
-let type_name = std::any::type_name_of_val(out.column(0).as_ref());
-println!("Actual type name: {}", type_name);
-
-
-
         let schema = out.schema();
         let field = schema.field(0).clone();
         assert_eq!(field.data_type(), &DataType::Binary);
