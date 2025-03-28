@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encryption implementation specific to Parquet, as described
-//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
-
-pub(crate) mod ciphers;
-pub mod decrypt;
-pub mod encrypt;
-pub(crate) mod modules;
+#[cfg(feature = "encryption")]
+mod encryption;
+mod encryption_agnostic;
+#[cfg(all(feature = "encryption", feature = "async"))]
+mod encryption_async;
+#[cfg(not(feature = "encryption"))]
+mod encryption_disabled;
+#[cfg(feature = "encryption")]
+mod encryption_util;

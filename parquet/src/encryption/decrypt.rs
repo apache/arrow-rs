@@ -27,6 +27,7 @@ use std::sync::Arc;
 
 /// Trait for retrieving an encryption key using the key's metadata
 pub trait KeyRetriever: Send + Sync {
+    /// Retrieve a decryption key given the key metadata
     fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>>;
 }
 
@@ -196,7 +197,7 @@ impl PartialEq for DecryptionKeys {
 #[derive(Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
-    pub(crate) aad_prefix: Option<Vec<u8>>,
+    aad_prefix: Option<Vec<u8>>,
 }
 
 impl FileDecryptionProperties {
@@ -212,9 +213,14 @@ impl FileDecryptionProperties {
         DecryptionPropertiesBuilder::new_with_key_retriever(key_retriever)
     }
 
+    /// AAD prefix string uniquely identifies the file and prevents file swapping
+    pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
+        self.aad_prefix.as_ref()
+    }
+
     /// Get the encryption key for decrypting a file's footer,
     /// and also column data if uniform encryption is used.
-    pub(crate) fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
+    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => Ok(Cow::Borrowed(&keys.footer_key)),
             DecryptionKeys::ViaRetriever(retriever) => {
@@ -225,7 +231,7 @@ impl FileDecryptionProperties {
     }
 
     /// Get the column-specific encryption key for decrypting column data and metadata within a file
-    pub(crate) fn column_key(
+    pub fn column_key(
         &self,
         column_name: &str,
         key_metadata: Option<&[u8]>,
@@ -233,7 +239,7 @@ impl FileDecryptionProperties {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
                 None => Err(general_err!(
-                    "No column decryption key set for column '{}'",
+                    "No column decryption key set for encrypted column '{}'",
                     column_name
                 )),
                 Some(key) => Ok(Cow::Borrowed(key)),
@@ -243,6 +249,22 @@ impl FileDecryptionProperties {
                 Ok(Cow::Owned(key))
             }
         }
+    }
+
+    /// Get the column names and associated decryption keys that have been configured.
+    /// If a key retriever is used rather than explicit decryption keys, the result
+    /// will be empty.
+    /// Provided for testing consumer code.
+    pub fn column_keys(&self) -> (Vec<String>, Vec<Vec<u8>>) {
+        let mut column_names: Vec<String> = Vec::new();
+        let mut column_keys: Vec<Vec<u8>> = Vec::new();
+        if let DecryptionKeys::Explicit(keys) = &self.keys {
+            for (key, value) in keys.column_keys.iter() {
+                column_names.push(key.clone());
+                column_keys.push(value.clone());
+            }
+        }
+        (column_names, column_keys)
     }
 }
 
@@ -322,6 +344,14 @@ impl DecryptionPropertiesBuilder {
     pub fn with_column_key(mut self, column_name: &str, decryption_key: Vec<u8>) -> Self {
         self.column_keys
             .insert(column_name.to_string(), decryption_key);
+        self
+    }
+
+    /// Specify multiple column decryption keys
+    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
+        for (column_name, key) in column_names.into_iter().zip(keys.into_iter()) {
+            self.column_keys.insert(column_name.to_string(), key);
+        }
         self
     }
 }

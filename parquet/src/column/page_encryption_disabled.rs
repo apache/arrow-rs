@@ -15,10 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encryption implementation specific to Parquet, as described
-//! in the [spec](https://github.com/apache/parquet-format/blob/master/Encryption.md).
+use crate::column::page::CompressedPage;
+use crate::errors::Result;
+use crate::format::PageHeader;
+use std::io::Write;
 
-pub(crate) mod ciphers;
-pub mod decrypt;
-pub mod encrypt;
-pub(crate) mod modules;
+#[derive(Debug)]
+/// Dummy PageEncryptor struct that can never be instantiated,
+/// provided to support compilation without the encryption feature enabled.
+pub struct PageEncryptor {
+    _empty: (),
+}
+
+impl PageEncryptor {
+    pub fn increment_page(&mut self) {}
+
+    pub fn encrypt_compressed_page(&mut self, _page: CompressedPage) -> Result<CompressedPage> {
+        unreachable!("The encryption feature is disabled")
+    }
+
+    pub fn encrypt_page_header<W: Write>(
+        &mut self,
+        _page_header: &PageHeader,
+        _sink: &mut W,
+    ) -> Result<()> {
+        unreachable!("The encryption feature is disabled")
+    }
+}

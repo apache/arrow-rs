@@ -118,5 +118,10 @@
 //! ```
 
 pub mod page;
+#[cfg(feature = "encryption")]
+pub(crate) mod page_encryption;
+#[cfg(not(feature = "encryption"))]
+#[path = "page_encryption_disabled.rs"]
+pub(crate) mod page_encryption;
 pub mod reader;
 pub mod writer;
