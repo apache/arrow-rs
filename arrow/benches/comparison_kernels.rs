@@ -32,24 +32,36 @@ use rand::Rng;
 
 const SIZE: usize = 65536;
 
-fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
-    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
-}
-
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     like(arr_a, &StringArray::new_scalar(value_b)).unwrap();
+}
+
+fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     nlike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
+fn bench_nlike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    nlike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
+}
+
 fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     ilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
+fn bench_ilike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    ilike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
+}
+
 fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     nilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
+}
+
+fn bench_nilike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    nilike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
@@ -424,5 +436,127 @@ fn add_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, add_benchmark);
+// Generate a string array that meets the requirements:
+// All strings start with "test", followed by a tail, ensuring the total length is greater than 12 bytes.
+fn make_custom_string_array(size: usize, tail_len: usize, rng: &mut StdRng) -> Vec<Option<String>> {
+    (0..size)
+        .map(|_| {
+            // Generate the tail: use visible ASCII characters (32 to 126) to ensure a valid UTF-8 string.
+            let tail: String = (0..tail_len)
+                .map(|_| rng.random_range(32u8..127u8) as char)
+                .collect();
+            Some(format!("test{}", tail))
+        })
+        .collect()
+}
+
+fn add_custom_string_benchmarks(c: &mut Criterion) {
+    // Assume SIZE is defined as the benchmark array size.
+    let mut rng = seedable_rng();
+    // Here, tail length is set to 12, so the total length becomes 4 + 12 = 16 bytes (> 12 bytes).
+    let custom_strings = make_custom_string_array(SIZE, 12, &mut rng);
+    let custom_string_array = StringArray::from(custom_strings);
+    let custom_string_view = StringViewArray::from_iter(custom_string_array.iter());
+
+    // Benchmark the eq operation for utf8 (StringArray)
+    c.bench_function("eq custom utf8", |b| {
+        b.iter(|| eq(&custom_string_array, &custom_string_array).unwrap())
+    });
+
+    // Benchmark the eq operation for utf8view (StringViewArray)
+    c.bench_function("eq custom utf8view", |b| {
+        b.iter(|| eq(&custom_string_view, &custom_string_view).unwrap())
+    });
+
+    // Benchmark the neq operation for utf8 (StringArray)
+    c.bench_function("neq custom utf8", |b| {
+        b.iter(|| neq(&custom_string_array, &custom_string_array).unwrap())
+    });
+
+    // Benchmark the neq operation for utf8view (StringViewArray)
+    c.bench_function("neq custom utf8view", |b| {
+        b.iter(|| neq(&custom_string_view, &custom_string_view).unwrap())
+    });
+
+    // Benchmark the greater-than (gt) operation for utf8 (StringArray)
+    c.bench_function("gt custom utf8", |b| {
+        b.iter(|| gt(&custom_string_array, &custom_string_array).unwrap())
+    });
+
+    // Benchmark the greater-than (gt) operation for utf8view (StringViewArray)
+    c.bench_function("gt custom utf8view", |b| {
+        b.iter(|| gt(&custom_string_view, &custom_string_view).unwrap())
+    });
+
+    // Benchmark the greater-than scalar operation for utf8 (StringArray)
+    c.bench_function("gt custom utf8 scalar", |b| {
+        // Create a scalar value to compare against.
+        let custom_scalar = StringArray::new_scalar("testXXXX");
+        b.iter(|| gt(&custom_string_array, &custom_scalar).unwrap())
+    });
+
+    // Benchmark the greater-than scalar operation for utf8view (StringViewArray)
+    c.bench_function("gt custom utf8view scalar", |b| {
+        // Create a scalar value to compare against.
+        let custom_scalar_view = StringViewArray::new_scalar("testXXXX");
+        b.iter(|| gt(&custom_string_view, &custom_scalar_view).unwrap())
+    });
+
+    // Benchmark the greater-than scalar operation for utf8 (StringArray) with long string
+    c.bench_function("gt custom utf8 scalar long string", |b| {
+        // Create a scalar value to compare against.
+        let custom_scalar = StringArray::new_scalar("testXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+        b.iter(|| gt(&custom_string_array, &custom_scalar).unwrap())
+    });
+
+    // Benchmark the greater-than scalar operation for utf8view (StringViewArray) with long string
+    c.bench_function("gt custom utf8view scalar long string", |b| {
+        // Create a scalar value to compare against.
+        let custom_scalar_view = StringViewArray::new_scalar("testXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+        b.iter(|| gt(&custom_string_view, &custom_scalar_view).unwrap())
+    });
+
+    // Benchmark the LIKE operation (pattern: "test%") for utf8 (StringArray)
+    c.bench_function("like custom utf8 scalar", |b| {
+        b.iter(|| bench_like_utf8_scalar(&custom_string_array, "test%"))
+    });
+
+    // Benchmark the LIKE operation for utf8view (StringViewArray)
+    c.bench_function("like custom utf8view scalar", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&custom_string_view, "test%"))
+    });
+
+    // Benchmark the NOT LIKE (nlike) operation for utf8 (StringArray)
+    c.bench_function("nlike custom utf8 scalar", |b| {
+        b.iter(|| bench_nlike_utf8_scalar(&custom_string_array, "test%"))
+    });
+
+    // Benchmark the NOT LIKE (nlike) operation for utf8view (StringViewArray)
+    c.bench_function("nlike custom utf8view scalar", |b| {
+        b.iter(|| bench_nlike_utf8view_scalar(&custom_string_view, "test%"))
+    });
+
+    // Benchmark the ILIKE (case-insensitive LIKE) operation for utf8 (StringArray)
+    c.bench_function("ilike custom utf8 scalar", |b| {
+        b.iter(|| bench_ilike_utf8_scalar(&custom_string_array, "TEST%"))
+    });
+
+    // Benchmark the ILIKE (case-insensitive LIKE) operation for utf8view (StringViewArray)
+    c.bench_function("ilike custom utf8view scalar", |b| {
+        b.iter(|| bench_ilike_utf8view_scalar(&custom_string_view, "TEST%"))
+    });
+
+    // Benchmark the NOT ILIKE (nilike) operation for utf8 (StringArray)
+    c.bench_function("nilike custom utf8 scalar", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&custom_string_array, "TEST%"))
+    });
+
+    // Benchmark the NOT ILIKE (nilike) operation for utf8view (StringViewArray)
+    c.bench_function("nilike custom utf8view scalar", |b| {
+        b.iter(|| bench_nilike_utf8view_scalar(&custom_string_view, "TEST%"))
+    });
+}
+
+
+criterion_group!(benches, add_benchmark, add_custom_string_benchmarks);
 criterion_main!(benches);
