@@ -1214,11 +1214,42 @@ mod async_tests {
         }
     }
 
+    struct MetadataSuffixFetchFn<F1, F2>(F1, F2);
+
+    impl<F1, Fut, F2> MetadataFetch for MetadataSuffixFetchFn<F1, F2>
+    where
+        F1: FnMut(Range<usize>) -> Fut + Send,
+        Fut: Future<Output = Result<Bytes>> + Send,
+        F2: Send,
+    {
+        fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+            async move { self.0(range).await }.boxed()
+        }
+    }
+
+    impl<F1, Fut, F2> MetadataSuffixFetch for MetadataSuffixFetchFn<F1, F2>
+    where
+        F1: FnMut(Range<usize>) -> Fut + Send,
+        F2: FnMut(usize) -> Fut + Send,
+        Fut: Future<Output = Result<Bytes>> + Send,
+    {
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+            async move { self.1(suffix).await }.boxed()
+        }
+    }
+
     fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
         let mut buf = Vec::with_capacity(len);
         file.take(len as _).read_to_end(&mut buf)?;
+        Ok(buf.into())
+    }
+
+    fn read_suffix(file: &mut File, suffix: usize) -> Result<Bytes> {
+        file.seek(SeekFrom::End(0 - suffix as i64))?;
+        let mut buf = Vec::with_capacity(suffix);
+        file.take(suffix as _).read_to_end(&mut buf)?;
         Ok(buf.into())
     }
 
@@ -1305,6 +1336,37 @@ mod async_tests {
             .unwrap_err()
             .to_string();
         assert_eq!(err, "Parquet error: Invalid Parquet file. Corrupt footer");
+    }
+
+    #[tokio::test]
+    async fn test_suffix() {
+        let mut file = get_test_file("nulls.snappy.parquet");
+        let mut file2 = file.try_clone().unwrap();
+
+        let expected = ParquetMetaDataReader::new()
+            .parse_and_finish(&file)
+            .unwrap();
+        let expected = expected.file_metadata().schema();
+        let fetch_count = AtomicUsize::new(0);
+        let suffix_fetch_count = AtomicUsize::new(0);
+
+        let mut fetch = |range| {
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let mut suffix_fetch = |suffix| {
+            suffix_fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_suffix(&mut file2, suffix))
+        };
+
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let actual = ParquetMetaDataReader::new()
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
