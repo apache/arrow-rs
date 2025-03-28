@@ -1247,7 +1247,9 @@ mod async_tests {
     }
 
     fn read_suffix(file: &mut File, suffix: usize) -> Result<Bytes> {
-        file.seek(SeekFrom::End(0 - suffix as i64))?;
+        let file_len = file.len();
+        // Don't seek before beginning of file
+        file.seek(SeekFrom::End(0 - suffix.min(file_len as usize) as i64))?;
         let mut buf = Vec::with_capacity(suffix);
         file.take(suffix as _).read_to_end(&mut buf)?;
         Ok(buf.into())
@@ -1367,6 +1369,59 @@ mod async_tests {
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too small - below footer size
+        fetch_count.store(0, Ordering::SeqCst);
+        suffix_fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(7))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
+
+        // Metadata hint too small
+        fetch_count.store(0, Ordering::SeqCst);
+        suffix_fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(10))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 2);
+
+        dbg!("test");
+        // Metadata hint too large
+        fetch_count.store(0, Ordering::SeqCst);
+        suffix_fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(500))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
+
+        // Metadata hint exactly correct
+        fetch_count.store(0, Ordering::SeqCst);
+        suffix_fetch_count.store(0, Ordering::SeqCst);
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let actual = ParquetMetaDataReader::new()
+            .with_prefetch_hint(Some(428))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(actual.file_metadata().schema(), expected);
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
