@@ -544,7 +544,7 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
-    first_row_number: Option<i64>,
+    first_row_index: Option<i64>,
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
@@ -585,9 +585,9 @@ impl RowGroupMetaData {
         self.num_rows
     }
 
-    /// Returns the first row number in this row group.
-    pub fn first_row_number(&self) -> Option<i64> {
-        self.first_row_number
+    /// Returns the global index number for the first row in this row group.
+    pub fn first_row_index(&self) -> Option<i64> {
+        self.first_row_index
     }
 
     /// Returns the sort ordering of the rows in this RowGroup if any
@@ -698,7 +698,7 @@ impl RowGroupMetaData {
         Ok(RowGroupMetaData {
             columns,
             num_rows,
-            first_row_number,
+            first_row_index: first_row_number,
             sorting_columns,
             total_byte_size,
             schema_descr,
@@ -732,7 +732,7 @@ impl RowGroupMetaData {
         Ok(RowGroupMetaData {
             columns,
             num_rows,
-            first_row_number,
+            first_row_index: first_row_number,
             sorting_columns,
             total_byte_size,
             schema_descr,
@@ -771,7 +771,7 @@ impl RowGroupMetaDataBuilder {
             schema_descr,
             file_offset: None,
             num_rows: 0,
-            first_row_number: None,
+            first_row_index: None,
             sorting_columns: None,
             total_byte_size: 0,
             ordinal: None,
@@ -786,7 +786,7 @@ impl RowGroupMetaDataBuilder {
 
     /// Sets the first row number in this row group.
     pub fn set_first_row_number(mut self, value: i64) -> Self {
-        self.0.first_row_number = Some(value);
+        self.0.first_row_index = Some(value);
         self
     }
 
