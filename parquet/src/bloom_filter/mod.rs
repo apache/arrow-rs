@@ -83,7 +83,6 @@ use crate::format::{
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
 use std::io::Write;
-use std::sync::Arc;
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 use twox_hash::XxHash64;
 
@@ -307,7 +306,7 @@ impl Sbbf {
     /// Read a new bloom filter from the given offset in the given reader.
     pub(crate) fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
-        reader: Arc<R>,
+        reader: &R,
     ) -> Result<Option<Self>, ParquetError> {
         let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
             offset

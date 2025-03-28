@@ -88,7 +88,15 @@ fn create_table(results: &[RecordBatch], options: &FormatOptions) -> Result<Tabl
 
     let mut header = Vec::new();
     for field in schema.fields() {
-        header.push(Cell::new(field.name()));
+        if options.types_info() {
+            header.push(Cell::new(format!(
+                "{}\n{}",
+                field.name(),
+                field.data_type()
+            )))
+        } else {
+            header.push(Cell::new(field.name()));
+        }
     }
     table.set_header(header);
 
@@ -1059,9 +1067,18 @@ mod tests {
 
     #[test]
     fn test_format_options() {
-        let options = FormatOptions::default().with_null("null");
-        let array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
-        let batch = RecordBatch::try_from_iter([("my_column_name", Arc::new(array) as _)]).unwrap();
+        let options = FormatOptions::default()
+            .with_null("null")
+            .with_types_info(true);
+        let int32_array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
+        let string_array =
+            StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz"), None]);
+
+        let batch = RecordBatch::try_from_iter([
+            ("my_int32_name", Arc::new(int32_array) as _),
+            ("my_string_name", Arc::new(string_array) as _),
+        ])
+        .unwrap();
 
         let column = pretty_format_columns_with_options(
             "my_column_name",
@@ -1071,11 +1088,7 @@ mod tests {
         .unwrap()
         .to_string();
 
-        let batch = pretty_format_batches_with_options(&[batch], &options)
-            .unwrap()
-            .to_string();
-
-        let expected = vec![
+        let expected_column = vec![
             "+----------------+",
             "| my_column_name |",
             "+----------------+",
@@ -1088,9 +1101,26 @@ mod tests {
         ];
 
         let actual: Vec<&str> = column.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{column}");
+        assert_eq!(expected_column, actual, "Actual result:\n{column}");
+
+        let batch = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
+
+        let expected_table = vec![
+            "+---------------+----------------+",
+            "| my_int32_name | my_string_name |",
+            "| Int32         | Utf8           |",
+            "+---------------+----------------+",
+            "| 1             | foo            |",
+            "| 2             | bar            |",
+            "| null          | null           |",
+            "| 3             | baz            |",
+            "| 4             | null           |",
+            "+---------------+----------------+",
+        ];
 
         let actual: Vec<&str> = batch.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{batch}");
+        assert_eq!(expected_table, actual, "Actual result:\n{batch}");
     }
 }
