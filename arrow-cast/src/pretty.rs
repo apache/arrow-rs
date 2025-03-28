@@ -47,7 +47,7 @@ use crate::display::{ArrayFormatter, FormatOptions};
 /// # ]).unwrap();
 /// // Note, returned object implements `Display`
 /// let pretty_table = pretty_format_batches(&[batch]).unwrap();
-/// let table_str = format!("Batches:\n{}", pretty_table);
+/// let table_str = format!("Batches:\n{pretty_table}");
 /// assert_eq!(table_str,
 /// r#"Batches:
 /// +---+---+
@@ -85,7 +85,7 @@ pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, Ar
 ///   .with_null("<NULL>");
 /// // Note, returned object implements `Display`
 /// let pretty_table = pretty_format_batches_with_options(&[batch], &options).unwrap();
-/// let table_str = format!("Batches:\n{}", pretty_table);
+/// let table_str = format!("Batches:\n{pretty_table}");
 /// assert_eq!(table_str,
 /// r#"Batches:
 /// +---+--------+
