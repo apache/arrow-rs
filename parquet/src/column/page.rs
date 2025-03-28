@@ -90,6 +90,16 @@ impl Page {
         }
     }
 
+    /// Returns whether this page is any version of a data page
+    pub fn is_data_page(&self) -> bool {
+        matches!(self, Page::DataPage { .. } | Page::DataPageV2 { .. })
+    }
+
+    /// Returns whether this page is a dictionary page
+    pub fn is_dictionary_page(&self) -> bool {
+        matches!(self, Page::DictionaryPage { .. })
+    }
+
     /// Returns internal byte buffer reference for this page.
     pub fn buffer(&self) -> &Bytes {
         match self {

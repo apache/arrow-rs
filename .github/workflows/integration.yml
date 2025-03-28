@@ -103,10 +103,6 @@ jobs:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
           fetch-depth: 0
-      # Workaround https://github.com/rust-lang/rust/issues/125067
-      - name: Downgrade rust
-        working-directory: rust
-        run: rustup override set 1.77
       - name: Build
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
       - name: Run
