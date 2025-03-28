@@ -512,7 +512,8 @@ fn add_custom_string_benchmarks(c: &mut Criterion) {
     // Benchmark the greater-than scalar operation for utf8view (StringViewArray) with long string
     c.bench_function("gt custom utf8view scalar long string", |b| {
         // Create a scalar value to compare against.
-        let custom_scalar_view = StringViewArray::new_scalar("testXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+        let custom_scalar_view =
+            StringViewArray::new_scalar("testXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
         b.iter(|| gt(&custom_string_view, &custom_scalar_view).unwrap())
     });
 
@@ -556,7 +557,6 @@ fn add_custom_string_benchmarks(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8view_scalar(&custom_string_view, "TEST%"))
     });
 }
-
 
 criterion_group!(benches, add_benchmark, add_custom_string_benchmarks);
 criterion_main!(benches);
