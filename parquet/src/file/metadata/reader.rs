@@ -428,9 +428,7 @@ impl ParquetMetaDataReader {
         mut fetch: F,
         file_size: usize,
     ) -> Result<()> {
-        let (metadata, remainder) = self
-            .load_metadata(&mut fetch, file_size, self.get_prefetch_size())
-            .await?;
+        let (metadata, remainder) = self.load_metadata(&mut fetch, file_size).await?;
 
         self.metadata = Some(metadata);
 
@@ -452,9 +450,7 @@ impl ParquetMetaDataReader {
         &mut self,
         mut fetch: F,
     ) -> Result<()> {
-        let (metadata, remainder) = self
-            .load_metadata_via_suffix(&mut fetch, self.get_prefetch_size())
-            .await?;
+        let (metadata, remainder) = self.load_metadata_via_suffix(&mut fetch).await?;
 
         self.metadata = Some(metadata);
 
@@ -625,8 +621,9 @@ impl ParquetMetaDataReader {
         &self,
         fetch: &mut F,
         file_size: usize,
-        prefetch: usize,
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
+        let prefetch = self.get_prefetch_size();
+
         if file_size < FOOTER_SIZE {
             return Err(eof_err!("file size of {} is less than footer", file_size));
         }
@@ -680,8 +677,9 @@ impl ParquetMetaDataReader {
     async fn load_metadata_via_suffix<F: MetadataSuffixFetch>(
         &self,
         fetch: &mut F,
-        prefetch: usize,
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
+        let prefetch = self.get_prefetch_size();
+
         let suffix = fetch.fetch_suffix(prefetch.max(FOOTER_SIZE)).await?;
         let suffix_len = suffix.len();
 

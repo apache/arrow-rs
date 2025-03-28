@@ -276,7 +276,7 @@ async fn test_read_encrypted_file_from_object_store() {
         .unwrap();
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
-    let mut reader = ParquetObjectReader::new(store, meta.location, Some(meta.size));
+    let mut reader = ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
     let metadata = reader.get_metadata_with_options(&options).await.unwrap();
     let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
         .await
