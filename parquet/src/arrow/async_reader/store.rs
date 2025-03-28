@@ -64,17 +64,11 @@ pub struct ParquetObjectReader {
 
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
-    ///
-    /// The file size is optional, and if provided, it will ensure that only bounded range requests
-    /// are used. If file size is not provided, the reader will use suffix range requests to fetch
-    /// the metadata.
-    ///
-    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
-    pub fn new(store: Arc<dyn ObjectStore>, path: Path, file_size: Option<usize>) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
         Self {
             store,
             path,
-            file_size,
+            file_size: None,
             metadata_size_hint: None,
             preload_column_index: false,
             preload_offset_index: false,
@@ -87,6 +81,22 @@ impl ParquetObjectReader {
     pub fn with_footer_size_hint(self, hint: usize) -> Self {
         Self {
             metadata_size_hint: Some(hint),
+            ..self
+        }
+    }
+
+    /// Provide the byte size of this file.
+    ///
+    /// If provided, the file size will ensure that only bounded range requests are used. If file
+    /// size is not provided, the reader will use suffix range requests to fetch the metadata.
+    ///
+    /// Providing this size up front is an important optimization to avoid extra calls when the
+    /// underlying store does not support suffix range requests.
+    ///
+    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
+    pub fn with_file_size(self, file_size: usize) -> Self {
+        Self {
+            file_size: Some(file_size),
             ..self
         }
     }
@@ -258,7 +268,8 @@ mod tests {
     #[tokio::test]
     async fn test_simple() {
         let (meta, store) = get_meta_store().await;
-        let object_reader = ParquetObjectReader::new(store, meta.location, Some(meta.size));
+        let object_reader =
+            ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
 
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
@@ -272,7 +283,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple_without_file_length() {
         let (meta, store) = get_meta_store().await;
-        let object_reader = ParquetObjectReader::new(store, meta.location, None);
+        let object_reader = ParquetObjectReader::new(store, meta.location);
 
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
@@ -288,7 +299,8 @@ mod tests {
         let (mut meta, store) = get_meta_store().await;
         meta.location = Path::from("I don't exist.parquet");
 
-        let object_reader = ParquetObjectReader::new(store, meta.location, Some(meta.size));
+        let object_reader =
+            ParquetObjectReader::new(store, meta.location).with_file_size(meta.size);
         // Cannot use unwrap_err as ParquetRecordBatchStreamBuilder: !Debug
         match ParquetRecordBatchStreamBuilder::new(object_reader).await {
             Ok(_) => panic!("expected failure"),
@@ -321,7 +333,8 @@ mod tests {
 
         let initial_actions = num_actions.load(Ordering::Relaxed);
 
-        let reader = ParquetObjectReader::new(store, meta.location, Some(meta.size))
+        let reader = ParquetObjectReader::new(store, meta.location)
+            .with_file_size(meta.size)
             .with_runtime(rt.handle().clone());
 
         let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
@@ -348,7 +361,8 @@ mod tests {
 
         let (meta, store) = get_meta_store().await;
 
-        let reader = ParquetObjectReader::new(store, meta.location, Some(meta.size))
+        let reader = ParquetObjectReader::new(store, meta.location)
+            .with_file_size(meta.size)
             .with_runtime(rt.handle().clone());
 
         let current_id = std::thread::current().id();
@@ -372,7 +386,8 @@ mod tests {
 
         let (meta, store) = get_meta_store().await;
 
-        let mut reader = ParquetObjectReader::new(store, meta.location, Some(meta.size))
+        let mut reader = ParquetObjectReader::new(store, meta.location)
+            .with_file_size(meta.size)
             .with_runtime(rt.handle().clone());
 
         rt.shutdown_background();
