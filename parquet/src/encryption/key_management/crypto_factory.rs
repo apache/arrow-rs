@@ -30,22 +30,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Parquet encryption algorithms
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EncryptionAlgorithm {
-    /// AES-GCM version 1, where all metadata and data pages are encrypted with AES-GCM
-    AesGcmV1,
-    /// AES-GCM-CTR version 1, where metadata is encrypted with AES-GCM, and data pages
-    /// are encrypted with AES-CTR
-    AesGcmCtrV1,
-}
-
 /// Configuration for encrypting a Parquet file
 #[derive(Debug)]
 pub struct EncryptionConfiguration {
     footer_key: String,
     column_keys: HashMap<String, Vec<String>>,
-    encryption_algorithm: EncryptionAlgorithm,
     plaintext_footer: bool,
     double_wrapping: bool,
     cache_lifetime: Option<Duration>,
@@ -67,11 +56,6 @@ impl EncryptionConfiguration {
     /// Map from master key identifiers to the column paths encrypted with a column
     pub fn column_keys(&self) -> &HashMap<String, Vec<String>> {
         &self.column_keys
-    }
-
-    /// The encryption algorithm to use
-    pub fn encryption_algorithm(&self) -> EncryptionAlgorithm {
-        self.encryption_algorithm
     }
 
     /// Whether to write the footer in plaintext.
@@ -111,7 +95,6 @@ impl EncryptionConfiguration {
 pub struct EncryptionConfigurationBuilder {
     footer_key: String,
     column_keys: HashMap<String, Vec<String>>,
-    encryption_algorithm: EncryptionAlgorithm,
     plaintext_footer: bool,
     double_wrapping: bool,
     cache_lifetime: Option<Duration>,
@@ -125,7 +108,6 @@ impl EncryptionConfigurationBuilder {
         Self {
             footer_key,
             column_keys: Default::default(),
-            encryption_algorithm: EncryptionAlgorithm::AesGcmV1,
             plaintext_footer: false,
             double_wrapping: true,
             cache_lifetime: Some(Duration::from_secs(600)),
@@ -139,7 +121,6 @@ impl EncryptionConfigurationBuilder {
         EncryptionConfiguration {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
-            encryption_algorithm: self.encryption_algorithm,
             plaintext_footer: self.plaintext_footer,
             double_wrapping: self.double_wrapping,
             cache_lifetime: self.cache_lifetime,
@@ -156,13 +137,6 @@ impl EncryptionConfigurationBuilder {
             .entry(master_key)
             .or_default()
             .extend(column_paths);
-        self
-    }
-
-    /// Set the encryption algorithm to use.
-    /// Currently only [`EncryptionAlgorithm::AesGcmV1`] is supported.
-    pub fn set_encryption_algorithm(mut self, algorithm: EncryptionAlgorithm) -> Self {
-        self.encryption_algorithm = algorithm;
         self
     }
 
@@ -289,11 +263,6 @@ impl CryptoFactory {
     ) -> Result<FileEncryptionProperties> {
         if !encryption_configuration.internal_key_material {
             return Err(nyi_err!("External key material is not yet implemented"));
-        }
-        if encryption_configuration.encryption_algorithm != EncryptionAlgorithm::AesGcmV1 {
-            return Err(nyi_err!(
-                "Only the AES-GCM-V1 encryption algorithm is implemented"
-            ));
         }
         if encryption_configuration.data_key_length_bits != 128 {
             return Err(nyi_err!("Only 128 bit data keys are currently implemented"));
