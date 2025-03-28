@@ -680,7 +680,7 @@ impl ParquetMetaDataReader {
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         let prefetch = self.get_prefetch_size();
 
-        let suffix = fetch.fetch_suffix(prefetch.max(FOOTER_SIZE)).await?;
+        let suffix = fetch.fetch_suffix(prefetch).await?;
         let suffix_len = suffix.len();
 
         if suffix_len < FOOTER_SIZE {
