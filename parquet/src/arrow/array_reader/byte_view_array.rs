@@ -432,11 +432,13 @@ impl ByteViewArrayDecoderDictionary {
         }
     }
 
-    /// Reads the next indexes from self.decoder
-    /// the indexes are assumed to be indexes into `dict`
+    /// Reads the next `len` indexes from self.decoder
+    ///
+    /// The indexes are assumed to be indexes into `dict`
     /// the output values are written to output
     ///
-    /// Assumptions / Optimization
+    /// # Assumptions / Optimization
+    ///
     /// This function checks if dict.buffers() are the last buffers in `output`, and if so
     /// reuses the dictionary page buffers directly without copying data
     fn read(&mut self, output: &mut ViewBuffer, dict: &ViewBuffer, len: usize) -> Result<usize> {
@@ -457,6 +459,10 @@ impl ByteViewArrayDecoderDictionary {
                 true
             }
         };
+
+        // we are going to append `len` views to the output buffer so reserve
+        // the space for them to avoid reallocations
+        output.reserve_views(len);
 
         if need_to_create_new_buffer {
             for b in dict.buffers.iter() {
