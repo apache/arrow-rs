@@ -163,33 +163,22 @@ impl AsyncFileReader for ParquetObjectReader {
     // an `impl MetadataFetch` and calls those methods to get data from it. Due to `Self`'s impl of
     // `AsyncFileReader`, the calls to `MetadataFetch::fetch` are just delegated to
     // `Self::get_bytes`.
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        Box::pin(async move {
-            let file_size = self.meta.size;
-            let metadata = ParquetMetaDataReader::new()
-                .with_column_indexes(self.preload_column_index)
-                .with_offset_indexes(self.preload_offset_index)
-                .with_prefetch_hint(self.metadata_size_hint)
-                .load_and_finish(self, file_size)
-                .await?;
-            Ok(Arc::new(metadata))
-        })
-    }
-
-    fn get_metadata_with_options<'a>(
+    fn get_metadata<'a>(
         &'a mut self,
-        options: &'a ArrowReaderOptions,
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let file_size = self.meta.size;
-            let metadata = ParquetMetaDataReader::new()
+            let mut metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
                 .with_offset_indexes(self.preload_offset_index)
                 .with_prefetch_hint(self.metadata_size_hint);
 
             #[cfg(feature = "encryption")]
-            let metadata =
-                metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+            if let Some(options) = options {
+                metadata = metadata
+                    .with_decryption_properties(options.file_decryption_properties.as_ref());
+            }
 
             let metadata = metadata.load_and_finish(self, file_size).await?;
 
