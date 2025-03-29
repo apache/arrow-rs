@@ -209,7 +209,7 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input.get_metadata_with_options(&options).await?;
+        let mut metadata = input.get_metadata(Some(&options)).await?;
 
         if options.page_index
             && metadata.column_index().is_none()
