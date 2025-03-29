@@ -168,10 +168,10 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
     let rng = &mut seedable_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                let remaining_len = rng.gen_range(
+                let remaining_len = rng.random_range(
                     min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
                 );
 
@@ -207,10 +207,10 @@ fn create_string_view_array_with_len_range_and_prefix(
     let rng = &mut seedable_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                let remaining_len = rng.gen_range(
+                let remaining_len = rng.random_range(
                     min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
                 );
 

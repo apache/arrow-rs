@@ -44,24 +44,12 @@ fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     nlike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
-fn bench_nlike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
-    nlike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
-}
-
 fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     ilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
-fn bench_ilike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
-    ilike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
-}
-
 fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     nilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
-}
-
-fn bench_nilike_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
-    nilike(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
