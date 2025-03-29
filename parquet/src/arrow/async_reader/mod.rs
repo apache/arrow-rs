@@ -164,7 +164,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
                 options.unwrap().file_decryption_properties.is_some();
 
             #[cfg(not(feature = "encryption"))]
-            let have_decryptor = options.is_some();
+            let have_decryptor = options.is_some() && cfg!(feature = "encryption"); // always false
 
             if footer.is_encrypted_footer() && !have_decryptor {
                 return Err(general_err!(
