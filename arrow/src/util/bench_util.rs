@@ -156,8 +156,14 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
     max_str_len: usize,
     prefix: &str,
 ) -> GenericStringArray<Offset> {
-    assert!(min_str_len <= max_str_len, "min_str_len must be <= max_str_len");
-    assert!(prefix.len() <= max_str_len, "Prefix length must be <= max_str_len");
+    assert!(
+        min_str_len <= max_str_len,
+        "min_str_len must be <= max_str_len"
+    );
+    assert!(
+        prefix.len() <= max_str_len,
+        "Prefix length must be <= max_str_len"
+    );
 
     let rng = &mut seedable_rng();
     (0..size)
@@ -165,7 +171,9 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let remaining_len = rng.gen_range(min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()));
+                let remaining_len = rng.gen_range(
+                    min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
+                );
 
                 let mut value = prefix.to_string();
                 value.extend(
@@ -187,8 +195,14 @@ fn create_string_view_array_with_len_range_and_prefix(
     max_str_len: usize,
     prefix: &str,
 ) -> StringViewArray {
-    assert!(min_str_len <= max_str_len, "min_str_len must be <= max_str_len");
-    assert!(prefix.len() <= max_str_len, "Prefix length must be <= max_str_len");
+    assert!(
+        min_str_len <= max_str_len,
+        "min_str_len must be <= max_str_len"
+    );
+    assert!(
+        prefix.len() <= max_str_len,
+        "Prefix length must be <= max_str_len"
+    );
 
     let rng = &mut seedable_rng();
     (0..size)
@@ -196,7 +210,9 @@ fn create_string_view_array_with_len_range_and_prefix(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let remaining_len = rng.gen_range(min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()));
+                let remaining_len = rng.gen_range(
+                    min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
+                );
 
                 let mut value = prefix.to_string();
                 value.extend(
@@ -210,7 +226,6 @@ fn create_string_view_array_with_len_range_and_prefix(
         })
         .collect()
 }
-
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
 fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
