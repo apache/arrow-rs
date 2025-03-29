@@ -159,8 +159,12 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
+            #[cfg(feature = "encryption")]
             let have_decryptor = options.is_some() &&
                 options.unwrap().file_decryption_properties.is_some();
+
+            #[cfg(not(feature = "encryption"))]
+            let have_decryptor = options.is_some();
 
             if footer.is_encrypted_footer() && !have_decryptor {
                 return Err(general_err!(
@@ -174,13 +178,15 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            let mut metadata_reader = ParquetMetaDataReader::new();
+            let metadata_reader = ParquetMetaDataReader::new();
 
             #[cfg(feature = "encryption")]
-            if let Some(options) = options {
-                metadata_reader = metadata_reader
-                    .with_decryption_properties(options.file_decryption_properties.as_ref());
-            }
+            let metadata_reader = match have_decryptor {
+                true => metadata_reader
+                    .with_decryption_properties(options.unwrap().file_decryption_properties.as_ref()),
+                false => metadata_reader,
+            };
+
 
             let parquet_metadata = match have_decryptor {
                 true => metadata_reader.decode_footer_metadata(&buf, &footer)?,
