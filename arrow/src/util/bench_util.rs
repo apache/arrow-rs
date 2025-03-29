@@ -129,6 +129,89 @@ pub fn create_string_array<Offset: OffsetSizeTrait>(
     create_string_array_with_max_len(size, null_density, 400)
 }
 
+/// Creates longer string array with same prefix, the prefix should be larger than 4 bytes,
+/// and the string length should be larger than 12 bytes
+/// so that we can compare the performance with StringViewArray, because StringViewArray has 4 bytes inline for view
+pub fn create_longer_string_array_with_same_prefix<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+) -> GenericStringArray<Offset> {
+    create_string_array_with_len_range_and_prefix(size, null_density, 13, 100, "prefix_")
+}
+
+/// Creates longer string view array with same prefix, the prefix should be larger than 4 bytes,
+/// and the string length should be larger than 12 bytes
+/// so that we can compare the StringArray performance with StringViewArray, because StringViewArray has 4 bytes inline for view
+pub fn create_longer_string_view_array_with_same_prefix(
+    size: usize,
+    null_density: f32,
+) -> StringViewArray {
+    create_string_view_array_with_len_range_and_prefix(size, null_density, 13, 100, "prefix_")
+}
+
+fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+) -> GenericStringArray<Offset> {
+    assert!(min_str_len <= max_str_len, "min_str_len must be <= max_str_len");
+    assert!(prefix.len() <= max_str_len, "Prefix length must be <= max_str_len");
+
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng.gen_range(min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()));
+
+                let mut value = prefix.to_string();
+                value.extend(
+                    rng.sample_iter(&Alphanumeric)
+                        .take(remaining_len)
+                        .map(char::from),
+                );
+
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+fn create_string_view_array_with_len_range_and_prefix(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+) -> StringViewArray {
+    assert!(min_str_len <= max_str_len, "min_str_len must be <= max_str_len");
+    assert!(prefix.len() <= max_str_len, "Prefix length must be <= max_str_len");
+
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng.gen_range(min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()));
+
+                let mut value = prefix.to_string();
+                value.extend(
+                    rng.sample_iter(&Alphanumeric)
+                        .take(remaining_len)
+                        .map(char::from),
+                );
+
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
 fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
