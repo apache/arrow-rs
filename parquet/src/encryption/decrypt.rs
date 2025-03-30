@@ -348,11 +348,18 @@ impl DecryptionPropertiesBuilder {
     }
 
     /// Specify multiple column decryption keys
-    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
+    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Result<Self> {
+        if column_names.len() != keys.len() {
+            return Err(general_err!(
+                "The number of column names ({}) does not match the number of keys ({})",
+                column_names.len(),
+                keys.len()
+            ));
+        }
         for (column_name, key) in column_names.into_iter().zip(keys.into_iter()) {
             self.column_keys.insert(column_name.to_string(), key);
         }
-        self
+        Ok(self)
     }
 }
 

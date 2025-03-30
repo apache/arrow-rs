@@ -258,11 +258,13 @@ async fn test_write_non_uniform_encryption() {
 
     let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
         .with_column_keys(column_names.clone(), column_keys.clone())
+        .unwrap()
         .build()
         .unwrap();
 
     let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
         .with_column_keys(column_names, column_keys)
+        .unwrap()
         .build()
         .unwrap();
 

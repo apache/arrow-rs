@@ -204,12 +204,19 @@ impl EncryptionPropertiesBuilder {
     /// with_column_key but for multiple columns. This will add column keys provided to the
     /// existing column keys. If column keys were already provided for some columns, the new keys
     /// will overwrite the old ones.
-    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Self {
+    pub fn with_column_keys(mut self, column_names: Vec<&str>, keys: Vec<Vec<u8>>) -> Result<Self> {
+        if column_names.len() != keys.len() {
+            return Err(general_err!(
+                "The number of column names ({}) does not match the number of keys ({})",
+                column_names.len(),
+                keys.len()
+            ));
+        }
         for (i, column_name) in column_names.into_iter().enumerate() {
             self.column_keys
                 .insert(column_name.to_string(), EncryptionKey::new(keys[i].clone()));
         }
-        self
+        Ok(self)
     }
 
     /// AAD prefix string uniquely identifies the file and allows to differentiate it e.g. from
