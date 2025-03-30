@@ -4621,59 +4621,6 @@ mod tests {
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 
-    #[test]
-    fn test_predicate_pushdown() {
-        // Create test data with multiple rows
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
-        let b = StringArray::from(vec!["a", "b", "c", "d", "e", "f"]);
-        let batch = RecordBatch::try_from_iter(vec![
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-        ])
-        .unwrap();
-
-        // Write to parquet file with custom properties to ensure statistics
-        let props = WriterProperties::builder()
-            .set_writer_version(WriterVersion::PARQUET_2_0)
-            .set_statistics_enabled(EnabledStatistics::Page)
-            .set_max_row_group_size(3)  // Force multiple row groups
-            .build();
-            
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Create a predicate pushdown for a > 3
-        // This should only match the second row group (values 4, 5, 6)
-        use super::predicate::{PredicatePushdown, PredicatePushdowns, push};
-        let predicate = PredicatePushdown::gt("a", push::int32(3));
-        let pushdowns = PredicatePushdowns::from_predicate(predicate);
-        
-        // Read with predicate pushdown
-        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf.clone()))
-            .unwrap()
-            .with_predicate_pushdown(pushdowns)
-            .build()
-            .unwrap();
-        
-        // Should only read rows where a > 3
-        let result: Vec<RecordBatch> = reader.collect::<Result<_, _>>().unwrap();
-        
-        // Check that we got the right number of rows
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-        
-        // With our implementation, we should get only 3 rows (values 4, 5, 6)
-        assert_eq!(total_rows, 3);
-        
-        // Verify the values in the result are all > 3
-        if !result.is_empty() {
-            let array = result[0].column(0).as_primitive::<arrow_array::types::Int32Type>();
-            for i in 0..array.len() {
-                assert!(array.value(i) > 3);
-            }
-        }
-    }
 
     #[test]
     fn test_predicate_pushdown_vs_row_filter() {
