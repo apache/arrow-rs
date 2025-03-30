@@ -671,6 +671,61 @@ fn test_write_encrypted_struct_field() {
     }
 }
 
+/// Test that when per-column encryption is used,
+/// unencrypted row group metadata are returned when the writer is closed
+/// and statistics can be used.
+#[test]
+pub fn test_retrieve_row_group_statistics_after_encrypted_write() {
+    let values = Int32Array::from(vec![8, 3, 4, 19, 5]);
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "x",
+        values.data_type().clone(),
+        true,
+    )]));
+    let values = Arc::new(values);
+    let record_batches = vec![RecordBatch::try_new(schema.clone(), vec![values]).unwrap()];
+
+    let temp_file = tempfile::tempfile().unwrap();
+
+    let footer_key = b"0123456789012345".to_vec();
+    let column_key = b"1234567890123450".to_vec();
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+    let mut writer = ArrowWriter::try_new(temp_file, schema, Some(props)).unwrap();
+
+    for batch in record_batches.clone() {
+        writer.write(&batch).unwrap();
+    }
+    let file_metadata = writer.close().unwrap();
+
+    assert_eq!(file_metadata.row_groups.len(), 1);
+    let row_group = &file_metadata.row_groups[0];
+    assert_eq!(row_group.columns.len(), 1);
+    let column = &row_group.columns[0];
+    let column_stats = column
+        .meta_data
+        .as_ref()
+        .unwrap()
+        .statistics
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        column_stats.min_value.as_deref(),
+        Some(3i32.to_le_bytes().as_slice())
+    );
+    assert_eq!(
+        column_stats.max_value.as_deref(),
+        Some(19i32.to_le_bytes().as_slice())
+    );
+}
+
 fn read_and_roundtrip_to_encrypted_file(
     path: &str,
     decryption_properties: FileDecryptionProperties,
