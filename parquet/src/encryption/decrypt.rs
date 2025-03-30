@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Configuration and utilities for decryption of files using Parquet Modular Encryption
+
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};

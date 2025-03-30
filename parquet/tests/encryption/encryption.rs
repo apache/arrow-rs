@@ -110,7 +110,8 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
-        "Parquet error: Parquet file was encrypted with AAD prefix that is not stored in the file"
+        "Parquet error: Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+        but no AAD prefix was provided in the file decryption properties"
     );
 }
 
@@ -393,7 +394,7 @@ fn test_write_non_uniform_encryption() {
 }
 
 // todo: currently we raise if writing with plaintext footer, but we should support it
-// for uniform and non-uniform encryption
+// for uniform and non-uniform encryption (see https://github.com/apache/arrow-rs/issues/7320)
 #[test]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();

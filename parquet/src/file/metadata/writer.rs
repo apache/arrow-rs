@@ -165,14 +165,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(self.object_writer.get_file_magic())?;
 
-        // TODO: Discuss what to do here with community
-        // The argument for returning unencrypted rowgroups is that any users working with
-        // the returned FIleMetaData have no easy way to decrypt it and hence expect an
-        // unencrypted structure be returned. So, the argument here would be backward compatibility.
-        // Return unencrypted row_group for use in program
-        // E.g. when collecting statistics.
-        // Related to this see: https://github.com/apache/arrow-rs/issues/7254
         if let Some(row_groups) = unencrypted_row_groups {
+            // If row group metadata was encrypted, we replace the encrypted row groups with
+            // unencrypted metadata before it is returned to users. This allows the metadata
+            // to be usable for retrieving the row group statistics for example, without users
+            // needing to decrypt the metadata.
             file_metadata.row_groups = row_groups;
         }
 

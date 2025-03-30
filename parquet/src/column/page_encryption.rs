@@ -60,7 +60,7 @@ impl PageEncryptor {
         }
     }
 
-    /// Update the page index after a page has been processed
+    /// Update the page index after a data page has been processed
     pub fn increment_page(&mut self) {
         self.page_index += 1;
     }

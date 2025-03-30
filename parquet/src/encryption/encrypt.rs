@@ -219,9 +219,9 @@ impl EncryptionPropertiesBuilder {
         Ok(self)
     }
 
-    /// AAD prefix string uniquely identifies the file and allows to differentiate it e.g. from
+    /// The AAD prefix uniquely identifies the file and allows to differentiate it e.g. from
     /// older versions of the file or from other partition files in the same data set (table).
-    /// This string is optionally passed by a writer upon file creation. When not specified, no
+    /// These bytes are optionally passed by a writer upon file creation. When not specified, no
     /// AAD prefix is used.
     pub fn with_aad_prefix(mut self, aad_prefix: Vec<u8>) -> Self {
         self.aad_prefix = Some(aad_prefix);
@@ -286,7 +286,7 @@ impl FileEncryptor {
 
     /// Unique file identifier part of AAD suffix. The full AAD suffix is generated per module by
     /// concatenating aad_file_unique, module type, row group ordinal (all except
-    /// footer),column ordinal (all except footer) and page ordinal (data page and
+    /// footer), column ordinal (all except footer) and page ordinal (data page and
     /// header only).
     pub fn aad_file_unique(&self) -> &Vec<u8> {
         &self.aad_file_unique
