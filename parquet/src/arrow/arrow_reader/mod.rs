@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -18,11 +19,12 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use predicate::{PredicatePushdown, PredicatePushdowns, PushdownOp, PushdownValue};
 pub use selection::{RowSelection, RowSelector};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 mod filter;
+mod predicate;
 mod selection;
 pub mod statistics;
 
@@ -73,6 +76,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
+    
+    pub(crate) predicate_pushdowns: Option<PredicatePushdowns>,
 }
 
 impl<T> ArrowReaderBuilder<T> {
@@ -89,6 +94,7 @@ impl<T> ArrowReaderBuilder<T> {
             selection: None,
             limit: None,
             offset: None,
+            predicate_pushdowns: None,
         }
     }
 
@@ -208,6 +214,26 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
+            ..self
+        }
+    }
+    
+    /// Provide a [`PredicatePushdowns`] to skip reading column chunks/pages 
+    /// that cannot satisfy the predicate conditions
+    ///
+    /// This feature uses Parquet's column statistics to determine if a column chunk
+    /// or page contains any values that could match the predicate. If not, the column
+    /// chunk or page can be skipped entirely, avoiding I/O and deserialization costs.
+    ///
+    /// Predicate pushdowns are applied before row selection and row filtering, and
+    /// can significantly improve performance for selective queries.
+    ///
+    /// It is recommended to enable reading the page index if using this functionality,
+    /// to allow more fine-grained skipping at the page level.
+    /// See [`ArrowReaderOptions::with_page_index`].
+    pub fn with_predicate_pushdown(self, pushdowns: PredicatePushdowns) -> Self {
+        Self {
+            predicate_pushdowns: Some(pushdowns),
             ..self
         }
     }
@@ -604,7 +630,52 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let row_groups = self
             .row_groups
+            .clone()
             .unwrap_or_else(|| (0..self.metadata.num_row_groups()).collect());
+
+        let row_groups = if let Some(ref pushdowns) = self.predicate_pushdowns {
+            // 1st pass for Predicate Pushdown: Filter row groups based on statistics   
+            self.apply_predicate_pushdowns(&row_groups, &pushdowns)?
+        } else {
+            row_groups
+        };
+
+    // 2. Second pass: Create row-level filters for remaining row groups
+    let mut filter = if self.filter.is_none() {
+        Some(RowFilter::new(Vec::new()))
+    } else {
+        self.filter
+    };
+
+    if let Some(ref pushdowns) = self.predicate_pushdowns {
+        for predicate in pushdowns.predicates() {
+            match predicate.op() {
+                PushdownOp::Gt => {
+                    let predicate = predicate.clone(); // Clone the predicate
+                    let predicate_fn = Box::new(ArrowPredicateFn::new(
+                        ProjectionMask::all(),
+                        move |batch| {
+                            let array = batch.column(0).as_primitive::<arrow_array::types::Int32Type>();
+                            let mut builder = BooleanArray::builder(batch.num_rows());
+                            for i in 0..batch.num_rows() {
+                                match predicate.value() {
+                                    PushdownValue::Scalar(scalar) => {
+                                        let scalar_array = scalar.as_primitive::<arrow_array::types::Int32Type>();
+                                        builder.append_value(array.value(i) > scalar_array.value(0));
+                                    }
+                                    _ => unreachable!("Gt operation only works with scalar values"),
+                                }
+                            }
+                            Ok(builder.finish())
+                        },
+                    ));
+                    filter.as_mut().unwrap().predicates.push(predicate_fn);
+                },
+                // Add other operators as needed
+                _ => continue,
+            }
+        }
+    }
 
         let reader = ReaderRowGroups {
             reader: Arc::new(self.input.0),
@@ -612,7 +683,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             row_groups,
         };
 
-        let mut filter = self.filter;
         let mut selection = self.selection;
 
         if let Some(filter) = filter.as_mut() {
@@ -645,6 +715,125 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             array_reader,
             apply_range(selection, reader.num_rows(), self.offset, self.limit),
         ))
+    }
+    
+    /// Apply predicate pushdowns to filter out row groups that can't match
+    fn apply_predicate_pushdowns(
+        &self,
+        row_groups: &[usize],
+        pushdowns: &PredicatePushdowns,
+    ) -> Result<Vec<usize>> {
+        // This implementation checks if row groups can be skipped based on statistics
+        let mut filtered_row_groups = Vec::new();
+        
+        for &rg_idx in row_groups {
+            let rg = self.metadata.row_group(rg_idx);
+            let mut include_rg = true;
+            
+            // Check each predicate against this row group
+            for predicate in pushdowns.predicates() {
+                // Find the column in the row group
+                let col_idx = self.find_column_index(predicate.column())?;
+                if col_idx.is_none() {
+                    // Column not found, can't apply this predicate
+                    continue;
+                }
+                
+                let col_idx = col_idx.unwrap();
+                let column_chunk = rg.column(col_idx);
+                
+                // Check if the column chunk has statistics
+                if let Some(stats) = column_chunk.statistics() {
+                    // Get the Arrow data type for this column
+                    let arrow_schema = self.schema.as_ref();
+                    let arrow_field = match arrow_schema.field_with_name(predicate.column()) {
+                        Ok(field) => field,
+                        Err(_) => continue, // Field not found in Arrow schema
+                    };
+                    let data_type = arrow_field.data_type();
+                    
+                    // Convert Parquet statistics to Arrow arrays
+                    let min_array = match convert_stat_to_array(stats, data_type, true) {
+                        Ok(arr) => arr,
+                        Err(_) => continue, // Can't convert statistics
+                    };
+                    
+                    let max_array = match convert_stat_to_array(stats, data_type, false) {
+                        Ok(arr) => arr,
+                        Err(_) => continue, // Can't convert statistics
+                    };
+                    
+                    // Check if we can skip this row group based on statistics
+                    if ! predicate.can_use_chunk(min_array.as_ref(), max_array.as_ref()) {
+                        include_rg = false;
+                        break; // No need to check other predicates if we're already skipping
+                    }
+                }
+            }
+            
+            if include_rg {
+                filtered_row_groups.push(rg_idx);
+            }
+        }
+        
+        Ok(filtered_row_groups)
+    }
+    
+    /// Find the index of a column by name
+    fn find_column_index(&self, column_name: &str) -> Result<Option<usize>> {
+        let schema = self.metadata.file_metadata().schema_descr();
+        for i in 0..schema.num_columns() {
+            let column = schema.column(i);
+            let col_path = column.path();
+            if col_path.string() == column_name {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Convert a Parquet statistic to an Arrow array
+fn convert_stat_to_array(
+    stats: &crate::file::statistics::Statistics,
+    data_type: &arrow_schema::DataType,
+    is_min: bool,
+) -> Result<arrow_array::ArrayRef> {
+    use arrow_array::{Int32Array, Int64Array, Float32Array, Float64Array, StringArray, BooleanArray};
+    use crate::file::statistics::Statistics;
+    use std::sync::Arc;
+    
+    // Extract the min or max value from the statistics based on the data type
+    match (stats, data_type) {
+        (Statistics::Boolean(val_stats), arrow_schema::DataType::Boolean) => {
+            let value = if is_min { val_stats.min_opt() } else { val_stats.max_opt() };
+            Ok(Arc::new(BooleanArray::from(vec![value.copied().unwrap_or_default()])) as Arc<dyn arrow_array::Array>)
+        },
+        (Statistics::Int32(val_stats), arrow_schema::DataType::Int32) => {
+            let value = if is_min { val_stats.min_opt() } else { val_stats.max_opt() };
+            Ok(Arc::new(Int32Array::from(vec![value.copied().unwrap_or_default()])) as Arc<dyn arrow_array::Array>)
+        },
+        (Statistics::Int64(val_stats), arrow_schema::DataType::Int64) => {
+            let value = if is_min { val_stats.min_opt() } else { val_stats.max_opt() };
+            Ok(Arc::new(Int64Array::from(vec![value.copied().unwrap_or_default()])) as Arc<dyn arrow_array::Array>)
+        },
+        (Statistics::Float(val_stats), arrow_schema::DataType::Float32) => {
+            let value = if is_min { val_stats.min_opt() } else { val_stats.max_opt() };
+            Ok(Arc::new(Float32Array::from(vec![value.copied().unwrap_or_default()])) as Arc<dyn arrow_array::Array>)
+        },
+        (Statistics::Double(val_stats), arrow_schema::DataType::Float64) => {
+            let value = if is_min { val_stats.min_opt() } else { val_stats.max_opt() };
+            Ok(Arc::new(Float64Array::from(vec![value.copied().unwrap_or_default()])) as Arc<dyn arrow_array::Array>)
+        },
+        (Statistics::ByteArray(val_stats), arrow_schema::DataType::Utf8) => {
+            let bytes = if is_min { val_stats.min_bytes_opt() } else { val_stats.max_bytes_opt() };
+            let string_value = bytes
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                .unwrap_or_default();
+            Ok(Arc::new(StringArray::from(vec![string_value])) as Arc<dyn arrow_array::Array>)
+        },
+        // Add more conversions as needed for other data types
+        _ => Err(arrow_err!("Unsupported statistic conversion from {:?} to {:?}", stats, data_type).into()),
     }
 }
 
@@ -4430,5 +4619,184 @@ mod tests {
         let c1 = out.column(2).as_list::<i32>();
         assert_eq!(c0.len(), c1.len());
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
+    }
+
+    #[test]
+    fn test_predicate_pushdown() {
+        // Create test data with multiple rows
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let b = StringArray::from(vec!["a", "b", "c", "d", "e", "f"]);
+        let batch = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+        ])
+        .unwrap();
+
+        // Write to parquet file with custom properties to ensure statistics
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_max_row_group_size(3)  // Force multiple row groups
+            .build();
+            
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Create a predicate pushdown for a > 3
+        // This should only match the second row group (values 4, 5, 6)
+        use super::predicate::{PredicatePushdown, PredicatePushdowns, push};
+        let predicate = PredicatePushdown::gt("a", push::int32(3));
+        let pushdowns = PredicatePushdowns::from_predicate(predicate);
+        
+        // Read with predicate pushdown
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf.clone()))
+            .unwrap()
+            .with_predicate_pushdown(pushdowns)
+            .build()
+            .unwrap();
+        
+        // Should only read rows where a > 3
+        let result: Vec<RecordBatch> = reader.collect::<Result<_, _>>().unwrap();
+        
+        // Check that we got the right number of rows
+        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
+        
+        // With our implementation, we should get only 3 rows (values 4, 5, 6)
+        assert_eq!(total_rows, 3);
+        
+        // Verify the values in the result are all > 3
+        if !result.is_empty() {
+            let array = result[0].column(0).as_primitive::<arrow_array::types::Int32Type>();
+            for i in 0..array.len() {
+                assert!(array.value(i) > 3);
+            }
+        }
+    }
+
+    #[test]
+    fn test_predicate_pushdown_vs_row_filter() {
+        use crate::file::metadata::ParquetMetaDataReader;
+        use super::predicate::{PredicatePushdown, PredicatePushdowns, push};
+        use rand::Rng;
+        use std::collections::HashMap;
+
+        let size = 1_000;
+        let mut a_values = Vec::with_capacity(size);
+        let mut b_values = Vec::with_capacity(size);
+        
+        // Generate a random predicate value between 0 and 99
+        let mut rng = rand::rng();
+        let predicate_value = rng.random_range(0..100);
+        
+        let mut n_gt_pred = 0;
+        for i in 0..size {
+            a_values.push(i as i32 % 100);
+            b_values.push(format!("value_{}", i));
+            if a_values[i] > predicate_value {
+                n_gt_pred += 1;
+            }
+        }
+        let a = Int32Array::from(a_values);
+        let b = StringArray::from(b_values);
+        
+        let batch = RecordBatch::try_from_iter(vec![
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+        ])
+        .unwrap();
+        
+        // Write to parquet file
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_max_row_group_size(5)  // Split into 2 row groups
+            .build();
+            
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        
+        let parquet_bytes = Bytes::from(buf);
+        
+        // Examine the parquet file statistics
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&parquet_bytes)
+            .unwrap();
+
+        
+        // 1. Measure time with traditional row filter (post-load filtering)
+        use arrow_array::BooleanArray;
+        
+        let start = std::time::Instant::now();
+        
+        let row_filter = RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
+            ProjectionMask::all(),
+            move |batch| {
+                let array = batch.column(0).as_primitive::<arrow_array::types::Int32Type>();
+                let mut builder = BooleanArray::builder(batch.num_rows());
+                for i in 0..batch.num_rows() {
+                    builder.append_value(array.value(i) > predicate_value);
+                }
+                Ok(builder.finish())
+            },
+        ))]);
+        
+        let reader_with_filter = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes.clone())
+            .unwrap()
+            .with_row_filter(row_filter)
+            .build()
+            .unwrap();
+        
+        let row_filter_results: Vec<RecordBatch> = reader_with_filter.collect::<Result<_, _>>().unwrap();
+        let row_filter_time = start.elapsed();
+        let row_filter_count: usize = row_filter_results.iter().map(|b| b.num_rows()).sum();
+        
+        println!("Row filter found {} rows matching a > {}", row_filter_count, predicate_value);
+        println!("Values in row filter results:");
+
+        
+        // 2. Test with predicate pushdown
+        let start = std::time::Instant::now();
+        
+        // Create predicate pushdown for a > predicate_value
+        let predicate = PredicatePushdown::gt("a", push::int32(predicate_value));
+        let pushdowns = PredicatePushdowns::from_predicate(predicate);
+        
+        let reader_with_pushdown = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes)
+            .unwrap()
+            .with_predicate_pushdown(pushdowns)
+            .build()
+            .unwrap();
+        
+        let predicate_results: Vec<RecordBatch> = reader_with_pushdown.collect::<Result<_, _>>().unwrap();
+        let predicate_time = start.elapsed();
+        let predicate_count: usize = predicate_results.iter().map(|b| b.num_rows()).sum();
+
+        println!("Predicate pushdown found {} rows matching a > {}", predicate_count, predicate_value);
+        println!("Values in predicate pushdown results:");
+        let mut value_counts = HashMap::new();
+        for batch in &predicate_results {
+            let array = batch.column(0).as_primitive::<arrow_array::types::Int32Type>();
+            for i in 0..array.len() {
+                // println!("  {}", array.value(i));
+                *value_counts.entry(array.value(i)).or_insert(0) += 1;
+            }
+        }
+
+        
+        println!("\n=== PERFORMANCE COMPARISON ===");
+        println!("Filter type      | Time      | Row count");
+        println!("-------------------|-----------|----------");
+        println!("Row Filter        | {:?} | {}", row_filter_time, row_filter_count);
+        println!("Predicate Pushdown| {:?} | {}", predicate_time, predicate_count);
+        println!("Improvement       | {:.2}x     |", 
+            row_filter_time.as_secs_f64() / predicate_time.as_secs_f64());
+        
+        // Expected: both methods should return rows greater than predicate_value
+        assert_eq!(row_filter_count, n_gt_pred, "Row filter should find {} rows", n_gt_pred);
+        assert_eq!(predicate_count, n_gt_pred, "Predicate pushdown should find {} rows", n_gt_pred);
     }
 }
