@@ -31,7 +31,7 @@ pub trait KeyRetriever: Send + Sync {
     fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>>;
 }
 
-pub fn read_and_decrypt<T: Read>(
+pub(crate) fn read_and_decrypt<T: Read>(
     decryptor: &Arc<dyn BlockDecryptor>,
     input: &mut T,
     aad: &[u8],

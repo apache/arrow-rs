@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 /// Encrypts page headers and page data for columns
-pub struct PageEncryptor {
+pub(crate) struct PageEncryptor {
     file_encryptor: Arc<FileEncryptor>,
     block_encryptor: Box<dyn BlockEncryptor>,
     row_group_index: usize,

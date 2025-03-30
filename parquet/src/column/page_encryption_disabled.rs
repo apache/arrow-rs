@@ -23,7 +23,7 @@ use std::io::Write;
 #[derive(Debug)]
 /// Dummy PageEncryptor struct that can never be instantiated,
 /// provided to support compilation without the encryption feature enabled.
-pub struct PageEncryptor {
+pub(crate) struct PageEncryptor {
     _empty: (),
 }
 

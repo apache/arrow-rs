@@ -27,7 +27,7 @@ const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 const SIZE_LEN: usize = 4;
 
-pub trait BlockDecryptor: Debug + Send + Sync {
+pub(crate) trait BlockDecryptor: Debug + Send + Sync {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
@@ -65,7 +65,7 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
     }
 }
 
-pub trait BlockEncryptor: Debug + Send + Sync {
+pub(crate) trait BlockEncryptor: Debug + Send + Sync {
     fn encrypt(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 }
 
