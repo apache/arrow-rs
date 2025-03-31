@@ -959,12 +959,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use bytes::Bytes;
-    use half::f16;
-    use num::PrimInt;
-    use rand::{rng, Rng, RngCore};
-    use tempfile::tempfile;
-    use arrow::compute::kernels::numeric;
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -978,6 +972,11 @@ mod tests {
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
     };
     use arrow_select::concat::concat_batches;
+    use bytes::Bytes;
+    use half::f16;
+    use num::PrimInt;
+    use rand::{rng, Rng, RngCore};
+    use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
@@ -1583,21 +1582,35 @@ mod tests {
                 .build()
                 .unwrap();
 
-        // let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
-
         let batch = record_reader.next().unwrap().unwrap();
-        println!("{:?}", batch);
-        assert_eq!(batch.num_rows(), 6);
         assert_eq!(batch.num_columns(), 1);
-        assert_eq!(batch.column(0).null_count(), 1);
-        let to_type = arrow_schema::DataType::Int64;
+        let column = batch.column(0);
+        assert_eq!(column.data_type(), &Timestamp(TimeUnit::Microsecond, None));
 
-        println!("{:?}", batch.column(0).data_type());
-        // println!("{:?}", to_type);
+        let expected = Arc::new(Int64Array::from(vec![
+            Some(1704141296123456),
+            Some(1704070800000000),
+            Some(253402225200000000),
+            Some(1735599600000000),
+            None,
+            Some(9089380393200000000),
+        ]));
 
-        let thing = arrow_cast::cast(batch.column(0), &to_type).unwrap();
+        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
+        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
+        // anyway, so this should be a zero-copy non-modifying cast.
 
-        println!("{:?}", thing);
+        let binding = arrow_cast::cast(batch.column(0), &arrow_schema::DataType::Int64).unwrap();
+        let casted_timestamps = binding.as_primitive::<types::Int64Type>();
+
+        assert_eq!(casted_timestamps.len(), expected.len());
+
+        casted_timestamps
+            .iter()
+            .zip(expected.iter())
+            .for_each(|(lhs, rhs)| {
+                assert_eq!(lhs, rhs);
+            });
     }
 
     struct RandUtf8Gen {}

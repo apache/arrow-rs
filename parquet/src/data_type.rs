@@ -108,8 +108,6 @@ impl Int96 {
     #[inline]
     pub fn to_micros(&self) -> i64 {
         let (day, nanos) = self.data_as_days_and_nanos();
-        println!("{}", day);
-        println!("{}", nanos);
         (day as i64 - JULIAN_DAY_OF_EPOCH)
             .wrapping_mul(MICROSECONDS_IN_DAY)
             .wrapping_add(nanos / 1_000)
