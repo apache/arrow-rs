@@ -48,12 +48,13 @@ use std::ops::Range;
 ///     file: tokio::fs::File,
 /// }
 /// impl MetadataFetch for TokioFileMetadata {
-///     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+///     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
 ///         // return a future that fetches data in range
 ///         async move {
-///             let mut buf = vec![0; range.len()]; // target buffer
+///             let len = (range.end - range.start) as usize;
+///             let mut buf = vec![0; len]; // target buffer
 ///             // seek to the start of the range and read the data
-///             self.file.seek(SeekFrom::Start(range.start as u64)).await?;
+///             self.file.seek(SeekFrom::Start(range.start)).await?;
 ///             self.file.read_exact(&mut buf).await?;
 ///             Ok(Bytes::from(buf)) // convert to Bytes
 ///         }
@@ -66,12 +67,12 @@ pub trait MetadataFetch {
     ///
     /// Note the returned type is a boxed future, often created by
     /// [FutureExt::boxed]. See the trait documentation for an example
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        self.get_bytes(range)
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        self.get_bytes(range.start..range.end)
     }
 }
 
@@ -107,7 +108,7 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             file_size - FOOTER_SIZE
         };
 
-        let suffix = fetch.fetch(footer_start..file_size).await?;
+        let suffix = fetch.fetch(footer_start as u64..file_size as u64).await?;
         let suffix_len = suffix.len();
 
         let mut footer = [0; FOOTER_SIZE];
@@ -127,7 +128,9 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let (metadata, remainder) = if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
-            let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
+            let meta = fetch
+                .fetch(metadata_start as u64..(file_size - FOOTER_SIZE) as u64)
+                .await?;
             (ParquetMetaDataReader::decode_metadata(&meta)?, None)
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
@@ -182,7 +185,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                 remainder.slice(offset..range.end - *remainder_start + offset)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => self.fetch.fetch(range.start..range.end).await?,
+            _ => {
+                self.fetch
+                    .fetch(range.start as u64..range.end as u64)
+                    .await?
+            }
         };
 
         // Sanity check
@@ -246,8 +253,8 @@ where
     F: FnMut(Range<usize>) -> Fut + Send,
     Fut: Future<Output = Result<Bytes>> + Send,
 {
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range).await }.boxed()
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        async move { self.0(range.start as usize..range.end as usize).await }.boxed()
     }
 }
 
