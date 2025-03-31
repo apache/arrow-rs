@@ -159,18 +159,6 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
-            #[cfg(feature = "encryption")]
-            let have_decryptor = options.is_some() &&
-                options.unwrap().file_decryption_properties.is_some();
-
-            #[cfg(not(feature = "encryption"))]
-            let have_decryptor = options.is_some() && cfg!(feature = "encryption"); // always false
-
-            if footer.is_encrypted_footer() && !have_decryptor {
-                return Err(general_err!(
-                    "Parquet file has an encrypted footer but decryption properties were not provided"
-                ));
-            }
 
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
@@ -181,17 +169,11 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let metadata_reader = ParquetMetaDataReader::new();
 
             #[cfg(feature = "encryption")]
-            let metadata_reader = match have_decryptor {
-                true => metadata_reader
-                    .with_decryption_properties(options.unwrap().file_decryption_properties.as_ref()),
-                false => metadata_reader,
-            };
+            let metadata_reader = metadata_reader.with_decryption_properties(
+                options.and_then(|o| o.file_decryption_properties.as_ref()),
+            );
 
-
-            let parquet_metadata = match have_decryptor {
-                true => metadata_reader.decode_footer_metadata(&buf, &footer)?,
-                false => ParquetMetaDataReader::decode_metadata(&buf)?
-            };
+            let parquet_metadata = metadata_reader.decode_footer_metadata(&buf, &footer)?;
 
             Ok(Arc::new(parquet_metadata))
         }
