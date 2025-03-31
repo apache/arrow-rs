@@ -31,13 +31,70 @@ use arrow_schema::ArrowError;
 
 use crate::display::{ArrayFormatter, FormatOptions};
 
-/// Create a visual representation of record batches
+/// Create a visual representation of [`RecordBatch`]es
+///
+/// Uses default values for display. See [`pretty_format_batches_with_options`]
+/// for more control.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_cast::pretty::pretty_format_batches;
+/// # let batch = RecordBatch::try_from_iter(vec![
+/// #       ("a", Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as ArrayRef),
+/// #       ("b", Arc::new(StringArray::from(vec![Some("a"), Some("b"), None, Some("d"), Some("e")]))),
+/// # ]).unwrap();
+/// // Note, returned object implements `Display`
+/// let pretty_table = pretty_format_batches(&[batch]).unwrap();
+/// let table_str = format!("Batches:\n{pretty_table}");
+/// assert_eq!(table_str,
+/// r#"Batches:
+/// +---+---+
+/// | a | b |
+/// +---+---+
+/// | 1 | a |
+/// | 2 | b |
+/// | 3 |   |
+/// | 4 | d |
+/// | 5 | e |
+/// +---+---+"#);
+/// ```
 pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     pretty_format_batches_with_options(results, &options)
 }
 
-/// Create a visual representation of record batches
+/// Create a visual representation of [`RecordBatch`]es with formatting options.
+///
+/// # Arguments
+/// * `results` - A slice of record batches to display
+/// * `options` - [`FormatOptions`] that control the resulting display
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_cast::display::FormatOptions;
+/// # use arrow_cast::pretty::{pretty_format_batches, pretty_format_batches_with_options};
+/// # let batch = RecordBatch::try_from_iter(vec![
+/// #       ("a", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+/// #       ("b", Arc::new(StringArray::from(vec![Some("a"), None]))),
+/// # ]).unwrap();
+/// let options = FormatOptions::new()
+///   .with_null("<NULL>");
+/// // Note, returned object implements `Display`
+/// let pretty_table = pretty_format_batches_with_options(&[batch], &options).unwrap();
+/// let table_str = format!("Batches:\n{pretty_table}");
+/// assert_eq!(table_str,
+/// r#"Batches:
+/// +---+--------+
+/// | a | b      |
+/// +---+--------+
+/// | 1 | a      |
+/// | 2 | <NULL> |
+/// +---+--------+"#);
+/// ```
 pub fn pretty_format_batches_with_options(
     results: &[RecordBatch],
     options: &FormatOptions,
@@ -45,7 +102,11 @@ pub fn pretty_format_batches_with_options(
     create_table(results, options)
 }
 
-/// Create a visual representation of columns
+/// Create a visual representation of [`ArrayRef`]
+///
+/// Uses default values for display. See [`pretty_format_columns_with_options`]
+///
+/// See [`pretty_format_batches`] for an example
 pub fn pretty_format_columns(
     col_name: &str,
     results: &[ArrayRef],
@@ -54,8 +115,10 @@ pub fn pretty_format_columns(
     pretty_format_columns_with_options(col_name, results, &options)
 }
 
-/// Utility function to create a visual representation of columns with options
-fn pretty_format_columns_with_options(
+/// Create a visual representation of [`ArrayRef`] with formatting options.
+///
+/// See [`pretty_format_batches_with_options`] for an example
+pub fn pretty_format_columns_with_options(
     col_name: &str,
     results: &[ArrayRef],
     options: &FormatOptions,
@@ -88,7 +151,15 @@ fn create_table(results: &[RecordBatch], options: &FormatOptions) -> Result<Tabl
 
     let mut header = Vec::new();
     for field in schema.fields() {
-        header.push(Cell::new(field.name()));
+        if options.types_info() {
+            header.push(Cell::new(format!(
+                "{}\n{}",
+                field.name(),
+                field.data_type()
+            )))
+        } else {
+            header.push(Cell::new(field.name()));
+        }
     }
     table.set_header(header);
 
@@ -1059,9 +1130,18 @@ mod tests {
 
     #[test]
     fn test_format_options() {
-        let options = FormatOptions::default().with_null("null");
-        let array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
-        let batch = RecordBatch::try_from_iter([("my_column_name", Arc::new(array) as _)]).unwrap();
+        let options = FormatOptions::default()
+            .with_null("null")
+            .with_types_info(true);
+        let int32_array = Int32Array::from(vec![Some(1), Some(2), None, Some(3), Some(4)]);
+        let string_array =
+            StringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz"), None]);
+
+        let batch = RecordBatch::try_from_iter([
+            ("my_int32_name", Arc::new(int32_array) as _),
+            ("my_string_name", Arc::new(string_array) as _),
+        ])
+        .unwrap();
 
         let column = pretty_format_columns_with_options(
             "my_column_name",
@@ -1071,11 +1151,7 @@ mod tests {
         .unwrap()
         .to_string();
 
-        let batch = pretty_format_batches_with_options(&[batch], &options)
-            .unwrap()
-            .to_string();
-
-        let expected = vec![
+        let expected_column = vec![
             "+----------------+",
             "| my_column_name |",
             "+----------------+",
@@ -1088,9 +1164,26 @@ mod tests {
         ];
 
         let actual: Vec<&str> = column.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{column}");
+        assert_eq!(expected_column, actual, "Actual result:\n{column}");
+
+        let batch = pretty_format_batches_with_options(&[batch], &options)
+            .unwrap()
+            .to_string();
+
+        let expected_table = vec![
+            "+---------------+----------------+",
+            "| my_int32_name | my_string_name |",
+            "| Int32         | Utf8           |",
+            "+---------------+----------------+",
+            "| 1             | foo            |",
+            "| 2             | bar            |",
+            "| null          | null           |",
+            "| 3             | baz            |",
+            "| 4             | null           |",
+            "+---------------+----------------+",
+        ];
 
         let actual: Vec<&str> = batch.lines().collect();
-        assert_eq!(expected, actual, "Actual result:\n{batch}");
+        assert_eq!(expected_table, actual, "Actual result:\n{batch}");
     }
 }
