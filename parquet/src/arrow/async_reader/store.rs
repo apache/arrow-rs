@@ -46,7 +46,7 @@ use tokio::runtime::Handle;
 /// println!("Found Blob with {}B at {}", meta.size, meta.location);
 ///
 /// // Show Parquet metadata
-/// let reader = ParquetObjectReader::new(storage_container, meta.location).with_file_size(meta.size);
+/// let reader = ParquetObjectReader::new(storage_container, meta.location).with_file_size(meta.size.try_into().unwrap());
 /// let builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
 /// # }
