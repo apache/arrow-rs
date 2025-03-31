@@ -294,10 +294,25 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
+        let parent_offset = data.offset();
+        let parent_len = data.len();
+
         let fields = data
             .child_data()
             .iter()
-            .map(|cd| make_array(cd.clone()))
+            .map(|cd| {
+                let child_offset = cd.offset();
+                let child_len = cd.len();
+                assert!(child_len >= parent_len + parent_offset);
+                let cd = cd
+                    .clone()
+                    .into_builder()
+                    .offset(child_offset + parent_offset)
+                    .len(child_len.min(parent_len))
+                    .build()
+                    .unwrap();
+                make_array(cd.clone())
+            })
             .collect();
 
         Self {
@@ -521,6 +536,53 @@ mod tests {
         assert_eq!(4, struct_array.len());
         assert_eq!(0, struct_array.null_count());
         assert_eq!(0, struct_array.offset());
+    }
+
+    #[test]
+    fn test_struct_array_from_data_with_offset_and_length() {
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        let struct_data =
+            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+                .len(3)
+                .offset(1)
+                .nulls(Some(struct_nulls))
+                .add_child_data(int_data)
+                .build()
+                .unwrap();
+        let struct_arr_from_data = StructArray::from(struct_data);
+
+        let struct_arr = StructArray::new(
+            Fields::from(vec![int_field]),
+            vec![Arc::new(int_arr)],
+            Some(NullBuffer::new(BooleanBuffer::from(vec![
+                true, true, true, false, true,
+            ]))),
+        )
+        .slice(1, 3);
+
+        assert_eq!(struct_arr_from_data, struct_arr);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: child_len >= parent_len + parent_offset")]
+    fn test_struct_array_from_data_with_offset_and_length_error() {
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        // If parent offset is 3 and len is 3 then child must have 6 items
+        let struct_data =
+            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+                .len(3)
+                .offset(3)
+                .nulls(Some(struct_nulls))
+                .add_child_data(int_data)
+                .build()
+                .unwrap();
+        let _ = StructArray::from(struct_data);
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
