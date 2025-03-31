@@ -273,8 +273,8 @@ mod tests {
     #[tokio::test]
     async fn test_simple() {
         let (meta, store) = get_meta_store().await;
-        let object_reader =
-            ParquetObjectReader::new(store, meta.location).with_file_size(meta.size.try_into().unwrap());
+        let object_reader = ParquetObjectReader::new(store, meta.location)
+            .with_file_size(meta.size.try_into().unwrap());
 
         let builder = ParquetRecordBatchStreamBuilder::new(object_reader)
             .await
@@ -304,8 +304,8 @@ mod tests {
         let (mut meta, store) = get_meta_store().await;
         meta.location = Path::from("I don't exist.parquet");
 
-        let object_reader =
-            ParquetObjectReader::new(store, meta.location).with_file_size(meta.size.try_into().unwrap());
+        let object_reader = ParquetObjectReader::new(store, meta.location)
+            .with_file_size(meta.size.try_into().unwrap());
         // Cannot use unwrap_err as ParquetRecordBatchStreamBuilder: !Debug
         match ParquetRecordBatchStreamBuilder::new(object_reader).await {
             Ok(_) => panic!("expected failure"),
