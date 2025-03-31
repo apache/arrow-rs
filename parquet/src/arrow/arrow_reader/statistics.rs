@@ -20,7 +20,7 @@
 /// Notice that all the corresponding tests are in
 /// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
 use crate::arrow::buffer::bit_util::sign_extend_be;
-use crate::arrow::{parquet_column, ProjectionMask};
+use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
@@ -1295,11 +1295,11 @@ impl<'a> StatisticsConverter<'a> {
         parquet_schema: &'a SchemaDescriptor,
     ) -> Result<Self> {
         let mut fields = arrow_schema.fields();
-        dbg!(fields);
+
         let mut arrow_field = None;
         // ensure the requested column is in the arrow schema
         for part in column.parts() {
-            if let Some((idx, inner_arrow_field)) = fields.find(&part) {
+            if let Some((_idx, inner_arrow_field)) = fields.find(part) {
                 match inner_arrow_field.data_type() {
                     DataType::Struct(inner_fields) => {
                         fields = inner_fields;
@@ -1323,11 +1323,20 @@ impl<'a> StatisticsConverter<'a> {
 
         let mask =
             ProjectionMask::columns(parquet_schema, std::iter::once(column.string().as_str()));
-        let parquet_index = mask
-            .mask
-            .expect("expected mask to exist")
-            .iter()
-            .position(|x| *x);
+
+        let mask_inner = mask.mask.as_ref().expect("expected mask to exist");
+        let leaves_count = mask_inner.iter().filter(|x| **x).count();
+        if leaves_count != 1 {
+            return Err(arrow_err!(format!(
+                "Expected only one Parquet leaf column, got {}",
+                leaves_count
+            )));
+        }
+
+        let parquet_index = mask_inner.iter().position(|x| *x);
+
+        // TODO: restore sanity check? But this provides a "top-level" arrow schema, and we'd need to validate that the **leaf** matches the arrow_field from above.
+        // let arrow_schema = parquet_to_arrow_schema_by_columns(parquet_schema, mask, None)?;
 
         // // find the column in the parquet schema, if not, return a null array
         // // ProjectionMask::columns( , names)

@@ -2697,7 +2697,7 @@ mod test {
 }
 
 // To be removed before merging but a real-world use case
-#[cfg(test)]
+#[cfg(all(test, feature = "async"))]
 mod test_geoparquet {
     use std::sync::Arc;
 
