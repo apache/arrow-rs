@@ -62,6 +62,7 @@ mod levels;
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
 ///
+/// # Example: Writing `RecordBatch`es
 /// ```
 /// # use std::sync::Arc;
 /// # use bytes::Bytes;
@@ -83,11 +84,11 @@ mod levels;
 /// assert_eq!(to_write, read);
 /// ```
 ///
-/// ## Memory Limiting
+/// # Memory Usage and Limiting
 ///
-/// The nature of parquet forces buffering of an entire row group before it can
+/// The nature of Parquet requires buffering of an entire row group before it can
 /// be flushed to the underlying writer. Data is mostly buffered in its encoded
-/// form, reducing memory usage. However, some data such as dictionary keys or
+/// form, reducing memory usage. However, some data such as dictionary keys,
 /// large strings or very nested data may still result in non-trivial memory
 /// usage.
 ///
@@ -577,18 +578,20 @@ impl ArrowColumnChunk {
 
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
-/// Note: This is a low-level interface for applications that require fine-grained control
-/// of encoding, see [`ArrowWriter`] for a higher-level interface
+/// Note: This is a low-level interface for applications that require
+/// fine-grained control of encoding (e.g. encoding using multiple threads),
+/// see [`ArrowWriter`] for a higher-level interface
 ///
+/// # Example: Encoding two Arrow Array's in Parallel
 /// ```
 /// // The arrow schema
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
 /// # use parquet::arrow::ArrowSchemaConverter;
-/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers};
+/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers, ArrowColumnChunk};
 /// # use parquet::file::properties::WriterProperties;
-/// # use parquet::file::writer::SerializedFileWriter;
+/// # use parquet::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 /// #
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("i32", DataType::Int32, false),
@@ -606,15 +609,20 @@ impl ArrowColumnChunk {
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
 ///
 /// // Spawn a worker thread for each column
-/// // This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better
+/// //
+/// // Note: This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better.
+/// // The `map` produces an iterator of type `tuple of (thread handle, send channel)`.
 /// let mut workers: Vec<_> = col_writers
 ///     .into_iter()
 ///     .map(|mut col_writer| {
 ///         let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
 ///         let handle = std::thread::spawn(move || {
+///             // receive Arrays to encode via the channel
 ///             for col in recv {
 ///                 col_writer.write(&col)?;
 ///             }
+///             // once the input is complete, close the writer
+///             // to return the newly created ArrowColumnChunk
 ///             col_writer.close()
 ///         });
 ///         (handle, send)
@@ -623,19 +631,23 @@ impl ArrowColumnChunk {
 ///
 /// // Create parquet writer
 /// let root_schema = parquet_schema.root_schema_ptr();
-/// let mut out = Vec::with_capacity(1024); // This could be a File
-/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone()).unwrap();
+/// // write to memory in the example, but this could be a File
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
+///   .unwrap();
 ///
 /// // Start row group
-/// let mut row_group = writer.next_row_group().unwrap();
+/// let mut row_group_writer: SerializedRowGroupWriter<'_, _> = writer
+///   .next_row_group()
+///   .unwrap();
 ///
-/// // Columns to encode
+/// // Create some example input columns to encode
 /// let to_write = vec![
 ///     Arc::new(Int32Array::from_iter_values([1, 2, 3])) as _,
 ///     Arc::new(Float32Array::from_iter_values([1., 45., -1.])) as _,
 /// ];
 ///
-/// // Spawn work to encode columns
+/// // Send the input columns to the workers
 /// let mut worker_iter = workers.iter_mut();
 /// for (arr, field) in to_write.iter().zip(&schema.fields) {
 ///     for leaves in compute_leaves(field, arr).unwrap() {
@@ -643,13 +655,16 @@ impl ArrowColumnChunk {
 ///     }
 /// }
 ///
-/// // Finish up parallel column encoding
+/// // Wait for the workers to complete encoding, and append
+/// // the resulting column chunks to the row group (and the file)
 /// for (handle, send) in workers {
 ///     drop(send); // Drop send side to signal termination
-///     let chunk = handle.join().unwrap().unwrap();
-///     chunk.append_to_row_group(&mut row_group).unwrap();
+///     // wait for the worker to send the completed chunk
+///     let chunk: ArrowColumnChunk = handle.join().unwrap().unwrap();
+///     chunk.append_to_row_group(&mut row_group_writer).unwrap();
 /// }
-/// row_group.close().unwrap();
+/// // Close the row group which writes to the underlying file
+/// row_group_writer.close().unwrap();
 ///
 /// let metadata = writer.close().unwrap();
 /// assert_eq!(metadata.num_rows, 3);
