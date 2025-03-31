@@ -936,10 +936,12 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    T::DATA_TYPE,
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1022,10 +1024,12 @@ fn build_boolean_array(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    "Boolean",
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1781,7 +1785,7 @@ mod tests {
         match csv.next() {
             Some(e) => match e {
                 Err(e) => assert_eq!(
-                    "ParseError(\"Error while parsing value 4.x4 for column 1 at line 4\")",
+                    "ParseError(\"Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'\")",
                     format!("{e:?}")
                 ),
                 Ok(_) => panic!("should have failed"),
