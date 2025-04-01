@@ -710,7 +710,8 @@ impl ParquetMetaDataReader {
                 ));
             }
 
-            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
+            // need to slice off the footer or decryption fails
+            Ok((self.decode_footer_metadata(&meta.slice(0..length), &footer)?, None))
         } else {
             let metadata_start = suffix_len - metadata_offset;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
