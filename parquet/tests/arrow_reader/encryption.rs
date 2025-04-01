@@ -154,7 +154,7 @@ fn test_decrypting_without_decryption_properties_fails() {
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
-        "Parquet error: Parquet file has an encrypted footer but no decryption properties were provided"
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
     );
 }
 
