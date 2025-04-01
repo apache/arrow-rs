@@ -43,14 +43,51 @@ mod filter;
 mod selection;
 pub mod statistics;
 
-/// Builder for constructing parquet readers into arrow.
+/// Builder for constructing Parquet readers that decode into [Apache Arrow]
+/// arrays.
 ///
 /// Most users should use one of the following specializations:
 ///
 /// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
 /// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
 ///
+/// # Features
+/// * Projection pushdown: [`Self::with_projection`]
+/// * Cached metadata: [`ArrowReaderMetadata::load`]
+/// * Offset skipping: [`Self::with_offset`] and [`Self::with_limit`]
+/// * Row group filtering: [`Self::with_row_groups`]
+/// * Range filtering: [`Self::with_row_selection`]
+/// * Row level filtering: [`Self::with_row_filter`]
+///
+/// # Implementing Predicate Pushdown
+///
+/// [`Self::with_row_filter`] permits filter evaluation *during* the decoding
+/// process, which is efficient and allows the most low level optimizations.
+///
+/// However, most Parquet based systems will apply filters at many steps prior
+/// to decoding such as pruning files, row groups and data pages. This crate
+/// provides the low level APIs needed to implement such filtering, but not
+/// include any logic to actually evaluate predicates. For example:
+///
+/// *  [`Self::with_row_groups`] for Row Group pruning
+/// * [`Self::with_row_selection`] for data page pruning
+/// * [`StatisticsConverter`] to convert Parquet statistics to Arrow arrays
+///
+/// The rationale for this design is that implementing predicate pushdown is a
+/// complex topic and varys significantly from system to system. For example
+///
+/// 1. Predicates supported (do you support predicates like prefix matching, user defined functions, etc)
+/// 2. Evaluating predicates on multiple files (with potentially different but compatible schemas)
+/// 3. Evaluating predicates using information from an external metadata catalog (e.g. Apache Iceberg or similar)
+/// 4. Interlave fetching metadata, evaluating predicates, and decoding files
+///
+/// You can read more about this design in the [Querying Parquet with
+/// Millisecond Latency] Arrow blog post.
+///
 /// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
+/// [Apache Arrow]: https://arrow.apache.org/
+/// [`StatisticsConverter`]: statistics::StatisticsConverter
+/// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
 pub struct ArrowReaderBuilder<T> {
     pub(crate) input: T,
 
