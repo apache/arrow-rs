@@ -215,7 +215,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             group.bench_function(BenchmarkId::new("extract_statistics", dtype.clone()), |b| {
                 b.iter(|| {
                     let converter = StatisticsConverter::try_new(
-                        "col",
+                        &"col".into(),
                         reader.schema(),
                         reader.parquet_schema(),
                     )

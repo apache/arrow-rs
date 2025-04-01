@@ -20,14 +20,14 @@
 /// Notice that all the corresponding tests are in
 /// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
 use crate::arrow::buffer::bit_util::sign_extend_be;
-use crate::arrow::parquet_column;
+use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
 use crate::file::page_index::index::{Index, PageIndex};
 use crate::file::statistics::Statistics as ParquetStatistics;
-use crate::schema::types::SchemaDescriptor;
+use crate::schema::types::{ColumnPath, SchemaDescriptor};
 use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder, StringBuilder,
     StringViewBuilder,
@@ -1290,32 +1290,69 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// * If the column is not found in the arrow schema
     pub fn try_new<'b>(
-        column_name: &'b str,
+        column: &'b ColumnPath,
         arrow_schema: &'a Schema,
         parquet_schema: &'a SchemaDescriptor,
     ) -> Result<Self> {
-        // ensure the requested column is in the arrow schema
-        let Some((_idx, arrow_field)) = arrow_schema.column_with_name(column_name) else {
-            return Err(arrow_err!(format!(
-                "Column '{}' not found in schema for statistics conversion",
-                column_name
-            )));
-        };
+        let mut fields = arrow_schema.fields();
 
-        // find the column in the parquet schema, if not, return a null array
-        let parquet_index = match parquet_column(parquet_schema, arrow_schema, column_name) {
-            Some((parquet_idx, matched_field)) => {
-                // sanity check that matching field matches the arrow field
-                if matched_field.as_ref() != arrow_field {
-                    return Err(arrow_err!(format!(
-                        "Matched column '{:?}' does not match original matched column '{:?}'",
-                        matched_field, arrow_field
-                    )));
+        let mut arrow_field = None;
+        // ensure the requested column is in the arrow schema
+        for part in column.parts() {
+            if let Some((_idx, inner_arrow_field)) = fields.find(part) {
+                match inner_arrow_field.data_type() {
+                    DataType::Struct(inner_fields) => {
+                        fields = inner_fields;
+                    }
+                    _ => {
+                        arrow_field = Some(inner_arrow_field);
+                    }
                 }
-                Some(parquet_idx)
-            }
-            None => None,
-        };
+            } else {
+                return Err(arrow_err!(format!(
+                    "Column '{}' not found in schema for statistics conversion",
+                    column
+                )));
+            };
+        }
+
+        let arrow_field = arrow_field.ok_or(arrow_err!(format!(
+            "Column '{}' not found in schema for statistics conversion",
+            column
+        )))?;
+
+        let mask =
+            ProjectionMask::columns(parquet_schema, std::iter::once(column.string().as_str()));
+
+        let mask_inner = mask.mask.as_ref().expect("expected mask to exist");
+        let leaves_count = mask_inner.iter().filter(|x| **x).count();
+        if leaves_count != 1 {
+            return Err(arrow_err!(format!(
+                "Expected only one Parquet leaf column, got {}",
+                leaves_count
+            )));
+        }
+
+        let parquet_index = mask_inner.iter().position(|x| *x);
+
+        // TODO: restore sanity check? But this provides a "top-level" arrow schema, and we'd need to validate that the **leaf** matches the arrow_field from above.
+        // let arrow_schema = parquet_to_arrow_schema_by_columns(parquet_schema, mask, None)?;
+
+        // // find the column in the parquet schema, if not, return a null array
+        // // ProjectionMask::columns( , names)
+        // let parquet_index = match parquet_column(parquet_schema, arrow_schema, column_name) {
+        //     Some((parquet_idx, matched_field)) => {
+        //         // sanity check that matching field matches the arrow field
+        //         if matched_field.as_ref() != arrow_field {
+        //             return Err(arrow_err!(format!(
+        //                 "Matched column '{:?}' does not match original matched column '{:?}'",
+        //                 matched_field, arrow_field
+        //             )));
+        //         }
+        //         Some(parquet_idx)
+        //     }
+        //     None => None,
+        // };
 
         Ok(Self {
             parquet_column_index: parquet_index,

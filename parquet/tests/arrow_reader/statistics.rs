@@ -221,7 +221,7 @@ struct Test<'a> {
 impl Test<'_> {
     fn run(self) {
         let converter = StatisticsConverter::try_new(
-            self.column_name,
+            &self.column_name.into(),
             self.reader.schema(),
             self.reader.parquet_schema(),
         )
@@ -231,9 +231,12 @@ impl Test<'_> {
     }
 
     fn run_with_schema(self, schema: &Schema) {
-        let converter =
-            StatisticsConverter::try_new(self.column_name, schema, self.reader.parquet_schema())
-                .unwrap();
+        let converter = StatisticsConverter::try_new(
+            &self.column_name.into(),
+            schema,
+            self.reader.parquet_schema(),
+        )
+        .unwrap();
 
         self.run_checks(converter);
     }
@@ -343,8 +346,11 @@ impl Test<'_> {
             ..
         } = self;
 
-        let converter =
-            StatisticsConverter::try_new(column_name, reader.schema(), reader.parquet_schema());
+        let converter = StatisticsConverter::try_new(
+            &column_name.into(),
+            reader.schema(),
+            reader.parquet_schema(),
+        );
 
         assert!(converter.is_err());
     }
@@ -2166,7 +2172,8 @@ fn missing_null_counts_as_zero() {
         .build()
         .unwrap();
 
-    let converter = StatisticsConverter::try_new("b", &arrow_schema, &parquet_schema).unwrap();
+    let converter =
+        StatisticsConverter::try_new(&"b".into(), &arrow_schema, &parquet_schema).unwrap();
 
     // by default null count should be 0
     assert_eq!(
@@ -2511,8 +2518,12 @@ mod test {
                     continue;
                 }
 
-                let converter =
-                    StatisticsConverter::try_new(field.name(), &schema, parquet_schema).unwrap();
+                let converter = StatisticsConverter::try_new(
+                    &field.name().as_str().into(),
+                    &schema,
+                    parquet_schema,
+                )
+                .unwrap();
 
                 assert_eq!(converter.arrow_field(), field.as_ref());
 
@@ -2612,7 +2623,8 @@ mod test {
                 } = expected_column;
 
                 let converter =
-                    StatisticsConverter::try_new(name, arrow_schema, parquet_schema).unwrap();
+                    StatisticsConverter::try_new(&name.into(), arrow_schema, parquet_schema)
+                        .unwrap();
 
                 // test accessors on the converter
                 let parquet_column_index =
@@ -2681,5 +2693,72 @@ mod test {
             .map(|s| s.map(|s| s.to_string()))
             .collect();
         Arc::new(array)
+    }
+}
+
+// To be removed before merging but a real-world use case
+#[cfg(all(test, feature = "async"))]
+mod test_geoparquet {
+    use std::sync::Arc;
+
+    use arrow::array::AsArray;
+    use arrow::datatypes::Float32Type;
+    use object_store::aws::AmazonS3Builder;
+    use parquet::arrow::arrow_reader::ArrowReaderMetadata;
+    use parquet::arrow::async_reader::ParquetObjectReader;
+    use parquet::schema::types::ColumnPath;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_struct_geoparquet() {
+        let store = Arc::new(
+            AmazonS3Builder::new()
+                .with_bucket_name("overturemaps-us-west-2")
+                .with_skip_signature(true)
+                .with_region("us-west-2")
+                .build()
+                .unwrap(),
+        );
+        let path = "release/2025-02-19.0/theme=addresses/type=address/part-00010-e084a2d7-fea9-41e5-a56f-e638a3307547-c000.zstd.parquet";
+        let mut object_reader = ParquetObjectReader::new(store, path.into());
+        let meta = ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
+            .await
+            .unwrap();
+
+        let parquet_schema = meta.parquet_schema();
+        let column_desc = parquet_schema.column(2);
+
+        let min_bytes = meta
+            .metadata()
+            .row_group(0)
+            .column(2)
+            .statistics()
+            .unwrap()
+            .min_bytes_opt()
+            .unwrap();
+        dbg!(column_desc.path());
+        dbg!(min_bytes);
+        let statistics_value_direct = f32::from_le_bytes(min_bytes.try_into().unwrap());
+        dbg!(statistics_value_direct);
+
+        let converter = StatisticsConverter::try_new(
+            &ColumnPath::new(vec!["bbox".to_string(), "xmin".to_string()]),
+            meta.schema(),
+            meta.parquet_schema(),
+        )
+        .unwrap();
+        let mins = converter
+            .row_group_mins(meta.metadata().row_groups())
+            .unwrap();
+        let mins_values = mins.as_primitive::<Float32Type>();
+        assert!(mins_values.is_valid(0));
+        let statistics_value_via_converter = mins_values.value(0);
+
+        assert_eq!(statistics_value_direct, statistics_value_via_converter)
+
+        // meta.metadata().row_group(0)
+        // Ok()
+        // ParquetRecordBatchStreamBuilder::
     }
 }
