@@ -303,14 +303,23 @@ impl From<ArrayData> for StructArray {
             .map(|cd| {
                 let child_offset = cd.offset();
                 let child_len = cd.len();
-                assert!(child_len >= parent_len + parent_offset);
-                let cd = cd
-                    .clone()
-                    .into_builder()
-                    .offset(child_offset + parent_offset)
-                    .len(child_len.min(parent_len))
-                    .build()
-                    .unwrap();
+                assert!(
+                    child_len >= parent_len + parent_offset,
+                    "struct array has offset {} and len {} but child array only has {} items",
+                    parent_offset,
+                    parent_len,
+                    child_len
+                );
+                // SAFETY: We have already checked that the child array has enough items and the
+                // only thing we are changing is the offset and length.  As long as the child data
+                // was previously valid, then the new child data is also valid.
+                let cd = unsafe {
+                    cd.clone()
+                        .into_builder()
+                        .offset(child_offset + parent_offset)
+                        .len(child_len.min(parent_len))
+                        .build_unchecked()
+                };
                 make_array(cd.clone())
             })
             .collect();
@@ -567,7 +576,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: child_len >= parent_len + parent_offset")]
+    #[should_panic(
+        expected = "struct array has offset 3 and len 3 but child array only has 5 items"
+    )]
     fn test_struct_array_from_data_with_offset_and_length_error() {
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
