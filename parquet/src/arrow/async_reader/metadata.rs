@@ -83,7 +83,7 @@ pub trait MetadataSuffixFetch: MetadataFetch {
     ///
     /// Note the returned type is a boxed future, often created by
     /// [FutureExt::boxed]. See the trait documentation for an example
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+    fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>>;
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source

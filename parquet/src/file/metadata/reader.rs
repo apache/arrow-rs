@@ -682,7 +682,7 @@ impl ParquetMetaDataReader {
     ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
         let prefetch = self.get_prefetch_size();
 
-        let suffix = fetch.fetch_suffix(prefetch).await?;
+        let suffix = fetch.fetch_suffix(prefetch as _).await?;
         let suffix_len = suffix.len();
 
         if suffix_len < FOOTER_SIZE {
@@ -702,7 +702,7 @@ impl ParquetMetaDataReader {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let metadata_offset = length + FOOTER_SIZE;
         if length > suffix_len - FOOTER_SIZE {
-            let meta = fetch.fetch_suffix(metadata_offset).await?;
+            let meta = fetch.fetch_suffix(metadata_offset as u64).await?;
 
             if meta.len() < metadata_offset {
                 return Err(eof_err!(
@@ -1231,27 +1231,27 @@ mod async_tests {
 
     impl<F1, Fut, F2> MetadataFetch for MetadataSuffixFetchFn<F1, F2>
     where
-        F1: FnMut(Range<usize>) -> Fut + Send,
+        F1: FnMut(Range<u64>) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
         F2: Send,
     {
-        fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+        fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
             async move { self.0(range).await }.boxed()
         }
     }
 
     impl<F1, Fut, F2> MetadataSuffixFetch for MetadataSuffixFetchFn<F1, F2>
     where
-        F1: FnMut(Range<usize>) -> Fut + Send,
-        F2: FnMut(usize) -> Fut + Send,
+        F1: FnMut(Range<u64>) -> Fut + Send,
+        F2: FnMut(u64) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
     {
-        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+        fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>> {
             async move { self.1(suffix).await }.boxed()
         }
     }
 
-    fn read_range(file: &mut File, range: Range<usize>) -> Result<Bytes> {
+    fn read_range(file: &mut File, range: Range<u64>) -> Result<Bytes> {
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
         let mut buf = Vec::with_capacity(len as usize);
@@ -1259,11 +1259,11 @@ mod async_tests {
         Ok(buf.into())
     }
 
-    fn read_suffix(file: &mut File, suffix: usize) -> Result<Bytes> {
+    fn read_suffix(file: &mut File, suffix: u64) -> Result<Bytes> {
         let file_len = file.len();
         // Don't seek before beginning of file
-        file.seek(SeekFrom::End(0 - suffix.min(file_len as usize) as i64))?;
-        let mut buf = Vec::with_capacity(suffix);
+        file.seek(SeekFrom::End(0 - suffix.min(file_len) as i64))?;
+        let mut buf = Vec::with_capacity(suffix as usize);
         file.take(suffix as _).read_to_end(&mut buf)?;
         Ok(buf.into())
     }
