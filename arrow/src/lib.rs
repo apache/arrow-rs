@@ -243,6 +243,10 @@
 //! let batch = RecordBatch::try_from_iter([("col1", col_1), ("col_2", col_2)]).unwrap();
 //! ```
 //!
+//! # Pretty Printing
+//!
+//! See the [`util::pretty`] module (requires the `prettyprint` crate feature)
+//!
 //! # IO
 //!
 //! This crate provides readers and writers for various formats to/from [`RecordBatch`]

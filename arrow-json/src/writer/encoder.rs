@@ -387,15 +387,6 @@ struct StructArrayEncoder<'a> {
     struct_mode: StructMode,
 }
 
-/// This API is only stable since 1.70 so can't use it when current MSRV is lower
-#[inline(always)]
-fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
-    match opt {
-        None => false,
-        Some(x) => f(x),
-    }
-}
-
 impl Encoder for StructArrayEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         match self.struct_mode {
@@ -740,7 +731,7 @@ impl<'a> MapEncoder<'a> {
             ));
         }
 
-        if is_some_and(array.entries().nulls(), |x| x.null_count() != 0) {
+        if array.entries().nulls().is_some_and(|x| x.null_count() != 0) {
             return Err(ArrowError::InvalidArgumentError(
                 "Encountered nulls in MapArray entries".to_string(),
             ));
