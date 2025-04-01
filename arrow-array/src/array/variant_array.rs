@@ -40,7 +40,13 @@ use std::any::Any;
 /// use arrow_array::Array; // Import the Array trait
 ///
 /// // Create metadata and value for each variant
-/// let metadata = vec![1, 2, 3];
+/// let metadata = vec![
+///     0x01,  // header: version=1, sorted=0, offset_size=1
+///     0x01,  // dictionary_size = 1
+///     0x00,  // offset 0
+///     0x03,  // offset 3
+///     b'k', b'e', b'y'  // dictionary bytes
+/// ];
 /// let variant_type = Variant::new(metadata.clone(), vec![]);
 /// 
 /// // Create variants with different values
@@ -76,7 +82,13 @@ pub mod variant_array_module {
     /// use arrow_array::Array; // Import the Array trait
     ///
     /// // Create metadata and value for each variant
-    /// let metadata = vec![1, 2, 3];
+    /// let metadata = vec![
+    ///     0x01,  // header: version=1, sorted=0, offset_size=1
+    ///     0x01,  // dictionary_size = 1
+    ///     0x00,  // offset 0
+    ///     0x03,  // offset 3
+    ///     b'k', b'e', b'y'  // dictionary bytes
+    /// ];
     /// let variant_type = Variant::new(metadata.clone(), vec![]);
     /// 
     /// // Create variants with different values
@@ -214,13 +226,65 @@ pub mod variant_array_module {
             Ok(&self.value_data.as_slice()[start..end])
         }
 
+        /// Calculate the length of variant metadata from serialized data
+        fn get_metadata_length(serialized: &[u8]) -> Result<usize, ArrowError> {
+            if serialized.is_empty() {
+                return Err(ArrowError::InvalidArgumentError("Empty variant data".to_string()));
+            }
+            
+            // Parse header
+            let header = serialized[0];
+            let version = header & 0x0F;
+            let offset_size_minus_one = (header >> 6) & 0x03;
+            let offset_size = (offset_size_minus_one + 1) as usize;
+            
+            if version != 1 {
+                return Err(ArrowError::InvalidArgumentError(format!("Invalid variant version: {}", version)));
+            }
+            
+            if serialized.len() < 1 + offset_size {
+                return Err(ArrowError::InvalidArgumentError("Variant data too short for dictionary size".to_string()));
+            }
+            
+            // Read dictionary_size
+            let mut dictionary_size = 0u32;
+            for i in 0..offset_size {
+                dictionary_size |= (serialized[1 + i] as u32) << (8 * i);
+            }
+            
+            // Calculate metadata structure size
+            let offset_list_size = offset_size * (dictionary_size as usize + 1);
+            let metadata_header_size = 1 + offset_size + offset_list_size;
+            
+            if serialized.len() < metadata_header_size {
+                return Err(ArrowError::InvalidArgumentError("Variant data too short for offsets".to_string()));
+            }
+            
+            // Get bytes length from last offset
+            let last_offset_pos = 1 + offset_size + offset_list_size - offset_size;
+            let mut bytes_length = 0u32;
+            for i in 0..offset_size {
+                bytes_length |= (serialized[last_offset_pos + i] as u32) << (8 * i);
+            }
+            
+            // Calculate total metadata length
+            let metadata_len = metadata_header_size + bytes_length as usize;
+            
+            if serialized.len() < metadata_len {
+                return Err(ArrowError::InvalidArgumentError("Variant metadata exceeds available data".to_string()));
+            }
+            
+            Ok(metadata_len)
+        }
+
         /// Return the Variant at the specified position.
         pub fn value(&self, i: usize) -> Result<Variant, ArrowError> {
             let serialized = self.value_bytes(i)?;
-            let metadata_len = self.variant_type.metadata().len();
+            let metadata_len = Self::get_metadata_length(serialized)?;
             
-            // Split the serialized data into metadata and value
-            let (metadata, value) = serialized.split_at(metadata_len);
+            // Split metadata and value
+            let metadata = &serialized[0..metadata_len];
+            let value = &serialized[metadata_len..];
             
             Ok(Variant::new(metadata.to_vec(), value.to_vec()))
         }
@@ -400,9 +464,20 @@ pub mod variant_array_module {
     mod tests {
         use super::*;
 
+        // Helper function to create valid metadata for tests
+        fn create_test_metadata() -> Vec<u8> {
+            vec![
+                0x01,  // header: version=1, sorted=0, offset_size=1
+                0x01,  // dictionary_size = 1
+                0x00,  // offset 0
+                0x03,  // offset 3
+                b'k', b'e', b'y'  // dictionary bytes
+            ]
+        }
+
         #[test]
         fn test_variant_array_from_variants() {
-            let metadata = vec![1, 2, 3];
+            let metadata = create_test_metadata();
             let variant_type = Variant::new(metadata.clone(), vec![]);
             
             let variants = vec![
@@ -411,7 +486,8 @@ pub mod variant_array_module {
                 Variant::new(metadata.clone(), b"value3".to_vec()),
             ];
             
-            let array = VariantArray::from_variants(variant_type, variants.clone()).expect("Failed to create VariantArray");
+            let array = VariantArray::from_variants(variant_type, variants.clone())
+                .expect("Failed to create VariantArray");
             
             assert_eq!(array.len(), 3);
             
@@ -424,7 +500,7 @@ pub mod variant_array_module {
 
         #[test]
         fn test_variant_builder() {
-            let metadata = vec![1, 2, 3];
+            let metadata = create_test_metadata();
             let variant_type = Variant::new(metadata.clone(), vec![]);
             
             let variants = vec![
@@ -458,7 +534,7 @@ pub mod variant_array_module {
 
         #[test]
         fn test_variant_array_slice() {
-            let metadata = vec![1, 2, 3];
+            let metadata = create_test_metadata();
             let variant_type = Variant::new(metadata.clone(), vec![]);
             
             let variants = vec![
@@ -468,7 +544,8 @@ pub mod variant_array_module {
                 Variant::new(metadata.clone(), b"value4".to_vec()),
             ];
             
-            let array = VariantArray::from_variants(variant_type, variants.clone()).expect("Failed to create VariantArray");
+            let array = VariantArray::from_variants(variant_type, variants.clone())
+                .expect("Failed to create VariantArray");
             
             let sliced = array.slice(1, 2);
             let sliced = sliced.as_any().downcast_ref::<VariantArray>().unwrap();
@@ -484,7 +561,7 @@ pub mod variant_array_module {
 
         #[test]
         fn test_from_binary_data() {
-            let metadata = vec![1, 2, 3];
+            let metadata = create_test_metadata();
             let variant_type = Variant::new(metadata.clone(), vec![]);
             
             let mut builder = BinaryBuilder::new();
@@ -499,10 +576,9 @@ pub mod variant_array_module {
             }
             
             let binary_array = builder.finish();
-            
-            // Convert to VariantArray using from_data
             let binary_data = binary_array.to_data();
-            let variant_array = VariantArray::from_data(binary_data, variant_type).expect("Failed to create VariantArray");
+            let variant_array = VariantArray::from_data(binary_data, variant_type)
+                .expect("Failed to create VariantArray");
             
             assert_eq!(variant_array.len(), 3);
             
@@ -514,6 +590,35 @@ pub mod variant_array_module {
                     format!("value{}", i+1)
                 );
             }
+        }
+        #[test]
+        fn test_get_metadata_length() {
+            // Create metadata following the spec:
+            // - header: version=1, sorted=0, offset_size=2 bytes (offset_size_minus_one=1)
+            // - dictionary_size: 2 strings
+            // - dictionary strings: "key1", "key2"
+            let mut data = vec![
+                0x41,  // header: 0100 0001b (version=1, sorted=0, offset_size_minus_one=1)
+                0x02, 0x00,  // dictionary_size = 2 (2 bytes, little-endian)
+                // offsets (3 offsets, 2 bytes each)
+                0x00, 0x00,  // offset for "key1" start
+                0x04, 0x00,  // offset for "key2" start
+                0x08, 0x00,  // total bytes length
+                // dictionary string bytes
+                b'k', b'e', b'y', b'1',  // first string
+                b'k', b'e', b'y', b'2'   // second string
+            ];
+            // Add some value data after metadata
+            data.extend_from_slice(b"value data");
+
+            // Total metadata length should be:
+            // 1 (header) + 2 (dictionary_size) + 6 (offsets) + 8 (string bytes) = 17
+            assert_eq!(VariantArray::get_metadata_length(&data).unwrap(), 17);
+
+            // Test error cases
+            assert!(VariantArray::get_metadata_length(&[]).is_err());  // Empty
+            assert!(VariantArray::get_metadata_length(&[0x42]).is_err());  // Wrong version
+            assert!(VariantArray::get_metadata_length(&[0x41, 0x02]).is_err());  // Too short
         }
     }
 }

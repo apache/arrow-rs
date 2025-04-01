@@ -4442,11 +4442,19 @@ mod tests {
         use bytes::Bytes;
         use std::sync::Arc;
         use crate::arrow::arrow_writer::ArrowWriter;
-        // use crate::file::properties::{WriterProperties, EnabledStatistics};
 
-        let variant_metadata = vec![1, 2, 3];
-        let variant_type = Variant::new(variant_metadata.clone(), vec![]);
+        // Extension type metadata - can be simple as it's just for type identification
+        let extension_metadata = vec![1, 2, 3];
+        let variant_type = Variant::new(extension_metadata.clone(), vec![]);
 
+        // Value metadata - needs to follow the spec format
+        let value_metadata = vec![
+            0x01,  // header: version=1, sorted=0, offset_size=1
+            0x01,  // dictionary_size = 1
+            0x00,  // offset 0
+            0x03,  // offset 3
+            b'k', b'e', b'y'  // dictionary bytes
+        ];
         let sample_json_values = vec![
             "null",
             "true",
@@ -4456,15 +4464,13 @@ mod tests {
             "4.5678E123",
             "\"string value\"",
             "{\"a\": 1, \"b\": {\"e\": -4, \"f\": 5.5}, \"c\": true}",
-            "[1, -2, 4.5, -6.7, \"str\", true]"
-        ];
+            "[1, -2, 4.5, -6.7, \"str\", true]"];
 
         let original_variants: Vec<Variant> = sample_json_values
             .iter()
-            .map(|json| Variant::new(variant_metadata.clone(), json.as_bytes().to_vec()))
+            .map(|json| Variant::new(value_metadata.clone(), json.as_bytes().to_vec()))
             .collect();
 
-        // Use VariantArray directly
         let variant_array = VariantArray::from_variants(variant_type.clone(), original_variants.clone())
             .expect("Failed to create VariantArray");
         
@@ -4505,7 +4511,7 @@ mod tests {
         assert_eq!(field.metadata().get("ARROW:extension:name").unwrap(), "arrow.variant");
         
         let extension_type = field.extension_type::<Variant>();
-        assert_eq!(extension_type.metadata(), &variant_metadata);
+        assert_eq!(extension_type.metadata(), &extension_metadata);
 
         let variant_array = VariantArray::from_data(
             out.column(0).to_data(),
