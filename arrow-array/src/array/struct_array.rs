@@ -317,7 +317,7 @@ impl From<ArrayData> for StructArray {
                     cd.clone()
                         .into_builder()
                         .offset(child_offset + parent_offset)
-                        .len(child_len.min(parent_len))
+                        .len(parent_len)
                         .build_unchecked()
                 };
                 make_array(cd.clone())
