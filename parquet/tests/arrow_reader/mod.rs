@@ -38,15 +38,6 @@ use tempfile::NamedTempFile;
 mod bad_data;
 #[cfg(feature = "crc")]
 mod checksum;
-#[cfg(feature = "encryption")]
-mod encryption;
-mod encryption_agnostic;
-#[cfg(all(feature = "encryption", feature = "async"))]
-mod encryption_async;
-#[cfg(not(feature = "encryption"))]
-mod encryption_disabled;
-#[cfg(feature = "encryption")]
-mod encryption_util;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values

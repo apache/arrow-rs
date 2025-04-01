@@ -815,6 +815,17 @@ impl ParquetMetaDataReader {
                 let t_file_crypto_metadata: TFileCryptoMetaData =
                     TFileCryptoMetaData::read_from_in_protocol(&mut prot)
                         .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
+                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
+                    _ => Some(false),
+                }
+                .unwrap_or(false);
+                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
+                    return Err(general_err!(
+                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                        but no AAD prefix was provided in the file decryption properties"
+                    ));
+                }
                 let decryptor = get_file_decryptor(
                     t_file_crypto_metadata.encryption_algorithm,
                     t_file_crypto_metadata.key_metadata.as_deref(),
@@ -834,7 +845,7 @@ impl ParquetMetaDataReader {
 
                 file_decryptor = Some(decryptor);
             } else {
-                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
+                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
             }
         }
 
@@ -959,8 +970,8 @@ fn get_file_decryptor(
             let aad_file_unique = algo
                 .aad_file_unique
                 .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if file_decryption_properties.aad_prefix.is_some() {
-                file_decryption_properties.aad_prefix.clone().unwrap()
+            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
+                aad_prefix.clone()
             } else {
                 algo.aad_prefix.unwrap_or_default()
             };
