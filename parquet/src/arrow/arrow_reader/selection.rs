@@ -200,9 +200,9 @@ impl RowSelection {
                 }
             } else {
                 if !(selector.skip || current_page_included) {
-                    let start = page.offset as usize;
-                    let end = start + page.compressed_page_size as usize;
-                    ranges.push(start as u64..end as u64);
+                    let start = page.offset as u64;
+                    let end = start + page.compressed_page_size as u64;
+                    ranges.push(start..end);
                 }
                 current_selector = selectors.next()
             }
