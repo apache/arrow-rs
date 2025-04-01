@@ -845,7 +845,7 @@ impl ParquetMetaDataReader {
 
                 file_decryptor = Some(decryptor);
             } else {
-                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
+                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
             }
         }
 
