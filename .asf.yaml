@@ -30,7 +30,6 @@ github:
   labels:
     - arrow
     - parquet
-    - object-store
     - rust
   enabled_merge_buttons:
     squash: true

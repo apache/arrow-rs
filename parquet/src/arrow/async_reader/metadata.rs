@@ -76,6 +76,16 @@ impl<T: AsyncFileReader> MetadataFetch for &mut T {
     }
 }
 
+/// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`] via suffix
+/// requests, without knowing the file size
+pub trait MetadataSuffixFetch: MetadataFetch {
+    /// Return a future that fetches the last `n` bytes asynchronously
+    ///
+    /// Note the returned type is a boxed future, often created by
+    /// [FutureExt::boxed]. See the trait documentation for an example
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+}
+
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
 pub struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously

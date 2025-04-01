@@ -15,29 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests the HTTP store implementation
-
-#[cfg(feature = "http")]
-use object_store::{http::HttpBuilder, path::Path, GetOptions, GetRange, ObjectStore};
-
-/// Tests that even when reqwest has the `gzip` feature enabled, the HTTP store
-/// does not error on a missing `Content-Length` header.
-#[tokio::test]
-#[cfg(feature = "http")]
-async fn test_http_store_gzip() {
-    let http_store = HttpBuilder::new()
-        .with_url("https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main")
-        .build()
-        .unwrap();
-
-    let _ = http_store
-        .get_opts(
-            &Path::parse("LICENSE.txt").unwrap(),
-            GetOptions {
-                range: Some(GetRange::Bounded(0..100)),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-}
+#[cfg(feature = "encryption")]
+mod encryption;
+mod encryption_agnostic;
+#[cfg(all(feature = "encryption", feature = "async"))]
+mod encryption_async;
+#[cfg(not(feature = "encryption"))]
+mod encryption_disabled;
+#[cfg(feature = "encryption")]
+mod encryption_util;

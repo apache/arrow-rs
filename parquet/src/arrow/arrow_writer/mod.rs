@@ -35,11 +35,14 @@ use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_pr
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::arrow::ArrowSchemaConverter;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
+use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
     get_column_writer, ColumnCloseResult, ColumnWriter, GenericColumnWriter,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
@@ -59,6 +62,7 @@ mod levels;
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
 ///
+/// # Example: Writing `RecordBatch`es
 /// ```
 /// # use std::sync::Arc;
 /// # use bytes::Bytes;
@@ -80,11 +84,11 @@ mod levels;
 /// assert_eq!(to_write, read);
 /// ```
 ///
-/// ## Memory Limiting
+/// # Memory Usage and Limiting
 ///
-/// The nature of parquet forces buffering of an entire row group before it can
+/// The nature of Parquet requires buffering of an entire row group before it can
 /// be flushed to the underlying writer. Data is mostly buffered in its encoded
-/// form, reducing memory usage. However, some data such as dictionary keys or
+/// form, reducing memory usage. However, some data such as dictionary keys,
 /// large strings or very nested data may still result in non-trivial memory
 /// usage.
 ///
@@ -135,6 +139,9 @@ pub struct ArrowWriter<W: Write> {
     ///
     /// The schema is used to verify that each record batch written has the correct schema
     arrow_schema: SchemaRef,
+
+    /// Creates new [`ArrowRowGroupWriter`] instances as required
+    row_group_writer_factory: ArrowRowGroupWriterFactory,
 
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
@@ -194,10 +201,13 @@ impl<W: Write + Send> ArrowWriter<W> {
         let file_writer =
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::new(props))?;
 
+        let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&file_writer);
+
         Ok(Self {
             writer: file_writer,
             in_progress: None,
             arrow_schema,
+            row_group_writer_factory,
             max_row_group_size,
         })
     }
@@ -262,10 +272,11 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
-            x => x.insert(ArrowRowGroupWriter::new(
+            x => x.insert(self.row_group_writer_factory.create_row_group_writer(
                 self.writer.schema_descr(),
                 self.writer.properties(),
                 &self.arrow_schema,
+                self.writer.flushed_row_groups().len(),
             )?),
         };
 
@@ -457,18 +468,56 @@ type SharedColumnChunk = Arc<Mutex<ArrowColumnChunkData>>;
 #[derive(Default)]
 struct ArrowPageWriter {
     buffer: SharedColumnChunk,
+    #[cfg(feature = "encryption")]
+    page_encryptor: Option<PageEncryptor>,
+}
+
+impl ArrowPageWriter {
+    #[cfg(feature = "encryption")]
+    pub fn with_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
+        self.page_encryptor = page_encryptor;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        self.page_encryptor.as_mut()
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        None
+    }
 }
 
 impl PageWriter for ArrowPageWriter {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
-        let mut buf = self.buffer.try_lock().unwrap();
+        let page = match self.page_encryptor_mut() {
+            Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
+            None => page,
+        };
+
         let page_header = page.to_thrift_header();
         let header = {
             let mut header = Vec::with_capacity(1024);
-            let mut protocol = TCompactOutputProtocol::new(&mut header);
-            page_header.write_to_out_protocol(&mut protocol)?;
+
+            match self.page_encryptor_mut() {
+                Some(page_encryptor) => {
+                    page_encryptor.encrypt_page_header(&page_header, &mut header)?;
+                    if page.compressed_page().is_data_page() {
+                        page_encryptor.increment_page();
+                    }
+                }
+                None => {
+                    let mut protocol = TCompactOutputProtocol::new(&mut header);
+                    page_header.write_to_out_protocol(&mut protocol)?;
+                }
+            };
+
             Bytes::from(header)
         };
+
+        let mut buf = self.buffer.try_lock().unwrap();
 
         let data = page.compressed_page().buffer().clone();
         let compressed_size = data.len() + header.len();
@@ -529,18 +578,20 @@ impl ArrowColumnChunk {
 
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
-/// Note: This is a low-level interface for applications that require fine-grained control
-/// of encoding, see [`ArrowWriter`] for a higher-level interface
+/// Note: This is a low-level interface for applications that require
+/// fine-grained control of encoding (e.g. encoding using multiple threads),
+/// see [`ArrowWriter`] for a higher-level interface
 ///
+/// # Example: Encoding two Arrow Array's in Parallel
 /// ```
 /// // The arrow schema
 /// # use std::sync::Arc;
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
 /// # use parquet::arrow::ArrowSchemaConverter;
-/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers};
+/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers, ArrowColumnChunk};
 /// # use parquet::file::properties::WriterProperties;
-/// # use parquet::file::writer::SerializedFileWriter;
+/// # use parquet::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 /// #
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("i32", DataType::Int32, false),
@@ -558,15 +609,20 @@ impl ArrowColumnChunk {
 /// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
 ///
 /// // Spawn a worker thread for each column
-/// // This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better
+/// //
+/// // Note: This is for demonstration purposes, a thread-pool e.g. rayon or tokio, would be better.
+/// // The `map` produces an iterator of type `tuple of (thread handle, send channel)`.
 /// let mut workers: Vec<_> = col_writers
 ///     .into_iter()
 ///     .map(|mut col_writer| {
 ///         let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
 ///         let handle = std::thread::spawn(move || {
+///             // receive Arrays to encode via the channel
 ///             for col in recv {
 ///                 col_writer.write(&col)?;
 ///             }
+///             // once the input is complete, close the writer
+///             // to return the newly created ArrowColumnChunk
 ///             col_writer.close()
 ///         });
 ///         (handle, send)
@@ -575,19 +631,23 @@ impl ArrowColumnChunk {
 ///
 /// // Create parquet writer
 /// let root_schema = parquet_schema.root_schema_ptr();
-/// let mut out = Vec::with_capacity(1024); // This could be a File
-/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone()).unwrap();
+/// // write to memory in the example, but this could be a File
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
+///   .unwrap();
 ///
 /// // Start row group
-/// let mut row_group = writer.next_row_group().unwrap();
+/// let mut row_group_writer: SerializedRowGroupWriter<'_, _> = writer
+///   .next_row_group()
+///   .unwrap();
 ///
-/// // Columns to encode
+/// // Create some example input columns to encode
 /// let to_write = vec![
 ///     Arc::new(Int32Array::from_iter_values([1, 2, 3])) as _,
 ///     Arc::new(Float32Array::from_iter_values([1., 45., -1.])) as _,
 /// ];
 ///
-/// // Spawn work to encode columns
+/// // Send the input columns to the workers
 /// let mut worker_iter = workers.iter_mut();
 /// for (arr, field) in to_write.iter().zip(&schema.fields) {
 ///     for leaves in compute_leaves(field, arr).unwrap() {
@@ -595,13 +655,16 @@ impl ArrowColumnChunk {
 ///     }
 /// }
 ///
-/// // Finish up parallel column encoding
+/// // Wait for the workers to complete encoding, and append
+/// // the resulting column chunks to the row group (and the file)
 /// for (handle, send) in workers {
 ///     drop(send); // Drop send side to signal termination
-///     let chunk = handle.join().unwrap().unwrap();
-///     chunk.append_to_row_group(&mut row_group).unwrap();
+///     // wait for the worker to send the completed chunk
+///     let chunk: ArrowColumnChunk = handle.join().unwrap().unwrap();
+///     chunk.append_to_row_group(&mut row_group_writer).unwrap();
 /// }
-/// row_group.close().unwrap();
+/// // Close the row group which writes to the underlying file
+/// row_group_writer.close().unwrap();
 ///
 /// let metadata = writer.close().unwrap();
 /// assert_eq!(metadata.num_rows, 3);
@@ -687,17 +750,12 @@ struct ArrowRowGroupWriter {
 }
 
 impl ArrowRowGroupWriter {
-    fn new(
-        parquet: &SchemaDescriptor,
-        props: &WriterPropertiesPtr,
-        arrow: &SchemaRef,
-    ) -> Result<Self> {
-        let writers = get_column_writers(parquet, props, arrow)?;
-        Ok(Self {
+    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
+        Self {
             writers,
             schema: arrow.clone(),
             buffered_rows: 0,
-        })
+        }
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
@@ -719,6 +777,55 @@ impl ArrowRowGroupWriter {
     }
 }
 
+struct ArrowRowGroupWriterFactory {
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
+}
+
+impl ArrowRowGroupWriterFactory {
+    #[cfg(feature = "encryption")]
+    fn new<W: Write + Send>(file_writer: &SerializedFileWriter<W>) -> Self {
+        Self {
+            file_encryptor: file_writer.file_encryptor(),
+        }
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn new<W: Write + Send>(_file_writer: &SerializedFileWriter<W>) -> Self {
+        Self {}
+    }
+
+    #[cfg(feature = "encryption")]
+    fn create_row_group_writer(
+        &self,
+        parquet: &SchemaDescriptor,
+        props: &WriterPropertiesPtr,
+        arrow: &SchemaRef,
+        row_group_index: usize,
+    ) -> Result<ArrowRowGroupWriter> {
+        let writers = get_column_writers_with_encryptor(
+            parquet,
+            props,
+            arrow,
+            self.file_encryptor.clone(),
+            row_group_index,
+        )?;
+        Ok(ArrowRowGroupWriter::new(writers, arrow))
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn create_row_group_writer(
+        &self,
+        parquet: &SchemaDescriptor,
+        props: &WriterPropertiesPtr,
+        arrow: &SchemaRef,
+        _row_group_index: usize,
+    ) -> Result<ArrowRowGroupWriter> {
+        let writers = get_column_writers(parquet, props, arrow)?;
+        Ok(ArrowRowGroupWriter::new(writers, arrow))
+    }
+}
+
 /// Returns the [`ArrowColumnWriter`] for a given schema
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
@@ -727,85 +834,173 @@ pub fn get_column_writers(
 ) -> Result<Vec<ArrowColumnWriter>> {
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
+    let column_factory = ArrowColumnWriterFactory::new();
     for field in &arrow.fields {
-        get_arrow_column_writer(field.data_type(), props, &mut leaves, &mut writers)?;
+        column_factory.get_arrow_column_writer(
+            field.data_type(),
+            props,
+            &mut leaves,
+            &mut writers,
+        )?;
     }
     Ok(writers)
 }
 
-/// Gets the [`ArrowColumnWriter`] for the given `data_type`
-fn get_arrow_column_writer(
-    data_type: &ArrowDataType,
+/// Returns the [`ArrowColumnWriter`] for a given schema and supports columnar encryption
+#[cfg(feature = "encryption")]
+fn get_column_writers_with_encryptor(
+    parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
-    leaves: &mut Iter<'_, ColumnDescPtr>,
-    out: &mut Vec<ArrowColumnWriter>,
-) -> Result<()> {
-    let col = |desc: &ColumnDescPtr| {
-        let page_writer = Box::<ArrowPageWriter>::default();
-        let chunk = page_writer.buffer.clone();
-        let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
-        ArrowColumnWriter {
-            chunk,
-            writer: ArrowColumnWriterImpl::Column(writer),
-        }
-    };
-
-    let bytes = |desc: &ColumnDescPtr| {
-        let page_writer = Box::<ArrowPageWriter>::default();
-        let chunk = page_writer.buffer.clone();
-        let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
-        ArrowColumnWriter {
-            chunk,
-            writer: ArrowColumnWriterImpl::ByteArray(writer),
-        }
-    };
-
-    match data_type {
-        _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())),
-        ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())),
-        ArrowDataType::LargeBinary
-        | ArrowDataType::Binary
-        | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8
-        | ArrowDataType::BinaryView
-        | ArrowDataType::Utf8View => {
-            out.push(bytes(leaves.next().unwrap()))
-        }
-        ArrowDataType::List(f)
-        | ArrowDataType::LargeList(f)
-        | ArrowDataType::FixedSizeList(f, _) => {
-            get_arrow_column_writer(f.data_type(), props, leaves, out)?
-        }
-        ArrowDataType::Struct(fields) => {
-            for field in fields {
-                get_arrow_column_writer(field.data_type(), props, leaves, out)?
-            }
-        }
-        ArrowDataType::Map(f, _) => match f.data_type() {
-            ArrowDataType::Struct(f) => {
-                get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
-                get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
-            }
-            _ => unreachable!("invalid map type"),
-        }
-        ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                out.push(bytes(leaves.next().unwrap()))
-            }
-            ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
-                out.push(bytes(leaves.next().unwrap()))
-            }
-            _ => {
-                out.push(col(leaves.next().unwrap()))
-            }
-        }
-       _ => return Err(ParquetError::NYI(
-           format!(
-               "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
-           )
-       ))
+    arrow: &SchemaRef,
+    file_encryptor: Option<Arc<FileEncryptor>>,
+    row_group_index: usize,
+) -> Result<Vec<ArrowColumnWriter>> {
+    let mut writers = Vec::with_capacity(arrow.fields.len());
+    let mut leaves = parquet.columns().iter();
+    let column_factory =
+        ArrowColumnWriterFactory::new().with_file_encryptor(row_group_index, file_encryptor);
+    for field in &arrow.fields {
+        column_factory.get_arrow_column_writer(
+            field.data_type(),
+            props,
+            &mut leaves,
+            &mut writers,
+        )?;
     }
-    Ok(())
+    Ok(writers)
+}
+
+/// Gets [`ArrowColumnWriter`] instances for different data types
+struct ArrowColumnWriterFactory {
+    #[cfg(feature = "encryption")]
+    row_group_index: usize,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
+}
+
+impl ArrowColumnWriterFactory {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(feature = "encryption")]
+            row_group_index: 0,
+            #[cfg(feature = "encryption")]
+            file_encryptor: None,
+        }
+    }
+
+    #[cfg(feature = "encryption")]
+    pub fn with_file_encryptor(
+        mut self,
+        row_group_index: usize,
+        file_encryptor: Option<Arc<FileEncryptor>>,
+    ) -> Self {
+        self.row_group_index = row_group_index;
+        self.file_encryptor = file_encryptor;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    fn create_page_writer(
+        &self,
+        column_descriptor: &ColumnDescPtr,
+        column_index: usize,
+    ) -> Result<Box<ArrowPageWriter>> {
+        let column_path = column_descriptor.path().string();
+        let page_encryptor = PageEncryptor::create_if_column_encrypted(
+            &self.file_encryptor,
+            self.row_group_index,
+            column_index,
+            &column_path,
+        )?;
+        Ok(Box::new(
+            ArrowPageWriter::default().with_encryptor(page_encryptor),
+        ))
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn create_page_writer(
+        &self,
+        _column_descriptor: &ColumnDescPtr,
+        _column_index: usize,
+    ) -> Result<Box<ArrowPageWriter>> {
+        Ok(Box::<ArrowPageWriter>::default())
+    }
+
+    /// Gets the [`ArrowColumnWriter`] for the given `data_type`
+    fn get_arrow_column_writer(
+        &self,
+        data_type: &ArrowDataType,
+        props: &WriterPropertiesPtr,
+        leaves: &mut Iter<'_, ColumnDescPtr>,
+        out: &mut Vec<ArrowColumnWriter>,
+    ) -> Result<()> {
+        let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+            let page_writer = self.create_page_writer(desc, out.len())?;
+            let chunk = page_writer.buffer.clone();
+            let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
+            Ok(ArrowColumnWriter {
+                chunk,
+                writer: ArrowColumnWriterImpl::Column(writer),
+            })
+        };
+
+        let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+            let page_writer = self.create_page_writer(desc, out.len())?;
+            let chunk = page_writer.buffer.clone();
+            let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
+            Ok(ArrowColumnWriter {
+                chunk,
+                writer: ArrowColumnWriterImpl::ByteArray(writer),
+            })
+        };
+
+        match data_type {
+            _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::LargeBinary
+            | ArrowDataType::Binary
+            | ArrowDataType::Utf8
+            | ArrowDataType::LargeUtf8
+            | ArrowDataType::BinaryView
+            | ArrowDataType::Utf8View => {
+                out.push(bytes(leaves.next().unwrap())?)
+            }
+            ArrowDataType::List(f)
+            | ArrowDataType::LargeList(f)
+            | ArrowDataType::FixedSizeList(f, _) => {
+                self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
+            }
+            ArrowDataType::Struct(fields) => {
+                for field in fields {
+                    self.get_arrow_column_writer(field.data_type(), props, leaves, out)?
+                }
+            }
+            ArrowDataType::Map(f, _) => match f.data_type() {
+                ArrowDataType::Struct(f) => {
+                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
+                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
+                }
+                _ => unreachable!("invalid map type"),
+            }
+            ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+                ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                    out.push(bytes(leaves.next().unwrap())?)
+                }
+                ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
+                    out.push(bytes(leaves.next().unwrap())?)
+                }
+                _ => {
+                    out.push(col(leaves.next().unwrap())?)
+                }
+            }
+            _ => return Err(ParquetError::NYI(
+                format!(
+                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
+                )
+            ))
+        }
+        Ok(())
+    }
 }
 
 fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usize> {
