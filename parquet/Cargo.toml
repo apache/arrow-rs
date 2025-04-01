@@ -155,6 +155,11 @@ name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
 
+[[test]]
+name = "encryption"
+required-features = ["arrow"]
+path = "./tests/encryption/mod.rs"
+
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
