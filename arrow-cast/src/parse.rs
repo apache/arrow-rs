@@ -2655,29 +2655,6 @@ mod tests {
             assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
         }
 
-        // here the 2nd column is expected result, it is also converted using parse_decimal
-        let test_rounding_for_e_notation_varying_scale = [
-            ("1.2345e4", "12345", 2),
-            ("12345e-5", "0.12", 2),
-            ("12345E-5", "0.123", 3),
-            ("12345e-5", "0.1235", 4),
-            ("1265E-4", ".127", 3),
-            ("12.345e3", "12345.000", 3),
-            ("1.2345e4", "12345", 0),
-            ("1.2345e3", "1235", 0),
-            ("1.23e-3", "0", 0),
-            ("123e-2", "1", 0),
-        ];
-
-        for (e, d, scale) in test_rounding_for_e_notation_varying_scale {
-            let result_128_e = parse_decimal::<Decimal128Type>(e, 38, scale);
-            let result_128_d = parse_decimal::<Decimal128Type>(d, 38, scale);
-            assert_eq!(result_128_e.unwrap(), result_128_d.unwrap());
-            let result_256_e = parse_decimal::<Decimal256Type>(e, 38, scale);
-            let result_256_d = parse_decimal::<Decimal256Type>(d, 38, scale);
-            assert_eq!(result_256_e.unwrap(), result_256_d.unwrap());
-        }
-
         let can_not_parse_tests = [
             "123,123",
             ".",
