@@ -46,7 +46,7 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 - `flight-sql-experimental`: Enables experimental support for
   [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
 
-- `tls`: Enables `tls` on `tonic`
+- `tls`: Enables `_tls-any` on `tonic`
 
 ## CLI
 
