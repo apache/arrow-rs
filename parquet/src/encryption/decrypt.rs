@@ -195,7 +195,43 @@ impl PartialEq for DecryptionKeys {
     }
 }
 
-/// FileDecryptionProperties hold keys and AAD data required to decrypt a Parquet file.
+/// `FileDecryptionProperties` hold keys and AAD data required to decrypt a Parquet file.
+///
+/// When reading Arrow data, the `FileDecryptionProperties` should be included in the
+/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions)  using
+/// [`with_file_decryption_properties`](crate::arrow::arrow_reader::ArrowReaderOptions::with_file_decryption_properties).
+///
+/// # Examples
+///
+/// Create `FileDecryptionProperties` for a file encrypted with uniform encryption,
+/// where all metadata and data are encrypted with the footer key:
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Create properties for a file where columns are encrypted with different keys:
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .with_column_key("x", b"1234567890123450".into())
+///     .with_column_key("y", b"1234567890123451".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Specify additional authenticated data, used to protect against data replacement.
+/// This must match the AAD prefix provided when the file was written, otherwise
+/// data decryption will fail.
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .with_aad_prefix("example_file".as_bytes().to_vec())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
 #[derive(Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
@@ -277,6 +313,8 @@ impl std::fmt::Debug for FileDecryptionProperties {
 }
 
 /// Builder for [`FileDecryptionProperties`]
+///
+/// See [`FileDecryptionProperties`] for example usage.
 pub struct DecryptionPropertiesBuilder {
     footer_key: Option<Vec<u8>>,
     key_retriever: Option<Arc<dyn KeyRetriever>>,
