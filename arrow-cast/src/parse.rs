@@ -2601,6 +2601,8 @@ mod tests {
             ("123.4567891", 12345679_i128, 5),
             ("123.4567891", 123_i128, 0),
             ("123.45", 12345000_i128, 5),
+            ("-2.5", -3_i128, 0),
+            ("-2.49", -2_i128, 0),
         ];
         for (str, e, scale) in tests_with_varying_scale {
             let result_128_a = parse_decimal::<Decimal128Type>(str, 20, scale);
