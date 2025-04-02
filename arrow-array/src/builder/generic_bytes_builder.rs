@@ -140,7 +140,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         let offsets = array.offsets();
 
         // If the offsets are contiguous, we can append them directly avoiding the need to align
-        // them
+        // for example, when the first appended array is not sliced (starts at offset 0)
         if self.next_offset() == offsets[0] {
             self.offsets_builder.append_slice(&offsets[1..]);
         } else {
@@ -400,6 +400,7 @@ mod tests {
     use super::*;
     use crate::array::Array;
     use crate::GenericStringArray;
+    use arrow_buffer::NullBuffer;
     use std::fmt::Write as _;
     use std::io::Write as _;
 
@@ -723,13 +724,90 @@ mod tests {
 
         let expected = GenericStringArray::<i32>::from(vec![None, Some("how"), None, None]);
 
-        println!("actual: {:?}", actual);
-        println!("expected: {:?}", expected);
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_append_underlying_null_values_added_as_is() {
-        // TODO
+        let input_1_array_with_nulls = {
+            let input = vec![
+                "hello", "world", "how", "are", "you", "doing", "today", "I", "am",
+            ];
+            let (offsets, buffer, _) = GenericStringArray::<i32>::from(input).into_parts();
+
+            GenericStringArray::<i32>::new(
+                offsets,
+                buffer,
+                Some(NullBuffer::from(&[
+                    true, false, true, false, false, true, true, true, false,
+                ])),
+            )
+        };
+        let input_2_array_with_nulls = {
+            let input = vec!["doing", "well", "thank", "you", "for", "asking"];
+            let (offsets, buffer, _) = GenericStringArray::<i32>::from(input).into_parts();
+
+            GenericStringArray::<i32>::new(
+                offsets,
+                buffer,
+                Some(NullBuffer::from(&[false, false, true, false, true, true])),
+            )
+        };
+
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_array(&input_1_array_with_nulls);
+        builder.append_array(&input_2_array_with_nulls);
+
+        let actual = builder.finish();
+        let expected = GenericStringArray::<i32>::from(vec![
+            Some("hello"),
+            None, // world
+            Some("how"),
+            None, // are
+            None, // you
+            Some("doing"),
+            Some("today"),
+            Some("I"),
+            None, // am
+            None, // doing
+            None, // well
+            Some("thank"),
+            None, // "you",
+            Some("for"),
+            Some("asking"),
+        ]);
+
+        assert_eq!(actual, expected);
+
+        let expected_underlying_buffer = Buffer::from(
+            [
+                "hello", "world", "how", "are", "you", "doing", "today", "I", "am", "doing",
+                "well", "thank", "you", "for", "asking",
+            ]
+            .join("")
+            .as_bytes(),
+        );
+        assert_eq!(actual.values(), &expected_underlying_buffer);
+    }
+
+    #[test]
+    fn append_array_with_continues_indices() {
+        let input = vec![
+            "hello", "world", "how", "are", "you", "doing", "today", "I", "am", "doing", "well",
+            "thank", "you", "for", "asking",
+        ];
+        let full_array = GenericStringArray::<i32>::from(input);
+        let slice1 = full_array.slice(0, 3);
+        let slice2 = full_array.slice(3, 4);
+        let slice3 = full_array.slice(7, full_array.len() - 7);
+
+        let mut builder = GenericStringBuilder::<i32>::new();
+        builder.append_array(&slice1);
+        builder.append_array(&slice2);
+        builder.append_array(&slice3);
+
+        let actual = builder.finish();
+
+        assert_eq!(actual, full_array);
     }
 }
