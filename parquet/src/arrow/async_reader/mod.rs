@@ -101,20 +101,11 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
-
-    /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
-    /// allowing fine-grained control over how metadata is sourced, in particular allowing
-    /// for caching, pre-fetching, catalog metadata, decrypting, etc...
-    ///
-    /// By default calls `get_metadata()`
-    fn get_metadata_with_options<'a>(
+    /// ArrowReaderOptions may be provided to supply decryption parameters
+    fn get_metadata<'a>(
         &'a mut self,
-        options: &'a ArrowReaderOptions,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        let _ = options;
-        self.get_metadata()
-    }
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -127,15 +118,11 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        self.as_mut().get_metadata()
-    }
-
-    fn get_metadata_with_options<'a>(
+    fn get_metadata<'a>(
         &'a mut self,
-        options: &'a ArrowReaderOptions,
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        self.as_mut().get_metadata_with_options(options)
+        self.as_mut().get_metadata(options)
     }
 }
 
@@ -156,9 +143,9 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         .boxed()
     }
 
-    fn get_metadata_with_options<'a>(
+    fn get_metadata<'a>(
         &'a mut self,
-        options: &'a ArrowReaderOptions,
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
@@ -169,6 +156,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
             let metadata_len = footer.metadata_length();
+
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
 
@@ -178,40 +166,13 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let metadata_reader = ParquetMetaDataReader::new();
 
             #[cfg(feature = "encryption")]
-            let metadata_reader = metadata_reader
-                .with_decryption_properties(options.file_decryption_properties.as_ref());
+            let metadata_reader = metadata_reader.with_decryption_properties(
+                options.and_then(|o| o.file_decryption_properties.as_ref()),
+            );
 
             let parquet_metadata = metadata_reader.decode_footer_metadata(&buf, &footer)?;
 
             Ok(Arc::new(parquet_metadata))
-        }
-        .boxed()
-    }
-
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
-        async move {
-            self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
-
-            let mut buf = [0_u8; FOOTER_SIZE];
-            self.read_exact(&mut buf).await?;
-
-            let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
-            let metadata_len = footer.metadata_length();
-
-            if footer.is_encrypted_footer() {
-                return Err(general_err!(
-                    "Parquet file has an encrypted footer but decryption properties were not provided"
-                ));
-            }
-
-            self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
-                .await?;
-
-            let mut buf = Vec::with_capacity(metadata_len);
-            self.take(metadata_len as _).read_to_end(&mut buf).await?;
-
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
         }
         .boxed()
     }
@@ -233,7 +194,7 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input.get_metadata_with_options(&options).await?;
+        let mut metadata = input.get_metadata(Some(&options)).await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -1169,13 +1130,9 @@ mod tests {
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
 
-        fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-            futures::future::ready(Ok(self.metadata.clone())).boxed()
-        }
-
-        fn get_metadata_with_options<'a>(
+        fn get_metadata<'a>(
             &'a mut self,
-            _options: &'a ArrowReaderOptions,
+            _options: Option<&'a ArrowReaderOptions>,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }

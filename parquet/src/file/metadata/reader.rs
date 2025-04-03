@@ -710,7 +710,11 @@ impl ParquetMetaDataReader {
                 ));
             }
 
-            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
+            Ok((
+                // need to slice off the footer or decryption fails
+                self.decode_footer_metadata(&meta.slice(0..length), &footer)?,
+                None,
+            ))
         } else {
             let metadata_start = suffix_len - metadata_offset;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
@@ -815,6 +819,17 @@ impl ParquetMetaDataReader {
                 let t_file_crypto_metadata: TFileCryptoMetaData =
                     TFileCryptoMetaData::read_from_in_protocol(&mut prot)
                         .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
+                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
+                    _ => Some(false),
+                }
+                .unwrap_or(false);
+                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
+                    return Err(general_err!(
+                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                        but no AAD prefix was provided in the file decryption properties"
+                    ));
+                }
                 let decryptor = get_file_decryptor(
                     t_file_crypto_metadata.encryption_algorithm,
                     t_file_crypto_metadata.key_metadata.as_deref(),
@@ -834,7 +849,7 @@ impl ParquetMetaDataReader {
 
                 file_decryptor = Some(decryptor);
             } else {
-                return Err(general_err!("Parquet file has an encrypted footer but no decryption properties were provided"));
+                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
             }
         }
 
@@ -959,8 +974,8 @@ fn get_file_decryptor(
             let aad_file_unique = algo
                 .aad_file_unique
                 .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if file_decryption_properties.aad_prefix.is_some() {
-                file_decryption_properties.aad_prefix.clone().unwrap()
+            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
+                aad_prefix.clone()
             } else {
                 algo.aad_prefix.unwrap_or_default()
             };
@@ -1198,7 +1213,6 @@ mod async_tests {
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::arrow::async_reader::MetadataFetch;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1422,6 +1436,31 @@ mod async_tests {
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "encryption")]
+    #[tokio::test]
+    async fn test_suffix_with_encryption() {
+        let mut file = get_test_file("uniform_encryption.parquet.encrypted");
+        let mut file2 = file.try_clone().unwrap();
+
+        let mut fetch = |range| futures::future::ready(read_range(&mut file, range));
+        let mut suffix_fetch = |suffix| futures::future::ready(read_suffix(&mut file2, suffix));
+
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        // just make sure the metadata is properly decrypted and read
+        let expected = ParquetMetaDataReader::new()
+            .with_decryption_properties(Some(&decryption_properties))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(expected.num_row_groups(), 1);
     }
 
     #[tokio::test]
