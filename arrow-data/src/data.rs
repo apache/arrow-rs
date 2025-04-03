@@ -220,7 +220,9 @@ pub struct ArrayData {
     /// kinds of buffers (e.g., value buffer, value offset buffer) at different
     /// positions.
     ///
-    /// This ArrayData's first logical element begins at `offset`
+    /// The buffer may be larger than needed.  Some items at the beginning may be skipped if
+    /// there is an `offset`.  Some items at the end may be skipped if the buffer is longer than
+    /// we need to satisfy `len`.
     ///
     /// [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout)
     buffers: Vec<Buffer>,
@@ -231,6 +233,9 @@ pub struct ArrayData {
     /// `StructArray`.
     ///
     /// The first logical element in each child element begins at `offset`.
+    ///
+    /// If the child element also has an offset then these offsets are
+    /// cumulative.
     child_data: Vec<ArrayData>,
 
     /// The null bitmap.
