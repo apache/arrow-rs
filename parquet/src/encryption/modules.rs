@@ -25,6 +25,10 @@ pub(crate) enum ModuleType {
     DictionaryPage = 3,
     DataPageHeader = 4,
     DictionaryPageHeader = 5,
+    ColumnIndex = 6,
+    OffsetIndex = 7,
+    _BloomFilterHeader = 8,
+    _BloomFilterBitset = 9,
 }
 
 pub fn create_footer_aad(file_aad: &[u8]) -> crate::errors::Result<Vec<u8>> {

@@ -32,15 +32,18 @@ use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
-use crate::file::page_encoding_stats::PageEncodingStats;
-use crate::file::properties::EnabledStatistics;
-use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::file::{
-    metadata::ColumnChunkMetaData,
-    properties::{WriterProperties, WriterPropertiesPtr, WriterVersion},
+use crate::file::metadata::ColumnChunkMetaData;
+use crate::file::metadata::{
+    ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder,
 };
+use crate::file::page_encoding_stats::PageEncodingStats;
+use crate::file::properties::{
+    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+};
+use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
 pub(crate) mod encoder;
@@ -1203,6 +1206,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
         }
 
+        builder = self.set_column_chunk_encryption_properties(builder);
+
         let metadata = builder.build()?;
         Ok(metadata)
     }
@@ -1317,6 +1322,31 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             }
             _ => {}
         }
+    }
+
+    #[inline]
+    #[cfg(feature = "encryption")]
+    fn set_column_chunk_encryption_properties(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+    ) -> ColumnChunkMetaDataBuilder {
+        if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
+            builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                encryption_properties,
+                &self.descr,
+            ))
+        } else {
+            builder
+        }
+    }
+
+    #[inline]
+    #[cfg(not(feature = "encryption"))]
+    fn set_column_chunk_encryption_properties(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+    ) -> ColumnChunkMetaDataBuilder {
+        builder
     }
 }
 
