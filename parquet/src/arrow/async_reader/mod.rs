@@ -113,7 +113,7 @@ pub trait AsyncFileReader: Send {
     ///
     /// # Parameters
     /// * `options`: Optional [`ArrowReaderOptions`] that may contain decryption
-    ///   and pther options that affect how the metadata is read.
+    ///   and other options that affect how the metadata is read.
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
