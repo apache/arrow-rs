@@ -549,6 +549,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_from_data_with_offset_and_length() {
+        // Case 1: Null buffer has no offset
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
         let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
@@ -558,19 +559,34 @@ mod tests {
                 .len(3)
                 .offset(1)
                 .nulls(Some(struct_nulls))
-                .add_child_data(int_data)
+                .add_child_data(int_data.clone())
                 .build()
                 .unwrap();
         let struct_arr_from_data = StructArray::from(struct_data);
 
         let struct_arr = StructArray::new(
-            Fields::from(vec![int_field]),
+            Fields::from(vec![int_field.clone()]),
             vec![Arc::new(int_arr)],
             Some(NullBuffer::new(BooleanBuffer::from(vec![
                 true, true, true, false, true,
             ]))),
         )
         .slice(1, 3);
+
+        assert_eq!(struct_arr_from_data, struct_arr);
+
+        // Case 2: Null buffer has offset
+        let struct_nulls =
+            NullBuffer::new(BooleanBuffer::from(vec![true, true, true, false, true]).slice(1, 3));
+        let struct_data =
+            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+                .len(3)
+                .offset(1)
+                .nulls(Some(struct_nulls))
+                .add_child_data(int_data)
+                .build()
+                .unwrap();
+        let struct_arr_from_data = StructArray::from(struct_data);
 
         assert_eq!(struct_arr_from_data, struct_arr);
     }
