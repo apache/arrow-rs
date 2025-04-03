@@ -4435,6 +4435,23 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn test_variant_roundtrip() -> Result<()> {
+        // This test demonstrates a 9x2 table with:
+        // - Column 1 (variant_data): Variant type containing different JSON-like values
+        // - Column 2 (int_data): Simple integers from 100 to 900
+        //
+        // Table structure:
+        // | Variant                        | Int |
+        // |--------------------------------|----------|
+        // | null                           | 100      |
+        // | true                           | 200      |
+        // | false                          | 300      |
+        // | 12                             | 400      |
+        // | -9876543210                    | 500      |
+        // | 4.5678E123                     | 600      |
+        // | "string value"                 | 700      |
+        // | {"a":1,"b":{"e":-4,"f":5.5}}   | 800      |
+        // | [1,-2,4.5,-6.7,"str",true]     | 900      |
+
         use arrow_array::{Int32Array, RecordBatch, Array};
         use arrow_array::VariantArray;
         use arrow_schema::{DataType, Field, Schema};
@@ -4443,18 +4460,12 @@ mod tests {
         use std::sync::Arc;
         use crate::arrow::arrow_writer::ArrowWriter;
 
-        // Extension type metadata - can be simple as it's just for type identification
+        // 1. Create the variant type with metadata
         let extension_metadata = vec![1, 2, 3];
         let variant_type = Variant::new(extension_metadata.clone(), vec![]);
 
         // Value metadata - needs to follow the spec format
-        let value_metadata = vec![
-            0x01,  // header: version=1, sorted=0, offset_size=1
-            0x01,  // dictionary_size = 1
-            0x00,  // offset 0
-            0x03,  // offset 3
-            b'k', b'e', b'y'  // dictionary bytes
-        ];
+        let value_metadata = vec![0x01, 0x01, 0x00, 0x03, b'k', b'e', b'y'];  // [header, size, offsets, "key"]
         let sample_json_values = vec![
             "null",
             "true",
@@ -4485,13 +4496,6 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(variant_array), Arc::new(int_array)]
         )?;
-
-        // Configure writer properties for better compatibility with VariantArray
-        // let props = WriterProperties::builder()
-        //     .set_compression(crate::basic::Compression::UNCOMPRESSED)
-        //     .set_dictionary_enabled(false) 
-        //     .set_statistics_enabled(EnabledStatistics::None)
-        //     .build();
 
         let mut buffer = Vec::with_capacity(1024);
         // let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))?;
