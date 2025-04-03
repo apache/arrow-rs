@@ -94,3 +94,10 @@ arrow-string = { version = "54.3.1", path = "./arrow-string" }
 parquet = { version = "54.3.1", path = "./parquet", default-features = false }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
+
+# release inherited profile keeping debug information and symbols
+# for mem/cpu profiling
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
