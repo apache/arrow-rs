@@ -98,10 +98,22 @@ pub trait AsyncFileReader: Send {
         .boxed()
     }
 
-    /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
-    /// allowing fine-grained control over how metadata is sourced, in particular allowing
-    /// for caching, pre-fetching, catalog metadata, etc...
-    /// ArrowReaderOptions may be provided to supply decryption parameters
+    /// Return a future which results in the [`ParquetMetaData`] for this Parquet file.
+    ///
+    /// This is an asynchronous operation as it may involve reading the file
+    /// footer and potentially other metadata from disk or a remote source.
+    ///
+    /// Reading data from Parquet, requires the metadata to understand the
+    /// schema, row groups, and location of pages within the file. This metadata
+    /// is stored in the footer of the Parquet file, and can be read using
+    /// [`ParquetMetaDataReader`].
+    ///
+    /// However, implementations can significantly speed up reading Parquet by
+    /// supplying cached metadata or pre-fetched metadata via this API.
+    ///
+    /// # Parameters
+    /// * `options`: Optional [`ArrowReaderOptions`] that may contain decryption
+    ///   and pther options that affect how the metadata is read.
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
