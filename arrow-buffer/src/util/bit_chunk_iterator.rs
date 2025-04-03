@@ -53,7 +53,7 @@ impl<'a> UnalignedBitChunk<'a> {
         let byte_offset = offset / 8;
         let offset_padding = offset % 8;
 
-        let bytes_len = (len + offset_padding + 7) / 8;
+        let bytes_len = (len + offset_padding).div_ceil(8);
         let buffer = &buffer[byte_offset..byte_offset + bytes_len];
 
         let prefix_mask = compute_prefix_mask(offset_padding);
