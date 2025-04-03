@@ -75,6 +75,16 @@ impl<T: AsyncFileReader> MetadataFetch for &mut T {
     }
 }
 
+/// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`] via suffix
+/// requests, without knowing the file size
+pub trait MetadataSuffixFetch: MetadataFetch {
+    /// Return a future that fetches the last `n` bytes asynchronously
+    ///
+    /// Note the returned type is a boxed future, often created by
+    /// [FutureExt::boxed]. See the trait documentation for an example
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+}
+
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
 pub struct MetadataLoader<F> {
     /// Function that fetches byte ranges asynchronously
@@ -113,7 +123,8 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = ParquetMetaDataReader::decode_footer(&footer)?;
+        let footer = ParquetMetaDataReader::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
 
         if file_size < length + FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(

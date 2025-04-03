@@ -24,9 +24,14 @@ use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    builder::TimestampNanosecondBufferBuilder, ArrayRef, BooleanArray, Decimal128Array,
-    Decimal256Array, Float32Array, Float64Array, Int32Array, Int64Array, TimestampNanosecondArray,
-    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    builder::{
+        TimestampMicrosecondBufferBuilder, TimestampMillisecondBufferBuilder,
+        TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
+    },
+    ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+    Int32Array, Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
 use arrow_cast::CastOptions;
@@ -37,13 +42,13 @@ use std::sync::Arc;
 
 /// Provides conversion from `Vec<T>` to `Buffer`
 pub trait IntoBuffer {
-    fn into_buffer(self) -> Buffer;
+    fn into_buffer(self, target_type: &ArrowType) -> Buffer;
 }
 
 macro_rules! native_buffer {
     ($($t:ty),*) => {
         $(impl IntoBuffer for Vec<$t> {
-            fn into_buffer(self) -> Buffer {
+            fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
                 Buffer::from_vec(self)
             }
         })*
@@ -52,18 +57,44 @@ macro_rules! native_buffer {
 native_buffer!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 
 impl IntoBuffer for Vec<bool> {
-    fn into_buffer(self) -> Buffer {
+    fn into_buffer(self, _target_type: &ArrowType) -> Buffer {
         BooleanBuffer::from_iter(self).into_inner()
     }
 }
 
 impl IntoBuffer for Vec<Int96> {
-    fn into_buffer(self) -> Buffer {
-        let mut builder = TimestampNanosecondBufferBuilder::new(self.len());
-        for v in self {
-            builder.append(v.to_nanos())
+    fn into_buffer(self, target_type: &ArrowType) -> Buffer {
+        match target_type {
+            ArrowType::Timestamp(TimeUnit::Second, _) => {
+                let mut builder = TimestampSecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_seconds())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Millisecond, _) => {
+                let mut builder = TimestampMillisecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_millis())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Microsecond, _) => {
+                let mut builder = TimestampMicrosecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_micros())
+                }
+                builder.finish()
+            }
+            ArrowType::Timestamp(TimeUnit::Nanosecond, _) => {
+                let mut builder = TimestampNanosecondBufferBuilder::new(self.len());
+                for v in self {
+                    builder.append(v.to_nanos())
+                }
+                builder.finish()
+            }
+            _ => unreachable!("Invalid target_type for Int96."),
         }
-        builder.finish()
     }
 }
 
@@ -161,8 +192,11 @@ where
             PhysicalType::FLOAT => ArrowType::Float32,
             PhysicalType::DOUBLE => ArrowType::Float64,
             PhysicalType::INT96 => match target_type {
+                ArrowType::Timestamp(TimeUnit::Second, _) => target_type.clone(),
+                ArrowType::Timestamp(TimeUnit::Millisecond, _) => target_type.clone(),
+                ArrowType::Timestamp(TimeUnit::Microsecond, _) => target_type.clone(),
                 ArrowType::Timestamp(TimeUnit::Nanosecond, _) => target_type.clone(),
-                _ => unreachable!("INT96 must be timestamp nanosecond"),
+                _ => unreachable!("INT96 must be a timestamp."),
             },
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!("PrimitiveArrayReaders don't support complex physical types");
@@ -172,7 +206,10 @@ where
         // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
-        let record_data = self.record_reader.consume_record_data().into_buffer();
+        let record_data = self
+            .record_reader
+            .consume_record_data()
+            .into_buffer(target_type);
 
         let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
@@ -194,7 +231,22 @@ where
             },
             PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)),
             PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)),
-            PhysicalType::INT96 => Arc::new(TimestampNanosecondArray::from(array_data)),
+            PhysicalType::INT96 => match target_type {
+                ArrowType::Timestamp(TimeUnit::Second, _) => {
+                    Arc::new(TimestampSecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Millisecond, _) => {
+                    Arc::new(TimestampMillisecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Microsecond, _) => {
+                    Arc::new(TimestampMicrosecondArray::from(array_data))
+                }
+                ArrowType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    Arc::new(TimestampNanosecondArray::from(array_data))
+                }
+                _ => unreachable!("INT96 must be a timestamp."),
+            },
+
             PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 unreachable!("PrimitiveArrayReaders don't support complex physical types");
             }
@@ -233,7 +285,14 @@ where
                     .unwrap()
                     .unary(|i| i as i8) as arrow_array::Int8Array;
                 Arc::new(array) as ArrayRef*/
-                arrow_cast::cast_with_options(&array, target_type, &CastOptions{safe: false, ..Default::default()})?
+                arrow_cast::cast_with_options(
+                    &array,
+                    target_type,
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
+                )?
                 //arrow_cast::cast(&array, target_type)?
             }
             ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
@@ -394,7 +453,7 @@ mod tests {
     use arrow_array::{Array, Date32Array, PrimitiveArray};
 
     use arrow::datatypes::DataType::{Date32, Decimal128};
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::collections::VecDeque;
 
     #[allow(clippy::too_many_arguments)]

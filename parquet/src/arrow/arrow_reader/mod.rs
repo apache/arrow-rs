@@ -17,9 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -27,12 +24,16 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -252,6 +253,9 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
+    /// If encryption is enabled, the file decryption properties can be provided
+    #[cfg(feature = "encryption")]
+    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ArrowReaderOptions {
@@ -317,7 +321,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -341,6 +345,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
+    }
+
+    /// Provide the file decryption properties to use when reading encrypted parquet files.
+    ///
+    /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) -> Self {
+        Self {
+            file_decryption_properties: Some(file_decryption_properties),
+            ..self
+        }
     }
 }
 
@@ -380,9 +398,11 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(options.page_index)
-            .parse_and_finish(reader)?;
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -553,6 +573,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -661,24 +682,39 @@ struct ReaderPageIterator<T: ChunkReader> {
     metadata: Arc<ParquetMetaData>,
 }
 
-impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
-    type Item = Result<Box<dyn PageReader>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rg_idx = self.row_groups.next()?;
+impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
+    /// Return the next SerializedPageReader
+    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
-        let meta = rg.column(self.column_idx);
+        let column_chunk_metadata = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
         // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
+        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
-        let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
-        Some(ret.map(|x| Box::new(x) as _))
+        SerializedPageReader::new(reader, column_chunk_metadata, total_rows, page_locations)?
+            .add_crypto_context(
+                rg_idx,
+                self.column_idx,
+                self.metadata.as_ref(),
+                column_chunk_metadata,
+            )
+    }
+}
+
+impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
+    type Item = Result<Box<dyn PageReader>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rg_idx = self.row_groups.next()?;
+        let page_reader = self
+            .next_page_reader(rg_idx)
+            .map(|page_reader| Box::new(page_reader) as _);
+        Some(page_reader)
     }
 }
 
@@ -926,7 +962,7 @@ mod tests {
     use bytes::Bytes;
     use half::f16;
     use num::PrimInt;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
@@ -953,7 +989,7 @@ mod tests {
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96Type,
+        FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -1403,7 +1439,7 @@ mod tests {
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
         fn gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
-            thread_rng().fill_bytes(&mut v);
+            rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
         }
     }
@@ -1455,17 +1491,76 @@ mod tests {
     #[test]
     fn test_int96_single_column_reader_test() {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
-        run_single_column_reader_tests::<Int96Type, _, Int96Type>(
-            2,
-            ConvertedType::NONE,
-            None,
-            |vals| {
+
+        type TypeHintAndConversionFunction =
+            (Option<ArrowDataType>, fn(&[Option<Int96>]) -> ArrayRef);
+
+        let resolutions: Vec<TypeHintAndConversionFunction> = vec![
+            // Test without a specified ArrowType hint.
+            (None, |vals: &[Option<Int96>]| {
                 Arc::new(TimestampNanosecondArray::from_iter(
                     vals.iter().map(|x| x.map(|x| x.to_nanos())),
-                )) as _
-            },
-            encodings,
-        );
+                )) as ArrayRef
+            }),
+            // Test other TimeUnits as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Second, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampSecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Millisecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMillisecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_millis())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Microsecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampMicrosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_micros())),
+                    )) as ArrayRef
+                },
+            ),
+            (
+                Some(ArrowDataType::Timestamp(TimeUnit::Nanosecond, None)),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(TimestampNanosecondArray::from_iter(
+                        vals.iter().map(|x| x.map(|x| x.to_nanos())),
+                    )) as ArrayRef
+                },
+            ),
+            // Test another timezone with TimeUnit as ArrowType hints.
+            (
+                Some(ArrowDataType::Timestamp(
+                    TimeUnit::Second,
+                    Some(Arc::from("-05:00")),
+                )),
+                |vals: &[Option<Int96>]| {
+                    Arc::new(
+                        TimestampSecondArray::from_iter(
+                            vals.iter().map(|x| x.map(|x| x.to_seconds())),
+                        )
+                        .with_timezone("-05:00"),
+                    ) as ArrayRef
+                },
+            ),
+        ];
+
+        resolutions.iter().for_each(|(arrow_type, converter)| {
+            run_single_column_reader_tests::<Int96Type, _, Int96Type>(
+                2,
+                ConvertedType::NONE,
+                arrow_type.clone(),
+                converter,
+                encodings,
+            );
+        })
     }
 
     struct RandUtf8Gen {}
@@ -1663,7 +1758,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // https://github.com/apache/arrow-rs/issues/2253
     fn test_decimal_list() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 
@@ -2058,10 +2152,13 @@ mod tests {
         fn with_row_selections(self) -> Self {
             assert!(self.row_filter.is_none(), "Must set row selection first");
 
-            let mut rng = thread_rng();
-            let step = rng.gen_range(self.record_batch_size..self.num_rows);
-            let row_selections =
-                create_test_selection(step, self.num_row_groups * self.num_rows, rng.gen::<bool>());
+            let mut rng = rng();
+            let step = rng.random_range(self.record_batch_size..self.num_rows);
+            let row_selections = create_test_selection(
+                step,
+                self.num_row_groups * self.num_rows,
+                rng.random::<bool>(),
+            );
             Self {
                 row_selections: Some(row_selections),
                 ..self
@@ -2074,9 +2171,9 @@ mod tests {
                 None => self.num_row_groups * self.num_rows,
             };
 
-            let mut rng = thread_rng();
+            let mut rng = rng();
             Self {
-                row_filter: Some((0..row_count).map(|_| rng.gen_bool(0.9)).collect()),
+                row_filter: Some((0..row_count).map(|_| rng.random_bool(0.9)).collect()),
                 ..self
             }
         }
@@ -2290,7 +2387,7 @@ mod tests {
         //according to null_percent generate def_levels
         let (repetition, def_levels) = match opts.null_percent.as_ref() {
             Some(null_percent) => {
-                let mut rng = thread_rng();
+                let mut rng = rng();
 
                 let def_levels: Vec<Vec<i16>> = (0..opts.num_row_groups)
                     .map(|_| {
@@ -4134,7 +4231,7 @@ mod tests {
 
     #[test]
     fn test_list_selection_fuzz() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
             Field::new_list(
@@ -4150,26 +4247,26 @@ mod tests {
         let mut list_a_builder = ListBuilder::new(ListBuilder::new(Int32Builder::new()));
 
         for _ in 0..2048 {
-            if rng.gen_bool(0.2) {
+            if rng.random_bool(0.2) {
                 list_a_builder.append(false);
                 continue;
             }
 
-            let list_a_len = rng.gen_range(0..10);
+            let list_a_len = rng.random_range(0..10);
             let list_b_builder = list_a_builder.values();
 
             for _ in 0..list_a_len {
-                if rng.gen_bool(0.2) {
+                if rng.random_bool(0.2) {
                     list_b_builder.append(false);
                     continue;
                 }
 
-                let list_b_len = rng.gen_range(0..10);
+                let list_b_len = rng.random_range(0..10);
                 let int_builder = list_b_builder.values();
                 for _ in 0..list_b_len {
-                    match rng.gen_bool(0.2) {
+                    match rng.random_bool(0.2) {
                         true => int_builder.append_null(),
-                        false => int_builder.append_value(rng.gen()),
+                        false => int_builder.append_value(rng.random()),
                     }
                 }
                 list_b_builder.append(true)
