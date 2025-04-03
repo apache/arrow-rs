@@ -35,9 +35,9 @@ use crate::encodings::levels::LevelEncoder;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::metadata::{
-    ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder,
+    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
+    OffsetIndexBuilder,
 };
 use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::properties::{
