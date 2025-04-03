@@ -164,6 +164,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(offsets, values, nulls);
+        }
         Self {
             data_type: T::DATA_TYPE,
             value_offsets: offsets,

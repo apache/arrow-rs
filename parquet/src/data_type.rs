@@ -38,6 +38,24 @@ pub struct Int96 {
     value: [u32; 3],
 }
 
+const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
+
+/// Number of seconds in a day
+const SECONDS_IN_DAY: i64 = 86_400;
+/// Number of milliseconds in a second
+const MILLISECONDS: i64 = 1_000;
+/// Number of microseconds in a second
+const MICROSECONDS: i64 = 1_000_000;
+/// Number of nanoseconds in a second
+const NANOSECONDS: i64 = 1_000_000_000;
+
+/// Number of milliseconds in a day
+const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
+/// Number of microseconds in a day
+const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
+/// Number of nanoseconds in a day
+const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
+
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
@@ -57,30 +75,60 @@ impl Int96 {
     }
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
+    #[deprecated(since = "54.0.0", note = "Use `to_millis` instead")]
     pub fn to_i64(&self) -> i64 {
-        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
-        seconds * 1_000 + nanoseconds / 1_000_000
+        self.to_millis()
+    }
+
+    /// Converts this INT96 into an i64 representing the number of SECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_seconds(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(SECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000_000_000)
+    }
+
+    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_millis(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(MILLISECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000_000)
+    }
+
+    /// Converts this INT96 into an i64 representing the number of MICROSECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn to_micros(&self) -> i64 {
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(MICROSECONDS_IN_DAY)
+            .wrapping_add(nanos / 1_000)
     }
 
     /// Converts this INT96 into an i64 representing the number of NANOSECONDS since EPOCH
     ///
     /// Will wrap around on overflow
+    #[inline]
     pub fn to_nanos(&self) -> i64 {
-        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
-        seconds
-            .wrapping_mul(1_000_000_000)
-            .wrapping_add(nanoseconds)
+        let (day, nanos) = self.data_as_days_and_nanos();
+        (day as i64 - JULIAN_DAY_OF_EPOCH)
+            .wrapping_mul(NANOSECONDS_IN_DAY)
+            .wrapping_add(nanos)
     }
 
-    /// Converts this INT96 to a number of seconds and nanoseconds since EPOCH
-    pub fn to_seconds_and_nanos(&self) -> (i64, i64) {
-        const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
-        const SECONDS_PER_DAY: i64 = 86_400;
-
-        let day = self.data()[2] as i64;
-        let nanoseconds = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        let seconds = (day - JULIAN_DAY_OF_EPOCH) * SECONDS_PER_DAY;
-        (seconds, nanoseconds)
+    #[inline]
+    fn data_as_days_and_nanos(&self) -> (i32, i64) {
+        let day = self.data()[2] as i32;
+        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
+        (day, nanos)
     }
 }
 

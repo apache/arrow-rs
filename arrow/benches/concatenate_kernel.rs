@@ -53,6 +53,62 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat_arrays(&arrays))
     });
 
+    {
+        let input = (0..100)
+            .map(|_| create_primitive_array::<Int32Type>(8192, 0.0))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat i32 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        let input = (0..100)
+            .map(|_| create_primitive_array::<Int32Type>(8192, 0.5))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat i32 nulls 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    let v1 = create_boolean_array(1024, 0.0, 0.5);
+    let v2 = create_boolean_array(1024, 0.0, 0.5);
+    c.bench_function("concat boolean 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+
+    let v1 = create_boolean_array(1024, 0.5, 0.5);
+    let v2 = create_boolean_array(1024, 0.5, 0.5);
+    c.bench_function("concat boolean nulls 1024", |b| {
+        b.iter(|| bench_concat(&v1, &v2))
+    });
+
+    let small_array = create_boolean_array(4, 0.0, 0.5);
+    let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
+    c.bench_function("concat 1024 arrays boolean 4", |b| {
+        b.iter(|| bench_concat_arrays(&arrays))
+    });
+
+    {
+        let input = (0..100)
+            .map(|_| create_boolean_array(8192, 0.0, 0.5))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat boolean 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        let input = (0..100)
+            .map(|_| create_boolean_array(8192, 0.5, 0.5))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat boolean nulls 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
     let v1 = create_string_array::<i32>(1024, 0.0);
     let v2 = create_string_array::<i32>(1024, 0.0);
     c.bench_function("concat str 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
@@ -62,6 +118,32 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("concat str nulls 1024", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
+
+    let small_array = create_string_array::<i32>(4, 0.0);
+    let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
+    c.bench_function("concat 1024 arrays str 4", |b| {
+        b.iter(|| bench_concat_arrays(&arrays))
+    });
+
+    {
+        let input = (0..100)
+            .map(|_| create_string_array::<i32>(8192, 0.0))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat str 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        let input = (0..100)
+            .map(|_| create_string_array::<i32>(8192, 0.5))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat str nulls 8192 over 100 arrays", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
 
     let v1 = create_string_array_with_len::<i32>(10, 0.0, 20);
     let v1 = create_dict_from_values::<Int32Type>(1024, 0.0, &v1);
@@ -76,12 +158,6 @@ fn add_benchmark(c: &mut Criterion) {
     let v2 = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let v2 = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &v2, 30..40);
     c.bench_function("concat str_dict_sparse 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
-    });
-
-    let v1 = create_string_array::<i32>(1024, 0.5);
-    let v2 = create_string_array::<i32>(1024, 0.5);
-    c.bench_function("concat str nulls 1024", |b| {
         b.iter(|| bench_concat(&v1, &v2))
     });
 

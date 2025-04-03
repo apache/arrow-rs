@@ -19,7 +19,7 @@
 extern crate criterion;
 use arrow::util::test_util::seedable_rng;
 use criterion::Criterion;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::Rng;
 
 extern crate arrow;
@@ -50,7 +50,7 @@ fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
         data.iter()
             .map(|datum| {
                 let mut result =
-                    MutableBuffer::new((data.len() + 7) / 8).with_bitset(datum.len(), false);
+                    MutableBuffer::new(data.len().div_ceil(8)).with_bitset(datum.len(), false);
                 for (i, value) in datum.iter().enumerate() {
                     if *value {
                         unsafe {
@@ -110,7 +110,7 @@ fn from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer {
 
 fn create_data(size: usize) -> Vec<Vec<u32>> {
     let rng = &mut seedable_rng();
-    let range = Uniform::new(0, 33);
+    let range = Uniform::new(0, 33).unwrap();
 
     (0..size)
         .map(|_| {
@@ -125,7 +125,7 @@ fn create_data(size: usize) -> Vec<Vec<u32>> {
 
 fn create_data_bool(size: usize) -> Vec<Vec<bool>> {
     let rng = &mut seedable_rng();
-    let range = Uniform::new(0, 33);
+    let range = Uniform::new(0, 33).unwrap();
 
     (0..size)
         .map(|_| {

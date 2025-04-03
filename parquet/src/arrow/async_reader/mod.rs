@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ParquetRecordBatchStreamBuilder`]:  `async` API for reading Parquet files as
-//! [`RecordBatch`]es
+//! `async` API for reading Parquet files as [`RecordBatch`]es
 //!
-//! This can be used to decode a Parquet file in streaming fashion (without
-//! downloading the whole file at once) from a remote source, such as an object store.
+//! See the [crate-level documentation](crate) for more details.
 //!
 //! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
@@ -52,7 +50,7 @@ use crate::bloom_filter::{
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::file::FOOTER_SIZE;
@@ -103,7 +101,11 @@ pub trait AsyncFileReader: Send {
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
     /// for caching, pre-fetching, catalog metadata, etc...
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
+    /// ArrowReaderOptions may be provided to supply decryption parameters
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
@@ -116,8 +118,11 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
-        self.as_mut().get_metadata()
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        self.as_mut().get_metadata(options)
     }
 }
 
@@ -138,7 +143,10 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         .boxed()
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
@@ -146,14 +154,25 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let mut buf = [0_u8; FOOTER_SIZE];
             self.read_exact(&mut buf).await?;
 
-            let metadata_len = ParquetMetaDataReader::decode_footer(&buf)?;
+            let footer = ParquetMetaDataReader::decode_footer_tail(&buf)?;
+            let metadata_len = footer.metadata_length();
+
             self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
                 .await?;
 
             let mut buf = Vec::with_capacity(metadata_len);
             self.take(metadata_len as _).read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(ParquetMetaDataReader::decode_metadata(&buf)?))
+            let metadata_reader = ParquetMetaDataReader::new();
+
+            #[cfg(feature = "encryption")]
+            let metadata_reader = metadata_reader.with_decryption_properties(
+                options.and_then(|o| o.file_decryption_properties.as_ref()),
+            );
+
+            let parquet_metadata = metadata_reader.decode_footer_metadata(&buf, &footer)?;
+
+            Ok(Arc::new(parquet_metadata))
         }
         .boxed()
     }
@@ -175,7 +194,7 @@ impl ArrowReaderMetadata {
     ) -> Result<Self> {
         // TODO: this is all rather awkward. It would be nice if AsyncFileReader::get_metadata
         // took an argument to fetch the page indexes.
-        let mut metadata = input.get_metadata().await?;
+        let mut metadata = input.get_metadata(Some(&options)).await?;
 
         if options.page_index
             && metadata.column_index().is_none()
@@ -183,6 +202,13 @@ impl ArrowReaderMetadata {
         {
             let m = Arc::try_unwrap(metadata).unwrap_or_else(|e| e.as_ref().clone());
             let mut reader = ParquetMetaDataReader::new_with_metadata(m).with_page_indexes(true);
+
+            #[cfg(feature = "encryption")]
+            {
+                reader =
+                    reader.with_decryption_properties(options.file_decryption_properties.as_ref());
+            }
+
             reader.load_page_index(input).await?;
             metadata = Arc::new(reader.finish()?)
         }
@@ -199,9 +225,12 @@ pub struct AsyncReader<T>(T);
 
 /// A builder for reading parquet files from an `async` source as  [`ParquetRecordBatchStream`]
 ///
-/// This builder  handles reading the parquet file metadata, allowing consumers
-/// to use this information to select what specific columns, row groups, etc...
-/// they wish to be read by the resulting stream
+/// This can be used to decode a Parquet file in streaming fashion (without
+/// downloading the whole file at once) from a remote source, such as an object store.
+///
+/// This builder handles reading the parquet file metadata, allowing consumers
+/// to use this information to select what specific columns, row groups, etc.
+/// they wish to be read by the resulting stream.
 ///
 /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
 ///
@@ -344,7 +373,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided async source
-    /// and [`ArrowReaderOptions`]
+    /// and [`ArrowReaderOptions`].
     pub async fn new_with_options(mut input: T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ArrowReaderMetadata::load_async(&mut input, options).await?;
         Ok(Self::new_with_metadata(input, metadata))
@@ -487,7 +516,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let batch_size = self
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
-        let reader = ReaderFactory {
+        let reader_factory = ReaderFactory {
             input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
@@ -498,7 +527,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
-        let projected_fields = match reader.fields.as_deref().map(|pf| &pf.arrow_type) {
+        let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
             Some(DataType::Struct(fields)) => {
                 fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
             }
@@ -514,7 +543,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection: self.projection,
             selection: self.selection,
             schema,
-            reader: Some(reader),
+            reader_factory: Some(reader_factory),
             state: StreamState::Init,
         })
     }
@@ -563,11 +592,12 @@ where
             .map(|x| x[row_group_idx].as_slice());
 
         let mut row_group = InMemoryRowGroup {
-            metadata: meta,
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
             offset_index,
+            row_group_idx,
+            metadata: self.metadata.as_ref(),
         };
 
         if let Some(filter) = self.filter.as_mut() {
@@ -693,7 +723,7 @@ pub struct ParquetRecordBatchStream<T> {
     selection: Option<RowSelection>,
 
     /// This is an option so it can be moved into a future
-    reader: Option<ReaderFactory<T>>,
+    reader_factory: Option<ReaderFactory<T>>,
 
     state: StreamState<T>,
 }
@@ -755,7 +785,7 @@ where
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
 
-                    let reader_factory = self.reader.take().expect("lost reader");
+                    let reader_factory = self.reader_factory.take().expect("lost reader factory");
 
                     let (reader_factory, maybe_reader) = reader_factory
                         .read_row_group(
@@ -765,11 +795,10 @@ where
                             self.batch_size,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|_| {
                             self.state = StreamState::Error;
-                            err
                         })?;
-                    self.reader = Some(reader_factory);
+                    self.reader_factory = Some(reader_factory);
 
                     if let Some(reader) = maybe_reader {
                         return Ok(Some(reader));
@@ -809,7 +838,7 @@ where
                         None => return Poll::Ready(None),
                     };
 
-                    let reader = self.reader.take().expect("lost reader");
+                    let reader = self.reader_factory.take().expect("lost reader factory");
 
                     let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
 
@@ -828,7 +857,7 @@ where
                 }
                 StreamState::Reading(f) => match ready!(f.poll_unpin(cx)) {
                     Ok((reader_factory, maybe_reader)) => {
-                        self.reader = Some(reader_factory);
+                        self.reader_factory = Some(reader_factory);
                         match maybe_reader {
                             // Read records from [`ParquetRecordBatchReader`]
                             Some(reader) => self.state = StreamState::Decoding(reader),
@@ -849,10 +878,11 @@ where
 
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup<'a> {
-    metadata: &'a RowGroupMetaData,
     offset_index: Option<&'a [OffsetIndexMetaData]>,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
+    row_group_idx: usize,
+    metadata: &'a ParquetMetaData,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -863,6 +893,7 @@ impl InMemoryRowGroup<'_> {
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
     ) -> Result<()> {
+        let metadata = self.metadata.row_group(self.row_group_idx);
         if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
@@ -871,7 +902,7 @@ impl InMemoryRowGroup<'_> {
             let fetch_ranges = self
                 .column_chunks
                 .iter()
-                .zip(self.metadata.columns())
+                .zip(metadata.columns())
                 .enumerate()
                 .filter(|&(idx, (chunk, _chunk_meta))| {
                     chunk.is_none() && projection.leaf_included(idx)
@@ -910,7 +941,7 @@ impl InMemoryRowGroup<'_> {
                     }
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: self.metadata.column(idx).byte_range().1 as usize,
+                        length: metadata.column(idx).byte_range().1 as usize,
                         data: offsets.into_iter().zip(chunks.into_iter()).collect(),
                     }))
                 }
@@ -922,7 +953,7 @@ impl InMemoryRowGroup<'_> {
                 .enumerate()
                 .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
                 .map(|(idx, _chunk)| {
-                    let column = self.metadata.column(idx);
+                    let column = metadata.column(idx);
                     let (start, length) = column.byte_range();
                     start as usize..(start + length) as usize
                 })
@@ -937,7 +968,7 @@ impl InMemoryRowGroup<'_> {
 
                 if let Some(data) = chunk_data.next() {
                     *chunk = Some(Arc::new(ColumnChunkData::Dense {
-                        offset: self.metadata.column(idx).byte_range().0 as usize,
+                        offset: metadata.column(idx).byte_range().0 as usize,
                         data,
                     }));
                 }
@@ -953,6 +984,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
         self.row_count
     }
 
+    /// Return chunks for column i
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
         match &self.column_chunks[i] {
             None => Err(ParquetError::General(format!(
@@ -964,12 +996,21 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
-                let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
+                let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
+                let page_reader = SerializedPageReader::new(
                     data.clone(),
-                    self.metadata.column(i),
+                    column_chunk_metadata,
                     self.row_count,
                     page_locations,
-                )?);
+                )?;
+                let page_reader = page_reader.add_crypto_context(
+                    self.row_group_idx,
+                    i,
+                    self.metadata,
+                    column_chunk_metadata,
+                )?;
+
+                let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 
                 Ok(Box::new(ColumnChunkIterator {
                     reader: Some(Ok(page_reader)),
@@ -1055,6 +1096,7 @@ mod tests {
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
+    use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
@@ -1070,7 +1112,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;
@@ -1088,7 +1130,10 @@ mod tests {
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
 
-        fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        fn get_metadata<'a>(
+            &'a mut self,
+            _options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
     }
@@ -1400,7 +1445,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let mut rand = thread_rng();
+        let mut rand = rng();
 
         for _ in 0..100 {
             let mut expected_rows = 0;
@@ -1409,7 +1454,7 @@ mod tests {
             let mut selectors = vec![];
 
             while total_rows < 7300 {
-                let row_count: usize = rand.gen_range(1..100);
+                let row_count: usize = rand.random_range(1..100);
 
                 let row_count = row_count.min(7300 - total_rows);
 
@@ -1436,7 +1481,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let col_idx: usize = rand.gen_range(0..13);
+            let col_idx: usize = rand.random_range(0..13);
             let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
 
             let stream = builder
@@ -1467,7 +1512,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let mut rand = thread_rng();
+        let mut rand = rng();
 
         let mut expected_rows = 0;
         let mut total_rows = 0;
@@ -1480,7 +1525,7 @@ mod tests {
         });
 
         while total_rows < 7300 {
-            let row_count: usize = rand.gen_range(1..100);
+            let row_count: usize = rand.random_range(1..100);
 
             let row_count = row_count.min(7300 - total_rows);
 
@@ -1507,7 +1552,7 @@ mod tests {
             .await
             .unwrap();
 
-        let col_idx: usize = rand.gen_range(0..13);
+        let col_idx: usize = rand.random_range(0..13);
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![col_idx]);
 
         let stream = builder

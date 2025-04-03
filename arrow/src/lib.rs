@@ -243,6 +243,10 @@
 //! let batch = RecordBatch::try_from_iter([("col1", col_1), ("col_2", col_2)]).unwrap();
 //! ```
 //!
+//! # Pretty Printing
+//!
+//! See the [`util::pretty`] module (requires the `prettyprint` crate feature)
+//!
 //! # IO
 //!
 //! This crate provides readers and writers for various formats to/from [`RecordBatch`]
@@ -362,6 +366,11 @@
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
