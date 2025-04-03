@@ -103,7 +103,7 @@ pub trait AsyncFileReader: Send {
     /// This is an asynchronous operation as it may involve reading the file
     /// footer and potentially other metadata from disk or a remote source.
     ///
-    /// Reading data from Parquet, requires the metadata to understand the
+    /// Reading data from Parquet requires the metadata to understand the
     /// schema, row groups, and location of pages within the file. This metadata
     /// is stored in the footer of the Parquet file, and can be read using
     /// [`ParquetMetaDataReader`].
