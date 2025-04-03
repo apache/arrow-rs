@@ -66,20 +66,20 @@ pub mod statistics;
 ///
 /// However, most Parquet based systems will apply filters at many steps prior
 /// to decoding such as pruning files, row groups and data pages. This crate
-/// provides the low level APIs needed to implement such filtering, but not
+/// provides the low level APIs needed to implement such filtering, but does not
 /// include any logic to actually evaluate predicates. For example:
 ///
-/// *  [`Self::with_row_groups`] for Row Group pruning
+/// * [`Self::with_row_groups`] for Row Group pruning
 /// * [`Self::with_row_selection`] for data page pruning
 /// * [`StatisticsConverter`] to convert Parquet statistics to Arrow arrays
 ///
 /// The rationale for this design is that implementing predicate pushdown is a
-/// complex topic and varys significantly from system to system. For example
+/// complex topic and varies significantly from system to system. For example
 ///
 /// 1. Predicates supported (do you support predicates like prefix matching, user defined functions, etc)
 /// 2. Evaluating predicates on multiple files (with potentially different but compatible schemas)
 /// 3. Evaluating predicates using information from an external metadata catalog (e.g. Apache Iceberg or similar)
-/// 4. Interlave fetching metadata, evaluating predicates, and decoding files
+/// 4. Interleaving fetching metadata, evaluating predicates, and decoding files
 ///
 /// You can read more about this design in the [Querying Parquet with
 /// Millisecond Latency] Arrow blog post.
