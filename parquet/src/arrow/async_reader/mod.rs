@@ -105,7 +105,7 @@ pub trait AsyncFileReader: Send {
     ///
     /// Reading data from Parquet requires the metadata to understand the
     /// schema, row groups, and location of pages within the file. This metadata
-    /// is stored in the footer of the Parquet file, and can be read using
+    /// is stored primarily in the footer of the Parquet file, and can be read using
     /// [`ParquetMetaDataReader`].
     ///
     /// However, implementations can significantly speed up reading Parquet by
