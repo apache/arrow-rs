@@ -25,6 +25,9 @@ use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
+#[cfg(feature = "pool")]
+use crate::pool::MemoryPool;
+
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
@@ -413,6 +416,17 @@ impl Buffer {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.length == other.length
+    }
+
+    /// Register this [`Buffer`] with the provided [`MemoryPool`]
+    ///
+    /// This claims the memory used by this buffer in the pool, allowing for
+    /// accurate accounting of memory usage. Any prior reservation will be
+    /// released so this works well when the buffer is being shared among
+    /// multiple arrays.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn MemoryPool) {
+        self.data.claim(pool)
     }
 }
 
