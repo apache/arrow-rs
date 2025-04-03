@@ -2115,6 +2115,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_byte_stream_split_extended() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",

@@ -24,6 +24,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader
 use parquet::arrow::ProjectionMask;
 use std::fs::File;
 
+#[allow(deprecated)]
 pub fn read_plaintext_footer_file_without_decryption_properties() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -81,6 +82,7 @@ pub fn read_plaintext_footer_file_without_decryption_properties() {
 }
 
 #[cfg(feature = "async")]
+#[allow(deprecated)]
 pub async fn read_plaintext_footer_file_without_decryption_properties_async() {
     use futures::StreamExt;
     use futures::TryStreamExt;

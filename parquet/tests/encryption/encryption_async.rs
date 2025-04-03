@@ -31,6 +31,7 @@ use std::sync::Arc;
 use tokio::fs::File;
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_non_uniform_encryption_plaintext_footer() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -54,6 +55,7 @@ async fn test_non_uniform_encryption_plaintext_footer() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_misspecified_encryption_keys() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
@@ -167,6 +169,7 @@ async fn test_plaintext_footer_read_without_decryption() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_non_uniform_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
@@ -188,6 +191,7 @@ async fn test_non_uniform_encryption() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_uniform_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
@@ -204,6 +208,7 @@ async fn test_uniform_encryption() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_aes_ctr_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer_ctr.parquet.encrypted");
@@ -233,6 +238,7 @@ async fn test_aes_ctr_encryption() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_decrypting_without_decryption_properties_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
@@ -248,6 +254,7 @@ async fn test_decrypting_without_decryption_properties_fails() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_write_non_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
@@ -278,6 +285,7 @@ async fn test_write_non_uniform_encryption() {
 }
 
 #[cfg(feature = "object_store")]
+#[allow(deprecated)]
 async fn get_encrypted_meta_store() -> (
     object_store::ObjectMeta,
     std::sync::Arc<dyn object_store::ObjectStore>,
@@ -323,6 +331,7 @@ async fn test_read_encrypted_file_from_object_store() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -344,6 +353,7 @@ async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_non_uniform_encryption_with_key_retriever() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
@@ -365,6 +375,7 @@ async fn test_non_uniform_encryption_with_key_retriever() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn test_uniform_encryption_with_key_retriever() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");

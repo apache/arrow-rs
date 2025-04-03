@@ -1139,6 +1139,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
@@ -1196,6 +1197,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader_with_next_row_group() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
@@ -1261,6 +1263,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader_with_index() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1329,6 +1332,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader_with_limit() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1375,6 +1379,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader_skip_pages() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1433,6 +1438,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_fuzz_async_reader_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1499,6 +1505,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_async_reader_zero_row_selector() {
         //See https://github.com/apache/arrow-rs/issues/2669
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1747,6 +1754,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_row_filter_with_index() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -1799,6 +1807,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
@@ -1892,6 +1901,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
@@ -1924,6 +1934,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_get_row_group_column_bloom_filter_without_length() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
@@ -2040,6 +2051,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_get_row_group_column_bloom_filter_with_length() {
         // convert to new parquet file with bloom_filter_length
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2282,6 +2294,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2307,6 +2320,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn non_empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2331,6 +2345,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn empty_offset_index_doesnt_panic_in_column_chunks() {
         use tempfile::TempDir;
         use tokio::fs::File;

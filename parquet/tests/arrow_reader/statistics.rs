@@ -2263,6 +2263,7 @@ async fn test_column_non_existent() {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[allow(deprecated)]
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
         new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
@@ -2595,6 +2596,7 @@ mod test {
 
         /// Reads the specified parquet file and validates that the expected min/max
         /// values for the specified columns are as expected.
+        #[allow(deprecated)]
         fn run(self) {
             let path = PathBuf::from(parquet_test_data()).join(self.file_name);
             let file = File::open(path).unwrap();

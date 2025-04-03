@@ -17,6 +17,7 @@
 
 //! Tests that reading invalid parquet files returns an error
 
+#[allow(deprecated)]
 use arrow::util::test_util::parquet_test_data;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
@@ -35,6 +36,7 @@ static KNOWN_FILES: &[&str] = &[
 ];
 
 /// Returns the path to 'parquet-testing/bad_data'
+#[allow(deprecated)]
 fn bad_data_dir() -> PathBuf {
     // points to parquet-testing/data
     let parquet_testing_data = parquet_test_data();

@@ -19,11 +19,13 @@ use arrow::array::UInt32Builder;
 use arrow::compute::take;
 use arrow::datatypes::{Int32Type, Int64Type};
 use arrow::util::bench_util::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow_array::UInt32Array;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::Rng;
 
+#[allow(deprecated)]
 fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
     let mut rng = seedable_rng();
     let mut builder = UInt32Builder::with_capacity(size);

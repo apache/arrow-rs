@@ -29,6 +29,7 @@ use rand::RngCore;
 extern crate arrow;
 
 use arrow::util::bench_util::create_primitive_array;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 
 fn bitwise_array_benchmark(c: &mut Criterion) {
@@ -75,6 +76,7 @@ fn bitwise_array_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(deprecated)]
 fn bitwise_array_scalar_benchmark(c: &mut Criterion) {
     let size = 64 * 1024_usize;
     let array_without_null = create_primitive_array::<Int64Type>(size, 0 as f32);

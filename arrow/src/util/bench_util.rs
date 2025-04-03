@@ -19,6 +19,7 @@
 
 use crate::array::*;
 use crate::datatypes::*;
+#[allow(deprecated)]
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
@@ -33,6 +34,7 @@ use rand::{
 use std::ops::Range;
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
+#[allow(deprecated)]
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
@@ -100,6 +102,7 @@ pub fn create_month_day_nano_array_with_seed(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size and null density
+#[allow(deprecated)]
 pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
     StandardUniform: Distribution<bool>,
@@ -149,6 +152,7 @@ pub fn create_longer_string_view_array_with_same_prefix(
     create_string_view_array_with_len_range_and_prefix(size, null_density, 13, 100, "prefix_")
 }
 
+#[allow(deprecated)]
 fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -188,6 +192,7 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
         .collect()
 }
 
+#[allow(deprecated)]
 fn create_string_view_array_with_len_range_and_prefix(
     size: usize,
     null_density: f32,
@@ -228,6 +233,7 @@ fn create_string_view_array_with_len_range_and_prefix(
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
+#[allow(deprecated)]
 fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -249,6 +255,7 @@ fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length
+#[allow(deprecated)]
 pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -277,6 +284,7 @@ pub fn create_string_view_array(size: usize, null_density: f32) -> StringViewArr
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
+#[allow(deprecated)]
 fn create_string_view_array_with_max_len(
     size: usize,
     null_density: f32,
@@ -298,6 +306,7 @@ fn create_string_view_array_with_max_len(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length
+#[allow(deprecated)]
 pub fn create_string_view_array_with_len(
     size: usize,
     null_density: f32,
@@ -335,6 +344,7 @@ pub fn create_string_view_array_with_len(
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 /// consisting of random 4 character alphanumeric strings
+#[allow(deprecated)]
 pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     size: usize,
     null_density: f32,
@@ -425,6 +435,7 @@ pub fn create_string_array_for_runs(
 }
 
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
+#[allow(deprecated)]
 pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -448,6 +459,7 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
+#[allow(deprecated)]
 pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> FixedSizeBinaryArray {
     let rng = &mut seedable_rng();
 
@@ -487,6 +499,7 @@ where
 
 /// Creates a random (but fixed-seeded) dictionary array of a given size and null density
 /// with the provided values array and key range
+#[allow(deprecated)]
 pub fn create_sparse_dict_from_values<K>(
     size: usize,
     null_density: f32,
@@ -524,6 +537,7 @@ where
 }
 
 /// Creates a random (but fixed-seeded) f16 array of a given size and nan-value density
+#[allow(deprecated)]
 pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
     let mut rng = seedable_rng();
 
@@ -539,6 +553,7 @@ pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
 }
 
 /// Creates a random (but fixed-seeded) f32 array of a given size and nan-value density
+#[allow(deprecated)]
 pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
     let mut rng = seedable_rng();
 
@@ -554,6 +569,7 @@ pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
 }
 
 /// Creates a random (but fixed-seeded) f64 array of a given size and nan-value density
+#[allow(deprecated)]
 pub fn create_f64_array(size: usize, nan_density: f32) -> Float64Array {
     let mut rng = seedable_rng();
 

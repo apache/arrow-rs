@@ -26,6 +26,7 @@ use rand::Rng;
 extern crate arrow;
 
 use arrow::datatypes::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_select::interleave::interleave;
@@ -50,6 +51,7 @@ fn do_bench(
     );
 }
 
+#[allow(deprecated)]
 fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]) {
     let mut rng = seedable_rng();
     let indices: Vec<_> = (0..len)
