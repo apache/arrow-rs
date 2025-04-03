@@ -710,7 +710,11 @@ impl ParquetMetaDataReader {
                 ));
             }
 
-            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
+            Ok((
+                // need to slice off the footer or decryption fails
+                self.decode_footer_metadata(&meta.slice(0..length), &footer)?,
+                None,
+            ))
         } else {
             let metadata_start = suffix_len - metadata_offset;
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
@@ -1209,7 +1213,6 @@ mod async_tests {
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::arrow::async_reader::MetadataFetch;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1433,6 +1436,31 @@ mod async_tests {
         assert_eq!(actual.file_metadata().schema(), expected);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 0);
         assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "encryption")]
+    #[tokio::test]
+    async fn test_suffix_with_encryption() {
+        let mut file = get_test_file("uniform_encryption.parquet.encrypted");
+        let mut file2 = file.try_clone().unwrap();
+
+        let mut fetch = |range| futures::future::ready(read_range(&mut file, range));
+        let mut suffix_fetch = |suffix| futures::future::ready(read_suffix(&mut file2, suffix));
+
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+
+        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+            .build()
+            .unwrap();
+
+        // just make sure the metadata is properly decrypted and read
+        let expected = ParquetMetaDataReader::new()
+            .with_decryption_properties(Some(&decryption_properties))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+        assert_eq!(expected.num_row_groups(), 1);
     }
 
     #[tokio::test]
