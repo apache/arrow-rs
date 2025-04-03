@@ -301,7 +301,7 @@ impl From<ArrayData> for StructArray {
             .child_data()
             .iter()
             .map(|cd| {
-                if parent_offset != 0 || cd.len() != parent_len {
+                if parent_offset != 0 || parent_len != cd.len() {
                     make_array(cd.slice(parent_offset, parent_len))
                 } else {
                     make_array(cd.clone())
@@ -534,22 +534,45 @@ mod tests {
 
     #[test]
     fn test_struct_array_from_data_with_offset_and_length() {
-        // Case 1: Null buffer has no offset
+        // Various ways to make the struct array:
+        //
+        // [{x: 2}, {x: 3}, None]
+        //
+        // from slicing larger buffers/arrays with offsets and lengths
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
         let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
         let int_data = int_arr.to_data();
-        let struct_data =
-            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
-                .len(3)
-                .offset(1)
-                .nulls(Some(struct_nulls))
-                .add_child_data(int_data.clone())
-                .build()
-                .unwrap();
-        let struct_arr_from_data = StructArray::from(struct_data);
+        // Case 1: Offset + length, nulls are not sliced
+        let case1 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
 
-        let struct_arr = StructArray::new(
+        // Case 2: Offset + length, nulls are sliced
+        let struct_nulls =
+            NullBuffer::new(BooleanBuffer::from(vec![true, true, true, false, true]).slice(1, 3));
+        let case2 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls.clone()))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
+
+        // Case 3: struct length is smaller than child length but no offset
+        let offset_int_data = int_data.slice(1, 4);
+        let case3 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .nulls(Some(struct_nulls))
+            .add_child_data(offset_int_data)
+            .build()
+            .unwrap();
+
+        let expected = StructArray::new(
             Fields::from(vec![int_field.clone()]),
             vec![Arc::new(int_arr)],
             Some(NullBuffer::new(BooleanBuffer::from(vec![
@@ -558,22 +581,11 @@ mod tests {
         )
         .slice(1, 3);
 
-        assert_eq!(struct_arr_from_data, struct_arr);
-
-        // Case 2: Null buffer has offset
-        let struct_nulls =
-            NullBuffer::new(BooleanBuffer::from(vec![true, true, true, false, true]).slice(1, 3));
-        let struct_data =
-            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
-                .len(3)
-                .offset(1)
-                .nulls(Some(struct_nulls))
-                .add_child_data(int_data)
-                .build()
-                .unwrap();
-        let struct_arr_from_data = StructArray::from(struct_data);
-
-        assert_eq!(struct_arr_from_data, struct_arr);
+        for case in [case1, case2, case3] {
+            let struct_arr_from_data = StructArray::from(case);
+            assert_eq!(struct_arr_from_data, expected);
+            assert_eq!(struct_arr_from_data.column(0), expected.column(0));
+        }
     }
 
     #[test]
