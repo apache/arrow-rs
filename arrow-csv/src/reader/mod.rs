@@ -1763,7 +1763,7 @@ mod tests {
 
         assert_eq!(&DataType::Float64, schema.field(0).data_type());
     }
-    
+
     fn invalid_csv_helper(file_name: &str) -> String {
         let file = File::open(file_name).unwrap();
         let schema = Schema::new(vec![
@@ -1791,7 +1791,7 @@ mod tests {
         let error = invalid_csv_helper(file_name);
         assert_eq!("Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'", error);
     }
-    
+
     #[test]
     fn test_parse_invalid_csv_int() {
         let file_name = "test/data/various_invalid_types/invalid_int.csv";
@@ -1799,7 +1799,7 @@ mod tests {
         let error = invalid_csv_helper(file_name);
         assert_eq!("Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'", error);
     }
-    
+
     #[test]
     fn test_parse_invalid_csv_bool() {
         let file_name = "test/data/various_invalid_types/invalid_bool.csv";
@@ -1807,7 +1807,7 @@ mod tests {
         let error = invalid_csv_helper(file_name);
         assert_eq!("Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'", error);
     }
-    
+
     /// Infer the data type of a record
     fn infer_field_schema(string: &str) -> DataType {
         let mut v = InferredDataType::default();
