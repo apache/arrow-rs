@@ -17,7 +17,31 @@
 
 //! Encryption Key Management Tools for Parquet
 //!
-//! # Example
+//! This module provides tools for integrating with a Key Management Server (KMS)
+//! to read and write encrypted Parquet files.
+//!
+//! Envelope encryption is used, where the Parquet file is encrypted with data encryption keys
+//! (DEKs) that are randomly generated per file,
+//! and the DEKs are encrypted with master encryption keys (MEKs) that are managed by a KMS.
+//! Double wrapping is used by default, where the DEKs are first encrypted with key encryption
+//! keys (KEKs) that are then encrypted with MEKs, to reduce KMS interactions.
+//!
+//! Using this module requires defining your own type that implements the
+//! [`KmsClient`](kms::KmsClient) trait and interacts with your organization's KMS.
+//!
+//! This `KmsClient` can then be used by the
+//! [`CryptoFactory`](crypto_factory::CryptoFactory) type to generate
+//! [`FileEncryptionProperties`](crate::encryption::encrypt::FileEncryptionProperties)
+//! for writing encrypted Parquet files and
+//! [`FileDecryptionProperties`](crate::encryption::decrypt::FileDecryptionProperties)
+//! for reading files.
+//!
+//! The encryption key metadata that is stored in the Parquet file is compatible with other Parquet
+//! implementations (PyArrow and parquet-java for example), so that files encrypted with this
+//! module may be decrypted by those implementations, and vice versa, as long as the
+//! `KmsClient` implementations are compatible.
+//!
+//! # Example of writing then reading an encrypted Parquet file
 //! ```
 //! use arrow_array::{ArrayRef, Float32Array, Int32Array, RecordBatch};
 //! use base64::prelude::BASE64_STANDARD;
@@ -40,7 +64,8 @@
 //! let temp_dir = TempDir::new()?;
 //! let file_path = temp_dir.path().join("encrypted_example.parquet");
 //!
-//! // Create a CryptoFactory that will use an example KMS client
+//! // Create a CryptoFactory, providing a factory function
+//! // that will create an example KMS client
 //! let crypto_factory = CryptoFactory::new(DemoKmsClient::create);
 //!
 //! // Specify any options required to connect to our KMS.

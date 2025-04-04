@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Configuration for encrypting a Parquet file
+/// Configuration for encrypting a Parquet file using a KMS
 #[derive(Debug)]
 pub struct EncryptionConfiguration {
     footer_key: String,
@@ -165,7 +165,7 @@ impl EncryptionConfigurationBuilder {
     }
 }
 
-/// Configuration for decrypting a Parquet file
+/// Configuration for decrypting a Parquet file using a KMS
 #[derive(Debug)]
 pub struct DecryptionConfiguration {
     cache_lifetime: Option<Duration>,
@@ -178,7 +178,7 @@ impl DecryptionConfiguration {
     }
 
     /// How long to cache objects for, including decrypted key encryption keys
-    /// and KMS clients. When None, no caching is used.
+    /// and KMS clients. When None, objects are cached indefinitely.
     pub fn cache_lifetime(&self) -> Option<Duration> {
         self.cache_lifetime
     }
@@ -190,7 +190,7 @@ impl Default for DecryptionConfiguration {
     }
 }
 
-/// Builder for Parquet [`DecryptionConfiguration`].
+/// Builder for a Parquet [`DecryptionConfiguration`].
 pub struct DecryptionConfigurationBuilder {
     cache_lifetime: Option<Duration>,
 }
@@ -226,6 +226,52 @@ impl Default for DecryptionConfigurationBuilder {
 
 /// A factory that produces file decryption and encryption properties using
 /// configuration options and a KMS client
+///
+/// Creating a `CryptoFactory` requires providing a [`KmsClientFactory`]
+/// to create clients for your Key Management Server:
+/// ```no_run
+/// # use parquet::encryption::key_management::crypto_factory::CryptoFactory;
+/// # use parquet::encryption::key_management::kms::KmsConnectionConfig;
+/// # let kms_client_factory = |config: &KmsConnectionConfig| todo!();
+/// let crypto_factory = CryptoFactory::new(kms_client_factory);
+/// ```
+///
+/// The `CryptoFactory` can then be used to generate file encryption properties
+/// when writing an encrypted Parquet file:
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use parquet::encryption::key_management::crypto_factory::{CryptoFactory, EncryptionConfiguration};
+/// # use parquet::encryption::key_management::kms::KmsConnectionConfig;
+/// # let crypto_factory: CryptoFactory = todo!();
+/// let kms_connection_config = Arc::new(KmsConnectionConfig::default());
+/// let encryption_config = EncryptionConfiguration::builder("master_key_id".into()).build();
+/// let encryption_properties = crypto_factory.file_encryption_properties(
+///     kms_connection_config, &encryption_config)?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// And file decryption properties can be constructed for reading an encrypted file:
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use parquet::encryption::key_management::crypto_factory::{CryptoFactory, DecryptionConfiguration};
+/// # use parquet::encryption::key_management::kms::KmsConnectionConfig;
+/// # let crypto_factory: CryptoFactory = todo!();
+/// # let kms_connection_config = Arc::new(KmsConnectionConfig::default());
+/// let decryption_config = DecryptionConfiguration::default();
+/// let decryption_properties = crypto_factory.file_decryption_properties(
+///     kms_connection_config, decryption_config)?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// A `CryptoFactory` can be reused multiple times to encrypt or decrypt many files,
+/// but the same encryption properties should not be reused between different files.
+///
+/// The `KmsClientFactory` will be used to create KMS clients as required,
+/// and these will be internally cached based on the KMS instance ID and the key access token.
+/// This means that if the key access token is changed using
+/// [`KmsConnectionConfig::refresh_key_access_token`],
+/// new `KmsClient` instances will be created using the new token rather than reusing
+/// a cached client.
 pub struct CryptoFactory {
     kms_manager: Arc<KmsManager>,
 }
