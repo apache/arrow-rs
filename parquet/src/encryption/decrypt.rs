@@ -28,6 +28,77 @@ use std::io::Read;
 use std::sync::Arc;
 
 /// Trait for retrieving an encryption key using the key's metadata
+///
+/// # Example
+///
+/// This shows how you might use a `KeyRetriever` to decrypt a Parquet file
+/// if you have a set of known encryption keys with identifiers, but at read time
+/// you may not know which columns were encrypted and which keys were used.
+///
+/// In practice, the key metadata might instead store an encrypted key that must
+/// be decrypted with a Key Management Server.
+///
+/// ```
+/// # use std::collections::HashMap;
+/// # use std::sync::{Arc, Mutex};
+/// # use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
+/// # use parquet::encryption::encrypt::FileEncryptionProperties;
+/// # use parquet::errors::ParquetError;
+/// // Define known encryption keys
+/// let mut keys = HashMap::new();
+/// keys.insert("kf".to_owned(), b"0123456789012345".to_vec());
+/// keys.insert("kc1".to_owned(), b"1234567890123450".to_vec());
+/// keys.insert("kc2".to_owned(), b"1234567890123451".to_vec());
+///
+/// // Create encryption properties for writing a file,
+/// // and specify the key identifiers as the key metadata.
+/// let encryption_properties = FileEncryptionProperties::builder(keys.get("kf").unwrap().clone())
+///     .with_footer_key_metadata("kf".into())
+///     .with_column_key_and_metadata("x", keys.get("kc1").unwrap().clone(), "kc1".as_bytes().into())
+///     .with_column_key_and_metadata("y", keys.get("kc2").unwrap().clone(), "kc2".as_bytes().into())
+///     .build()?;
+///
+/// // Write an encrypted file with the properties
+/// // ...
+///
+/// // Define a KeyRetriever that can get encryption keys using their identifiers
+/// struct CustomKeyRetriever {
+///     keys: Mutex<HashMap<String, Vec<u8>>>,
+/// }
+///
+/// impl KeyRetriever for CustomKeyRetriever {
+///     fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
+///         // Metadata is bytes, so convert it to a string identifier
+///         let key_metadata = std::str::from_utf8(key_metadata).map_err(|e| {
+///             ParquetError::General(format!("Could not convert key metadata to string: {e}"))
+///         })?;
+///         // Lookup the key
+///         let keys = self.keys.lock().unwrap();
+///         match keys.get(key_metadata) {
+///             Some(key) => Ok(key.clone()),
+///             None => Err(ParquetError::General(format!(
+///                 "Could not retrieve key for metadata {key_metadata:?}"
+///             ))),
+///         }
+///     }
+/// }
+///
+/// let key_retriever = Arc::new(CustomKeyRetriever {
+///     keys: Mutex::new(keys),
+/// });
+///
+/// // Create decryption properties for reading an encrypted file.
+/// // Note that we don't need to specify which columns are encrypted,
+/// // this is determined by the file metadata and the required keys will be retrieved
+/// // dynamically using our key retriever.
+/// let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
+///     .build()?;
+///
+/// // Read an encrypted file with the decryption properties
+/// // ...
+///
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
 pub trait KeyRetriever: Send + Sync {
     /// Retrieve a decryption key given the key metadata
     fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>>;
@@ -195,7 +266,43 @@ impl PartialEq for DecryptionKeys {
     }
 }
 
-/// FileDecryptionProperties hold keys and AAD data required to decrypt a Parquet file.
+/// `FileDecryptionProperties` hold keys and AAD data required to decrypt a Parquet file.
+///
+/// When reading Arrow data, the `FileDecryptionProperties` should be included in the
+/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions)  using
+/// [`with_file_decryption_properties`](crate::arrow::arrow_reader::ArrowReaderOptions::with_file_decryption_properties).
+///
+/// # Examples
+///
+/// Create `FileDecryptionProperties` for a file encrypted with uniform encryption,
+/// where all metadata and data are encrypted with the footer key:
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Create properties for a file where columns are encrypted with different keys:
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .with_column_key("x", b"1234567890123450".into())
+///     .with_column_key("y", b"1234567890123451".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Specify additional authenticated data, used to protect against data replacement.
+/// This must match the AAD prefix provided when the file was written, otherwise
+/// data decryption will fail.
+/// ```
+/// # use parquet::encryption::decrypt::FileDecryptionProperties;
+/// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+///     .with_aad_prefix("example_file".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
 #[derive(Clone, PartialEq)]
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
@@ -277,6 +384,8 @@ impl std::fmt::Debug for FileDecryptionProperties {
 }
 
 /// Builder for [`FileDecryptionProperties`]
+///
+/// See [`FileDecryptionProperties`] for example usage.
 pub struct DecryptionPropertiesBuilder {
     footer_key: Option<Vec<u8>>,
     key_retriever: Option<Arc<dyn KeyRetriever>>,
