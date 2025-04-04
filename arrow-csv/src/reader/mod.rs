@@ -1763,11 +1763,9 @@ mod tests {
 
         assert_eq!(&DataType::Float64, schema.field(0).data_type());
     }
-
-    #[test]
-    fn test_parse_invalid_csv() {
-        let file = File::open("test/data/various_types_invalid.csv").unwrap();
-
+    
+    fn invalid_csv_helper(file_name: &str) -> String {
+        let file = File::open(file_name).unwrap();
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, false),
@@ -1782,18 +1780,34 @@ mod tests {
             .with_projection(vec![0, 1, 2, 3]);
 
         let mut csv = builder.build(file).unwrap();
-        match csv.next() {
-            Some(e) => match e {
-                Err(e) => assert_eq!(
-                    "ParseError(\"Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'\")",
-                    format!("{e:?}")
-                ),
-                Ok(_) => panic!("should have failed"),
-            },
-            None => panic!("should have failed"),
-        }
+
+        csv.next().unwrap().unwrap_err().to_string()
     }
 
+    #[test]
+    fn test_parse_invalid_csv_float() {
+        let file_name = "test/data/various_invalid_types/invalid_float.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'", error);
+    }
+    
+    #[test]
+    fn test_parse_invalid_csv_int() {
+        let file_name = "test/data/various_invalid_types/invalid_int.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'", error);
+    }
+    
+    #[test]
+    fn test_parse_invalid_csv_bool() {
+        let file_name = "test/data/various_invalid_types/invalid_bool.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'", error);
+    }
+    
     /// Infer the data type of a record
     fn infer_field_schema(string: &str) -> DataType {
         let mut v = InferredDataType::default();
