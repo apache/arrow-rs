@@ -34,6 +34,7 @@ use arrow_array::{
     UInt8Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
+use arrow_cast::CastOptions;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
@@ -275,6 +276,24 @@ where
                     .unwrap()
                     .unary(|i| i as u8) as UInt8Array;
                 Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
+                /*
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i8) as arrow_array::Int8Array;
+                Arc::new(array) as ArrayRef*/
+                arrow_cast::cast_with_options(
+                    &array,
+                    target_type,
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
+                )?
+                //arrow_cast::cast(&array, target_type)?
             }
             ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
                 let array = array
