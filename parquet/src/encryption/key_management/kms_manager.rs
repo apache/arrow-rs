@@ -23,14 +23,12 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-type ClientFactory = Mutex<Box<dyn KmsClientFactory>>;
-
-/// Cache of key encryption keys, keyed by their base64 encoded key id
+/// Cache of key encryption keys (KEKs), keyed by their base64 encoded key id
 pub type KekCache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
-/// Manages caching the KMS and allowing interaction with it
+/// Manages caching KMS clients and KEK caches
 pub struct KmsManager {
-    kms_client_factory: ClientFactory,
+    kms_client_factory: Box<dyn KmsClientFactory>,
     kms_client_cache: ExpiringCache<ClientKey, KmsClientRef>,
     kek_caches: ExpiringCache<KekCacheKey, KekCache>,
 }
@@ -41,7 +39,7 @@ impl KmsManager {
         T: KmsClientFactory + 'static,
     {
         Self {
-            kms_client_factory: Mutex::new(Box::new(kms_client_factory)),
+            kms_client_factory: Box::new(kms_client_factory),
             kms_client_cache: ExpiringCache::new(),
             kek_caches: ExpiringCache::new(),
         }
@@ -60,8 +58,7 @@ impl KmsManager {
         );
         self.kms_client_cache
             .get_or_create_fallible(key, cache_lifetime, || {
-                let client_factory = self.kms_client_factory.lock().unwrap();
-                client_factory.create_client(kms_connection_config)
+                self.kms_client_factory.create_client(kms_connection_config)
             })
     }
 

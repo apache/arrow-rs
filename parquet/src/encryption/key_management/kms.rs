@@ -167,14 +167,14 @@ impl Default for KmsConnectionConfigBuilder {
 }
 
 /// Trait for factories that create KMS clients
-pub trait KmsClientFactory: Send {
+pub trait KmsClientFactory: Send + Sync {
     /// Create a new [`KmsClient`] instance using the provided configuration
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef>;
 }
 
 impl<T> KmsClientFactory for Arc<T>
 where
-    T: KmsClientFactory + Send + Sync,
+    T: KmsClientFactory,
 {
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
         self.deref().create_client(kms_connection_config)
@@ -183,7 +183,7 @@ where
 
 impl<T> KmsClientFactory for T
 where
-    T: Fn(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + 'static,
+    T: Fn(&KmsConnectionConfig) -> Result<KmsClientRef> + Send + Sync + 'static,
 {
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
         self(kms_connection_config)
