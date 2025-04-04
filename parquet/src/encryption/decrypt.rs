@@ -53,7 +53,7 @@ use std::sync::Arc;
 /// // Create encryption properties for writing a file,
 /// // and specify the key identifiers as the key metadata.
 /// let encryption_properties = FileEncryptionProperties::builder(keys.get("kf").unwrap().clone())
-///     .with_footer_key_metadata("kf".as_bytes().into())
+///     .with_footer_key_metadata("kf".into())
 ///     .with_column_key_and_metadata("x", keys.get("kc1").unwrap().clone(), "kc1".as_bytes().into())
 ///     .with_column_key_and_metadata("y", keys.get("kc2").unwrap().clone(), "kc2".as_bytes().into())
 ///     .build()?;
@@ -70,15 +70,14 @@ use std::sync::Arc;
 ///     fn retrieve_key(&self, key_metadata: &[u8]) -> parquet::errors::Result<Vec<u8>> {
 ///         // Metadata is bytes, so convert it to a string identifier
 ///         let key_metadata = std::str::from_utf8(key_metadata).map_err(|e| {
-///             ParquetError::General(format!("Could not convert key metadata to string: {}", e))
+///             ParquetError::General(format!("Could not convert key metadata to string: {e}"))
 ///         })?;
 ///         // Lookup the key
 ///         let keys = self.keys.lock().unwrap();
 ///         match keys.get(key_metadata) {
 ///             Some(key) => Ok(key.clone()),
 ///             None => Err(ParquetError::General(format!(
-///                 "Could not retrieve key for metadata {:?}",
-///                 key_metadata
+///                 "Could not retrieve key for metadata {key_metadata:?}"
 ///             ))),
 ///         }
 ///     }
@@ -300,7 +299,7 @@ impl PartialEq for DecryptionKeys {
 /// ```
 /// # use parquet::encryption::decrypt::FileDecryptionProperties;
 /// let file_encryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-///     .with_aad_prefix("example_file".as_bytes().to_vec())
+///     .with_aad_prefix("example_file".into())
 ///     .build()?;
 /// # Ok::<(), parquet::errors::ParquetError>(())
 /// ```

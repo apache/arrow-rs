@@ -101,7 +101,7 @@
 //! let record_reader = builder.build()?;
 //! for batch in record_reader {
 //!     let batch = batch?;
-//!     println!("Read batch: {:?}", batch);
+//!     println!("Read batch: {batch:?}");
 //! }
 //! # Ok::<(), parquet::errors::ParquetError>(())
 //! ```

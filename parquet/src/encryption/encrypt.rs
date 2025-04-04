@@ -84,7 +84,7 @@ impl EncryptionKey {
 /// ```
 /// # use parquet::encryption::encrypt::FileEncryptionProperties;
 /// let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-///     .with_aad_prefix("example_file".as_bytes().to_vec())
+///     .with_aad_prefix("example_file".into())
 ///     .build()?;
 /// # Ok::<(), parquet::errors::ParquetError>(())
 /// ```
