@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This library tests interoperability of encrypted Parquet
-//! files with PyArrow.
+//! This library tests interoperability of encrypted Parquet files with PyArrow.
 
-use arrow::array::{Float32Builder, StructArray, UInt64Builder};
+use arrow::array::{ArrayRef, Float32Builder, Int32Builder, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
@@ -67,7 +66,7 @@ fn read_encrypted_parquet(file_path: &str) -> PyResult<()> {
     for batch in record_reader {
         let batch = batch.map_err(arrow_to_py_err)?;
         batches_read += 1;
-        println!("Read batch: {:?}", batch);
+        println!("Read batch: {batch:?}");
     }
     if batches_read > 0 {
         Ok(())
@@ -91,7 +90,6 @@ fn write_encrypted_parquet(file_path: &str, double_wrapping: bool) -> PyResult<(
         .build();
     let connection_config = Arc::new(KmsConnectionConfig::default());
 
-    // Use the CryptoFactory to generate file encryption properties
     let encryption_properties = crypto_factory
         .file_encryption_properties(connection_config.clone(), &encryption_config)
         .map_err(to_py_err)?;
@@ -99,16 +97,7 @@ fn write_encrypted_parquet(file_path: &str, double_wrapping: bool) -> PyResult<(
         .with_file_encryption_properties(encryption_properties)
         .build();
 
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt64, false),
-        Field::new("x", DataType::Float32, false),
-        Field::new("y", DataType::Float32, false),
-    ]));
-
-    let mut writer =
-        ArrowWriter::try_new(file, schema.clone(), Some(properties)).map_err(to_py_err)?;
-
-    let mut id_builder = UInt64Builder::new();
+    let mut id_builder = Int32Builder::new();
     let mut x_builder = Float32Builder::new();
     let mut y_builder = Float32Builder::new();
     let num_rows = 10;
@@ -117,21 +106,18 @@ fn write_encrypted_parquet(file_path: &str, double_wrapping: bool) -> PyResult<(
         x_builder.append_value(i as f32 / 10.0);
         y_builder.append_value(i as f32 / 100.0);
     }
-    writer
-        .write(
-            &StructArray::new(
-                schema.fields().clone(),
-                vec![
-                    Arc::new(id_builder.finish()),
-                    Arc::new(x_builder.finish()),
-                    Arc::new(y_builder.finish()),
-                ],
-                None,
-            )
-            .into(),
-        )
-        .map_err(to_py_err)?;
-    writer.flush().map_err(to_py_err)?;
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(id_builder.finish()) as ArrayRef),
+        ("x", Arc::new(x_builder.finish()) as ArrayRef),
+        ("y", Arc::new(y_builder.finish()) as ArrayRef),
+    ])
+    .map_err(arrow_to_py_err)?;
+
+    let mut writer =
+        ArrowWriter::try_new(file, batch.schema(), Some(properties)).map_err(to_py_err)?;
+
+    writer.write(&batch).map_err(to_py_err)?;
     writer.close().map_err(to_py_err)?;
 
     Ok(())

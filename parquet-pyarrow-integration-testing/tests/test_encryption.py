@@ -81,6 +81,10 @@ def test_write_python_read_rust(tmp_path: Path, double_wrapping: bool):
 
 
 class _TestKmsClient(pe.KmsClient):
+    """
+    Test KMS client implementation that is compatible with
+    parquet::encryption::key_management::test_kms::TestKmsClient
+    """
     def __init__(self, _kms_connection_configuration):
       pe.KmsClient.__init__(self)
       self._keys = {
