@@ -125,11 +125,6 @@ jobs:
         # Necessary because half 2.5 requires rust 1.81 or newer
         run: |
           cargo update -p half --precise 2.4.0
-      - name: Downgrade parquet-pyarrow-integration-testing dependencies
-        working-directory: parquet-pyarrow-integration-testing
-        # Necessary because half 2.5 requires rust 1.81 or newer
-        run: |
-          cargo update -p half --precise 2.4.0
       - name: Downgrade workspace dependencies
         # Necessary because half 2.5 requires rust 1.81 or newer
         run: |
