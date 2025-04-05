@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use chrono::TimeZone;
+use chrono::{DateTime, TimeZone};
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;
@@ -32,15 +32,17 @@ use crate::reader::ArrayDecoder;
 pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
     data_type: DataType,
     timezone: Tz,
+    ignore_type_conflicts: bool,
     // Invariant and Send
     phantom: PhantomData<fn(P) -> P>,
 }
 
 impl<P: ArrowTimestampType, Tz: TimeZone> TimestampArrayDecoder<P, Tz> {
-    pub fn new(data_type: DataType, timezone: Tz) -> Self {
+    pub fn new(data_type: DataType, timezone: Tz, ignore_type_conflicts: bool) -> Self {
         Self {
             data_type,
             timezone,
+            ignore_type_conflicts,
             phantom: Default::default(),
         }
     }
@@ -55,6 +57,18 @@ where
         let mut builder =
             PrimitiveBuilder::<P>::with_capacity(pos.len()).with_data_type(self.data_type.clone());
 
+        // Factor out this logic to simplify call sites below; the compiler will inline it,
+        // producing a highly predictable branch whose cost should be trivial compared to the
+        // expensive and unpredictably branchy string parse that immediately precedes each call.
+        let append = |builder: &mut PrimitiveBuilder<P>, value| {
+            match value {
+                Ok(value) => builder.append_value(value),
+                Err(_) if self.ignore_type_conflicts => builder.append_null(),
+                Err(e) => return Err(e),
+            };
+            Ok(())
+        };
+
         for p in pos {
             match tape.get(*p) {
                 TapeElement::Null => builder.append_null(),
@@ -65,20 +79,20 @@ where
                             "failed to parse \"{s}\" as {}: {}",
                             self.data_type, e
                         ))
-                    })?;
+                    });
 
-                    let value = match P::UNIT {
-                        TimeUnit::Second => date.timestamp(),
-                        TimeUnit::Millisecond => date.timestamp_millis(),
-                        TimeUnit::Microsecond => date.timestamp_micros(),
+                    let date_to_value = |date: DateTime<Tz>| match P::UNIT {
+                        TimeUnit::Second => Ok(date.timestamp()),
+                        TimeUnit::Millisecond => Ok(date.timestamp_millis()),
+                        TimeUnit::Microsecond => Ok(date.timestamp_micros()),
                         TimeUnit::Nanosecond => date.timestamp_nanos_opt().ok_or_else(|| {
                             ArrowError::ParseError(format!(
                                 "{} would overflow 64-bit signed nanoseconds",
                                 date.to_rfc3339(),
                             ))
-                        })?,
+                        }),
                     };
-                    builder.append_value(value)
+                    append(&mut builder, date.and_then(date_to_value))?
                 }
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
@@ -90,9 +104,8 @@ where
                                 "failed to parse {s} as {}",
                                 self.data_type
                             ))
-                        })?;
-
-                    builder.append_value(value)
+                        });
+                    append(&mut builder, value)?
                 }
                 TapeElement::I32(v) => builder.append_value(v as i64),
                 TapeElement::I64(high) => match tape.get(p + 1) {
@@ -101,6 +114,7 @@ where
                     }
                     _ => unreachable!(),
                 },
+                _ if self.ignore_type_conflicts => builder.append_null(),
                 _ => return Err(tape.error(*p, "primitive")),
             }
         }
