@@ -161,9 +161,9 @@ impl ParquetObjectReader {
 }
 
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
-            range: Some(GetRange::Suffix(suffix as u64)),
+            range: Some(GetRange::Suffix(suffix)),
             ..Default::default()
         };
         self.spawn(|store, path| {
@@ -177,19 +177,14 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
 }
 
 impl AsyncFileReader for ParquetObjectReader {
-    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        let range = range.start as u64..range.end as u64;
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range))
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<usize>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        let ranges = ranges
-            .into_iter()
-            .map(|range| range.start as u64..range.end as u64)
-            .collect::<Vec<_>>();
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 
