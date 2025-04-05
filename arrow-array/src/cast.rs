@@ -365,6 +365,12 @@ macro_rules! downcast_primitive {
             $crate::repeat_pat!($crate::cast::__private::DataType::Float64, $($data_type),+) => {
                 $m!($crate::types::Float64Type $(, $args)*)
             }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal32(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal32Type $(, $args)*)
+            }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal64(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal64Type $(, $args)*)
+            }
             $crate::repeat_pat!($crate::cast::__private::DataType::Decimal128(_, _), $($data_type),+) => {
                 $m!($crate::types::Decimal128Type $(, $args)*)
             }
