@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::error::{ArrowError, Result};
 use arrow::ffi::{from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::record_batch::RecordBatch;
+#[allow(deprecated)]
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
 use std::collections::HashMap;
@@ -148,6 +149,7 @@ pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
 ///
 /// Returns the contents of
 /// `arrow-ipc-stream/integration/0.17.1/generated_union.json.gz`
+#[allow(deprecated)]
 pub fn read_gzip_json(version: &str, path: &str) -> ArrowJson {
     use flate2::read::GzDecoder;
     use std::io::Read;

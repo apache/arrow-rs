@@ -25,9 +25,11 @@ extern crate arrow;
 
 use arrow::compute::{take, TakeOptions};
 use arrow::datatypes::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 
+#[allow(deprecated)]
 fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
     let mut rng = seedable_rng();
     let mut builder = UInt32Builder::with_capacity(size);

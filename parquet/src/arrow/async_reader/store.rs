@@ -238,12 +238,14 @@ mod tests {
     use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::arrow::ParquetRecordBatchStreamBuilder;
     use crate::errors::ParquetError;
+    #[allow(deprecated)]
     use arrow::util::test_util::parquet_test_data;
     use futures::FutureExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
 
+    #[allow(deprecated)]
     async fn get_meta_store() -> (ObjectMeta, Arc<dyn ObjectStore>) {
         let res = parquet_test_data();
         let store = LocalFileSystem::new_with_prefix(res).unwrap();

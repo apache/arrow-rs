@@ -19,6 +19,7 @@ use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use std::fs::File;
 
 #[test]
+#[allow(deprecated)]
 fn test_read_without_encryption_enabled_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");

@@ -29,6 +29,10 @@ pub mod data_gen;
 pub use arrow_cast::pretty;
 pub mod string_writer;
 #[cfg(any(test, feature = "test_utils"))]
+#[deprecated(
+    since = "55.0.0",
+    note = "The `test_util` module is deprecated for public use and will be removed in a future release"
+)]
 pub mod test_util;
 
 pub use arrow_cast::display;
