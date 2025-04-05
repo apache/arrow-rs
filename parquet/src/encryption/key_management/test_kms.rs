@@ -16,7 +16,8 @@
 // under the License.
 
 //! A KMS client implementation for use in tests, which is compatible
-//! with the C++ Arrow LocalWrapKmsClient
+//! with the C++ Arrow LocalWrapKmsClient and records details of
+//! KMS interactions.
 
 use crate::encryption::key_management::kms::{
     KmsClient, KmsClientFactory, KmsClientRef, KmsConnectionConfig,
@@ -28,13 +29,14 @@ use base64::Engine;
 use ring::aead::{Aad, LessSafeKey, UnboundKey, AES_128_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The test KMS client implementation
 pub struct TestKmsClient {
     key_map: HashMap<String, Vec<u8>>,
-    keys_wrapped: Arc<Mutex<usize>>,
-    keys_unwrapped: Arc<Mutex<usize>>,
+    keys_wrapped: Arc<AtomicUsize>,
+    keys_unwrapped: Arc<AtomicUsize>,
 }
 
 /// Properties from [`KmsConnectionConfig`] used to construct a KMS client
@@ -54,8 +56,8 @@ pub struct KmsConnectionConfigDetails {
 pub struct TestKmsClientFactory {
     key_map: HashMap<String, Vec<u8>>,
     invocations: Mutex<Vec<KmsConnectionConfigDetails>>,
-    keys_wrapped: Arc<Mutex<usize>>,
-    keys_unwrapped: Arc<Mutex<usize>>,
+    keys_wrapped: Arc<AtomicUsize>,
+    keys_unwrapped: Arc<AtomicUsize>,
 }
 
 impl TestKmsClientFactory {
@@ -70,8 +72,8 @@ impl TestKmsClientFactory {
         Self {
             key_map,
             invocations: Mutex::new(Vec::new()),
-            keys_wrapped: Arc::new(Mutex::new(0)),
-            keys_unwrapped: Arc::new(Mutex::new(0)),
+            keys_wrapped: Arc::new(AtomicUsize::new(0)),
+            keys_unwrapped: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -83,25 +85,25 @@ impl TestKmsClientFactory {
 
     /// Get the number of times a key was wrapped with a KMS client created by this factory
     pub fn keys_wrapped(&self) -> usize {
-        *self.keys_wrapped.lock().unwrap()
+        self.keys_wrapped.load(Ordering::Relaxed)
     }
 
     /// Get the number of times a key was unwrapped with a KMS client created by this factory
     pub fn keys_unwrapped(&self) -> usize {
-        *self.keys_unwrapped.lock().unwrap()
+        self.keys_unwrapped.load(Ordering::Relaxed)
     }
 }
 
 impl KmsClientFactory for TestKmsClientFactory {
     fn create_client(&self, kms_connection_config: &KmsConnectionConfig) -> Result<KmsClientRef> {
         {
-            let mut invocations = self.invocations.lock().unwrap();
             let details = KmsConnectionConfigDetails {
                 kms_instance_id: kms_connection_config.kms_instance_id().to_owned(),
                 kms_instance_url: kms_connection_config.kms_instance_url().to_owned(),
                 key_access_token: kms_connection_config.key_access_token(),
                 custom_kms_conf: kms_connection_config.custom_kms_conf().clone(),
             };
+            let mut invocations = self.invocations.lock().unwrap();
             invocations.push(details);
         }
         Ok(Arc::new(TestKmsClient::new(
@@ -114,10 +116,10 @@ impl KmsClientFactory for TestKmsClientFactory {
 
 impl TestKmsClient {
     /// Create a new [`TestKmsClient`]
-    pub fn new(
+    fn new(
         key_map: HashMap<String, Vec<u8>>,
-        keys_wrapped: Arc<Mutex<usize>>,
-        keys_unwrapped: Arc<Mutex<usize>>,
+        keys_wrapped: Arc<AtomicUsize>,
+        keys_unwrapped: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             key_map,
@@ -156,10 +158,7 @@ impl KmsClient for TestKmsClient {
         ciphertext.extend_from_slice(tag.as_ref());
         let encoded = BASE64_STANDARD.encode(&ciphertext);
 
-        {
-            let mut guard = self.keys_wrapped.lock().unwrap();
-            *guard += 1;
-        }
+        self.keys_wrapped.fetch_add(1, Ordering::Relaxed);
 
         Ok(encoded)
     }
@@ -180,10 +179,7 @@ impl KmsClient for TestKmsClient {
         key.open_in_place(nonce, Aad::from(aad), &mut plaintext)?;
         plaintext.resize(plaintext.len() - tag_len, 0u8);
 
-        {
-            let mut guard = self.keys_unwrapped.lock().unwrap();
-            *guard += 1;
-        }
+        self.keys_unwrapped.fetch_add(1, Ordering::Relaxed);
 
         Ok(plaintext)
     }

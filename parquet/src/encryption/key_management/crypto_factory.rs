@@ -315,7 +315,7 @@ impl CryptoFactory {
         }
 
         let mut key_wrapper = KeyWrapper::new(
-            self.kms_manager.clone(),
+            &self.kms_manager,
             kms_connection_config,
             encryption_configuration,
         );
@@ -326,8 +326,8 @@ impl CryptoFactory {
             &mut key_wrapper,
         )?;
 
-        let mut builder = FileEncryptionProperties::builder(footer_key.key.clone())
-            .with_footer_key_metadata(footer_key.metadata.clone())
+        let mut builder = FileEncryptionProperties::builder(footer_key.key)
+            .with_footer_key_metadata(footer_key.metadata)
             .with_plaintext_footer(encryption_configuration.plaintext_footer);
 
         for (master_key_id, column_paths) in &encryption_configuration.column_keys {
@@ -453,6 +453,7 @@ mod tests {
             .unwrap();
         let serialized_key_material = key_material.serialize().unwrap();
 
+        // Default config with ID and URL set from the footer key material
         let default_config = KmsConnectionConfigDetails {
             kms_instance_id: "123".to_string(),
             kms_instance_url: "https://example.com".to_string(),
@@ -460,6 +461,7 @@ mod tests {
             custom_kms_conf: Default::default(),
         };
 
+        // Expected config after the access token refresh
         let refreshed_config = KmsConnectionConfigDetails {
             kms_instance_id: "123".to_string(),
             kms_instance_url: "https://example.com".to_string(),
@@ -566,17 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_double_wrapping_properties() {
-        round_trip_encryption_properties(true);
-    }
-
-    #[test]
-    fn test_round_trip_single_wrapping_properties() {
-        round_trip_encryption_properties(false);
-    }
-
-    #[test]
-    fn test_uniform_encryption() {
+    fn test_uniform_encryption_properties() {
         let kms_config = Arc::new(KmsConnectionConfig::default());
         let encryption_config = EncryptionConfigurationBuilder::new("kf".to_owned())
             .set_double_wrapping(true)
@@ -591,6 +583,16 @@ mod tests {
         let (column_names, column_keys, _) = file_encryption_properties.column_keys();
         assert!(column_names.is_empty());
         assert!(column_keys.is_empty());
+    }
+
+    #[test]
+    fn test_round_trip_double_wrapping_properties() {
+        round_trip_encryption_properties(true);
+    }
+
+    #[test]
+    fn test_round_trip_single_wrapping_properties() {
+        round_trip_encryption_properties(false);
     }
 
     fn round_trip_encryption_properties(double_wrapping: bool) {
@@ -759,8 +761,7 @@ mod tests {
         assert_eq!(details.kms_instance_id, "456");
         assert_eq!(details.kms_instance_url, "https://example.com/kms2/");
         assert_eq!(details.key_access_token, "secret_2");
-        let mut expected_conf = HashMap::default();
-        expected_conf.insert("test_key".to_owned(), "test_value_2".to_owned());
+        let expected_conf = HashMap::from([("test_key".to_owned(), "test_value_2".to_owned())]);
         assert_eq!(details.custom_kms_conf, expected_conf);
     }
 
@@ -780,8 +781,7 @@ mod tests {
         assert_eq!(details.kms_instance_id, "123");
         assert_eq!(details.kms_instance_url, "https://example.com/kms1/");
         assert_eq!(details.key_access_token, "secret_2");
-        let mut expected_conf = HashMap::default();
-        expected_conf.insert("test_key".to_owned(), "test_value_2".to_owned());
+        let expected_conf = HashMap::from([("test_key".to_owned(), "test_value_2".to_owned())]);
         assert_eq!(details.custom_kms_conf, expected_conf);
     }
 

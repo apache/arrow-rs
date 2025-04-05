@@ -22,11 +22,13 @@ use crate::encryption::key_management::key_material::KeyMaterial;
 use crate::encryption::key_management::kms::KmsConnectionConfig;
 use crate::encryption::key_management::kms_manager::{KekCache, KmsManager};
 use crate::errors::{ParquetError, Result};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use std::collections::hash_map::Entry;
 use std::sync::{Arc, RwLock};
 
 /// Unwraps (decrypts) key encryption keys and data encryption keys using a KMS
-pub struct KeyUnwrapper {
+pub(crate) struct KeyUnwrapper {
     kms_manager: Arc<KmsManager>,
     kms_connection_config: RwLock<Arc<KmsConnectionConfig>>,
     decryption_configuration: DecryptionConfiguration,
@@ -68,12 +70,11 @@ impl KeyUnwrapper {
         kek_id: &str,
         wrapped_kek: &str,
     ) -> Result<Vec<u8>> {
-        let kms_connection_config = self.kms_connection_config.read().unwrap();
-        let mut guard = self.kek_cache.lock().unwrap();
-        let kek_cache = &mut *guard;
+        let mut kek_cache = self.kek_cache.lock().unwrap();
         let kek = match kek_cache.entry(kek_id.to_owned()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
+                let kms_connection_config = self.kms_connection_config.read().unwrap();
                 let client = self.kms_manager.get_client(
                     &kms_connection_config,
                     self.decryption_configuration.cache_lifetime(),
@@ -82,7 +83,10 @@ impl KeyUnwrapper {
                 entry.insert(kek)
             }
         };
-        key_encryption::decrypt_encryption_key(wrapped_dek, kek_id, kek)
+        let decoded_kek_id = BASE64_STANDARD
+            .decode(kek_id)
+            .map_err(|e| general_err!("Could not base64 decode key encryption key id: {}", e))?;
+        key_encryption::decrypt_encryption_key(wrapped_dek, &decoded_kek_id, kek)
     }
 
     fn update_kms_config_from_footer_metadata(

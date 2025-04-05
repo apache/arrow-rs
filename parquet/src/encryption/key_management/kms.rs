@@ -67,7 +67,7 @@ impl KmsConnectionConfig {
     }
 
     /// Return the key access token inside a read lock.
-    pub fn read_key_access_token(&self) -> RwLockReadGuard<String> {
+    pub(crate) fn read_key_access_token(&self) -> RwLockReadGuard<String> {
         self.key_access_token.read().unwrap()
     }
 

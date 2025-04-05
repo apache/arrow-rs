@@ -30,8 +30,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Creates key material for data encryption keys
-pub struct KeyWrapper<'a> {
-    kms_manager: Arc<KmsManager>,
+pub(crate) struct KeyWrapper<'a> {
+    kms_manager: &'a Arc<KmsManager>,
     kms_connection_config: Arc<KmsConnectionConfig>,
     encryption_configuration: &'a EncryptionConfiguration,
     master_key_to_kek: HashMap<String, KeyEncryptionKey>,
@@ -39,7 +39,7 @@ pub struct KeyWrapper<'a> {
 
 impl<'a> KeyWrapper<'a> {
     pub fn new(
-        kms_manager: Arc<KmsManager>,
+        kms_manager: &'a Arc<KmsManager>,
         kms_connection_config: Arc<KmsConnectionConfig>,
         encryption_configuration: &'a EncryptionConfiguration,
     ) -> Self {
@@ -78,7 +78,7 @@ impl<'a> KeyWrapper<'a> {
                 Entry::Occupied(kek) => kek.into_mut(),
                 Entry::Vacant(entry) => entry.insert(generate_key_encryption_key(
                     master_key_id,
-                    &self.kms_manager,
+                    self.kms_manager,
                     &self.kms_connection_config,
                     self.encryption_configuration.cache_lifetime(),
                 )?),
@@ -89,8 +89,8 @@ impl<'a> KeyWrapper<'a> {
             key_material_builder
                 .with_double_wrapped_key(
                     master_key_id.to_owned(),
-                    kek.encoded_key_id.to_owned(),
-                    kek.wrapped_key.to_owned(),
+                    kek.encoded_key_id.clone(),
+                    kek.wrapped_key.clone(),
                     wrapped_dek,
                 )
                 .build()?

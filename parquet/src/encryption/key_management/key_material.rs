@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// Serializable key material that describes a wrapped encryption key
 /// and includes metadata required to unwrap it.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct KeyMaterial {
+pub(crate) struct KeyMaterial {
     /// The type of the key material.
     /// Currently only one type is supported: "PKMT1"
     #[serde(rename = "keyMaterialType")]
@@ -71,7 +71,7 @@ pub struct KeyMaterial {
     pub wrapped_kek: Option<String>,
 }
 
-pub struct KeyMaterialBuilder {
+pub(crate) struct KeyMaterialBuilder {
     is_footer_key: bool,
     kms_instance_id: Option<String>,
     kms_instance_url: Option<String>,
