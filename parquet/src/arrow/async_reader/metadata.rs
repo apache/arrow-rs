@@ -297,7 +297,7 @@ where
     let fetch = MetadataFetchFn(fetch);
     ParquetMetaDataReader::new()
         .with_prefetch_hint(prefetch)
-        .load_and_finish(fetch, file_size)
+        .load_and_finish(fetch, file_size as u64)
         .await
 }
 

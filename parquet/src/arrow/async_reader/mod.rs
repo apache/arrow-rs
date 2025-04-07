@@ -2249,7 +2249,7 @@ mod tests {
         let file_size = file.metadata().await.unwrap().len();
         let mut metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
-            .load_and_finish(&mut file, file_size as usize)
+            .load_and_finish(&mut file, file_size)
             .await
             .unwrap();
 
@@ -2274,7 +2274,7 @@ mod tests {
         let file_size = file.metadata().await.unwrap().len();
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
-            .load_and_finish(&mut file, file_size as usize)
+            .load_and_finish(&mut file, file_size)
             .await
             .unwrap();
 
@@ -2320,7 +2320,7 @@ mod tests {
         let file_size = file.metadata().await.unwrap().len();
         let metadata = ParquetMetaDataReader::new()
             .with_page_indexes(true)
-            .load_and_finish(&mut file, file_size as usize)
+            .load_and_finish(&mut file, file_size)
             .await
             .unwrap();
 
