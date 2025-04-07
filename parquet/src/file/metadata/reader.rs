@@ -209,7 +209,7 @@ impl ParquetMetaDataReader {
     /// the request, and must include the Parquet footer. If page indexes are desired, the buffer
     /// must contain the entire file, or [`Self::try_parse_sized()`] should be used.
     pub fn try_parse<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
-        self.try_parse_sized(reader, reader.len() as usize)
+        self.try_parse_sized(reader, reader.len())
     }
 
     /// Same as [`Self::try_parse()`], but provide the original file size in the case that `reader`
@@ -232,10 +232,10 @@ impl ParquetMetaDataReader {
     /// # use parquet::file::metadata::ParquetMetaDataReader;
     /// # use parquet::errors::ParquetError;
     /// # use crate::parquet::file::reader::Length;
-    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<usize>) -> bytes::Bytes { unimplemented!(); }
+    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<u64>) -> bytes::Bytes { unimplemented!(); }
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
     /// let file = open_parquet_file("some_path.parquet");
-    /// let len = file.len() as usize;
+    /// let len = file.len();
     /// // Speculatively read 1 kilobyte from the end of the file
     /// let bytes = get_bytes(&file, len - 1024..len);
     /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
@@ -243,7 +243,7 @@ impl ParquetMetaDataReader {
     ///     Ok(_) => (),
     ///     Err(ParquetError::NeedMoreData(needed)) => {
     ///         // Read the needed number of bytes from the end of the file
-    ///         let bytes = get_bytes(&file, len - needed..len);
+    ///         let bytes = get_bytes(&file, len - needed as u64..len);
     ///         reader.try_parse_sized(&bytes, len).unwrap();
     ///     }
     ///     _ => panic!("unexpected error")
@@ -259,10 +259,10 @@ impl ParquetMetaDataReader {
     /// # use parquet::file::metadata::ParquetMetaDataReader;
     /// # use parquet::errors::ParquetError;
     /// # use crate::parquet::file::reader::Length;
-    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<usize>) -> bytes::Bytes { unimplemented!(); }
+    /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<u64>) -> bytes::Bytes { unimplemented!(); }
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
     /// let file = open_parquet_file("some_path.parquet");
-    /// let len = file.len() as usize;
+    /// let len = file.len();
     /// // Speculatively read 1 kilobyte from the end of the file
     /// let mut bytes = get_bytes(&file, len - 1024..len);
     /// let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
@@ -272,7 +272,7 @@ impl ParquetMetaDataReader {
     ///         Ok(_) => break,
     ///         Err(ParquetError::NeedMoreData(needed)) => {
     ///             // Read the needed number of bytes from the end of the file
-    ///             bytes = get_bytes(&file, len - needed..len);
+    ///             bytes = get_bytes(&file, len - needed as u64..len);
     ///             // If file metadata was read only read page indexes, otherwise continue loop
     ///             if reader.has_metadata() {
     ///                 reader.read_page_indexes_sized(&bytes, len);
@@ -284,13 +284,13 @@ impl ParquetMetaDataReader {
     /// }
     /// let metadata = reader.finish().unwrap();
     /// ```
-    pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: usize) -> Result<()> {
+    pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: u64) -> Result<()> {
         self.metadata = match self.parse_metadata(reader) {
             Ok(metadata) => Some(metadata),
             Err(ParquetError::NeedMoreData(needed)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
-                if file_size == reader.len() as usize || needed > file_size {
+                if file_size == reader.len() || needed as u64 > file_size {
                     return Err(eof_err!(
                         "Parquet file too small. Size is {} but need {}",
                         file_size,
@@ -315,7 +315,7 @@ impl ParquetMetaDataReader {
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
     /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`].
     pub fn read_page_indexes<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
-        self.read_page_indexes_sized(reader, reader.len() as usize)
+        self.read_page_indexes_sized(reader, reader.len())
     }
 
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
@@ -326,7 +326,7 @@ impl ParquetMetaDataReader {
     pub fn read_page_indexes_sized<R: ChunkReader>(
         &mut self,
         reader: &R,
-        file_size: usize,
+        file_size: u64,
     ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!(
@@ -350,25 +350,28 @@ impl ParquetMetaDataReader {
 
         // Check to see if needed range is within `file_range`. Checking `range.end` seems
         // redundant, but it guards against `range_for_page_index()` returning garbage.
-        let file_range = file_size.saturating_sub(reader.len() as usize)..file_size;
-        if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
+        let file_range = file_size.saturating_sub(reader.len())..file_size;
+        if !(file_range.contains(&(range.start as u64)) && file_range.contains(&(range.end as u64)))
+        {
             // Requested range starts beyond EOF
-            if range.end > file_size {
+            if range.end as u64 > file_size {
                 return Err(eof_err!(
                     "Parquet file too small. Range {:?} is beyond file bounds {file_size}",
                     range
                 ));
             } else {
                 // Ask for a larger buffer
-                return Err(ParquetError::NeedMoreData(file_size - range.start));
+                return Err(ParquetError::NeedMoreData(
+                    (file_size - range.start as u64).try_into().unwrap(),
+                ));
             }
         }
 
         // Perform extra sanity check to make sure `range` and the footer metadata don't
         // overlap.
         if let Some(metadata_size) = self.metadata_size {
-            let metadata_range = file_size.saturating_sub(metadata_size)..file_size;
-            if range.end > metadata_range.start {
+            let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
+            if range.end as u64 > metadata_range.start {
                 return Err(eof_err!(
                     "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
                     range,
@@ -378,7 +381,7 @@ impl ParquetMetaDataReader {
         }
 
         let bytes_needed = range.end - range.start;
-        let bytes = reader.get_bytes((range.start - file_range.start) as u64, bytes_needed)?;
+        let bytes = reader.get_bytes(range.start as u64 - file_range.start, bytes_needed)?;
         let offset = range.start;
 
         self.parse_column_index(&bytes, offset)?;
@@ -588,7 +591,7 @@ impl ParquetMetaDataReader {
         let footer_metadata_len = FOOTER_SIZE + metadata_len;
         self.metadata_size = Some(footer_metadata_len);
 
-        if footer_metadata_len > file_size as usize {
+        if footer_metadata_len as u64 > file_size {
             return Err(ParquetError::NeedMoreData(footer_metadata_len));
         }
 
@@ -1091,13 +1094,16 @@ mod tests {
     #[test]
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
-        let len = file.len() as usize;
+        let len = file.len();
 
         let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
 
-        let bytes_for_range = |range: Range<usize>| {
-            file.get_bytes(range.start as u64, range.end - range.start)
-                .unwrap()
+        let bytes_for_range = |range: Range<u64>| {
+            file.get_bytes(
+                range.start as u64,
+                (range.end - range.start).try_into().unwrap(),
+            )
+            .unwrap()
         };
 
         // read entire file
@@ -1127,7 +1133,7 @@ mod tests {
         match reader.try_parse_sized(&bytes, len).unwrap_err() {
             // expected error, try again with provided bounds
             ParquetError::NeedMoreData(needed) => {
-                let bytes = bytes_for_range(len - needed..len);
+                let bytes = bytes_for_range(len - needed as u64..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 let metadata = reader.finish().unwrap();
                 assert!(metadata.column_index.is_some());
@@ -1143,7 +1149,7 @@ mod tests {
             match reader.try_parse_sized(&bytes, len) {
                 Ok(_) => break,
                 Err(ParquetError::NeedMoreData(needed)) => {
-                    bytes = bytes_for_range(len - needed..len);
+                    bytes = bytes_for_range(len - needed as u64..len);
                     if reader.has_metadata() {
                         reader.read_page_indexes_sized(&bytes, len).unwrap();
                         break;
@@ -1171,7 +1177,7 @@ mod tests {
         match reader.try_parse_sized(&bytes, len).unwrap_err() {
             // expected error, try again with provided bounds
             ParquetError::NeedMoreData(needed) => {
-                let bytes = bytes_for_range(len - needed..len);
+                let bytes = bytes_for_range(len - needed as u64..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 reader.finish().unwrap();
             }
