@@ -27,7 +27,7 @@ use crate::encryption::{
 };
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
@@ -41,6 +41,7 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
+use crate::encryption::modules::{create_module_aad, ModuleType};
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
@@ -513,13 +514,18 @@ impl ParquetMetaDataReader {
             let index = metadata
                 .row_groups()
                 .iter()
-                .map(|x| {
+                .enumerate()
+                .map(|(rg_idx, x)| {
                     x.columns()
                         .iter()
-                        .map(|c| match c.column_index_range() {
-                            Some(r) => decode_column_index(
+                        .enumerate()
+                        .map(|(col_idx, c)| match c.column_index_range() {
+                            Some(r) => Self::parse_single_column_index(
+                                metadata,
+                                c,
                                 &bytes[r.start - start_offset..r.end - start_offset],
                                 c.column_type(),
+                                rg_idx, col_idx,
                             ),
                             None => Ok(Index::NONE),
                         })
@@ -529,6 +535,27 @@ impl ParquetMetaDataReader {
             metadata.set_column_index(Some(index));
         }
         Ok(())
+    }
+
+    #[cfg(feature = "encryption")]
+    fn parse_single_column_index(metadata: &ParquetMetaData, column: &ColumnChunkMetaData, bytes: &[u8], column_type: crate::basic::Type, row_group_index: usize, col_index: usize) -> Result<Index> {
+        match &metadata.file_decryptor {
+            Some(file_decryptor) => {
+                let column_name = column.column_descr.path().string();
+                // todo: Get key metadata, determine footer vs col decryption
+                //let column_decryptor = file_decryptor.get_column_metadata_decryptor(&column_name, None)?;
+                let column_decryptor = file_decryptor.get_footer_decryptor()?;
+                let aad = create_module_aad(file_decryptor.file_aad(), ModuleType::ColumnIndex, row_group_index, col_index, None)?;
+                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
+                decode_column_index(&plaintext, column_type)
+            },
+            None => decode_column_index(bytes, column_type),
+        }
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn parse_single_column_index(metadata: &ParquetMetaData, column: &ColumnChunkMetaData, bytes: &[u8], column_type: crate::basic::Type, row_group_index: usize, col_index: usize) -> Result<Index> {
+        decode_column_index(bytes, column_type)
     }
 
     fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: usize) -> Result<()> {
