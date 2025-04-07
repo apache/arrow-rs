@@ -155,7 +155,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             self.seek(SeekFrom::Start(range.start)).await?;
 
             let to_read = range.end - range.start;
-            let mut buffer = Vec::with_capacity(to_read as usize);
+            let mut buffer = Vec::with_capacity(to_read.try_into().unwrap());
             let read = self.take(to_read).read_to_end(&mut buffer).await?;
             if read as u64 != to_read {
                 return Err(eof_err!("expected to read {} bytes, got {}", to_read, read));
@@ -461,7 +461,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice((bitset_offset as usize - offset as usize)..),
+            Some(_) => buffer.slice(
+                (TryInto::<usize>::try_into(bitset_offset).unwrap()
+                    - TryInto::<usize>::try_into(offset).unwrap())..,
+            ),
             None => {
                 let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())

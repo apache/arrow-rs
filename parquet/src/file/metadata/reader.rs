@@ -1257,7 +1257,7 @@ mod async_tests {
     fn read_range(file: &mut File, range: Range<u64>) -> Result<Bytes> {
         file.seek(SeekFrom::Start(range.start as _))?;
         let len = range.end - range.start;
-        let mut buf = Vec::with_capacity(len as usize);
+        let mut buf = Vec::with_capacity(len.try_into().unwrap());
         file.take(len as _).read_to_end(&mut buf)?;
         Ok(buf.into())
     }

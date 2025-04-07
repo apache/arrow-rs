@@ -51,7 +51,7 @@ use std::ops::Range;
 ///     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
 ///         // return a future that fetches data in range
 ///         async move {
-///             let len = (range.end - range.start) as usize;
+///             let len = (range.end - range.start).try_into().unwrap();
 ///             let mut buf = vec![0; len]; // target buffer
 ///             // seek to the start of the range and read the data
 ///             self.file.seek(SeekFrom::Start(range.start)).await?;
@@ -264,7 +264,8 @@ where
     Fut: Future<Output = Result<Bytes>> + Send,
 {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range.start as usize..range.end as usize).await }.boxed()
+        async move { self.0(range.start.try_into().unwrap()..range.end.try_into().unwrap()).await }
+            .boxed()
     }
 }
 
