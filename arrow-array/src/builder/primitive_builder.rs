@@ -17,7 +17,7 @@
 
 use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::types::*;
-use crate::{ArrayRef, PrimitiveArray};
+use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::ArrayData;
@@ -255,6 +255,28 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.append_slice(values);
     }
 
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `array` and `self` data types are different
+    #[inline]
+    pub fn append_array(&mut self, array: &PrimitiveArray<T>) {
+        assert_eq!(
+            &self.data_type,
+            array.data_type(),
+            "array data type mismatch"
+        );
+
+        self.values_builder.append_slice(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
+    }
+
     /// Appends values from a trusted length iterator.
     ///
     /// # Safety
@@ -366,6 +388,7 @@ impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::{NullBuffer, ScalarBuffer};
     use arrow_schema::TimeUnit;
 
     use crate::array::Array;
@@ -614,5 +637,64 @@ mod tests {
         builder.extend([2, 4, 6, 2].into_iter().map(Some));
         let array = builder.finish();
         assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
+    }
+
+    #[test]
+    fn test_primitive_array_append_array() {
+        let input = vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            None,
+            None,
+            None,
+            Some(7),
+            Some(9),
+            Some(8),
+            Some(6),
+            Some(4),
+        ];
+        let arr1 = Int32Array::from(input[..5].to_vec());
+        let arr2 = Int32Array::from(input[5..8].to_vec());
+        let arr3 = Int32Array::from(input[8..].to_vec());
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = Int32Array::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = Int32Array::new(
+            ScalarBuffer::from(vec![2, 3, 4, 5]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
+    }
+
+    #[test]
+    #[should_panic(expected = "array data type mismatch")]
+    fn test_invalid_with_data_type_in_append_array() {
+        let array = {
+            let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+            builder.append_value(1);
+            builder.finish()
+        };
+
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
+        builder.append_array(&array)
     }
 }

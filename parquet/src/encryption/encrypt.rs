@@ -53,6 +53,41 @@ impl EncryptionKey {
 
 #[derive(Debug, Clone, PartialEq)]
 /// Defines how data in a Parquet file should be encrypted
+///
+/// The `FileEncryptionProperties` should be included in the [`WriterProperties`](crate::file::properties::WriterProperties)
+/// used to write a file by using [`WriterPropertiesBuilder::with_file_encryption_properties`](crate::file::properties::WriterPropertiesBuilder::with_file_encryption_properties).
+///
+/// # Examples
+///
+/// Create `FileEncryptionProperties` for a file encrypted with uniform encryption,
+/// where all metadata and data are encrypted with the footer key:
+/// ```
+/// # use parquet::encryption::encrypt::FileEncryptionProperties;
+/// let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Create properties for a file where columns are encrypted with different keys.
+/// Any columns without a key specified will be unencrypted:
+/// ```
+/// # use parquet::encryption::encrypt::FileEncryptionProperties;
+/// let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+///     .with_column_key("x", b"1234567890123450".into())
+///     .with_column_key("y", b"1234567890123451".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
+///
+/// Specify additional authenticated data, used to protect against data replacement.
+/// This should represent the file identity:
+/// ```
+/// # use parquet::encryption::encrypt::FileEncryptionProperties;
+/// let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+///     .with_aad_prefix("example_file".into())
+///     .build()?;
+/// # Ok::<(), parquet::errors::ParquetError>(())
+/// ```
 pub struct FileEncryptionProperties {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
@@ -141,6 +176,8 @@ impl FileEncryptionProperties {
 }
 
 /// Builder for [`FileEncryptionProperties`]
+///
+/// See [`FileEncryptionProperties`] for example usage.
 pub struct EncryptionPropertiesBuilder {
     encrypt_footer: bool,
     footer_key: EncryptionKey,
