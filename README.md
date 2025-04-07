@@ -64,7 +64,7 @@ is described in the [contributing] guide.
 Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
-|------------------|------------|-----------------------------------------|
+| ---------------- | ---------- | --------------------------------------- |
 | Apr 2025         | [`55.0.0`] | Major, potentially breaking API changes |
 | May 2025         | [`55.1.0`] | Minor, NO breaking API changes          |
 | June 2025        | [`55.2.0`] | Minor, NO breaking API changes          |
@@ -74,8 +74,6 @@ Planned Release Schedule
 [`55.1.0`]: https://github.com/apache/arrow-rs/issues/7393
 [`55.2.0`]: https://github.com/apache/arrow-rs/issues/7394
 [`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
-
-
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
