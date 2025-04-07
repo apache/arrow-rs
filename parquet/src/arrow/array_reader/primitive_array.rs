@@ -29,12 +29,11 @@ use arrow_array::{
         TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
     },
     ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
-use arrow_cast::CastOptions;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
@@ -278,22 +277,12 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
-                /*
                 let array = array
                     .as_any()
                     .downcast_ref::<Int32Array>()
                     .unwrap()
-                    .unary(|i| i as i8) as arrow_array::Int8Array;
-                Arc::new(array) as ArrayRef*/
-                arrow_cast::cast_with_options(
-                    &array,
-                    target_type,
-                    &CastOptions {
-                        safe: false,
-                        ..Default::default()
-                    },
-                )?
-                //arrow_cast::cast(&array, target_type)?
+                    .unary(|i| i as i8) as Int8Array;
+                Arc::new(array) as ArrayRef
             }
             ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
                 let array = array
@@ -301,6 +290,14 @@ where
                     .downcast_ref::<Int32Array>()
                     .unwrap()
                     .unary(|i| i as u16) as UInt16Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i16) as Int16Array;
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
