@@ -658,13 +658,13 @@ impl ParquetMetaDataReader {
 
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         if length > suffix_len - FOOTER_SIZE {
-            let metadata_start = file_size - (length - FOOTER_SIZE) as u64;
+            let metadata_start = file_size - (length + FOOTER_SIZE) as u64;
             let meta = fetch
                 .fetch(metadata_start..(file_size - FOOTER_SIZE as u64))
                 .await?;
             Ok((self.decode_footer_metadata(&meta, &footer)?, None))
         } else {
-            let metadata_start = (file_size - (length - FOOTER_SIZE) as u64 - footer_start)
+            let metadata_start = (file_size - (length + FOOTER_SIZE) as u64 - footer_start)
                 .try_into()
                 .expect("metadata length should never be larger than u32");
             let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
