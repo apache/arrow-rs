@@ -1373,7 +1373,6 @@ mod tests {
         );
 
         // Test page readers
-        // TODO: test for every column
         let page_reader_0_result = row_group_reader.get_column_page_reader(0);
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
