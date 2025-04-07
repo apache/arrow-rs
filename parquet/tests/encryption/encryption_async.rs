@@ -383,6 +383,27 @@ async fn test_uniform_encryption_with_key_retriever() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn test_decrypt_page_index() {
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+    let mut file = File::open(&path).await.unwrap();
+
+    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(decryption_properties)
+        .with_page_index(true);
+
+    let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await.unwrap();
+    let _metadata = arrow_metadata.metadata();
+
+    // TODO: Verify metadata
+}
+
 async fn verify_encryption_test_file_read_async(
     file: &mut tokio::fs::File,
     decryption_properties: FileDecryptionProperties,
