@@ -702,7 +702,7 @@ impl ParquetMetaDataReader {
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let metadata_offset = length + FOOTER_SIZE;
         if length > suffix_len - FOOTER_SIZE {
-            let meta = fetch.fetch_suffix(metadata_offset as u64).await?;
+            let meta = fetch.fetch_suffix(metadata_offset).await?;
 
             if meta.len() < metadata_offset {
                 return Err(eof_err!(
@@ -1246,10 +1246,10 @@ mod async_tests {
     impl<F1, Fut, F2> MetadataSuffixFetch for MetadataSuffixFetchFn<F1, F2>
     where
         F1: FnMut(Range<u64>) -> Fut + Send,
-        F2: FnMut(u64) -> Fut + Send,
+        F2: FnMut(usize) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
     {
-        fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>> {
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
             async move { self.1(suffix).await }.boxed()
         }
     }
@@ -1262,11 +1262,11 @@ mod async_tests {
         Ok(buf.into())
     }
 
-    fn read_suffix(file: &mut File, suffix: u64) -> Result<Bytes> {
+    fn read_suffix(file: &mut File, suffix: usize) -> Result<Bytes> {
         let file_len = file.len();
         // Don't seek before beginning of file
-        file.seek(SeekFrom::End(0 - suffix.min(file_len) as i64))?;
-        let mut buf = Vec::with_capacity(suffix as usize);
+        file.seek(SeekFrom::End(0 - suffix.min(file_len as _) as i64))?;
+        let mut buf = Vec::with_capacity(suffix);
         file.take(suffix as _).read_to_end(&mut buf)?;
         Ok(buf.into())
     }

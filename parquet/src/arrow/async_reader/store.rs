@@ -161,9 +161,9 @@ impl ParquetObjectReader {
 }
 
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
-    fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
-            range: Some(GetRange::Suffix(suffix)),
+            range: Some(GetRange::Suffix(suffix as u64)),
             ..Default::default()
         };
         self.spawn(|store, path| {
