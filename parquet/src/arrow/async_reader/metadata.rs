@@ -288,7 +288,7 @@ where
 #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataReader")]
 pub async fn fetch_parquet_metadata<F, Fut>(
     fetch: F,
-    file_size: usize,
+    file_size: u64,
     prefetch: Option<usize>,
 ) -> Result<ParquetMetaData>
 where
@@ -298,7 +298,7 @@ where
     let fetch = MetadataFetchFn(fetch);
     ParquetMetaDataReader::new()
         .with_prefetch_hint(prefetch)
-        .load_and_finish(fetch, file_size as u64)
+        .load_and_finish(fetch, file_size)
         .await
 }
 
@@ -324,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn test_simple() {
         let mut file = get_test_file("nulls.snappy.parquet");
-        let len = file.len() as usize;
+        let len = file.len();
 
         let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
         let expected = reader.metadata().file_metadata().schema();
