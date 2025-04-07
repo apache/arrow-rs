@@ -362,7 +362,7 @@ impl ParquetMetaDataReader {
             } else {
                 // Ask for a larger buffer
                 return Err(ParquetError::NeedMoreData(
-                    (file_size - range.start as u64).try_into().unwrap(),
+                    (file_size - range.start as u64).try_into()?,
                 ));
             }
         }

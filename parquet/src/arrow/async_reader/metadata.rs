@@ -264,8 +264,7 @@ where
     Fut: Future<Output = Result<Bytes>> + Send,
 {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range.start.try_into().unwrap()..range.end.try_into().unwrap()).await }
-            .boxed()
+        async move { self.0(range.start.try_into()?..range.end.try_into()?).await }.boxed()
     }
 }
 
