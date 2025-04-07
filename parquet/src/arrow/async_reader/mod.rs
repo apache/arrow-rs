@@ -138,10 +138,10 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
 }
 
 impl<T: AsyncFileReader + MetadataFetch + AsyncRead + AsyncSeek + Unpin> MetadataSuffixFetch for T {
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch_suffix(&mut self, suffix: u64) -> BoxFuture<'_, Result<Bytes>> {
         async move {
             self.seek(SeekFrom::End(-(suffix as i64))).await?;
-            let mut buf = Vec::with_capacity(suffix);
+            let mut buf = Vec::with_capacity(suffix as usize);
             self.take(suffix as _).read_to_end(&mut buf).await?;
             Ok(buf.into())
         }
