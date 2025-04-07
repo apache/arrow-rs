@@ -19,7 +19,7 @@
 
 use crate::error::Error;
 use serde_json::Value;
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 
 /// Creates a metadata binary vector for a JSON value according to the Arrow Variant specification
 ///
@@ -141,7 +141,7 @@ pub fn parse_metadata(metadata: &[u8]) -> Result<HashMap<String, usize>, Error> 
     // Parse header
     let header = metadata[0];
     let version = header & 0x0F;
-    let sorted_strings = (header >> 4) & 0x01 != 0;
+    let _sorted_strings = (header >> 4) & 0x01 != 0;
     let offset_size_minus_one = (header >> 6) & 0x03;
     let offset_size = (offset_size_minus_one + 1) as usize;
     

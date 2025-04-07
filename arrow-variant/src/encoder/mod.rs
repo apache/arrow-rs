@@ -304,8 +304,9 @@ fn encode_object(obj: &serde_json::Map<String, Value>, output: &mut Vec<u8>, key
         temp_outputs.push(temp_output);
     }
     
-    // Determine minimum sizes needed
-    let id_size = if field_ids.iter().max().unwrap() <= &255 { 1 }
+    // Determine minimum sizes needed - use size 1 for empty objects
+    let id_size = if field_ids.is_empty() { 1 }
+                  else if field_ids.iter().max().unwrap() <= &255 { 1 }
                   else if field_ids.iter().max().unwrap() <= &65535 { 2 }
                   else if field_ids.iter().max().unwrap() <= &16777215 { 3 }
                   else { 4 };
@@ -395,7 +396,6 @@ pub fn encode_json(json: &Value, key_mapping: &HashMap<String, usize>) -> Result
 mod tests {
     use super::*;
     use serde_json::json;
-    use crate::metadata::parse_metadata;
     
     fn setup_key_mapping() -> HashMap<String, usize> {
         let mut mapping = HashMap::new();
@@ -519,6 +519,15 @@ mod tests {
         assert_eq!(output[3], 1); // age
         assert_eq!(output[4], 0); // name
         
+        // Test empty object
+        let empty_obj = json!({});
+        output.clear();
+        encode_object(empty_obj.as_object().unwrap(), &mut output, &key_mapping)?;
+        
+        // Verify header byte for empty object
+        assert_eq!(output[0], 0b00000010); // Object header with minimum sizes
+        assert_eq!(output[1], 0); // Zero elements
+        
         // Test case 2: Object with large values requiring larger offsets
         let obj = json!({
             "name": "This is a very long string that will definitely require more than 255 bytes to encode. Let me add some more text to make sure it exceeds the limit. The string needs to be long enough to trigger the use of 2-byte offsets. Adding more content to ensure we go over the threshold. This is just padding text to make the string longer. Almost there, just a bit more to go. And finally, some more text to push us over the edge.",
@@ -564,8 +573,6 @@ mod tests {
         assert_eq!(output[2], 4); // address
         assert_eq!(output[3], 0); // name
         assert_eq!(output[4], 3); // scores
-        
-    
         
         Ok(())
     }
