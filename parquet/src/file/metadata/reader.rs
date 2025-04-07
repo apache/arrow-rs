@@ -1099,11 +1099,8 @@ mod tests {
         let mut reader = ParquetMetaDataReader::new().with_page_indexes(true);
 
         let bytes_for_range = |range: Range<u64>| {
-            file.get_bytes(
-                range.start as u64,
-                (range.end - range.start).try_into().unwrap(),
-            )
-            .unwrap()
+            file.get_bytes(range.start, (range.end - range.start).try_into().unwrap())
+                .unwrap()
         };
 
         // read entire file
