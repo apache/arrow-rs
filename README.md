@@ -63,11 +63,18 @@ is described in the [contributing] guide.
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Mar 2025         | `54.2.0` | Minor, NO breaking API changes          |
-| Apr 2025         | `55.0.0` | Major, potentially breaking API changes |
-| May 2025         | `55.1.0` | Minor, NO breaking API changes          |
+| Approximate Date | Version    | Notes                                   |
+|------------------|------------|-----------------------------------------|
+| Apr 2025         | [`55.0.0`] | Major, potentially breaking API changes |
+| May 2025         | [`55.1.0`] | Minor, NO breaking API changes          |
+| June 2025        | [`55.2.0`] | Minor, NO breaking API changes          |
+| July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
+
+[`55.0.0`]: https://github.com/apache/arrow-rs/issues/7084
+[`55.1.0`]: https://github.com/apache/arrow-rs/issues/7393
+[`55.2.0`]: https://github.com/apache/arrow-rs/issues/7394
+[`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
+
 
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
