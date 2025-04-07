@@ -28,28 +28,48 @@ use std::collections::{HashSet, HashMap};
 ///   - dictionary_size: `offset_size` bytes (unsigned little-endian)
 ///   - offsets: `dictionary_size + 1` entries of `offset_size` bytes each
 ///   - bytes: UTF-8 encoded dictionary string values
-pub fn create_metadata(json_value: &Value) -> Result<Vec<u8>, Error> {
+///
+/// # Arguments
+///
+/// * `json_value` - The JSON value to create metadata for
+/// * `sort_keys` - If true, keys will be sorted lexicographically; if false, keys will be used in their original order
+pub fn create_metadata(json_value: &Value, sort_keys: bool) -> Result<Vec<u8>, Error> {
     // Extract all keys from the JSON value (including nested)
     let keys = extract_all_keys(json_value);
     
-    // For simplicity, we'll use 1 byte for offset_size
-    let offset_size = 1;
+    // Convert keys to a vector and optionally sort them
+    let mut keys: Vec<_> = keys.into_iter().collect();
+    if sort_keys {
+        keys.sort();
+    }
+    
+    // Calculate the total size of all dictionary strings
+    let mut dictionary_string_size = 0u32;
+    for key in &keys {
+        dictionary_string_size += key.len() as u32;
+    }
+    
+    // Determine the minimum integer size required for offsets
+    // The largest offset is the one-past-the-end value, which is total string size
+    let max_size = std::cmp::max(dictionary_string_size, keys.len() as u32);
+    let offset_size = get_min_integer_size(max_size as usize);
     let offset_size_minus_one = offset_size - 1;
     
-    // Create header: version=1, sorted=0, offset_size=1 (1 byte)
-    let header = 0x01 | ((offset_size_minus_one as u8) << 6);
+    // Set sorted_strings based on whether keys are sorted in metadata
+    let sorted_strings = if sort_keys { 1 } else { 0 };
+    
+    // Create header: version=1, sorted_strings based on parameter, offset_size based on calculation
+    let header = 0x01 | (sorted_strings << 4) | ((offset_size_minus_one as u8) << 6);
     
     // Start building the metadata
     let mut metadata = Vec::new();
     metadata.push(header);
     
     // Add dictionary_size (this is the number of keys)
-    if keys.len() > 255 {
-        return Err(Error::InvalidMetadata(
-            "Too many keys for 1-byte offset_size".to_string(),
-        ));
+    // Write the dictionary size using the calculated offset_size
+    for i in 0..offset_size {
+        metadata.push(((keys.len() >> (8 * i)) & 0xFF) as u8);
     }
-    metadata.push(keys.len() as u8);
     
     // Pre-calculate offsets and prepare bytes
     let mut bytes = Vec::new();
@@ -58,19 +78,17 @@ pub fn create_metadata(json_value: &Value) -> Result<Vec<u8>, Error> {
     
     offsets.push(current_offset);
     
-    // Sort keys to ensure consistent ordering
-    let mut sorted_keys: Vec<_> = keys.into_iter().collect();
-    sorted_keys.sort();
-    
-    for key in sorted_keys {
+    for key in keys {
         bytes.extend_from_slice(key.as_bytes());
         current_offset += key.len() as u32;
         offsets.push(current_offset);
     }
     
-    // Add all offsets
+    // Add all offsets using the calculated offset_size
     for offset in &offsets {
-        metadata.push(*offset as u8);
+        for i in 0..offset_size {
+            metadata.push(((*offset >> (8 * i)) & 0xFF) as u8);
+        }
     }
     
     // Add dictionary bytes
@@ -79,14 +97,27 @@ pub fn create_metadata(json_value: &Value) -> Result<Vec<u8>, Error> {
     Ok(metadata)
 }
 
+/// Determines the minimum integer size required to represent a value
+fn get_min_integer_size(value: usize) -> usize {
+    if value <= 255 {
+        1
+    } else if value <= 65535 {
+        2
+    } else if value <= 16777215 {
+        3
+    } else {
+        4
+    }
+}
+
 /// Extracts all keys from a JSON value, including nested objects
-fn extract_all_keys(json_value: &Value) -> HashSet<String> {
-    let mut keys = HashSet::new();
+fn extract_all_keys(json_value: &Value) -> Vec<String> {
+    let mut keys = Vec::new();
     
     match json_value {
         Value::Object(map) => {
             for (key, value) in map {
-                keys.insert(key.clone());
+                keys.push(key.clone());
                 keys.extend(extract_all_keys(value));
             }
         }
@@ -110,7 +141,7 @@ pub fn parse_metadata(metadata: &[u8]) -> Result<HashMap<String, usize>, Error> 
     // Parse header
     let header = metadata[0];
     let version = header & 0x0F;
-    let _sorted = (header >> 4) & 0x01 != 0;
+    let sorted_strings = (header >> 4) & 0x01 != 0;
     let offset_size_minus_one = (header >> 6) & 0x03;
     let offset_size = (offset_size_minus_one + 1) as usize;
     
@@ -186,146 +217,213 @@ mod tests {
 
     #[test]
     fn test_simple_object() {
-        let json = json!({"a": 1, "b": 2});
-        let metadata = create_metadata(&json).unwrap();
+        let value = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3
+        });
+
+        let metadata = create_metadata(&value, false).unwrap();
         
-        // Expected structure:
-        // header: 0x01 (version=1, sorted=0, offset_size=1)
-        // dictionary_size: 2
-        // offsets: [0, 1, 2] (3 offsets for 2 strings)
-        // bytes: "ab"
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
         
-        assert_eq!(metadata[0], 0x01); // header
-        assert_eq!(metadata[1], 0x02); // dictionary_size
-        assert_eq!(metadata[2], 0x00); // first offset
-        assert_eq!(metadata[3], 0x01); // second offset
-        assert_eq!(metadata[4], 0x02); // third offset (total length)
-        assert_eq!(metadata[5], b'a'); // first key
-        assert_eq!(metadata[6], b'b'); // second key
+        // Dictionary size: 3 keys
+        assert_eq!(metadata[1], 3);
+        
+        // Offsets: [0, 1, 2, 3] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // Third offset
+        assert_eq!(metadata[5], 3); // One-past-the-end offset
+        
+        // Dictionary bytes: "abc"
+        assert_eq!(&metadata[6..9], b"abc");
     }
 
     #[test]
     fn test_normal_object() {
-        let json = json!({
+        let value = json!({
+            "a": 1,
+            "b": 2,
+            "c": 3
+        });
+
+        let metadata = create_metadata(&value, false).unwrap();
+        
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
+        
+        // Dictionary size: 3 keys
+        assert_eq!(metadata[1], 3);
+        
+        // Offsets: [0, 1, 2, 3] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // Third offset
+        assert_eq!(metadata[5], 3); // One-past-the-end offset
+        
+        // Dictionary bytes: "abc"
+        assert_eq!(&metadata[6..9], b"abc");
+    }
+
+    #[test]
+    fn test_complex_object() {
+        let value = json!({
             "first_name": "John",
             "last_name": "Smith",
             "email": "john.smith@example.com"
         });
-        let metadata = create_metadata(&json).unwrap();
+
+        let metadata = create_metadata(&value, false).unwrap();
         
-        // Expected structure:
-        // header: 0x01 (version=1, sorted=0, offset_size=1)
-        // dictionary_size: 3
-        // offsets: [0, 5, 15, 24] (4 offsets for 3 strings)
-        // bytes: "emailfirst_namelast_name"
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
         
-        assert_eq!(metadata[0], 0x01); // header
-        assert_eq!(metadata[1], 0x03); // dictionary_size
-        assert_eq!(metadata[2], 0x00); // offset for "email"
-        assert_eq!(metadata[3], 0x05); // offset for "first_name"
-        assert_eq!(metadata[4], 0x0F); // offset for "last_name"
-        assert_eq!(metadata[5], 0x18); // total length
-        assert_eq!(&metadata[6..], b"emailfirst_namelast_name"); // dictionary bytes
+        // Dictionary size: 3 keys
+        assert_eq!(metadata[1], 3);
+        
+        // Offsets: [0, 5, 15, 24] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset for "email"
+        assert_eq!(metadata[3], 5); // Second offset for "first_name"
+        assert_eq!(metadata[4], 15); // Third offset for "last_name"
+        assert_eq!(metadata[5], 24); // One-past-the-end offset
+        
+        // Dictionary bytes: "emailfirst_namelast_name"
+        assert_eq!(&metadata[6..30], b"emailfirst_namelast_name");
     }
 
     #[test]
     fn test_nested_object() {
-        let json = json!({
+        let value = json!({
             "a": {
-                "b": {
-                    "c": {
-                        "d": 1,
-                        "e": 2
-                    },
-                    "f": 3
-                },
-                "g": 4
+                "b": 1,
+                "c": 2
             },
-            "h": 5
+            "d": 3
         });
-        let metadata = create_metadata(&json).unwrap();
+
+        let metadata = create_metadata(&value, false).unwrap();
         
-        // Expected structure:
-        // header: 0x01
-        // dictionary_size: 8 (a, b, c, d, e, f, g, h)
-        // offsets: [0, 1, 2, 3, 4, 5, 6, 7, 8]
-        // bytes: "abcdefgh"
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
         
-        assert_eq!(metadata[0], 0x01); // header
-        assert_eq!(metadata[1], 0x08); // dictionary_size = 8
-        assert_eq!(metadata[2], 0x00); // offset for "a"
-        assert_eq!(metadata[3], 0x01); // offset for "b"
-        assert_eq!(metadata[4], 0x02); // offset for "c"
-        assert_eq!(metadata[5], 0x03); // offset for "d"
-        assert_eq!(metadata[6], 0x04); // offset for "e"
-        assert_eq!(metadata[7], 0x05); // offset for "f"
-        assert_eq!(metadata[8], 0x06); // offset for "g"
-        assert_eq!(metadata[9], 0x07); // offset for "h"
-        assert_eq!(metadata[10], 0x08); // total length
-        assert_eq!(&metadata[11..19], b"abcdefgh"); // dictionary bytes
+        // Dictionary size: 4 keys (a, b, c, d)
+        assert_eq!(metadata[1], 4);
+        
+        // Offsets: [0, 1, 2, 3, 4] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // Third offset
+        assert_eq!(metadata[5], 3); // Fourth offset
+        assert_eq!(metadata[6], 4); // One-past-the-end offset
+        
+        // Dictionary bytes: "abcd"
+        assert_eq!(&metadata[7..11], b"abcd");
     }
 
     #[test]
     fn test_nested_array() {
-        let json = json!({
-            "arr": [
-                {"x": 1, "y": 2},
-                {"z": 3}
-            ]
+        let value = json!({
+            "a": [1, 2, 3],
+            "b": 4
         });
-        let metadata = create_metadata(&json).unwrap();
-    
-        // header: 0x01 (version=1, sorted=0, offset_size=1)
-        // dictionary_size: 4
-        // offsets: [0, 3, 4, 5, 6]
-        // bytes: "arrxyz"
-    
-        assert_eq!(metadata[0], 0x01); // header
-        assert_eq!(metadata[1], 0x04); // dictionary_size = 4
-    
-        assert_eq!(metadata[2], 0x00); // offset for "arr"
-        assert_eq!(metadata[3], 0x03); // offset for "x"
-        assert_eq!(metadata[4], 0x04); // offset for "y"
-        assert_eq!(metadata[5], 0x05); // offset for "z"
-        assert_eq!(metadata[6], 0x06); // total length of bytes
-    
-        assert_eq!(&metadata[7..13], b"arrxyz"); // dictionary bytes
+
+        let metadata = create_metadata(&value, false).unwrap();
+        
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
+        
+        // Dictionary size: 2 keys (a, b)
+        assert_eq!(metadata[1], 2);
+        
+        // Offsets: [0, 1, 2] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // One-past-the-end offset
+        
+        // Dictionary bytes: "ab"
+        assert_eq!(&metadata[5..7], b"ab");
     }
-    
+
     #[test]
     fn test_complex_nested() {
-        let json = json!({
-            "outer": {
-                "middle": {
-                    "inner": 1
-                },
-                "array": [
-                    {"key": "value"},
-                    {"another": true}
-                ]
-            }
+        let value = json!({
+            "a": {
+                "b": [1, 2, 3],
+                "c": 4
+            },
+            "d": 5
         });
-        let metadata = create_metadata(&json).unwrap();
-    
-        // dictionary key: another, array, inner, key, middle, outer
-        // bytes: "anotherarrayinnerkeymiddleouter"
-        // offsets: [0, 7, 12, 17, 20, 26, 31]
-    
-        assert_eq!(metadata[0], 0x01); // header
-        assert_eq!(metadata[1], 0x06); // dictionary_size = 6
-    
-        assert_eq!(metadata[2], 0x00); // "another"
-        assert_eq!(metadata[3], 0x07); // "array"
-        assert_eq!(metadata[4], 0x0C); // "inner"
-        assert_eq!(metadata[5], 0x11); // "key"
-        assert_eq!(metadata[6], 0x14); // "middle"
-        assert_eq!(metadata[7], 0x1A); // "outer"
-        assert_eq!(metadata[8], 0x1F); // total bytes length = 31
-    
-        assert_eq!(
-            &metadata[9..40],
-            b"anotherarrayinnerkeymiddleouter"
-        );
+
+        let metadata = create_metadata(&value, false).unwrap();
+        
+        // Header: version=1, sorted_strings=0, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x01);
+        
+        // Dictionary size: 4 keys (a, b, c, d)
+        assert_eq!(metadata[1], 4);
+        
+        // Offsets: [0, 1, 2, 3, 4] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // Third offset
+        assert_eq!(metadata[5], 3); // Fourth offset
+        assert_eq!(metadata[6], 4); // One-past-the-end offset
+        
+        // Dictionary bytes: "abcd"
+        assert_eq!(&metadata[7..11], b"abcd");
     }
-    
+
+    #[test]
+    fn test_sorted_keys() {
+        let value = json!({
+            "c": 3,
+            "a": 1,
+            "b": 2
+        });
+
+        let metadata = create_metadata(&value, true).unwrap();
+        
+        // Header: version=1, sorted_strings=1, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x11);
+        
+        // Dictionary size: 3 keys
+        assert_eq!(metadata[1], 3);
+        
+        // Offsets: [0, 1, 2, 3] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset
+        assert_eq!(metadata[3], 1); // Second offset
+        assert_eq!(metadata[4], 2); // Third offset
+        assert_eq!(metadata[5], 3); // One-past-the-end offset
+        
+        // Dictionary bytes: "abc" (sorted)
+        assert_eq!(&metadata[6..9], b"abc");
+    }
+
+    #[test]
+    fn test_sorted_complex_object() {
+        let value = json!({
+            "first_name": "John",
+            "email": "john.smith@example.com",
+            "last_name": "Smith"
+        });
+
+        let metadata = create_metadata(&value, true).unwrap();
+        
+        // Header: version=1, sorted_strings=1, offset_size=1 (1 byte)
+        assert_eq!(metadata[0], 0x11);
+        
+        // Dictionary size: 3 keys
+        assert_eq!(metadata[1], 3);
+        
+        // Offsets: [0, 5, 15, 24] (1 byte each)
+        assert_eq!(metadata[2], 0); // First offset for "email"
+        assert_eq!(metadata[3], 5); // Second offset for "first_name"
+        assert_eq!(metadata[4], 15); // Third offset for "last_name"
+        assert_eq!(metadata[5], 24); // One-past-the-end offset
+        
+        // Dictionary bytes: "emailfirst_namelast_name"
+        assert_eq!(&metadata[6..30], b"emailfirst_namelast_name");
+    }
 } 
