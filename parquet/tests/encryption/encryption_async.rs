@@ -384,24 +384,55 @@ async fn test_uniform_encryption_with_key_retriever() {
 }
 
 #[tokio::test]
-async fn test_decrypt_page_index() {
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
+async fn test_decrypt_page_index_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
 
     let key_code: &[u8] = "0123456789012345".as_bytes();
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
         .build()
         .unwrap();
 
+    test_decrypt_page_index(&path, decryption_properties)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_decrypt_page_index_non_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+
+    let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
+    let column_1_key = "1234567890123450".as_bytes().to_vec();
+    let column_2_key = "1234567890123451".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties)
+        .await
+        .unwrap();
+}
+
+async fn test_decrypt_page_index(
+    path: &str,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<(), ParquetError> {
+    let mut file = File::open(&path).await?;
+
     let options = ArrowReaderOptions::new()
         .with_file_decryption_properties(decryption_properties)
         .with_page_index(true);
 
-    let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await.unwrap();
+    let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
     let _metadata = arrow_metadata.metadata();
 
     // TODO: Verify metadata
+    Ok(())
 }
 
 async fn verify_encryption_test_file_read_async(

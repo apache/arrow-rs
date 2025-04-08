@@ -236,6 +236,10 @@ impl CryptoContext {
         &self.data_decryptor
     }
 
+    pub(crate) fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
+        &self.metadata_decryptor
+    }
+
     pub(crate) fn file_aad(&self) -> &Vec<u8> {
         &self.file_aad
     }
