@@ -351,10 +351,9 @@ impl ParquetMetaDataReader {
         // Check to see if needed range is within `file_range`. Checking `range.end` seems
         // redundant, but it guards against `range_for_page_index()` returning garbage.
         let file_range = file_size.saturating_sub(reader.len())..file_size;
-        if !(file_range.contains(&(range.start as u64)) && file_range.contains(&(range.end as u64)))
-        {
+        if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
             // Requested range starts beyond EOF
-            if range.end as u64 > file_size {
+            if range.end > file_size {
                 return Err(eof_err!(
                     "Parquet file too small. Range {:?} is beyond file bounds {file_size}",
                     range
@@ -362,7 +361,7 @@ impl ParquetMetaDataReader {
             } else {
                 // Ask for a larger buffer
                 return Err(ParquetError::NeedMoreData(
-                    (file_size - range.start as u64).try_into()?,
+                    (file_size - range.start).try_into()?,
                 ));
             }
         }
@@ -371,7 +370,7 @@ impl ParquetMetaDataReader {
         // overlap.
         if let Some(metadata_size) = self.metadata_size {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
-            if range.end as u64 > metadata_range.start {
+            if range.end > metadata_range.start {
                 return Err(eof_err!(
                     "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
                     range,
@@ -380,8 +379,8 @@ impl ParquetMetaDataReader {
             }
         }
 
-        let bytes_needed = range.end - range.start;
-        let bytes = reader.get_bytes(range.start as u64 - file_range.start, bytes_needed)?;
+        let bytes_needed = usize::try_from(range.end - range.start)?;
+        let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
         let offset = range.start;
 
         self.parse_column_index(&bytes, offset)?;
@@ -486,27 +485,27 @@ impl ParquetMetaDataReader {
         };
 
         let bytes = match &remainder {
-            Some((remainder_start, remainder)) if *remainder_start <= range.start => {
-                let offset = range.start - *remainder_start;
-                let end = offset + range.end - range.start;
+            Some((remainder_start, remainder)) if *remainder_start as u64 <= range.start => {
+                let remainder_start = *remainder_start as u64;
+                let offset = usize::try_from(range.start - remainder_start)?;
+                let end = usize::try_from(range.end - remainder_start)?;
                 assert!(end <= remainder.len());
                 remainder.slice(offset..end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => fetch.fetch(range.start as u64..range.end as u64).await?,
+            _ => fetch.fetch(range.start..range.end).await?,
         };
 
         // Sanity check
-        assert_eq!(bytes.len(), range.end - range.start);
-        let offset = range.start;
+        assert_eq!(bytes.len() as u64, range.end - range.start);
 
-        self.parse_column_index(&bytes, offset)?;
-        self.parse_offset_index(&bytes, offset)?;
+        self.parse_column_index(&bytes, range.start)?;
+        self.parse_offset_index(&bytes, range.start)?;
 
         Ok(())
     }
 
-    fn parse_column_index(&mut self, bytes: &Bytes, start_offset: usize) -> Result<()> {
+    fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
         if self.column_index {
             let index = metadata
@@ -516,10 +515,11 @@ impl ParquetMetaDataReader {
                     x.columns()
                         .iter()
                         .map(|c| match c.column_index_range() {
-                            Some(r) => decode_column_index(
-                                &bytes[r.start - start_offset..r.end - start_offset],
-                                c.column_type(),
-                            ),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - start_offset)?;
+                                let r_end = usize::try_from(r.end - start_offset)?;
+                                decode_column_index(&bytes[r_start..r_end], c.column_type())
+                            }
                             None => Ok(Index::NONE),
                         })
                         .collect::<Result<Vec<_>>>()
@@ -530,7 +530,7 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
-    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: usize) -> Result<()> {
+    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
         if self.offset_index {
             let index = metadata
@@ -540,9 +540,11 @@ impl ParquetMetaDataReader {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => decode_offset_index(
-                                &bytes[r.start - start_offset..r.end - start_offset],
-                            ),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - start_offset)?;
+                                let r_end = usize::try_from(r.end - start_offset)?;
+                                decode_offset_index(&bytes[r_start..r_end])
+                            }
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()
@@ -554,7 +556,7 @@ impl ParquetMetaDataReader {
         Ok(())
     }
 
-    fn range_for_page_index(&self) -> Option<Range<usize>> {
+    fn range_for_page_index(&self) -> Option<Range<u64>> {
         // sanity check
         self.metadata.as_ref()?;
 

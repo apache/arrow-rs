@@ -190,20 +190,18 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         };
 
         let data = match &self.remainder {
-            Some((remainder_start, remainder)) if *remainder_start <= range.start => {
-                let offset = range.start - *remainder_start;
-                remainder.slice(offset..range.end - *remainder_start + offset)
+            Some((remainder_start, remainder)) if *remainder_start as u64 <= range.start => {
+                let remainder_start = *remainder_start as u64;
+                let range_start = usize::try_from(range.start - remainder_start)?;
+                let range_end = usize::try_from(range.end - remainder_start)?;
+                remainder.slice(range_start..range_end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
-            _ => {
-                self.fetch
-                    .fetch(range.start as u64..range.end as u64)
-                    .await?
-            }
+            _ => self.fetch.fetch(range.start..range.end).await?,
         };
 
         // Sanity check
-        assert_eq!(data.len(), range.end - range.start);
+        assert_eq!(data.len(), (range.end - range.start) as usize);
         let offset = range.start;
 
         if column_index {
@@ -215,10 +213,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.column_index_range() {
-                            Some(r) => decode_column_index(
-                                &data[r.start - offset..r.end - offset],
-                                c.column_type(),
-                            ),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - offset)?;
+                                let r_end = usize::try_from(r.end - offset)?;
+                                decode_column_index(&data[r_start..r_end], c.column_type())
+                            }
                             None => Ok(Index::NONE),
                         })
                         .collect::<Result<Vec<_>>>()
@@ -237,7 +236,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => decode_offset_index(&data[r.start - offset..r.end - offset]),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - offset)?;
+                                let r_end = usize::try_from(r.end - offset)?;
+                                decode_offset_index(&data[r_start..r_end])
+                            }
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()
