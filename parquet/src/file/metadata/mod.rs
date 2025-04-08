@@ -1103,9 +1103,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn column_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.column_index_offset?).ok()?;
-        let length = usize::try_from(self.column_index_length?).ok()?;
+    pub(crate) fn column_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.column_index_offset?).ok()?;
+        let length = u64::try_from(self.column_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 
@@ -1120,9 +1120,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn offset_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.offset_index_offset?).ok()?;
-        let length = usize::try_from(self.offset_index_length?).ok()?;
+    pub(crate) fn offset_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.offset_index_offset?).ok()?;
+        let length = u64::try_from(self.offset_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 

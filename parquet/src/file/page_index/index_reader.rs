@@ -31,7 +31,7 @@ use std::ops::Range;
 /// Computes the covering range of two optional ranges
 ///
 /// For example `acc_range(Some(7..9), Some(1..3)) = Some(1..9)`
-pub(crate) fn acc_range(a: Option<Range<usize>>, b: Option<Range<usize>>) -> Option<Range<usize>> {
+pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<Range<u64>> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.start.min(b.start)..a.end.max(b.end)),
         (None, x) | (x, None) => x,
@@ -61,14 +61,17 @@ pub fn read_columns_indexes<R: ChunkReader>(
         None => return Ok(None),
     };
 
-    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
-    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+    let bytes = reader.get_bytes(fetch.start as _, (fetch.end - fetch.start).try_into()?)?;
 
     Some(
         chunks
             .iter()
             .map(|c| match c.column_index_range() {
-                Some(r) => decode_column_index(get(r), c.column_type()),
+                Some(r) => decode_column_index(
+                    &bytes[usize::try_from(r.start - fetch.start)?
+                        ..usize::try_from(r.end - fetch.start)?],
+                    c.column_type(),
+                ),
                 None => Ok(Index::NONE),
             })
             .collect(),
@@ -101,13 +104,15 @@ pub fn read_pages_locations<R: ChunkReader>(
         None => return Ok(vec![]),
     };
 
-    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
-    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+    let bytes = reader.get_bytes(fetch.start as _, (fetch.end - fetch.start).try_into()?)?;
 
     chunks
         .iter()
         .map(|c| match c.offset_index_range() {
-            Some(r) => decode_page_locations(get(r)),
+            Some(r) => decode_page_locations(
+                &bytes[usize::try_from(r.start - fetch.start)?
+                    ..usize::try_from(r.end - fetch.start)?],
+            ),
             None => Err(general_err!("missing offset index")),
         })
         .collect()
@@ -136,14 +141,16 @@ pub fn read_offset_indexes<R: ChunkReader>(
         None => return Ok(None),
     };
 
-    let bytes = reader.get_bytes(fetch.start as _, fetch.end - fetch.start)?;
-    let get = |r: Range<usize>| &bytes[(r.start - fetch.start)..(r.end - fetch.start)];
+    let bytes = reader.get_bytes(fetch.start as _, (fetch.end - fetch.start).try_into()?)?;
 
     Some(
         chunks
             .iter()
             .map(|c| match c.offset_index_range() {
-                Some(r) => decode_offset_index(get(r)),
+                Some(r) => decode_offset_index(
+                    &bytes[usize::try_from(r.start - fetch.start)?
+                        ..usize::try_from(r.end - fetch.start)?],
+                ),
                 None => Err(general_err!("missing offset index")),
             })
             .collect(),
