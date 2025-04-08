@@ -19,12 +19,13 @@
 
 # Changelog
 
-## [55.0.0](https://github.com/apache/arrow-rs/tree/55.0.0) (2025-04-07)
+## [55.0.0](https://github.com/apache/arrow-rs/tree/55.0.0) (2025-04-08)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/54.3.1...55.0.0)
 
 **Breaking changes:**
 
+- Change Parquet API interaction to use `u64` \(support files larger than 4GB in WASM\) [\#7371](https://github.com/apache/arrow-rs/pull/7371) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([kylebarron](https://github.com/kylebarron))
 - Remove  `AsyncFileReader::get_metadata_with_options`, add `options` to `AsyncFileReader::get_metadata` [\#7342](https://github.com/apache/arrow-rs/pull/7342) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([corwinjoy](https://github.com/corwinjoy))
 - Parquet: Support reading Parquet metadata via suffix range requests [\#7334](https://github.com/apache/arrow-rs/pull/7334) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([kylebarron](https://github.com/kylebarron))
 - Upgrade to `object_store` to `0.12.0` [\#7328](https://github.com/apache/arrow-rs/pull/7328) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mbrobbel](https://github.com/mbrobbel))
@@ -42,7 +43,8 @@
 - Improve CSV parsing errors: Print the row that makes csv parsing fails [\#7344](https://github.com/apache/arrow-rs/issues/7344) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support ColumnMetaData `encoding_stats` in Parquet Writing [\#7341](https://github.com/apache/arrow-rs/issues/7341) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support writing Parquet with modular encryption [\#7327](https://github.com/apache/arrow-rs/issues/7327) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Parquet reader: option to pass INT96 as bytes instead of as Timestamp [\#7220](https://github.com/apache/arrow-rs/issues/7220) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet Use U64 Instead of Usize \(wasm support for files greater than 4GB\) [\#7238](https://github.com/apache/arrow-rs/issues/7238) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support different TimeUnits and timezones when reading Timestamps from INT96 [\#7220](https://github.com/apache/arrow-rs/issues/7220) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
