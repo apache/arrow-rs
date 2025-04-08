@@ -156,7 +156,7 @@ async fn bad_metadata_err() {
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
-    let metadata_length = metadata_buffer.len();
+    let metadata_length = metadata_buffer.len() as u64;
 
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();
