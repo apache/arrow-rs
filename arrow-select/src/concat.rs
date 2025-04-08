@@ -31,6 +31,7 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -193,9 +194,51 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
     Ok(Arc::new(array))
 }
 
+fn concat_primitives<T: ArrowPrimitiveType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(arrays.iter().map(|a| a.len()).sum())
+        .with_data_type(arrays[0].data_type().clone());
+
+    for array in arrays {
+        builder.append_array(array.as_primitive());
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn concat_boolean(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = BooleanBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
+
+    for array in arrays {
+        builder.append_array(array.as_boolean());
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let (item_capacity, bytes_capacity) = match binary_capacity::<T>(arrays) {
+        Capacities::Binary(item_capacity, Some(bytes_capacity)) => (item_capacity, bytes_capacity),
+        _ => unreachable!(),
+    };
+
+    let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, bytes_capacity);
+
+    for array in arrays {
+        builder.append_array(array.as_bytes::<T>());
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
 macro_rules! dict_helper {
     ($t:ty, $arrays:expr) => {
         return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    };
+}
+
+macro_rules! primitive_concat {
+    ($t:ty, $arrays:expr) => {
+        return Ok(Arc::new(concat_primitives::<$t>($arrays)?) as _)
     };
 }
 
@@ -254,7 +297,9 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
-    match d {
+    downcast_primitive! {
+        d => (primitive_concat, arrays),
+        DataType::Boolean => concat_boolean(arrays),
         DataType::Dictionary(k, _) => {
             downcast_integer! {
                 k.as_ref() => (dict_helper, arrays),
@@ -263,6 +308,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
+        DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
+        DataType::Binary => concat_bytes::<BinaryType>(arrays),
+        DataType::LargeBinary => concat_bytes::<LargeBinaryType>(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
