@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use crate::parse::*;
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
@@ -393,7 +394,7 @@ where
 {
     if cast_options.safe {
         let iter = from.iter().map(|v| {
-            v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
+            v.and_then(|v| parse_decimal::<T>(v, precision, scale).ok())
                 .and_then(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
         });
         // Benefit:
@@ -409,12 +410,13 @@ where
             .iter()
             .map(|v| {
                 v.map(|v| {
-                    parse_string_to_decimal_native::<T>(v, scale as usize)
+                    parse_decimal::<T>(v, precision, scale)
                         .map_err(|_| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
+                                "Cannot cast string '{}' to decimal type of precision {} and scale {}",
                                 v,
-                                T::DATA_TYPE,
+                                precision,
+                                scale
                             ))
                         })
                         .and_then(|v| T::validate_decimal_precision(v, precision).map(|_| v))
