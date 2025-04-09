@@ -561,19 +561,19 @@ pub enum ColumnOrder {
 impl ColumnOrder {
     /// Returns the sort order for a physical/logical type.
     ///
-    /// If `use_total_order` is `true` then IEEE 754 total order will be used for floating point
+    /// If `ieee754_total_order` is `true` then IEEE 754 total order will be used for floating point
     /// types.
     pub fn get_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
-        use_total_order: bool,
+        ieee754_total_order: bool,
     ) -> SortOrder {
         // check for floating point types, then fall back to type defined order
         match logical_type {
-            Some(LogicalType::Float16) if use_total_order => SortOrder::TOTAL_ORDER,
+            Some(LogicalType::Float16) if ieee754_total_order => SortOrder::TOTAL_ORDER,
             _ => match physical_type {
-                Type::FLOAT | Type::DOUBLE if use_total_order => SortOrder::TOTAL_ORDER,
+                Type::FLOAT | Type::DOUBLE if ieee754_total_order => SortOrder::TOTAL_ORDER,
                 _ => ColumnOrder::get_type_defined_sort_order(
                     logical_type,
                     converted_type,
