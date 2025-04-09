@@ -1163,7 +1163,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_dictionary_page_offset(dict_page_offset);
 
         if self.statistics_enabled != EnabledStatistics::None {
-            let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+            let backwards_compatible_min_max = self
+                .descr
+                .sort_order(self.props.ieee754_total_order())
+                .is_signed();
 
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
