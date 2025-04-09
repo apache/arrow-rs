@@ -403,7 +403,7 @@ async fn test_decrypt_page_index_non_uniform() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
 
-    let footer_key = "0123456789012345".as_bytes().to_vec(); // 128bit/16
+    let footer_key = "0123456789012345".as_bytes().to_vec();
     let column_1_key = "1234567890123450".as_bytes().to_vec();
     let column_2_key = "1234567890123451".as_bytes().to_vec();
 
@@ -429,9 +429,26 @@ async fn test_decrypt_page_index(
         .with_page_index(true);
 
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
-    let _metadata = arrow_metadata.metadata();
+    let metadata = arrow_metadata.metadata();
 
-    // TODO: Verify metadata
+    let offset_index = metadata.offset_index().unwrap();
+    // 1 row group, 8 columns
+    assert_eq!(offset_index.len(), 1);
+    assert_eq!(offset_index[0].len(), 8);
+    // Check float column, which is encrypted in non-uniform example
+    let float_col_idx = 4;
+    let offset_index = &offset_index[0][float_col_idx];
+    assert_eq!(offset_index.page_locations.len(), 1);
+
+    let column_index = metadata.column_index().unwrap();
+    assert_eq!(column_index.len(), 1);
+    assert_eq!(column_index[0].len(), 8);
+    let column_index = &column_index[0][float_col_idx];
+    assert!(matches!(
+        column_index,
+        parquet::file::page_index::index::Index::FLOAT(_)
+    ));
+
     Ok(())
 }
 
