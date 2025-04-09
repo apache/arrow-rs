@@ -17,7 +17,9 @@
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
-use crate::encryption_util::{verify_encryption_test_data, TestKeyRetriever};
+use crate::encryption_util::{
+    verify_column_indexes, verify_encryption_test_data, TestKeyRetriever,
+};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
@@ -429,25 +431,8 @@ async fn test_decrypt_page_index(
         .with_page_index(true);
 
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
-    let metadata = arrow_metadata.metadata();
 
-    let offset_index = metadata.offset_index().unwrap();
-    // 1 row group, 8 columns
-    assert_eq!(offset_index.len(), 1);
-    assert_eq!(offset_index[0].len(), 8);
-    // Check float column, which is encrypted in non-uniform example
-    let float_col_idx = 4;
-    let offset_index = &offset_index[0][float_col_idx];
-    assert_eq!(offset_index.page_locations.len(), 1);
-
-    let column_index = metadata.column_index().unwrap();
-    assert_eq!(column_index.len(), 1);
-    assert_eq!(column_index[0].len(), 8);
-    let column_index = &column_index[0][float_col_idx];
-    assert!(matches!(
-        column_index,
-        parquet::file::page_index::index::Index::FLOAT(_)
-    ));
+    verify_column_indexes(arrow_metadata.metadata());
 
     Ok(())
 }
