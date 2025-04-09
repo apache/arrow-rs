@@ -352,6 +352,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
+            self.props.ieee754_total_order(),
         );
 
         #[cfg(feature = "encryption")]
