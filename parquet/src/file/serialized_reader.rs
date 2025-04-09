@@ -442,6 +442,18 @@ pub(crate) fn decode_page(
     let mut can_decompress = true;
 
     if let Some(ref header_v2) = page_header.data_page_header_v2 {
+        if header_v2.definition_levels_byte_length < 0
+            || header_v2.repetition_levels_byte_length < 0
+            || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
+                > page_header.uncompressed_page_size
+        {
+            return Err(general_err!(
+                    "DataPage v2 header contains implausible values for definition_levels_byte_length ({}) and repetition_levels_byte_length ({}) given DataPage header provides uncompressed_page_size ({})",
+                    header_v2.definition_levels_byte_length,
+                    header_v2.repetition_levels_byte_length,
+                    page_header.uncompressed_page_size
+                ));
+        }
         offset = (header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length)
             as usize;
         // When is_compressed flag is missing the page is considered compressed
@@ -456,7 +468,7 @@ pub(crate) fn decode_page(
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
-            if decompressed_size != 0 {
+            if decompressed_size > 0 {
                 let compressed = &buffer.as_ref()[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
