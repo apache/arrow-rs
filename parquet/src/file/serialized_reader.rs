@@ -322,7 +322,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
         Ok(Box::new(SerializedPageReader::new_with_properties(
             Arc::clone(&self.chunk_reader),
             col,
-            self.metadata.num_rows() as usize,
+            usize::try_from(self.metadata.num_rows())?,
             page_locations,
             props,
         )?))
@@ -454,8 +454,9 @@ pub(crate) fn decode_page(
                     page_header.uncompressed_page_size
                 ));
         }
-        offset = (header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length)
-            as usize;
+        offset = usize::try_from(
+            header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length,
+        )?;
         // When is_compressed flag is missing the page is considered compressed
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
@@ -464,7 +465,7 @@ pub(crate) fn decode_page(
     // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
-            let uncompressed_page_size = page_header.uncompressed_page_size as usize;
+            let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
@@ -663,8 +664,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 }
             }
             None => SerializedPageReaderState::Values {
-                offset: start as usize,
-                remaining_bytes: len as usize,
+                offset: usize::try_from(start)?,
+                remaining_bytes: usize::try_from(len)?,
                 next_page_header: None,
                 page_ordinal: 0,
                 require_dictionary: meta.dictionary_page_offset().is_some(),
@@ -728,9 +729,9 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 ..
             } => {
                 if let Some(page) = dictionary_page {
-                    Ok(Some(page.offset as usize))
+                    Ok(Some(usize::try_from(page.offset)?))
                 } else if let Some(page) = page_locations.front() {
-                    Ok(Some(page.offset as usize))
+                    Ok(Some(usize::try_from(page.offset)?))
                 } else {
                     Ok(None)
                 }
@@ -872,7 +873,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         None => return Ok(None),
                     };
 
-                    let page_len = front.compressed_page_size as usize;
+                    let page_len = usize::try_from(front.compressed_page_size)?;
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
@@ -1463,7 +1464,7 @@ mod tests {
         SerializedPageReader::new_with_properties(
             Arc::clone(&row_group.chunk_reader),
             col,
-            row_group.metadata.num_rows() as usize,
+            usize::try_from(row_group.metadata.num_rows())?,
             page_locations,
             props,
         )
