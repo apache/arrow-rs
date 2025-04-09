@@ -514,7 +514,24 @@ pub(crate) fn build_field<'a>(
 ) -> WIPOffset<crate::Field<'a>> {
     // Optional custom metadata.
     let mut fb_metadata = None;
-    if !field.metadata().is_empty() {
+
+    // Handle extension type metadata if applicable
+    if let DataType::Extension(extension) = field.data_type() {
+        let mut field_metadata = HashMap::from([
+            (
+                "ARROW:extension:name".to_string(),
+                extension.extension_name().to_string(),
+            ),
+            (
+                "ARROW:extension:metadata".to_string(),
+                extension.serialized_metadata(),
+            ),
+        ]);
+
+        for (k, v) in field.metadata() {
+            field_metadata.insert(k.clone(), v.clone());
+        }
+    } else if !field.metadata().is_empty() {
         fb_metadata = Some(metadata_to_fb(fbb, field.metadata()));
     };
 
@@ -882,6 +899,9 @@ pub(crate) fn get_fb_field_type<'a>(
                 type_: builder.finish().as_union_value(),
                 children: Some(fbb.create_vector(&children[..])),
             }
+        }
+        DataType::Extension(extension) => {
+            get_fb_field_type(extension.storage_type(), dictionary_tracker, fbb)
         }
     }
 }

@@ -151,6 +151,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
                 }
             }
         }
+        DataType::Extension(extension) => new_buffers(extension.storage_type(), capacity),
     }
 }
 
@@ -1664,6 +1665,7 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
+        DataType::Extension(extension) => layout(extension.storage_type()),
     }
 }
 

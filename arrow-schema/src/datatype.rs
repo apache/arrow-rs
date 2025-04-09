@@ -19,6 +19,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::extension::DynExtensionType;
 use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 
 /// Datatypes supported by this implementation of Apache Arrow.
@@ -411,6 +412,8 @@ pub enum DataType {
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
     RunEndEncoded(FieldRef, FieldRef),
+    /// An ExtensionType
+    Extension(Arc<dyn DynExtensionType + Send + Sync>),
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
@@ -689,6 +692,7 @@ impl DataType {
             DataType::Union(_, _) => None,
             DataType::Dictionary(_, _) => None,
             DataType::RunEndEncoded(_, _) => None,
+            DataType::Extension(_) => None,
         }
     }
 
@@ -740,6 +744,7 @@ impl DataType {
                     run_ends.size() - std::mem::size_of_val(run_ends) + values.size()
                         - std::mem::size_of_val(values)
                 }
+                DataType::Extension(extension) => extension.size(),
             }
     }
 

@@ -25,6 +25,10 @@ mod canonical;
 pub use canonical::*;
 
 use crate::{ArrowError, DataType};
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 
 /// The metadata key for the string name identifying an [`ExtensionType`].
 pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
@@ -257,4 +261,57 @@ pub trait ExtensionType: Sized {
     /// This should return an error if the given data type is not supported by
     /// this extension type.
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError>;
+}
+
+/// dyn-compatible ExtensionType
+pub trait DynExtensionType: Debug {
+    /// For dyn-compatible comparison methods
+    fn as_any(&self) -> &dyn Any;
+
+    /// Because DataType implements sized
+    fn size(&self) -> usize;
+
+    /// Concrete storage type for this extension
+    fn storage_type(&self) -> &DataType;
+
+    /// Name of the extension
+    fn extension_name(&self) -> &'static str;
+
+    /// Extension metadata
+    fn serialized_metadata(&self) -> String;
+
+    /// Because DataType implement Eq
+    fn extension_equals(&self, other: &dyn Any) -> bool;
+
+    /// Because DataType implements Hash
+    fn extension_hash(&self, hasher: &dyn Hasher);
+
+    /// Because DataType implements Ord
+    fn exension_cmp(&self, other: &dyn Any) -> Ordering;
+}
+
+impl PartialEq for dyn DynExtensionType + Send + Sync {
+    fn eq(&self, other: &Self) -> bool {
+        self.extension_equals(other.as_any())
+    }
+}
+
+impl Eq for dyn DynExtensionType + Send + Sync {}
+
+impl Hash for dyn DynExtensionType + Send + Sync {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.extension_hash(state);
+    }
+}
+
+impl PartialOrd for dyn DynExtensionType + Send + Sync {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for dyn DynExtensionType + Send + Sync {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.exension_cmp(other.as_any())
+    }
 }

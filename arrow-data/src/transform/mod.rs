@@ -276,6 +276,7 @@ fn build_extend(array: &ArrayData) -> Extend {
             UnionMode::Dense => union::build_extend_dense(array),
         },
         DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::Extension(_) => unimplemented!("Extension not implemented")
     }
 }
 
@@ -332,6 +333,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             UnionMode::Dense => union::extend_nulls_dense,
         },
         DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::Extension(_) => unimplemented!("ListView/LargeListView not implemented")
     })
 }
 
@@ -590,6 +592,7 @@ impl<'a> MutableArrayData<'a> {
                     MutableArrayData::new(child_arrays, use_nulls, array_capacity)
                 })
                 .collect::<Vec<_>>(),
+            DataType::Extension(_) => unimplemented!("Extension not implemented")
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
