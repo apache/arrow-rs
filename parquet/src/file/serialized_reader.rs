@@ -1195,7 +1195,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DictionaryPage {
                     buf,
@@ -1289,7 +1289,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DictionaryPage {
                     buf,
@@ -1391,7 +1391,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DictionaryPage {
                     buf,
@@ -1493,7 +1493,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DataPageV2 {
                     buf,
