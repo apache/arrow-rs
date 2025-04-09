@@ -220,6 +220,26 @@ impl CryptoContext {
         )
     }
 
+    pub(crate) fn create_column_index_aad(&self) -> Result<Vec<u8>> {
+        create_module_aad(
+            self.file_aad(),
+            ModuleType::ColumnIndex,
+            self.row_group_idx,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
+    }
+
+    pub(crate) fn create_offset_index_aad(&self) -> Result<Vec<u8>> {
+        create_module_aad(
+            self.file_aad(),
+            ModuleType::OffsetIndex,
+            self.row_group_idx,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
+    }
+
     pub(crate) fn for_dictionary_page(&self) -> Self {
         Self {
             row_group_idx: self.row_group_idx,

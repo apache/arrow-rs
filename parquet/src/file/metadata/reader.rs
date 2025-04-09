@@ -43,8 +43,6 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::CryptoContext;
-#[cfg(feature = "encryption")]
-use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -526,10 +524,9 @@ impl ParquetMetaDataReader {
                                 let r_start = usize::try_from(r.start - start_offset)?;
                                 let r_end = usize::try_from(r.end - start_offset)?;
                                 Self::parse_single_column_index(
+                                    &bytes[r_start..r_end],
                                     metadata,
                                     c,
-                                    &bytes[r_start..r_end],
-                                    c.column_type(),
                                     rg_idx,
                                     col_idx,
                                 )
@@ -546,10 +543,9 @@ impl ParquetMetaDataReader {
 
     #[cfg(feature = "encryption")]
     fn parse_single_column_index(
+        bytes: &[u8],
         metadata: &ParquetMetaData,
         column: &ColumnChunkMetaData,
-        bytes: &[u8],
-        column_type: crate::basic::Type,
         row_group_index: usize,
         col_index: usize,
     ) -> Result<Index> {
@@ -565,30 +561,23 @@ impl ParquetMetaDataReader {
                     col_index,
                 )?;
                 let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = create_module_aad(
-                    file_decryptor.file_aad(),
-                    ModuleType::ColumnIndex,
-                    row_group_index,
-                    col_index,
-                    None,
-                )?;
+                let aad = crypto_context.create_column_index_aad()?;
                 let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_column_index(&plaintext, column_type)
+                decode_column_index(&plaintext, column.column_type())
             }
-            None => decode_column_index(bytes, column_type),
+            None => decode_column_index(bytes, column.column_type()),
         }
     }
 
     #[cfg(not(feature = "encryption"))]
     fn parse_single_column_index(
-        _metadata: &ParquetMetaData,
-        _column: &ColumnChunkMetaData,
         bytes: &[u8],
-        column_type: crate::basic::Type,
+        _metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
         _row_group_index: usize,
         _col_index: usize,
     ) -> Result<Index> {
-        decode_column_index(bytes, column_type)
+        decode_column_index(bytes, column.column_type())
     }
 
     fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
@@ -607,9 +596,9 @@ impl ParquetMetaDataReader {
                                 let r_start = usize::try_from(r.start - start_offset)?;
                                 let r_end = usize::try_from(r.end - start_offset)?;
                                 Self::parse_single_offset_index(
+                                    &bytes[r_start..r_end],
                                     metadata,
                                     c,
-                                    &bytes[r_start..r_end],
                                     rg_idx,
                                     col_idx,
                                 )
@@ -627,9 +616,9 @@ impl ParquetMetaDataReader {
 
     #[cfg(feature = "encryption")]
     fn parse_single_offset_index(
+        bytes: &[u8],
         metadata: &ParquetMetaData,
         column: &ColumnChunkMetaData,
-        bytes: &[u8],
         row_group_index: usize,
         col_index: usize,
     ) -> Result<OffsetIndexMetaData> {
@@ -645,13 +634,7 @@ impl ParquetMetaDataReader {
                     col_index,
                 )?;
                 let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = create_module_aad(
-                    file_decryptor.file_aad(),
-                    ModuleType::OffsetIndex,
-                    row_group_index,
-                    col_index,
-                    None,
-                )?;
+                let aad = crypto_context.create_offset_index_aad()?;
                 let plaintext = column_decryptor.decrypt(bytes, &aad)?;
                 decode_offset_index(&plaintext)
             }
@@ -661,9 +644,9 @@ impl ParquetMetaDataReader {
 
     #[cfg(not(feature = "encryption"))]
     fn parse_single_offset_index(
+        bytes: &[u8],
         _metadata: &ParquetMetaData,
         _column: &ColumnChunkMetaData,
-        bytes: &[u8],
         _row_group_index: usize,
         _col_index: usize,
     ) -> Result<OffsetIndexMetaData> {
