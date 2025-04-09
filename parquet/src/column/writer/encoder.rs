@@ -18,7 +18,7 @@
 use bytes::Bytes;
 use half::f16;
 
-use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
+use crate::basic::{ConvertedType, Encoding, LogicalType, SortOrder, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
@@ -28,7 +28,9 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::ColumnDescPtr;
+
+use super::OrderedColumnDescriptor;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -126,25 +128,20 @@ pub trait ColumnValueEncoder {
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
     dict_encoder: Option<DictEncoder<T>>,
-    descr: ColumnDescPtr,
+    descr: OrderedColumnDescriptor,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
     variable_length_bytes: Option<i64>,
-    ieee754_total_order: bool,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
     fn min_max(&self, values: &[T::T], value_indices: Option<&[usize]>) -> Option<(T::T, T::T)> {
         match value_indices {
-            Some(indices) => get_min_max(
-                &self.descr,
-                indices.iter().map(|x| &values[*x]),
-                self.ieee754_total_order,
-            ),
-            None => get_min_max(&self.descr, values.iter(), self.ieee754_total_order),
+            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
+            None => get_min_max(&self.descr, values.iter()),
         }
     }
 
@@ -154,18 +151,8 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
             if let Some((min, max)) = self.min_max(slice, None) {
-                update_min(
-                    &self.descr,
-                    &min,
-                    &mut self.min_value,
-                    self.ieee754_total_order,
-                );
-                update_max(
-                    &self.descr,
-                    &max,
-                    &mut self.max_value,
-                    self.ieee754_total_order,
-                );
+                update_min(&self.descr, &min, &mut self.min_value);
+                update_max(&self.descr, &max, &mut self.max_value);
             }
 
             if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
@@ -216,17 +203,18 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
             .transpose()?;
 
+        let descr = OrderedColumnDescriptor::new(descr.clone(), props.ieee754_total_order());
+
         Ok(Self {
             encoder,
             dict_encoder,
-            descr: descr.clone(),
+            descr,
             num_values: 0,
             statistics_enabled,
             bloom_filter,
             min_value: None,
             max_value: None,
             variable_length_bytes: None,
-            ieee754_total_order: props.ieee754_total_order(),
         })
     }
 
@@ -325,18 +313,15 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 }
 
-fn get_min_max<'a, T, I>(
-    descr: &ColumnDescriptor,
-    mut iter: I,
-    ieee754_total_order: bool,
-) -> Option<(T, T)>
+fn get_min_max<'a, T, I>(descr: &OrderedColumnDescriptor, mut iter: I) -> Option<(T, T)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
+    let ieee754_total_order = descr.sort_order == SortOrder::TOTAL_ORDER;
     let first = loop {
         let next = iter.next()?;
-        if ieee754_total_order || !is_nan(descr, next) {
+        if ieee754_total_order || !is_nan(&descr.descr, next) {
             break next;
         }
     };
@@ -344,13 +329,13 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if !ieee754_total_order && is_nan(descr, val) {
+        if !ieee754_total_order && is_nan(&descr.descr, val) {
             continue;
         }
-        if compare_greater(descr, min, val, ieee754_total_order) {
+        if compare_greater(descr, min, val) {
             min = val;
         }
-        if compare_greater(descr, val, max, ieee754_total_order) {
+        if compare_greater(descr, val, max) {
             max = val;
         }
     }
@@ -363,20 +348,15 @@ where
     //
     // For max, it has similar logic but will be written as 0.0
     // (positive zero)
-    let min = replace_zero(min, descr, -0.0, ieee754_total_order);
-    let max = replace_zero(max, descr, 0.0, ieee754_total_order);
+    let min = replace_zero(min, descr, -0.0);
+    let max = replace_zero(max, descr, 0.0);
 
     Some((min, max))
 }
 
 #[inline]
-fn replace_zero<T: ParquetValueType>(
-    val: &T,
-    descr: &ColumnDescriptor,
-    replace: f32,
-    ieee754_total_order: bool,
-) -> T {
-    if ieee754_total_order {
+fn replace_zero<T: ParquetValueType>(val: &T, descr: &OrderedColumnDescriptor, replace: f32) -> T {
+    if descr.sort_order == SortOrder::TOTAL_ORDER {
         return val.clone();
     }
 

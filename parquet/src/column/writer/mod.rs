@@ -326,13 +326,52 @@ impl<T: Default> ColumnMetrics<T> {
     }
 }
 
+// ColumnDescriptor that knows how it should be sorted
+struct OrderedColumnDescriptor {
+    descr: ColumnDescPtr,
+    sort_order: SortOrder,
+}
+
+impl OrderedColumnDescriptor {
+    fn new(descr: ColumnDescPtr, ieee754_total_order: bool) -> Self {
+        let sort_order = descr.sort_order(ieee754_total_order);
+        Self { descr, sort_order }
+    }
+
+    // add some pass-through methods for convenience
+    #[inline]
+    fn max_def_level(&self) -> i16 {
+        self.descr.max_def_level()
+    }
+
+    #[inline]
+    fn max_rep_level(&self) -> i16 {
+        self.descr.max_rep_level()
+    }
+
+    #[inline]
+    fn converted_type(&self) -> ConvertedType {
+        self.descr.converted_type()
+    }
+
+    #[inline]
+    fn logical_type(&self) -> Option<LogicalType> {
+        self.descr.logical_type()
+    }
+
+    #[inline]
+    fn physical_type(&self) -> Type {
+        self.descr.physical_type()
+    }
+}
+
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
 /// Generic column writer for a primitive column.
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
-    descr: ColumnDescPtr,
+    descr: OrderedColumnDescriptor,
     props: WriterPropertiesPtr,
     statistics_enabled: EnabledStatistics,
 
@@ -408,6 +447,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             _ => None,
         };
 
+        let descr = OrderedColumnDescriptor::new(descr, props.ieee754_total_order());
+
         Self {
             descr,
             props,
@@ -469,20 +510,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         if let Some(min) = min {
-            update_min(
-                &self.descr,
-                min,
-                &mut self.column_metrics.min_column_value,
-                self.props.ieee754_total_order(),
-            );
+            update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
         }
         if let Some(max) = max {
-            update_max(
-                &self.descr,
-                max,
-                &mut self.column_metrics.max_column_value,
-                self.props.ieee754_total_order(),
-            );
+            update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
         // We can only set the distinct count if there are no other writes
@@ -610,7 +641,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Returns a reference to a [`ColumnDescPtr`]
     pub fn get_descriptor(&self) -> &ColumnDescPtr {
-        &self.descr
+        &self.descr.descr
     }
 
     /// Finalizes writes and closes the column writer.
@@ -787,11 +818,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
-    /// Evaluate `a > b` according to underlying logical type.
-    fn compare_greater(&self, a: &E::T, b: &E::T) -> bool {
-        compare_greater(&self.descr, a, b, self.props.ieee754_total_order())
-    }
-
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
@@ -824,8 +850,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = self.compare_greater(last_min, new_min)
-                                || self.compare_greater(last_max, new_max);
+                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
+                                || compare_greater(&self.descr, last_max, new_max);
                             if not_ascending {
                                 self.data_page_boundary_ascending = false;
                             }
@@ -833,8 +859,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                         if self.data_page_boundary_descending {
                             // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = self.compare_greater(new_min, last_min)
-                                || self.compare_greater(new_max, last_max);
+                            let not_descending = compare_greater(&self.descr, new_min, last_min)
+                                || compare_greater(&self.descr, new_max, last_max);
                             if not_descending {
                                 self.data_page_boundary_descending = false;
                             }
@@ -981,18 +1007,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
-                update_min(
-                    &self.descr,
-                    &min,
-                    &mut self.column_metrics.min_column_value,
-                    self.props.ieee754_total_order(),
-                );
-                update_max(
-                    &self.descr,
-                    &max,
-                    &mut self.column_metrics.max_column_value,
-                    self.props.ieee754_total_order(),
-                );
+                update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
+                update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
 
                 (self.statistics_enabled == EnabledStatistics::Page).then_some(
                     ValueStatistics::new(
@@ -1152,7 +1168,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // If data page offset is not set, then no pages have been written
         let data_page_offset = self.column_metrics.data_page_offset.unwrap_or(0) as i64;
 
-        let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
+        let mut builder = ColumnChunkMetaData::builder(self.descr.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
             .set_page_encoding_stats(self.encoding_stats.clone())
@@ -1163,10 +1179,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_dictionary_page_offset(dict_page_offset);
 
         if self.statistics_enabled != EnabledStatistics::None {
-            let backwards_compatible_min_max = self
-                .descr
-                .sort_order(self.props.ieee754_total_order())
-                .is_signed();
+            let backwards_compatible_min_max = self.descr.sort_order.is_signed();
 
             let statistics = ValueStatistics::<E::T>::new(
                 self.column_metrics.min_column_value.clone(),
@@ -1364,7 +1377,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
             builder.set_column_crypto_metadata(get_column_crypto_metadata(
                 encryption_properties,
-                &self.descr,
+                &self.descr.descr,
             ))
         } else {
             builder
@@ -1381,25 +1394,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 }
 
-fn update_min<T: ParquetValueType>(
-    descr: &ColumnDescriptor,
-    val: &T,
-    min: &mut Option<T>,
-    ieee754_total_order: bool,
-) {
-    update_stat::<T, _>(descr, val, min, |cur| {
-        compare_greater(descr, cur, val, ieee754_total_order)
+fn update_min<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, min: &mut Option<T>) {
+    update_stat::<T, _>(&descr.descr, val, min, |cur| {
+        compare_greater(descr, cur, val)
     })
 }
 
-fn update_max<T: ParquetValueType>(
-    descr: &ColumnDescriptor,
-    val: &T,
-    max: &mut Option<T>,
-    ieee754_total_order: bool,
-) {
-    update_stat::<T, _>(descr, val, max, |cur| {
-        compare_greater(descr, val, cur, ieee754_total_order)
+fn update_max<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, max: &mut Option<T>) {
+    update_stat::<T, _>(&descr.descr, val, max, |cur| {
+        compare_greater(descr, val, cur)
     })
 }
 
@@ -1439,12 +1442,7 @@ fn update_stat<T: ParquetValueType, F>(
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-fn compare_greater<T: ParquetValueType>(
-    descr: &ColumnDescriptor,
-    a: &T,
-    b: &T,
-    ieee754_total_order: bool,
-) -> bool {
+fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, b: &T) -> bool {
     if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
         if !is_signed {
             // need to compare unsigned
@@ -1480,7 +1478,7 @@ fn compare_greater<T: ParquetValueType>(
         };
     };
 
-    if ieee754_total_order {
+    if descr.sort_order == SortOrder::TOTAL_ORDER {
         if ColumnOrder::get_sort_order(
             descr.logical_type(),
             descr.converted_type(),
