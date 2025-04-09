@@ -133,13 +133,18 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
     variable_length_bytes: Option<i64>,
+    ieee754_total_order: bool,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
     fn min_max(&self, values: &[T::T], value_indices: Option<&[usize]>) -> Option<(T::T, T::T)> {
         match value_indices {
-            Some(indices) => get_min_max(&self.descr, indices.iter().map(|x| &values[*x])),
-            None => get_min_max(&self.descr, values.iter()),
+            Some(indices) => get_min_max(
+                &self.descr,
+                indices.iter().map(|x| &values[*x]),
+                self.ieee754_total_order,
+            ),
+            None => get_min_max(&self.descr, values.iter(), self.ieee754_total_order),
         }
     }
 
@@ -149,8 +154,18 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
             if let Some((min, max)) = self.min_max(slice, None) {
-                update_min(&self.descr, &min, &mut self.min_value);
-                update_max(&self.descr, &max, &mut self.max_value);
+                update_min(
+                    &self.descr,
+                    &min,
+                    &mut self.min_value,
+                    self.ieee754_total_order,
+                );
+                update_max(
+                    &self.descr,
+                    &max,
+                    &mut self.max_value,
+                    self.ieee754_total_order,
+                );
             }
 
             if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
@@ -211,6 +226,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             min_value: None,
             max_value: None,
             variable_length_bytes: None,
+            ieee754_total_order: props.ieee754_total_order(),
         })
     }
 
@@ -309,14 +325,18 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 }
 
-fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
+fn get_min_max<'a, T, I>(
+    descr: &ColumnDescriptor,
+    mut iter: I,
+    ieee754_total_order: bool,
+) -> Option<(T, T)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
     let first = loop {
         let next = iter.next()?;
-        if !is_nan(descr, next) {
+        if ieee754_total_order || !is_nan(descr, next) {
             break next;
         }
     };
@@ -324,13 +344,13 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(descr, val) {
+        if !ieee754_total_order && is_nan(descr, val) {
             continue;
         }
-        if compare_greater(descr, min, val) {
+        if compare_greater(descr, min, val, ieee754_total_order) {
             min = val;
         }
-        if compare_greater(descr, val, max) {
+        if compare_greater(descr, val, max, ieee754_total_order) {
             max = val;
         }
     }
@@ -343,14 +363,23 @@ where
     //
     // For max, it has similar logic but will be written as 0.0
     // (positive zero)
-    let min = replace_zero(min, descr, -0.0);
-    let max = replace_zero(max, descr, 0.0);
+    let min = replace_zero(min, descr, -0.0, ieee754_total_order);
+    let max = replace_zero(max, descr, 0.0, ieee754_total_order);
 
     Some((min, max))
 }
 
 #[inline]
-fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace: f32) -> T {
+fn replace_zero<T: ParquetValueType>(
+    val: &T,
+    descr: &ColumnDescriptor,
+    replace: f32,
+    ieee754_total_order: bool,
+) -> T {
+    if ieee754_total_order {
+        return val.clone();
+    }
+
     match T::PHYSICAL_TYPE {
         Type::FLOAT if f32::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
             T::try_from_le_slice(&f32::to_le_bytes(replace)).unwrap()

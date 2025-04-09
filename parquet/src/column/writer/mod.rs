@@ -22,10 +22,13 @@ use half::f16;
 
 use crate::bloom_filter::Sbbf;
 use crate::format::{BoundaryOrder, ColumnIndex, OffsetIndex};
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
-use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
+use crate::basic::{
+    ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, SortOrder, Type,
+};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
 use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
@@ -466,10 +469,20 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         if let Some(min) = min {
-            update_min(&self.descr, min, &mut self.column_metrics.min_column_value);
+            update_min(
+                &self.descr,
+                min,
+                &mut self.column_metrics.min_column_value,
+                self.props.ieee754_total_order(),
+            );
         }
         if let Some(max) = max {
-            update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
+            update_max(
+                &self.descr,
+                max,
+                &mut self.column_metrics.max_column_value,
+                self.props.ieee754_total_order(),
+            );
         }
 
         // We can only set the distinct count if there are no other writes
@@ -774,6 +787,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(())
     }
 
+    /// Evaluate `a > b` according to underlying logical type.
+    fn compare_greater(&self, a: &E::T, b: &E::T) -> bool {
+        compare_greater(&self.descr, a, b, self.props.ieee754_total_order())
+    }
+
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
@@ -806,8 +824,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     if let Some((last_min, last_max)) = &self.last_non_null_data_page_min_max {
                         if self.data_page_boundary_ascending {
                             // If last min/max are greater than new min/max then not ascending anymore
-                            let not_ascending = compare_greater(&self.descr, last_min, new_min)
-                                || compare_greater(&self.descr, last_max, new_max);
+                            let not_ascending = self.compare_greater(last_min, new_min)
+                                || self.compare_greater(last_max, new_max);
                             if not_ascending {
                                 self.data_page_boundary_ascending = false;
                             }
@@ -815,8 +833,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                         if self.data_page_boundary_descending {
                             // If new min/max are greater than last min/max then not descending anymore
-                            let not_descending = compare_greater(&self.descr, new_min, last_min)
-                                || compare_greater(&self.descr, new_max, last_max);
+                            let not_descending = self.compare_greater(new_min, last_min)
+                                || self.compare_greater(new_max, last_max);
                             if not_descending {
                                 self.data_page_boundary_descending = false;
                             }
@@ -963,8 +981,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
-                update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
-                update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
+                update_min(
+                    &self.descr,
+                    &min,
+                    &mut self.column_metrics.min_column_value,
+                    self.props.ieee754_total_order(),
+                );
+                update_max(
+                    &self.descr,
+                    &max,
+                    &mut self.column_metrics.max_column_value,
+                    self.props.ieee754_total_order(),
+                );
 
                 (self.statistics_enabled == EnabledStatistics::Page).then_some(
                     ValueStatistics::new(
@@ -1350,12 +1378,26 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 }
 
-fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, min, |cur| compare_greater(descr, cur, val))
+fn update_min<T: ParquetValueType>(
+    descr: &ColumnDescriptor,
+    val: &T,
+    min: &mut Option<T>,
+    ieee754_total_order: bool,
+) {
+    update_stat::<T, _>(descr, val, min, |cur| {
+        compare_greater(descr, cur, val, ieee754_total_order)
+    })
 }
 
-fn update_max<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
+fn update_max<T: ParquetValueType>(
+    descr: &ColumnDescriptor,
+    val: &T,
+    max: &mut Option<T>,
+    ieee754_total_order: bool,
+) {
+    update_stat::<T, _>(descr, val, max, |cur| {
+        compare_greater(descr, val, cur, ieee754_total_order)
+    })
 }
 
 #[inline]
@@ -1394,7 +1436,12 @@ fn update_stat<T: ParquetValueType, F>(
 }
 
 /// Evaluate `a > b` according to underlying logical type.
-fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
+fn compare_greater<T: ParquetValueType>(
+    descr: &ColumnDescriptor,
+    a: &T,
+    b: &T,
+    ieee754_total_order: bool,
+) -> bool {
     if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
         if !is_signed {
             // need to compare unsigned
@@ -1430,12 +1477,42 @@ fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) 
         };
     };
 
-    if let Some(LogicalType::Float16) = descr.logical_type() {
-        let a = a.as_bytes();
-        let a = f16::from_le_bytes([a[0], a[1]]);
-        let b = b.as_bytes();
-        let b = f16::from_le_bytes([b[0], b[1]]);
-        return a > b;
+    if ieee754_total_order {
+        if ColumnOrder::get_sort_order(
+            descr.logical_type(),
+            descr.converted_type(),
+            descr.physical_type(),
+            true,
+        ) == SortOrder::TOTAL_ORDER
+        {
+            if let Some(LogicalType::Float16) = descr.logical_type() {
+                let a = a.as_bytes();
+                let a = f16::from_le_bytes([a[0], a[1]]);
+                let b = b.as_bytes();
+                let b = f16::from_le_bytes([b[0], b[1]]);
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+
+            if descr.physical_type() == Type::FLOAT {
+                let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+                let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+
+            if descr.physical_type() == Type::DOUBLE {
+                let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+                let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+        }
+    } else {
+        if let Some(LogicalType::Float16) = descr.logical_type() {
+            let a = a.as_bytes();
+            let a = f16::from_le_bytes([a[0], a[1]]);
+            let b = b.as_bytes();
+            let b = f16::from_le_bytes([b[0], b[1]]);
+            return a > b;
+        }
     }
 
     a > b
