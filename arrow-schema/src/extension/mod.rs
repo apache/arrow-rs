@@ -29,6 +29,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+use std::panic::RefUnwindSafe;
 
 /// The metadata key for the string name identifying an [`ExtensionType`].
 pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
@@ -264,7 +265,7 @@ pub trait ExtensionType: Sized {
 }
 
 /// dyn-compatible ExtensionType
-pub trait DynExtensionType: Debug {
+pub trait DynExtensionType: Debug + RefUnwindSafe {
     /// For dyn-compatible comparison methods
     fn as_any(&self) -> &dyn Any;
 
