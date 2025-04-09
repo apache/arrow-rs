@@ -529,6 +529,8 @@ pub enum SortOrder {
     UNSIGNED,
     /// Comparison is undefined.
     UNDEFINED,
+    /// Use IEEE 754 total order.
+    TOTAL_ORDER,
 }
 
 impl SortOrder {
@@ -549,14 +551,40 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    /// Column ordering to use for floating point types.
+    IEEE_754_TOTAL_ORDER,
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
     UNDEFINED,
 }
 
 impl ColumnOrder {
-    /// Returns sort order for a physical/logical type.
+    /// Returns the sort order for a physical/logical type.
+    ///
+    /// If `use_total_order` is `true` then IEEE 754 total order will be used for floating point
+    /// types.
     pub fn get_sort_order(
+        logical_type: Option<LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+        use_total_order: bool,
+    ) -> SortOrder {
+        // check for floating point types, then fall back to type defined order
+        match logical_type {
+            Some(LogicalType::Float16) if use_total_order => SortOrder::TOTAL_ORDER,
+            _ => match physical_type {
+                Type::FLOAT | Type::DOUBLE if use_total_order => SortOrder::TOTAL_ORDER,
+                _ => ColumnOrder::get_type_defined_sort_order(
+                    logical_type,
+                    converted_type,
+                    physical_type,
+                ),
+            },
+        }
+    }
+
+    /// Returns the type defined sort order for a physical/logical type.
+    pub fn get_type_defined_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
@@ -647,6 +675,7 @@ impl ColumnOrder {
     pub fn sort_order(&self) -> SortOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
+            ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
         }
     }
@@ -2134,7 +2163,11 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
+                    ColumnOrder::get_type_defined_sort_order(
+                        Some(tpe),
+                        ConvertedType::NONE,
+                        Type::BYTE_ARRAY
+                    ),
                     expected_order
                 );
             }
@@ -2229,7 +2262,7 @@ mod tests {
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(None, tpe, Type::BYTE_ARRAY),
+                    ColumnOrder::get_type_defined_sort_order(None, tpe, Type::BYTE_ARRAY),
                     expected_order
                 );
             }

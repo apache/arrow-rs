@@ -954,12 +954,15 @@ impl ParquetMetaDataReader {
                 for (i, column) in schema_descr.columns().iter().enumerate() {
                     match orders[i] {
                         TColumnOrder::TYPEORDER(_) => {
-                            let sort_order = ColumnOrder::get_sort_order(
+                            let sort_order = ColumnOrder::get_type_defined_sort_order(
                                 column.logical_type(),
                                 column.converted_type(),
                                 column.physical_type(),
                             );
                             res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                        }
+                        TColumnOrder::IEEE754TOTALORDER(_) => {
+                            res.push(ColumnOrder::IEEE_754_TOTAL_ORDER)
                         }
                     }
                 }
