@@ -413,6 +413,7 @@ pub enum DataType {
     /// respectively.
     RunEndEncoded(FieldRef, FieldRef),
     /// An ExtensionType
+    #[cfg_attr(feature = "serde", serde(skip))]
     Extension(Arc<dyn DynExtensionType + Send + Sync>),
 }
 
