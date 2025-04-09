@@ -1334,7 +1334,110 @@ mod tests {
     }
 
     #[test]
+    fn test_file_reader_empty_compressed_datapage_v2() {
+        // this file has a compressed datapage that un-compresses to 0 bytes
+        let test_file = get_test_file("page_v2_empty_compressed.parquet");
+        let reader_result = SerializedFileReader::new(test_file);
+        assert!(reader_result.is_ok());
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        // Test contents in file metadata
+        let file_metadata = metadata.file_metadata();
+        assert!(file_metadata.created_by().is_some());
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 14.0.2"
+        );
+        assert!(file_metadata.key_value_metadata().is_some());
+        assert_eq!(
+            file_metadata.key_value_metadata().to_owned().unwrap().len(),
+            1
+        );
+
+        assert_eq!(file_metadata.num_rows(), 10);
+        assert_eq!(file_metadata.version(), 2);
+        let expected_order = ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED);
+        assert_eq!(
+            file_metadata.column_orders(),
+            Some(vec![expected_order].as_ref())
+        );
+
+        let row_group_metadata = metadata.row_group(0);
+
+        // Check each column order
+        for i in 0..row_group_metadata.num_columns() {
+            assert_eq!(file_metadata.column_order(i), expected_order);
+        }
+
+        // Test row group reader
+        let row_group_reader_result = reader.get_row_group(0);
+        assert!(row_group_reader_result.is_ok());
+        let row_group_reader: Box<dyn RowGroupReader> = row_group_reader_result.unwrap();
+        assert_eq!(
+            row_group_reader.num_columns(),
+            row_group_metadata.num_columns()
+        );
+        assert_eq!(
+            row_group_reader.metadata().total_byte_size(),
+            row_group_metadata.total_byte_size()
+        );
+
+        // Test page readers
+        let page_reader_0_result = row_group_reader.get_column_page_reader(0);
+        assert!(page_reader_0_result.is_ok());
+        let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
+        let mut page_count = 0;
+        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+            let is_expected_page = match page {
+                Page::DictionaryPage {
+                    buf,
+                    num_values,
+                    encoding,
+                    is_sorted,
+                } => {
+                    assert_eq!(buf.len(), 0);
+                    assert_eq!(num_values, 0);
+                    assert_eq!(encoding, Encoding::PLAIN);
+                    assert!(!is_sorted);
+                    true
+                }
+                Page::DataPageV2 {
+                    buf,
+                    num_values,
+                    encoding,
+                    num_nulls,
+                    num_rows,
+                    def_levels_byte_len,
+                    rep_levels_byte_len,
+                    is_compressed,
+                    statistics,
+                } => {
+                    assert_eq!(buf.len(), 3);
+                    assert_eq!(num_values, 10);
+                    assert_eq!(encoding, Encoding::RLE_DICTIONARY);
+                    assert_eq!(num_nulls, 10);
+                    assert_eq!(num_rows, 10);
+                    assert_eq!(def_levels_byte_len, 2);
+                    assert_eq!(rep_levels_byte_len, 0);
+                    assert!(is_compressed);
+                    assert!(statistics.is_some());
+                    true
+                }
+                _ => false,
+            };
+            assert!(is_expected_page);
+            page_count += 1;
+        }
+        assert_eq!(page_count, 2);
+    }
+
+    #[test]
     fn test_file_reader_empty_datapage_v2() {
+        // this file has 0 bytes compressed datapage that un-compresses to 0 bytes
         let test_file = get_test_file("datapage_v2_empty_datapage.snappy.parquet");
         let reader_result = SerializedFileReader::new(test_file);
         assert!(reader_result.is_ok());
@@ -1392,18 +1495,6 @@ mod tests {
         let mut page_count = 0;
         while let Ok(Some(page)) = page_reader_0.get_next_page() {
             let is_expected_page = match page {
-                Page::DictionaryPage {
-                    buf,
-                    num_values,
-                    encoding,
-                    is_sorted,
-                } => {
-                    assert_eq!(buf.len(), 7);
-                    assert_eq!(num_values, 1);
-                    assert_eq!(encoding, Encoding::PLAIN);
-                    assert!(!is_sorted);
-                    true
-                }
                 Page::DataPageV2 {
                     buf,
                     num_values,
