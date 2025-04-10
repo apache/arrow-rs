@@ -359,13 +359,11 @@ impl RecordBatch {
         })
     }
 
-    /// Forcibly overrides the schema of this [`RecordBatch`]
-    /// without additional schema checks however bringing all the schema compatibility responsibilities
-    /// to the caller site.
-    ///
-    /// If provided schema is not compatible with this [`RecordBatch`] columns the runtime behavior
-    /// is undefined
-    pub fn with_schema_force(self, schema: SchemaRef) -> Result<Self, ArrowError> {
+    /// Overrides the schema of this [`RecordBatch`]
+    /// without additional schema checks. Note, however, that this pushes all the schema compatibility responsibilities
+    /// to the caller site. In particular, the caller guarantees that `schema` is a superset
+    /// of the current schema as determined by [`Schema::contains`].
+    pub fn with_schema_unchecked(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         Ok(Self {
             schema,
             columns: self.columns,
@@ -1655,15 +1653,15 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_with_force_schema() {
-        fn force_schema_and_get_err_from_batch(
+    fn test_batch_with_unchecked_schema() {
+        fn apply_schema_unchecked(
             record_batch: &RecordBatch,
             schema_ref: SchemaRef,
             idx: usize,
         ) -> Option<ArrowError> {
             record_batch
                 .clone()
-                .with_schema_force(schema_ref)
+                .with_schema_unchecked(schema_ref)
                 .unwrap()
                 .project(&[idx])
                 .err()
@@ -1677,7 +1675,7 @@ mod tests {
         // Test empty schema for non-empty schema batch
         let invalid_schema_empty = Schema::empty();
         assert_eq!(
-            force_schema_and_get_err_from_batch(&record_batch, invalid_schema_empty.into(), 0)
+            apply_schema_unchecked(&record_batch, invalid_schema_empty.into(), 0)
                 .unwrap()
                 .to_string(),
             "Schema error: project index 0 out of bounds, max field 0"
@@ -1686,16 +1684,16 @@ mod tests {
         // Wrong number of columns
         let invalid_schema_more_cols = Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
-            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
         ]);
-        assert!(force_schema_and_get_err_from_batch(
-            &record_batch,
-            invalid_schema_more_cols.clone().into(),
-            0
-        )
-        .is_none());
+
+        assert!(
+            apply_schema_unchecked(&record_batch, invalid_schema_more_cols.clone().into(), 0)
+                .is_none()
+        );
+
         assert_eq!(
-            force_schema_and_get_err_from_batch(&record_batch, invalid_schema_more_cols.into(), 1)
+            apply_schema_unchecked(&record_batch, invalid_schema_more_cols.into(), 1)
                 .unwrap()
                 .to_string(),
             "Schema error: project index 1 out of bounds, max field 1"
@@ -1704,6 +1702,29 @@ mod tests {
         // Wrong datatype
         let invalid_schema_wrong_datatype =
             Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        assert_eq!(force_schema_and_get_err_from_batch(&record_batch, invalid_schema_wrong_datatype.into(), 0).unwrap().to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Utf8 at column index 0");
+        assert_eq!(apply_schema_unchecked(&record_batch, invalid_schema_wrong_datatype.into(), 0).unwrap().to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Utf8 at column index 0");
+
+        // Wrong column name. A instead C
+        let invalid_schema_wrong_col_name =
+            Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+
+        assert!(record_batch
+            .clone()
+            .with_schema_unchecked(invalid_schema_wrong_col_name.into())
+            .unwrap()
+            .column_by_name("c")
+            .is_none());
+
+        // Valid schema
+        let valid_schema = Schema::new(vec![Field::new("c", DataType::Utf8, false)]);
+
+        assert_eq!(
+            record_batch
+                .clone()
+                .with_schema_unchecked(valid_schema.into())
+                .unwrap()
+                .column_by_name("c"),
+            record_batch.column_by_name("c")
+        );
     }
 }
