@@ -21,7 +21,7 @@
 //!  - int64: sequential integers
 //!  - float64: floating-point values (derived from the integers)
 //!  - utf8View: string values where about half are non-empty,
-//!          and a few rows (every 10Kth row) are the constant "const"
+//!    and a few rows (every 10Kth row) are the constant "const"
 //!  - ts: timestamp values (using, e.g., a millisecond epoch)
 //!
 //! It then applies several filter functions and projections, benchmarking the read-back speed.
@@ -135,7 +135,7 @@ fn filter_utf8_view_nonempty(batch: &RecordBatch) -> BooleanArray {
         .unwrap();
     let mut builder = BooleanBuilder::with_capacity(array.len());
     for i in 0..array.len() {
-        let keep = array.value(i) != "";
+        let keep = !array.value(i).is_empty();
         builder.append_value(keep);
     }
     builder.finish()
@@ -227,7 +227,8 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
     let parquet_file = write_parquet_file();
 
     // Define filter functions associated with each FilterType.
-    let filter_funcs: Vec<(FilterType, fn(&RecordBatch) -> BooleanArray)> = vec![
+    type FilterFn = fn(&RecordBatch) -> BooleanArray;
+    let filter_funcs: Vec<(FilterType, FilterFn)> = vec![
         (FilterType::Utf8ViewNonEmpty, filter_utf8_view_nonempty),
         (FilterType::Utf8ViewConst, filter_utf8_view_const),
         (FilterType::Int64Even, filter_int64_even),
