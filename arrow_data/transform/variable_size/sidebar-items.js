@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_extend","extend_nulls","extend_offset_values"]};
