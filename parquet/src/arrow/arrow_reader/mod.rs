@@ -397,6 +397,22 @@ impl ArrowReaderOptions {
             ..self
         }
     }
+
+    /// Retrieve the currently set page index behavior.
+    ///
+    /// This can be set via [`with_page_index`][Self::with_page_index].
+    pub fn page_index(&self) -> bool {
+        self.page_index
+    }
+
+    /// Retrieve the currently set file decryption properties.
+    ///
+    /// This can be set via
+    /// [`file_decryption_properties`][Self::with_file_decryption_properties].
+    #[cfg(feature = "encryption")]
+    pub fn file_decryption_properties(&self) -> Option<&FileDecryptionProperties> {
+        self.file_decryption_properties.as_ref()
+    }
 }
 
 /// The metadata necessary to construct a [`ArrowReaderBuilder`]
