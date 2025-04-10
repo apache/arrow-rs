@@ -264,7 +264,7 @@ where
         let array = match target_type {
             // Using `arrow_cast::cast` has been found to be very slow for converting
             // INT32 physical type to lower bitwidth logical types. Since rust casts
-            // are infallible, instead use `unary` which is much faster.
+            // are infallible, instead use `unary` which is much faster (by up to 40%).
             // One consequence of this approach is that some malformed integer columns
             // will return (an arguably correct) result rather than null.
             // See https://github.com/apache/arrow-rs/issues/7040 for a discussion of this
