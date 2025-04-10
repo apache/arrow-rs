@@ -48,8 +48,8 @@ pub mod encoder;
 pub mod decoder;
 
 pub use error::Error;
-pub use reader::{from_json, from_json_array};
-pub use writer::{to_json, to_json_array};
+pub use reader::{from_json, from_json_array, from_json_value, from_json_value_array};
+pub use writer::{to_json, to_json_array, to_json_value, to_json_value_array};
 pub use encoder::{encode_value, encode_json, VariantBasicType, VariantPrimitiveType};
 pub use decoder::{decode_value, decode_json};
 

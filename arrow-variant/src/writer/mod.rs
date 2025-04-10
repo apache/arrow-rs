@@ -24,6 +24,59 @@ use serde_json::Value;
 use crate::error::Error;
 use crate::decoder::decode_json;
 
+/// Converts a Variant to a JSON Value
+///
+/// # Examples
+///
+/// ```
+/// use arrow_variant::reader::from_json;
+/// use arrow_variant::writer::to_json_value;
+/// use serde_json::json;
+///
+/// let json_str = r#"{"name":"John","age":30}"#;
+/// let variant = from_json(json_str).unwrap();
+/// let value = to_json_value(&variant).unwrap();
+/// assert_eq!(value, json!({"name":"John","age":30}));
+/// ```
+pub fn to_json_value(variant: &Variant) -> Result<Value, Error> {
+    // Decode the variant binary data to a JSON value
+    decode_json(variant.value(), variant.metadata())
+}
+
+/// Converts a VariantArray to an array of JSON Values
+///
+/// # Example
+///
+/// ```
+/// use arrow_variant::{from_json_array, to_json_value_array};
+/// use serde_json::json;
+///
+/// let json_strings = vec![
+///     r#"{"name": "John", "age": 30}"#,
+///     r#"{"name": "Jane", "age": 28}"#,
+/// ];
+///
+/// let variant_array = from_json_array(&json_strings).unwrap();
+/// let values = to_json_value_array(&variant_array).unwrap();
+/// assert_eq!(values, vec![
+///     json!({"name": "John", "age": 30}),
+///     json!({"name": "Jane", "age": 28})
+/// ]);
+/// ```
+pub fn to_json_value_array(variant_array: &VariantArray) -> Result<Vec<Value>, Error> {
+    let mut result = Vec::with_capacity(variant_array.len());
+    for i in 0..variant_array.len() {
+        if variant_array.is_null(i) {
+            result.push(Value::Null);
+            continue;
+        }
+        let variant = variant_array.value(i)
+            .map_err(|e| Error::VariantRead(e.to_string()))?;
+        result.push(to_json_value(&variant)?);
+    }
+    Ok(result)
+}
+
 /// Converts a Variant to a JSON string
 ///
 /// # Examples
@@ -39,10 +92,8 @@ use crate::decoder::decode_json;
 ///            serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&result).unwrap()).unwrap());
 /// ```
 pub fn to_json(variant: &Variant) -> Result<String, Error> {
-    // Decode the variant binary data to a JSON value
-    let value = decode_json(variant.value(), variant.metadata())?;
-    
-    // Convert the JSON value to a string
+    // Use the value-based function and convert to string
+    let value = to_json_value(variant)?;
     Ok(value.to_string())
 }
 
@@ -65,17 +116,10 @@ pub fn to_json(variant: &Variant) -> Result<String, Error> {
 /// // but they are semantically equivalent
 /// ```
 pub fn to_json_array(variant_array: &VariantArray) -> Result<Vec<String>, Error> {
-    let mut result = Vec::with_capacity(variant_array.len());
-    for i in 0..variant_array.len() {
-        if variant_array.is_null(i) {
-            result.push("null".to_string());
-            continue;
-        }
-        let variant = variant_array.value(i)
-            .map_err(|e| Error::VariantRead(e.to_string()))?;
-        result.push(to_json(&variant)?);
-    }
-    Ok(result)
+    // Use the value-based function and convert each value to a string
+    to_json_value_array(variant_array).map(|values| 
+        values.into_iter().map(|v| v.to_string()).collect()
+    )
 }
 
 #[cfg(test)]

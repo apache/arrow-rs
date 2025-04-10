@@ -4537,4 +4537,152 @@ mod tests {
 
         Ok(())
     }
+
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn test_read_unshredded_variant() -> Result<(), Box<dyn std::error::Error>> {
+        use arrow_array::{Array, StructArray, BinaryArray};
+        use arrow_schema::extension::Variant;
+        use bytes::Bytes;
+        use std::fs::File;
+        use std::io::Read;
+        use std::sync::Arc;
+        use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+        use crate::util::test_common::file_util::get_test_file;
+        use arrow_variant::writer::to_json;
+        use arrow_variant::reader::from_json;
+        // Get the primitive.parquet test file
+        // The file contains id integer and var variant with variant being integer 34 and unshredded
+        let test_file = get_test_file("primitive.parquet");
+        
+        let mut reader = ParquetRecordBatchReader::try_new(test_file, 1024)?;
+        let batch = reader.next().expect("Expected to read a batch")?.clone();
+        
+        println!("Batch schema: {:#?}", batch.schema());
+        println!("Batch rows: {}", batch.num_rows());
+        
+        let variant_col = batch.column_by_name("var")
+            .expect("Column 'var' not found in Parquet file");
+        
+        println!("Variant column type: {:#?}", variant_col.data_type());
+        
+        let struct_array = variant_col.as_any().downcast_ref::<StructArray>()
+            .expect("Expected variant column to be a struct array");
+        
+        let metadata_field = struct_array.column_by_name("metadata")
+            .expect("metadata field not found in variant column");
+        let value_field = struct_array.column_by_name("value")
+            .expect("value field not found in variant column");
+        
+        let metadata_binary = metadata_field.as_any().downcast_ref::<BinaryArray>()
+            .expect("Expected metadata to be a binary array");
+        let value_binary = value_field.as_any().downcast_ref::<BinaryArray>()
+            .expect("Expected value to be a binary array");
+    
+        let metadata = metadata_binary.value(0);
+        let value = value_binary.value(0);
+        
+        let variant = Variant::new(metadata.to_vec(), value.to_vec());
+        println!("Metadata bytes: {:?}", variant.metadata());
+        println!("Value bytes: {:?}", variant.value());
+        let json_str = to_json(&variant)?;
+        println!("JSON: {}", json_str);
+        
+        assert_eq!(json_str, "34", "Expected JSON value to be 34, got {}", json_str);
+
+        let json_value = "34";
+        let variant_from_json = from_json(&json_value)?;
+
+        println!("Metadata bytes: {:?}", variant_from_json.metadata());
+        println!("Value bytes: {:?}", variant_from_json.value());
+
+        assert_eq!(variant.metadata(), variant_from_json.metadata(), "Metadata bytes do not match");
+        assert_eq!(variant.value(), variant_from_json.value(), "Value bytes do not match");
+        
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "arrow_canonical_extension_types")]
+    fn test_json_variant_parquet_roundtrip() -> Result<()> {
+        use arrow_array::{RecordBatch, Array};
+        use arrow_array::VariantArray;
+        use arrow_schema::{DataType, Field, Schema};
+        use arrow_schema::extension::Variant;
+        use bytes::Bytes;
+        use std::sync::Arc;
+        use crate::arrow::arrow_writer::ArrowWriter;
+        use arrow_variant::reader::from_json_value_array;
+        use arrow_variant::writer::to_json_value_array;
+        use serde_json::{json, Value};
+
+        let json_values = vec![
+            json!(null),
+            json!(42),
+            json!(-123.456),
+            json!(true),
+            json!("hello world"),
+            json!({"name": "Alice", "age": 30, "active": true}),
+            json!([1, 2, 3, {"key": "value"}]),
+            json!({"nested": {"a": 1, "b": [true, false]}, "list": [1, 2, 3]})
+        ];
+
+        let variant_array = from_json_value_array(&json_values)
+            .expect("Failed to create VariantArray from JSON values");
+        
+        let schema = Schema::new(vec![
+            variant_array.to_field("json_data")
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(variant_array)]
+        )?;
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))?;
+        let mut reader = builder.build()?;
+        let result_batch = reader.next().unwrap()?;
+
+        let schema = result_batch.schema();
+        let field = schema.field(0).clone();
+        assert_eq!(field.data_type(), &DataType::Binary);
+        
+        assert!(field.metadata().contains_key("ARROW:extension:name"));
+        assert_eq!(field.metadata().get("ARROW:extension:name").unwrap(), "arrow.variant");
+        
+        let extension_metadata = Vec::new();
+        let variant_type = Variant::new(extension_metadata.clone(), vec![]);
+        let extension_type = field.extension_type::<Variant>();
+        assert_eq!(extension_type.metadata(), &extension_metadata);
+        
+
+        let variant_array = VariantArray::from_data(
+            result_batch.column(0).to_data(),
+            variant_type
+        ).expect("Failed to create VariantArray from output data");
+
+        let result_values = to_json_value_array(&variant_array)
+            .expect("Failed to convert variant array to JSON values");
+
+        assert_eq!(
+            json_values.len(),
+            result_values.len(),
+            "Number of values should match after roundtrip"
+        );
+
+        for (i, (original, result)) in json_values.iter().zip(result_values.iter()).enumerate() {
+            assert_eq!(
+                original, result,
+                "JSON at index {} should match after roundtrip", i
+            );
+        }
+
+        Ok(())
+    }
 }
