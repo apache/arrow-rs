@@ -408,3 +408,49 @@ impl DynExtensionTypeFactory for CanonicalExtensionTypeFactory {
         }
     }
 }
+
+/// Extension for tests
+#[derive(Debug)]
+pub struct TextExtension {
+    /// Arbitrary storage type
+    pub storage_type: DataType,
+}
+
+impl DynExtensionType for TextExtension {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn storage_type(&self) -> &DataType {
+        &self.storage_type
+    }
+
+    fn extension_name(&self) -> &'static str {
+        "arrow.rs.test"
+    }
+
+    fn serialized_metadata(&self) -> String {
+        "".to_string()
+    }
+
+    fn extension_equals(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Self>().is_some()
+    }
+
+    fn extension_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write("arrow.rs.test".as_bytes());
+    }
+
+    fn exension_cmp(&self, other: &dyn Any) -> Ordering {
+        if self.extension_equals(other) {
+            Ordering::Equal
+        } else {
+            // Fishy...
+            Ordering::Less
+        }
+    }
+}

@@ -393,6 +393,11 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             DataType::Union(_, UnionMode::Sparse) => {
                 Ok(Arc::new(filter_sparse_union(values.as_union(), predicate)?))
             }
+            DataType::Extension(_) => {
+                let extension_array: ExtensionArray = values.to_data().into();
+                let storage_result = filter_array(extension_array.storage(), predicate)?;
+                Ok(Arc::new(extension_array.with_storage(storage_result)))
+            }
             _ => {
                 let data = values.to_data();
                 // fallback to using MutableArrayData
@@ -864,6 +869,7 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
+    use arrow_schema::extension::TextExtension;
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
@@ -2044,5 +2050,28 @@ mod tests {
         let result = filter(&array, &predicate).unwrap();
 
         assert_eq!(result.to_data(), expected.to_data());
+    }
+
+    #[test]
+    fn test_filter_extension() {
+        let predicate = BooleanArray::from(vec![true, false, true, false]);
+        let storage = Arc::new(StringArray::from(vec![
+            "one banana",
+            "two banana",
+            "three banana",
+            "four",
+        ]));
+        let array = ExtensionArray::new(
+            Arc::new(TextExtension {
+                storage_type: DataType::Utf8,
+            }),
+            storage.clone(),
+        );
+        let result_ref = filter(&array, &predicate).unwrap();
+        assert_eq!(result_ref.data_type(), array.data_type());
+        assert_eq!(result_ref.len(), 2);
+
+        let result_array: ExtensionArray = array.to_data().into();
+        assert_eq!(result_array.storage().to_data(), storage.to_data());
     }
 }
