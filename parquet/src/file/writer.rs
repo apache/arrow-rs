@@ -1169,6 +1169,34 @@ mod tests {
         );
 
         let props = Default::default();
+        let writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), schema.clone(), props).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+
+        // only leaves
+        let expected = vec![
+            // INT32
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // INTERVAL
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+            // Float16
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            // String
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+        ];
+        let actual = reader.metadata().file_metadata().column_orders();
+
+        assert!(actual.is_some());
+        let actual = actual.unwrap();
+        assert_eq!(*actual, expected);
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_ieee754_total_order(true)
+                .build(),
+        );
         let writer = SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -1181,7 +1209,7 @@ mod tests {
             // INTERVAL
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
             // Float16
-            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
             // String
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
         ];

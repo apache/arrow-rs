@@ -3164,7 +3164,14 @@ mod tests {
 
     #[test]
     fn test_double_statistics_nan_min_max_total_order() {
-        let stats = statistics_roundtrip_total_order::<DoubleType>(&[1.0, -f64::NAN, f64::NAN, 2.0]);
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[
+            -1.0,
+            -f64::INFINITY,
+            -f64::NAN,
+            f64::NAN,
+            2.0,
+            f64::INFINITY,
+        ]);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Double(stats) = stats {
             assert_eq!(
