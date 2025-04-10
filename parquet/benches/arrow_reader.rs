@@ -84,6 +84,10 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL INT32 optional_uint32_leaf (INTEGER(32, false));
             REQUIRED INT32 mandatory_int8_leaf (INTEGER(8, true));
             OPTIONAL INT32 optional_int8_leaf (INTEGER(8, true));
+            REQUIRED INT32 mandatory_int16_leaf (INTEGER(16, true));
+            OPTIONAL INT32 optional_int16_leaf (INTEGER(16, true));
+            REQUIRED INT64 mandatory_uint64_leaf (INTEGER(64, false));
+            OPTIONAL INT64 optional_uint64_leaf (INTEGER(64, false));
         }
         ";
     parse_message_type(message_type)
@@ -1296,6 +1300,10 @@ fn add_benches(c: &mut Criterion) {
     let optional_uint32_column_desc = schema.column(32);
     let mandatory_int8_column_desc = schema.column(33);
     let optional_int8_column_desc = schema.column(34);
+    let mandatory_int16_column_desc = schema.column(35);
+    let optional_int16_column_desc = schema.column(36);
+    let mandatory_uint64_column_desc = schema.column(37);
+    let optional_uint64_column_desc = schema.column(38);
 
     // primitive / int32 benchmarks
     // =============================
@@ -1343,6 +1351,17 @@ fn add_benches(c: &mut Criterion) {
     );
     group.finish();
 
+    // primitive int32 / logical int16 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/Int16Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_int16_column_desc,
+        &optional_int16_column_desc,
+        0,
+        32768,
+    );
+    group.finish();
+
     // primitive int32 / logical uint32 benchmarks
     let mut group = c.benchmark_group("arrow_array_reader/UInt32Array");
     bench_primitive::<Int32Type>(
@@ -1362,6 +1381,17 @@ fn add_benches(c: &mut Criterion) {
         &mut group,
         &mandatory_int64_column_desc,
         &optional_int64_column_desc,
+        0,
+        1000,
+    );
+    group.finish();
+
+    // primitive int64 / logical uint64 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/UInt64Array");
+    bench_primitive::<Int64Type>(
+        &mut group,
+        &mandatory_uint64_column_desc,
+        &optional_uint64_column_desc,
         0,
         1000,
     );
