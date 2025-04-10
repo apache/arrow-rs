@@ -329,7 +329,10 @@ pub trait DynExtensionTypeFactory {
     ) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError>;
 
     /// Create an extension type from a field
-    fn make_from_field(&self, field: &Field) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError> {
+    fn make_from_field(
+        &self,
+        field: &Field,
+    ) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError> {
         if let Some(extension_name) = field.metadata().get("ARROW:extension:name") {
             self.make_extension_type(
                 extension_name,

@@ -201,7 +201,10 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
 }
 
 /// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema] with extension support
-pub fn fb_to_schema_with_extension_factory(fb: crate::Schema, extension_factory: Option<&dyn DynExtensionTypeFactory>) -> Result<Schema, ArrowError> {
+pub fn fb_to_schema_with_extension_factory(
+    fb: crate::Schema,
+    extension_factory: Option<&dyn DynExtensionTypeFactory>,
+) -> Result<Schema, ArrowError> {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
     let len = c_fields.len();
