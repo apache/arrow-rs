@@ -359,6 +359,19 @@ impl RecordBatch {
         })
     }
 
+    /// Forcibly overrides the schema of this [`RecordBatch`]
+    /// No schema checks executed so the method is faster than safe `with_schema`
+    ///
+    /// If provided schema is not compatible with this [`RecordBatch`] columns the runtime behavior
+    /// is undefined
+    pub fn with_schema_force(self, schema: SchemaRef) -> Result<Self, ArrowError> {
+        Ok(Self {
+            schema,
+            columns: self.columns,
+            row_count: self.row_count,
+        })
+    }
+
     /// Returns the [`Schema`] of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
@@ -744,12 +757,14 @@ impl RecordBatchOptions {
             row_count: None,
         }
     }
-    /// Sets the row_count of RecordBatchOptions and returns self
+
+    /// Sets the `row_count` of `RecordBatchOptions` and returns this [`RecordBatch`]
     pub fn with_row_count(mut self, row_count: Option<usize>) -> Self {
         self.row_count = row_count;
         self
     }
-    /// Sets the match_field_names of RecordBatchOptions and returns self
+
+    /// Sets the `match_field_names` of `RecordBatchOptions` and returns this [`RecordBatch`]
     pub fn with_match_field_names(mut self, match_field_names: bool) -> Self {
         self.match_field_names = match_field_names;
         self
@@ -1636,5 +1651,58 @@ mod tests {
             batch.schema().metadata().get("foo").unwrap().as_str(),
             "bar"
         );
+    }
+
+    #[test]
+    fn test_batch_with_force_schema() {
+        fn force_schema_and_get_err_from_batch(
+            record_batch: &RecordBatch,
+            schema_ref: SchemaRef,
+            idx: usize,
+        ) -> Option<ArrowError> {
+            record_batch
+                .clone()
+                .with_schema_force(schema_ref)
+                .unwrap()
+                .project(&[idx])
+                .err()
+        }
+
+        let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
+
+        let record_batch =
+            RecordBatch::try_from_iter(vec![("c", c.clone())]).expect("valid conversion");
+
+        // Test empty schema for non-empty schema batch
+        let invalid_schema_empty = Schema::empty();
+        assert_eq!(
+            force_schema_and_get_err_from_batch(&record_batch, invalid_schema_empty.into(), 0)
+                .unwrap()
+                .to_string(),
+            "Schema error: project index 0 out of bounds, max field 0"
+        );
+
+        // Wrong number of columns
+        let invalid_schema_more_cols = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("a", DataType::Int32, false),
+        ]);
+        assert!(force_schema_and_get_err_from_batch(
+            &record_batch,
+            invalid_schema_more_cols.clone().into(),
+            0
+        )
+        .is_none());
+        assert_eq!(
+            force_schema_and_get_err_from_batch(&record_batch, invalid_schema_more_cols.into(), 1)
+                .unwrap()
+                .to_string(),
+            "Schema error: project index 1 out of bounds, max field 1"
+        );
+
+        // Wrong datatype
+        let invalid_schema_wrong_datatype =
+            Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        assert_eq!(force_schema_and_get_err_from_batch(&record_batch, invalid_schema_wrong_datatype.into(), 0).unwrap().to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Utf8 at column index 0");
     }
 }
