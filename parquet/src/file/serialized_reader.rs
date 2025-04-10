@@ -448,11 +448,14 @@ pub(crate) fn decode_page(
                 > page_header.uncompressed_page_size
         {
             return Err(general_err!(
-                    "DataPage v2 header contains implausible values for definition_levels_byte_length ({}) and repetition_levels_byte_length ({}) given DataPage header provides uncompressed_page_size ({})",
-                    header_v2.definition_levels_byte_length,
-                    header_v2.repetition_levels_byte_length,
-                    page_header.uncompressed_page_size
-                ));
+                "DataPage v2 header contains implausible values \
+                    for definition_levels_byte_length ({}) \
+                    and repetition_levels_byte_length ({}) \
+                    given DataPage header provides uncompressed_page_size ({})",
+                header_v2.definition_levels_byte_length,
+                header_v2.repetition_levels_byte_length,
+                page_header.uncompressed_page_size
+            ));
         }
         offset = usize::try_from(
             header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length,
