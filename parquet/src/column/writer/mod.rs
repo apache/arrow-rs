@@ -1395,13 +1395,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(&descr.descr, val, min, |cur| {
+    update_stat::<T, _>(descr, val, min, |cur| {
         compare_greater(descr, cur, val)
     })
 }
 
 fn update_max<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(&descr.descr, val, max, |cur| {
+    update_stat::<T, _>(descr, val, max, |cur| {
         compare_greater(descr, val, cur)
     })
 }
@@ -1425,14 +1425,14 @@ fn is_nan<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T) -> bool {
 /// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
 /// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
 fn update_stat<T: ParquetValueType, F>(
-    descr: &ColumnDescriptor,
+    descr: &OrderedColumnDescriptor,
     val: &T,
     cur: &mut Option<T>,
     should_update: F,
 ) where
     F: Fn(&T) -> bool,
 {
-    if is_nan(descr, val) {
+    if descr.sort_order != SortOrder::TOTAL_ORDER && is_nan(&descr.descr, val) {
         return;
     }
 
@@ -2676,7 +2676,7 @@ mod tests {
         .map(|s| ByteArray::from(s).into())
         .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(
             stats.min_opt().unwrap(),
@@ -2695,7 +2695,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2705,13 +2705,26 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_check_float16_nan_middle_total_order() {
+        let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NAN));
+    }
+
+    #[test]
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2727,7 +2740,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
         assert_eq!(
@@ -2743,7 +2756,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.min_bytes_opt().is_none());
         assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
@@ -2756,7 +2769,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -2769,7 +2782,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -2782,7 +2795,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NEG_ZERO));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::PI));
@@ -2795,7 +2808,7 @@ mod tests {
             .map(|s| ByteArray::from(s).into())
             .collect::<Vec<_>>();
 
-        let stats = float16_statistics_roundtrip(&input);
+        let stats = float16_statistics_roundtrip(&input, false);
         assert!(stats.is_min_max_backwards_compatible());
         assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::PI));
         assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
@@ -4180,9 +4193,16 @@ mod tests {
 
     fn float16_statistics_roundtrip(
         values: &[FixedLenByteArray],
+        total_order: bool,
     ) -> ValueStatistics<FixedLenByteArray> {
         let page_writer = get_test_page_writer();
-        let mut writer = get_test_float16_column_writer(page_writer, Default::default());
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_ieee754_total_order(total_order)
+                .build(),
+        );
+        let mut writer = get_test_float16_column_writer(page_writer, props);
         writer.write_batch(values, None, None).unwrap();
 
         let metadata = writer.close().unwrap().metadata;
