@@ -26,6 +26,7 @@
 
 mod stream;
 
+use arrow_schema::extension::DynExtensionTypeFactory;
 pub use stream::*;
 
 use flatbuffers::{VectorIter, VerifierOptions};
@@ -229,6 +230,12 @@ impl RecordBatchDecoder<'_> {
                     .offset(0);
                 self.create_array_from_builder(builder)
             }
+            Extension(extension) => self.create_array(
+                &field
+                    .clone()
+                    .with_data_type(extension.storage_type().clone()),
+                variadic_counts,
+            ),
             _ => {
                 let field_node = self.next_node(field)?;
                 let buffers = [self.next_buffer()?, self.next_buffer()?];
@@ -1173,7 +1180,7 @@ impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader.
     ///
     /// There is no internal buffering. If buffered reads are needed you likely want to use
-    /// [`FileReader::try_new_buffered`] instead.    
+    /// [`FileReader::try_new_buffered`] instead.
     ///
     /// # Errors
     ///
@@ -1364,8 +1371,17 @@ impl<R: Read> StreamReader<R> {
     /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
     /// as the first message in the stream.
     pub fn try_new(
+        reader: R,
+        projection: Option<Vec<usize>>,
+    ) -> Result<StreamReader<R>, ArrowError> {
+        Self::try_new_with_extension_factory(reader, projection, None)
+    }
+
+    /// Create a stream reader with an extension factory
+    pub fn try_new_with_extension_factory(
         mut reader: R,
         projection: Option<Vec<usize>>,
+        extension_factory: Option<&dyn DynExtensionTypeFactory>,
     ) -> Result<StreamReader<R>, ArrowError> {
         // determine metadata length
         let mut meta_size: [u8; 4] = [0; 4];
@@ -1389,7 +1405,9 @@ impl<R: Read> StreamReader<R> {
         let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
             ArrowError::ParseError("Unable to read IPC message as schema".to_string())
         })?;
-        let schema = crate::convert::fb_to_schema(ipc_schema);
+
+        let schema =
+            crate::convert::fb_to_schema_with_extension_factory(ipc_schema, extension_factory)?;
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();

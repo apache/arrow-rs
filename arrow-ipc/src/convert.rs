@@ -18,6 +18,7 @@
 //! Utilities for converting between IPC types and native Arrow types
 
 use arrow_buffer::Buffer;
+use arrow_schema::extension::DynExtensionTypeFactory;
 use arrow_schema::*;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
@@ -194,8 +195,13 @@ impl From<crate::Field<'_>> for Field {
     }
 }
 
-/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema].
+/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema]
 pub fn fb_to_schema(fb: crate::Schema) -> Schema {
+    fb_to_schema_with_extension_factory(fb, None).unwrap()
+}
+
+/// Deserialize an ipc [crate::Schema`] from flat buffers to an arrow [Schema] with extension support
+pub fn fb_to_schema_with_extension_factory(fb: crate::Schema, extension_factory: Option<&dyn DynExtensionTypeFactory>) -> Result<Schema, ArrowError> {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb.fields().unwrap();
     let len = c_fields.len();
@@ -207,7 +213,15 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
             }
             _ => (),
         };
-        fields.push(c_field.into());
+        let field: Field = c_field.into();
+        if let Some(factory) = extension_factory {
+            if let Some(extension) = factory.make_from_field(&field)? {
+                fields.push(field.clone().with_data_type(DataType::Extension(extension)));
+                continue;
+            }
+        }
+
+        fields.push(field);
     }
 
     let mut metadata: HashMap<String, String> = HashMap::default();
@@ -224,7 +238,8 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
             }
         }
     }
-    Schema::new_with_metadata(fields, metadata)
+
+    Ok(Schema::new_with_metadata(fields, metadata))
 }
 
 /// Try deserialize flat buffer format bytes into a schema
