@@ -261,13 +261,14 @@ where
         // These are:
         // - date64: cast int32 to date32, then date32 to date64.
         // - decimal: cast int32 to decimal, int64 to decimal
-        //
-        // Some Parquet writers do not properly write UINT_8 and UINT_16 types
-        // (they will emit a negative 32-bit integer in some cases). To handle
-        // these incorrect files, we need to do some explicit casting to unsigned,
-        // rather than relying on num::cast::cast as used by arrow-cast (it will not
-        // cast a negative INT32 to UINT8 or UINT16).
         let array = match target_type {
+            // Using `arrow_cast::cast` has been found to be very slow for converting
+            // INT32 physical type to lower bitwidth logical types. Since rust casts
+            // are infallible, instead use `unary` which is much faster.
+            // One consequence of this approach is that some malformed integer columns
+            // will return (an arguably correct) result rather than null.
+            // See https://github.com/apache/arrow-rs/issues/7040 for a discussion of this
+            // issue.
             ArrowType::UInt8 if *(array.data_type()) == ArrowType::Int32 => {
                 let array = array
                     .as_any()
