@@ -1395,15 +1395,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 }
 
 fn update_min<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, min: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, min, |cur| {
-        compare_greater(descr, cur, val)
-    })
+    update_stat::<T, _>(descr, val, min, |cur| compare_greater(descr, cur, val))
 }
 
 fn update_max<T: ParquetValueType>(descr: &OrderedColumnDescriptor, val: &T, max: &mut Option<T>) {
-    update_stat::<T, _>(descr, val, max, |cur| {
-        compare_greater(descr, val, cur)
-    })
+    update_stat::<T, _>(descr, val, max, |cur| compare_greater(descr, val, cur))
 }
 
 #[inline]
@@ -2705,19 +2701,6 @@ mod tests {
     }
 
     #[test]
-    fn test_column_writer_check_float16_nan_middle_total_order() {
-        let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
-            .into_iter()
-            .map(|s| ByteArray::from(s).into())
-            .collect::<Vec<_>>();
-
-        let stats = float16_statistics_roundtrip(&input, true);
-        assert!(!stats.is_min_max_backwards_compatible());
-        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
-        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NAN));
-    }
-
-    #[test]
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -2815,6 +2798,71 @@ mod tests {
     }
 
     #[test]
+    fn test_float16_nan_max_total_order() {
+        let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::ONE));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NAN));
+    }
+
+    #[test]
+    fn test_float16_nan_min_total_order() {
+        let input = [f16::ONE, -f16::NAN, f16::ZERO]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert!(!stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::NAN));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ONE));
+    }
+
+    #[test]
+    fn test_float16_statistics_nan_only_total_order() {
+        let input = [f16::NAN, f16::NAN]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(f16::NAN));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NAN));
+        assert!(!stats.is_min_max_backwards_compatible());
+    }
+
+    #[test]
+    fn test_float16_statistics_nan_min_max_total_order() {
+        let input = [f16::ONE, -f16::NAN, f16::NAN, f16::PI]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::NAN));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::NAN));
+        assert!(!stats.is_min_max_backwards_compatible());
+    }
+
+    #[test]
+    fn test_float16_statistics_zero_min_max_total_order() {
+        let input = [-f16::ZERO, f16::ZERO]
+            .into_iter()
+            .map(|s| ByteArray::from(s).into())
+            .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input, true);
+        assert_eq!(stats.min_opt().unwrap(), &ByteArray::from(-f16::ZERO));
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::ZERO));
+        assert!(!stats.is_min_max_backwards_compatible());
+    }
+
+    #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
         assert!(stats.is_min_max_backwards_compatible());
@@ -2896,6 +2944,84 @@ mod tests {
             assert_eq!(stats.min_opt().unwrap(), &-2.0);
             assert_eq!(stats.max_opt().unwrap(), &0.0);
             assert!(stats.max_opt().unwrap().is_sign_positive());
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_nan_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<FloatType>(&[1.0, f32::NAN, 2.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f32::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_nan_min_total_order() {
+        let stats = statistics_roundtrip_total_order::<FloatType>(&[1.0, -f32::NAN, 0.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&-f32::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(stats.max_opt().unwrap(), &1.0);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_nan_only_total_order() {
+        let stats = statistics_roundtrip_total_order::<FloatType>(&[f32::NAN, f32::NAN]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&f32::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f32::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_nan_min_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<FloatType>(&[1.0, -f32::NAN, f32::NAN, 2.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&-f32::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f32::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_float_statistics_zero_min_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<FloatType>(&[-0.0, 0.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
         } else {
             panic!("expecting Statistics::Float");
         }
@@ -2985,6 +3111,84 @@ mod tests {
             assert!(stats.max_opt().unwrap().is_sign_positive());
         } else {
             panic!("expecting Statistics::Double");
+        }
+    }
+
+    #[test]
+    fn test_double_nan_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[1.0, f64::NAN, 2.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f64::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_double_nan_min_total_order() {
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[1.0, -f64::NAN, 0.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&-f64::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(stats.max_opt().unwrap(), &1.0);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_nan_only_total_order() {
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[f64::NAN, f64::NAN]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&f64::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f64::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_nan_min_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[1.0, -f64::NAN, f64::NAN, 2.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(
+                stats.min_opt().unwrap().total_cmp(&-f64::NAN),
+                Ordering::Equal
+            );
+            assert_eq!(
+                stats.max_opt().unwrap().total_cmp(&f64::NAN),
+                Ordering::Equal
+            );
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+    }
+
+    #[test]
+    fn test_double_statistics_zero_min_max_total_order() {
+        let stats = statistics_roundtrip_total_order::<DoubleType>(&[-0.0, 0.0]);
+        assert!(!stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min_opt().unwrap(), &-0.0);
+            assert_eq!(stats.max_opt().unwrap(), &0.0);
+        } else {
+            panic!("expecting Statistics::Float");
         }
     }
 
@@ -4142,10 +4346,31 @@ mod tests {
         }
     }
 
-    /// Write data into parquet using [`get_test_page_writer`] and [`get_test_column_writer`] and returns generated statistics.
+    /// Write data into parquet using [`get_test_page_writer`] and [`get_test_column_writer`]
+    /// and returns generated statistics.
     fn statistics_roundtrip<T: DataType>(values: &[<T as DataType>::T]) -> Statistics {
         let page_writer = get_test_page_writer();
         let props = Default::default();
+        let mut writer = get_test_column_writer::<T>(page_writer, 0, 0, props);
+        writer.write_batch(values, None, None).unwrap();
+
+        let metadata = writer.close().unwrap().metadata;
+        if let Some(stats) = metadata.statistics() {
+            stats.clone()
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    /// Write data into parquet using [`get_test_page_writer`] and [`get_test_column_writer`]
+    /// and returns generated statistics. Sets `ieee754_total_order` property to `true`.
+    fn statistics_roundtrip_total_order<T: DataType>(values: &[<T as DataType>::T]) -> Statistics {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_ieee754_total_order(true)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<T>(page_writer, 0, 0, props);
         writer.write_batch(values, None, None).unwrap();
 
