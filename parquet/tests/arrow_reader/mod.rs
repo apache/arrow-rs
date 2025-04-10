@@ -84,6 +84,10 @@ enum Scenario {
     Float16,
     Float32,
     Float64,
+    /// Float tests with Parquet sort order set to IEEE 754 total order
+    Float16TotalOrder,
+    Float32TotalOrder,
+    Float64TotalOrder,
     Decimal,
     Decimal256,
     ByteArray,
@@ -686,7 +690,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::NumericLimits => {
             vec![make_numeric_limit_batch()]
         }
-        Scenario::Float16 => {
+        Scenario::Float16 | Scenario::Float16TotalOrder => {
             vec![
                 make_f16_batch(
                     vec![-5.0, -4.0, -3.0, -2.0, -1.0]
@@ -714,7 +718,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ),
             ]
         }
-        Scenario::Float32 => {
+        Scenario::Float32 | Scenario::Float32TotalOrder => {
             vec![
                 make_f32_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
                 make_f32_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
@@ -722,7 +726,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_f32_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
             ]
         }
-        Scenario::Float64 => {
+        Scenario::Float64 | Scenario::Float64TotalOrder => {
             vec![
                 make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
                 make_f64_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
@@ -1027,10 +1031,19 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .tempfile()
         .expect("tempfile creation");
 
+    let total_order = match scenario {
+        Scenario::Float16TotalOrder | Scenario::Float32TotalOrder | Scenario::Float64TotalOrder => {
+            true
+        }
+        _ => false,
+    };
+
+    // TODO(ets): need to get total order option down here
     let props = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page)
+        .set_ieee754_total_order(total_order)
         .build();
 
     let batches = create_data_batch(scenario);
