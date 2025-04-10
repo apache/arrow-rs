@@ -211,6 +211,10 @@ name = "arrow_statistics"
 required-features = ["arrow"]
 harness = false
 
+[[bench]]
+name = "arrow_reader_row_filter"
+required-features = ["arrow"]
+harness = false
 
 [[bench]]
 name = "compression"
