@@ -360,7 +360,8 @@ impl RecordBatch {
     }
 
     /// Forcibly overrides the schema of this [`RecordBatch`]
-    /// No schema checks executed so the method is faster than safe `with_schema`
+    /// without additional schema checks however bringing all the schema compatibility responsibilities
+    /// to the caller site.
     ///
     /// If provided schema is not compatible with this [`RecordBatch`] columns the runtime behavior
     /// is undefined
