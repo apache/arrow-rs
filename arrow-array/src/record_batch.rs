@@ -312,6 +312,7 @@ impl RecordBatch {
 
         // function for comparing column type and field type
         // return true if 2 types are not matched
+        #[allow(deprecated)]
         let type_not_match = if options.match_field_names {
             |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| col_type != field_type
         } else {
@@ -400,10 +401,7 @@ impl RecordBatch {
         RecordBatch::try_new_with_options(
             SchemaRef::new(projected_schema),
             batch_fields,
-            &RecordBatchOptions {
-                match_field_names: true,
-                row_count: Some(self.row_count),
-            },
+            &RecordBatchOptions::new().with_row_count(Some(self.row_count)),
         )
     }
 
@@ -742,6 +740,7 @@ impl RecordBatch {
 #[non_exhaustive]
 pub struct RecordBatchOptions {
     /// Match field names of structs and lists. If set to `true`, the names must match.
+    #[deprecated(note = "match_field_names is unsound")]
     pub match_field_names: bool,
 
     /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
@@ -750,6 +749,7 @@ pub struct RecordBatchOptions {
 
 impl RecordBatchOptions {
     /// Creates a new `RecordBatchOptions`
+    #[allow(deprecated)]
     pub fn new() -> Self {
         Self {
             match_field_names: true,
@@ -764,6 +764,8 @@ impl RecordBatchOptions {
     }
 
     /// Sets the `match_field_names` of `RecordBatchOptions` and returns this [`RecordBatch`]
+    #[deprecated(note = "match_field_names is unsound")]
+    #[allow(deprecated)]
     pub fn with_match_field_names(mut self, match_field_names: bool) -> Self {
         self.match_field_names = match_field_names;
         self
@@ -1059,6 +1061,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn create_record_batch_field_name_mismatch() {
         let fields = vec![
             Field::new("a1", DataType::Int32, false),
@@ -1514,10 +1517,7 @@ mod tests {
         let expected = RecordBatch::try_new_with_options(
             Arc::new(Schema::empty()),
             vec![],
-            &RecordBatchOptions {
-                match_field_names: true,
-                row_count: Some(3),
-            },
+            &RecordBatchOptions::new().with_row_count(Some(3)),
         )
         .expect("valid conversion");
 
@@ -1558,6 +1558,7 @@ mod tests {
         assert_eq!("Invalid argument error: Column 'a' is declared as non-nullable but contains null values", format!("{}", maybe_batch.err().unwrap()));
     }
     #[test]
+    #[allow(deprecated)]
     fn test_record_batch_options() {
         let options = RecordBatchOptions::new()
             .with_match_field_names(false)
