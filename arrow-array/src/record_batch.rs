@@ -362,6 +362,11 @@ impl RecordBatch {
         })
     }
 
+    /// Return the schema, columns and row count of this [`RecordBatch`]
+    pub fn into_parts(self) -> (SchemaRef, Vec<ArrayRef>, usize) {
+        (self.schema, self.columns, self.row_count)
+    }
+
     /// Override the schema of this [`RecordBatch`]
     ///
     /// Returns an error if `schema` is not a superset of the current schema
