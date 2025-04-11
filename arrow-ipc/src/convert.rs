@@ -19,6 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_schema::*;
+use core::panic;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
     VerifierOptions, WIPOffset,
@@ -127,12 +128,6 @@ impl<'a> IpcSchemaEncoder<'a> {
     }
 }
 
-/// Serialize a schema in IPC format
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
-pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    IpcSchemaEncoder::new().schema_to_fb(schema)
-}
-
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
@@ -165,12 +160,10 @@ pub fn schema_to_fb_offset<'a>(
 impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
-            #[allow(deprecated)]
             Field::new_dict(
                 field.name().unwrap(),
                 get_data_type(field, true),
                 field.nullable(),
-                dictionary.id(),
                 dictionary.isOrdered(),
             )
         } else {
@@ -525,24 +518,13 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
-                #[allow(deprecated)]
-                tracker.set_dict_id(field),
+                tracker.next_dict_id(),
                 field
                     .dict_is_ordered()
                     .expect("All Dictionary types have `dict_is_ordered`"),
                 fbb,
             )),
-            None => Some(get_fb_dictionary(
-                index_type,
-                #[allow(deprecated)]
-                field
-                    .dict_id()
-                    .expect("Dictionary type must have a dictionary id"),
-                field
-                    .dict_is_ordered()
-                    .expect("All Dictionary types have `dict_is_ordered`"),
-                fbb,
-            )),
+            None => panic!("IPC must no longer be used without dictionary tracker"),
         }
     } else {
         None
@@ -1151,20 +1133,16 @@ mod tests {
                     ),
                     true,
                 ),
-                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
-                    123,
                     true,
                 ),
-                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
                     true,
-                    123,
                     true,
                 ),
                 Field::new("decimal<usize, usize>", DataType::Decimal128(10, 6), false),

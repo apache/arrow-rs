@@ -43,17 +43,12 @@ pub struct Field {
     name: String,
     data_type: DataType,
     nullable: bool,
-    #[deprecated(
-        since = "54.0.0",
-        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
-    )]
-    dict_id: i64,
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
     metadata: HashMap<String, String>,
 }
 
-// Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
+// Auto-derive `PartialEq` traits will pull and `dict_is_ordered`
 // into comparison. However, these properties are only used in IPC context
 // for matching dictionary encoded data. They are not necessary to be same
 // to consider schema equality. For example, in C++ `Field` implementation,
@@ -131,12 +126,10 @@ impl Field {
 
     /// Creates a new field with the given name, type, and nullability
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
-        #[allow(deprecated)]
         Field {
             name: name.into(),
             data_type,
             nullable,
-            dict_id: 0,
             dict_is_ordered: false,
             metadata: HashMap::default(),
         }
@@ -161,15 +154,10 @@ impl Field {
     }
 
     /// Creates a new field that has additional dictionary information
-    #[deprecated(
-        since = "54.0.0",
-        note = "The ability to preserve dictionary IDs will be removed. With the dict_id field disappearing this function signature will change by removing the dict_id parameter."
-    )]
     pub fn new_dict(
         name: impl Into<String>,
         data_type: DataType,
         nullable: bool,
-        dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
         #[allow(deprecated)]
@@ -177,7 +165,6 @@ impl Field {
             name: name.into(),
             data_type,
             nullable,
-            dict_id,
             dict_is_ordered,
             metadata: HashMap::default(),
         }
@@ -559,38 +546,6 @@ impl Field {
         }
     }
 
-    /// Returns a vector containing all (potentially nested) `Field` instances selected by the
-    /// dictionary ID they use
-    #[inline]
-    #[deprecated(
-        since = "54.0.0",
-        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
-    )]
-    pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
-        self.fields()
-            .into_iter()
-            .filter(|&field| {
-                #[allow(deprecated)]
-                let matching_dict_id = field.dict_id == id;
-                matches!(field.data_type(), DataType::Dictionary(_, _)) && matching_dict_id
-            })
-            .collect()
-    }
-
-    /// Returns the dictionary ID, if this is a dictionary type.
-    #[inline]
-    #[deprecated(
-        since = "54.0.0",
-        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
-    )]
-    pub const fn dict_id(&self) -> Option<i64> {
-        match self.data_type {
-            #[allow(deprecated)]
-            DataType::Dictionary(_, _) => Some(self.dict_id),
-            _ => None,
-        }
-    }
-
     /// Returns whether this `Field`'s dictionary is ordered, if this is a dictionary type.
     ///
     /// # Example
@@ -640,13 +595,6 @@ impl Field {
     /// assert!(field.is_nullable());
     /// ```
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
-        #[allow(deprecated)]
-        if from.dict_id != self.dict_id {
-            return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field '{}' because from dict_id = {} does not match {}",
-                self.name, from.dict_id, self.dict_id
-            )));
-        }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field '{}' because from dict_is_ordered = {} does not match {}",
@@ -783,11 +731,8 @@ impl Field {
     /// * self.metadata is a superset of other.metadata
     /// * all other fields are equal
     pub fn contains(&self, other: &Field) -> bool {
-        #[allow(deprecated)]
-        let matching_dict_id = self.dict_id == other.dict_id;
         self.name == other.name
         && self.data_type.contains(&other.data_type)
-        && matching_dict_id
         && self.dict_is_ordered == other.dict_is_ordered
         // self need to be nullable or both of them are not nullable
         && (self.nullable || !other.nullable)
@@ -836,8 +781,7 @@ mod test {
     fn test_new_dict_with_string() {
         // Fields should allow owned Strings to support reuse
         let s = "c1";
-        #[allow(deprecated)]
-        Field::new_dict(s, DataType::Int64, false, 4, false);
+        Field::new_dict(s, DataType::Int64, false, false);
     }
 
     #[test]
@@ -952,63 +896,6 @@ mod test {
         );
     }
 
-    #[test]
-    fn test_fields_with_dict_id() {
-        #[allow(deprecated)]
-        let dict1 = Field::new_dict(
-            "dict1",
-            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
-            false,
-            10,
-            false,
-        );
-        #[allow(deprecated)]
-        let dict2 = Field::new_dict(
-            "dict2",
-            DataType::Dictionary(DataType::Int32.into(), DataType::Int8.into()),
-            false,
-            20,
-            false,
-        );
-
-        let field = Field::new(
-            "struct<dict1, list[struct<dict2, list[struct<dict1]>]>",
-            DataType::Struct(Fields::from(vec![
-                dict1.clone(),
-                Field::new(
-                    "list[struct<dict1, list[struct<dict2>]>]",
-                    DataType::List(Arc::new(Field::new(
-                        "struct<dict1, list[struct<dict2>]>",
-                        DataType::Struct(Fields::from(vec![
-                            dict1.clone(),
-                            Field::new(
-                                "list[struct<dict2>]",
-                                DataType::List(Arc::new(Field::new(
-                                    "struct<dict2>",
-                                    DataType::Struct(vec![dict2.clone()].into()),
-                                    false,
-                                ))),
-                                false,
-                            ),
-                        ])),
-                        false,
-                    ))),
-                    false,
-                ),
-            ])),
-            false,
-        );
-
-        #[allow(deprecated)]
-        for field in field.fields_with_dict_id(10) {
-            assert_eq!(dict1, *field);
-        }
-        #[allow(deprecated)]
-        for field in field.fields_with_dict_id(20) {
-            assert_eq!(dict2, *field);
-        }
-    }
-
     fn get_field_hash(field: &Field) -> u64 {
         let mut s = DefaultHasher::new();
         field.hash(&mut s);
@@ -1018,32 +905,26 @@ mod test {
     #[test]
     fn test_field_comparison_case() {
         // dictionary-encoding properties not used for field comparison
-        #[allow(deprecated)]
         let dict1 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
             false,
-            10,
             false,
         );
-        #[allow(deprecated)]
         let dict2 = Field::new_dict(
             "dict1",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
             false,
-            20,
             false,
         );
 
         assert_eq!(dict1, dict2);
         assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
 
-        #[allow(deprecated)]
         let dict1 = Field::new_dict(
             "dict0",
             DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
             false,
-            10,
             false,
         );
 

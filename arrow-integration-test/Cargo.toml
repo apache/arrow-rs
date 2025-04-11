@@ -38,6 +38,7 @@ all-features = true
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
+arrow-ipc = { workspace = true }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false, features = ["rc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }

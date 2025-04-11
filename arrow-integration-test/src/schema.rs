@@ -18,12 +18,14 @@
 use crate::{field_from_json, field_to_json};
 use arrow::datatypes::{Fields, Schema};
 use arrow::error::{ArrowError, Result};
+use arrow_ipc::writer::DictionaryTracker;
 use std::collections::HashMap;
 
 /// Generate a JSON representation of the `Schema`.
 pub fn schema_to_json(schema: &Schema) -> serde_json::Value {
+    let mut dictionary_tracker = DictionaryTracker::new(false);
     serde_json::json!({
-        "fields": schema.fields().iter().map(|f| field_to_json(f.as_ref())).collect::<Vec<_>>(),
+        "fields": schema.fields().iter().map(|f| field_to_json(&mut dictionary_tracker, f.as_ref())).collect::<Vec<_>>(),
         "metadata": serde_json::to_value(schema.metadata()).unwrap()
     })
 }
@@ -189,12 +191,10 @@ mod tests {
                 Field::new("c30", DataType::Duration(TimeUnit::Millisecond), false),
                 Field::new("c31", DataType::Duration(TimeUnit::Microsecond), false),
                 Field::new("c32", DataType::Duration(TimeUnit::Nanosecond), false),
-                #[allow(deprecated)]
                 Field::new_dict(
                     "c33",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
-                    123,
                     true,
                 ),
                 Field::new("c34", DataType::LargeBinary, true),
@@ -589,7 +589,7 @@ mod tests {
                           "name": "utf8"
                         },
                         "dictionary": {
-                          "id": 123,
+                          "id": 0,
                           "indexType": {
                             "name": "int",
                             "bitWidth": 32,

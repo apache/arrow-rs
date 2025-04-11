@@ -707,6 +707,7 @@ pub enum ArrowFlightData {
 pub fn arrow_data_from_flight_data(
     flight_data: FlightData,
     arrow_schema_ref: &SchemaRef,
+    ipc_schema: arrow_ipc::Schema,
 ) -> Result<ArrowFlightData, ArrowError> {
     let ipc_message = root_as_message(&flight_data.data_header[..])
         .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
@@ -723,6 +724,7 @@ pub fn arrow_data_from_flight_data(
             let record_batch = read_record_batch(
                 &Buffer::from(flight_data.data_body),
                 ipc_record_batch,
+                ipc_schema,
                 arrow_schema_ref.clone(),
                 &dictionaries_by_field,
                 None,

@@ -34,7 +34,6 @@ use arrow_flight::{
 use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
 use tonic::{Request, Streaming};
 
-use arrow::datatypes::Schema;
 use std::sync::Arc;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -72,9 +71,7 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    #[allow(deprecated)]
-    let mut dict_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
     let data_gen = writer::IpcDataGenerator::default();
     let data = IpcMessage(
         data_gen
@@ -217,33 +214,40 @@ async fn consume_flight_location(
     let resp = client.do_get(ticket).await?;
     let mut resp = resp.into_inner();
 
-    let flight_schema = receive_schema_flight_data(&mut resp)
+    let data = resp
+        .next()
         .await
-        .unwrap_or_else(|| panic!("Failed to receive flight schema"));
-    let actual_schema = Arc::new(flight_schema);
+        .ok_or_else(|| Error::from("No data received from Flight server"))??;
+    let message =
+        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
+
+    // message header is a Schema, so read it
+    let ipc_schema: ipc::Schema = message
+        .header_as_schema()
+        .expect("Unable to read IPC message as schema");
+    let schema = Arc::new(ipc::convert::fb_to_schema(ipc_schema));
 
     let mut dictionaries_by_id = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
-        let data =
-            receive_batch_flight_data(&mut resp, actual_schema.clone(), &mut dictionaries_by_id)
-                .await
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Got fewer batches than expected, received so far: {} expected: {}",
-                        counter,
-                        expected_data.len(),
-                    )
-                });
+        let data = receive_batch_flight_data(&mut resp, ipc_schema, &mut dictionaries_by_id)
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "Got fewer batches than expected, received so far: {} expected: {}",
+                    counter,
+                    expected_data.len(),
+                )
+            });
 
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
 
         let actual_batch =
-            flight_data_to_arrow_batch(&data, actual_schema.clone(), &dictionaries_by_id)
+            flight_data_to_arrow_batch(&data, ipc_schema, schema.clone(), &dictionaries_by_id)
                 .expect("Unable to convert flight data to Arrow batch");
 
-        assert_eq!(actual_schema, actual_batch.schema());
+        assert_eq!(schema, actual_batch.schema());
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
         assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
         let schema = expected_batch.schema();
@@ -267,23 +271,9 @@ async fn consume_flight_location(
     Ok(())
 }
 
-async fn receive_schema_flight_data(resp: &mut Streaming<FlightData>) -> Option<Schema> {
-    let data = resp.next().await?.ok()?;
-    let message =
-        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
-
-    // message header is a Schema, so read it
-    let ipc_schema: ipc::Schema = message
-        .header_as_schema()
-        .expect("Unable to read IPC message as schema");
-    let schema = ipc::convert::fb_to_schema(ipc_schema);
-
-    Some(schema)
-}
-
 async fn receive_batch_flight_data(
     resp: &mut Streaming<FlightData>,
-    schema: SchemaRef,
+    ipc_schema: arrow::ipc::Schema<'_>,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
@@ -296,7 +286,7 @@ async fn receive_batch_flight_data(
             message
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),
-            &schema,
+            ipc_schema,
             dictionaries_by_id,
             &message.version(),
         )
