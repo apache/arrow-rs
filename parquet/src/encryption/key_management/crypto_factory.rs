@@ -33,8 +33,8 @@ use std::time::Duration;
 /// Configuration for encrypting a Parquet file using a KMS
 #[derive(Debug)]
 pub struct EncryptionConfiguration {
-    footer_key: String,
-    column_keys: HashMap<String, Vec<String>>,
+    footer_key_id: String,
+    column_key_ids: HashMap<String, Vec<String>>,
     plaintext_footer: bool,
     double_wrapping: bool,
     cache_lifetime: Option<Duration>,
@@ -43,19 +43,20 @@ pub struct EncryptionConfiguration {
 }
 
 impl EncryptionConfiguration {
-    /// Create a new builder for an [`EncryptionConfiguration`]
-    pub fn builder(footer_key: String) -> EncryptionConfigurationBuilder {
-        EncryptionConfigurationBuilder::new(footer_key)
+    /// Create a new builder for an [`EncryptionConfiguration`] using the specified
+    /// master key identifier for footer encryption.
+    pub fn builder(footer_key_id: String) -> EncryptionConfigurationBuilder {
+        EncryptionConfigurationBuilder::new(footer_key_id)
     }
 
     /// Master key identifier for footer key encryption or signing
-    pub fn footer_key(&self) -> &str {
-        &self.footer_key
+    pub fn footer_key_id(&self) -> &str {
+        &self.footer_key_id
     }
 
-    /// Map from master key identifiers to the column paths encrypted with a column
-    pub fn column_keys(&self) -> &HashMap<String, Vec<String>> {
-        &self.column_keys
+    /// Map from master key identifiers to the names of columns encrypted with the key
+    pub fn column_key_ids(&self) -> &HashMap<String, Vec<String>> {
+        &self.column_key_ids
     }
 
     /// Whether to write the footer in plaintext.
@@ -78,7 +79,8 @@ impl EncryptionConfiguration {
 
     /// Whether to store encryption key material inside Parquet file metadata,
     /// rather than in external JSON files.
-    /// Using external key material allows for rotation of master keys.
+    /// Using external key material allows for re-wrapping of data keys after
+    /// rotation of master keys in the KMS.
     /// Currently only internal key material is implemented.
     pub fn internal_key_material(&self) -> bool {
         self.internal_key_material
@@ -93,8 +95,8 @@ impl EncryptionConfiguration {
 
 /// Builder for a Parquet [`EncryptionConfiguration`].
 pub struct EncryptionConfigurationBuilder {
-    footer_key: String,
-    column_keys: HashMap<String, Vec<String>>,
+    footer_key_id: String,
+    column_key_ids: HashMap<String, Vec<String>>,
     plaintext_footer: bool,
     double_wrapping: bool,
     cache_lifetime: Option<Duration>,
@@ -103,11 +105,12 @@ pub struct EncryptionConfigurationBuilder {
 }
 
 impl EncryptionConfigurationBuilder {
-    /// Create a new [`EncryptionConfigurationBuilder`] with default options
-    pub fn new(footer_key: String) -> Self {
+    /// Create a new [`EncryptionConfigurationBuilder`] using the specified master key
+    /// identifier for footer encryption and default values for other options.
+    pub fn new(footer_key_id: String) -> Self {
         Self {
-            footer_key,
-            column_keys: Default::default(),
+            footer_key_id,
+            column_key_ids: Default::default(),
             plaintext_footer: false,
             double_wrapping: true,
             cache_lifetime: Some(Duration::from_secs(600)),
@@ -119,8 +122,8 @@ impl EncryptionConfigurationBuilder {
     /// Finalizes the encryption configuration to be used
     pub fn build(self) -> EncryptionConfiguration {
         EncryptionConfiguration {
-            footer_key: self.footer_key,
-            column_keys: self.column_keys,
+            footer_key_id: self.footer_key_id,
+            column_key_ids: self.column_key_ids,
             plaintext_footer: self.plaintext_footer,
             double_wrapping: self.double_wrapping,
             cache_lifetime: self.cache_lifetime,
@@ -132,9 +135,9 @@ impl EncryptionConfigurationBuilder {
     /// Specify a column master key identifier and the column names to be encrypted with this key.
     /// Note that if no column keys are specified, uniform encryption is used where all columns
     /// are encrypted with the footer key.
-    pub fn add_column_key(mut self, master_key: String, column_paths: Vec<String>) -> Self {
-        self.column_keys
-            .entry(master_key)
+    pub fn add_column_key(mut self, master_key_id: String, column_paths: Vec<String>) -> Self {
+        self.column_key_ids
+            .entry(master_key_id)
             .or_default()
             .extend(column_paths);
         self
@@ -321,7 +324,7 @@ impl CryptoFactory {
         );
 
         let footer_key = self.generate_key(
-            encryption_configuration.footer_key(),
+            encryption_configuration.footer_key_id(),
             true,
             &mut key_wrapper,
         )?;
@@ -330,7 +333,7 @@ impl CryptoFactory {
             .with_footer_key_metadata(footer_key.metadata)
             .with_plaintext_footer(encryption_configuration.plaintext_footer);
 
-        for (master_key_id, column_paths) in &encryption_configuration.column_keys {
+        for (master_key_id, column_paths) in &encryption_configuration.column_key_ids {
             for column_path in column_paths {
                 let column_key = self.generate_key(master_key_id, false, &mut key_wrapper)?;
                 builder = builder.with_column_key_and_metadata(
