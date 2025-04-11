@@ -740,7 +740,7 @@ impl RecordBatch {
 #[non_exhaustive]
 pub struct RecordBatchOptions {
     /// Match field names of structs and lists. If set to `true`, the names must match.
-    #[deprecated(note = "match_field_names is unsound")]
+    #[deprecated(note = "match_field_names can lead to unpredictable behaviour")]
     pub match_field_names: bool,
 
     /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
@@ -764,7 +764,7 @@ impl RecordBatchOptions {
     }
 
     /// Sets the `match_field_names` of `RecordBatchOptions` and returns this [`RecordBatch`]
-    #[deprecated(note = "match_field_names is unsound")]
+    #[deprecated(note = "match_field_names can lead to unpredictable behaviour")]
     #[allow(deprecated)]
     pub fn with_match_field_names(mut self, match_field_names: bool) -> Self {
         self.match_field_names = match_field_names;
@@ -891,7 +891,7 @@ mod tests {
     use crate::{
         BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
     };
-    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_buffer::{Buffer, OffsetBuffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
     use std::collections::HashMap;
