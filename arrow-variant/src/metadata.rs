@@ -51,7 +51,7 @@ pub fn create_metadata(json_value: &Value, sort_keys: bool) -> Result<Vec<u8>, E
     
     // Determine the minimum integer size required for offsets
     // The largest offset is the one-past-the-end value, which is total string size
-    let max_size = std::cmp::max(dictionary_string_size, keys.len() as u32);
+    let max_size = std::cmp::max(dictionary_string_size, (keys.len() + 1) as u32);
     let offset_size = get_min_integer_size(max_size as usize);
     let offset_size_minus_one = offset_size - 1;
     
