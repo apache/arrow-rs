@@ -147,7 +147,6 @@ pub fn create_random_batch(
     )
 }
 
->>>>>>> 69a2617
 fn make_record_batch() -> RecordBatch {
     let num_rows = 100_000;
     let fields = vec![
@@ -220,12 +219,6 @@ fn filter_timestamp_gt(batch: &RecordBatch) -> arrow::error::Result<arrow::array
     Ok(gt_thresh)
 }
 
-/// Filters tested:
-///  - A string filter: `utf8View <> ''` (non-empty)
-///  - A string filter: `utf8View = 'const'` (selective)
-///  - An integer non-selective filter (e.g. even numbers)
-///  - An integer selective filter (e.g. `int64 = 0`)
-///  - A timestamp filter (e.g. `ts > threshold`)
 #[derive(Clone)]
 enum FilterType {
     Utf8ViewNonEmpty,
@@ -245,13 +238,6 @@ impl std::fmt::Display for FilterType {
     }
 }
 
-/// This benchmark tests the performance of row filters and projections
-///
-/// Tests combinations of FilterType and ProjectionType
-///
-/// Projections tested:
-///  - All 4 columns.
-///  - All columns except the one used for the filter.
 fn benchmark_filters_and_projections(c: &mut Criterion) {
     let parquet_file = write_parquet_file();
 
