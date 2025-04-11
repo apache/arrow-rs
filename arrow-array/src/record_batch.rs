@@ -1655,7 +1655,7 @@ mod tests {
 
     #[test]
     fn test_batch_with_unchecked_schema() {
-        fn apply_schema_unchecked(
+        unsafe fn apply_schema_unchecked(
             record_batch: &RecordBatch,
             schema_ref: SchemaRef,
             idx: usize,
@@ -1676,7 +1676,7 @@ mod tests {
         // Test empty schema for non-empty schema batch
         let invalid_schema_empty = Schema::empty();
         assert_eq!(
-            apply_schema_unchecked(&record_batch, invalid_schema_empty.into(), 0)
+            unsafe { apply_schema_unchecked(&record_batch, invalid_schema_empty.into(), 0) }
                 .unwrap()
                 .to_string(),
             "Schema error: project index 0 out of bounds, max field 0"
@@ -1688,13 +1688,13 @@ mod tests {
             Field::new("b", DataType::Int32, false),
         ]);
 
-        assert!(
+        assert!(unsafe {
             apply_schema_unchecked(&record_batch, invalid_schema_more_cols.clone().into(), 0)
-                .is_none()
-        );
+        }
+        .is_none());
 
         assert_eq!(
-            apply_schema_unchecked(&record_batch, invalid_schema_more_cols.into(), 1)
+            unsafe { apply_schema_unchecked(&record_batch, invalid_schema_more_cols.into(), 1) }
                 .unwrap()
                 .to_string(),
             "Schema error: project index 1 out of bounds, max field 1"
@@ -1703,28 +1703,32 @@ mod tests {
         // Wrong datatype
         let invalid_schema_wrong_datatype =
             Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        assert_eq!(apply_schema_unchecked(&record_batch, invalid_schema_wrong_datatype.into(), 0).unwrap().to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Utf8 at column index 0");
+        assert_eq!(unsafe { apply_schema_unchecked(&record_batch, invalid_schema_wrong_datatype.into(), 0)}.unwrap().to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Utf8 at column index 0");
 
         // Wrong column name. A instead C
         let invalid_schema_wrong_col_name =
             Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
 
-        assert!(record_batch
-            .clone()
-            .with_schema_unchecked(invalid_schema_wrong_col_name.into())
-            .unwrap()
-            .column_by_name("c")
-            .is_none());
+        assert!(unsafe {
+            record_batch
+                .clone()
+                .with_schema_unchecked(invalid_schema_wrong_col_name.into())
+        }
+        .unwrap()
+        .column_by_name("c")
+        .is_none());
 
         // Valid schema
         let valid_schema = Schema::new(vec![Field::new("c", DataType::Utf8, false)]);
 
         assert_eq!(
-            record_batch
-                .clone()
-                .with_schema_unchecked(valid_schema.into())
-                .unwrap()
-                .column_by_name("c"),
+            unsafe {
+                record_batch
+                    .clone()
+                    .with_schema_unchecked(valid_schema.into())
+            }
+            .unwrap()
+            .column_by_name("c"),
             record_batch.column_by_name("c")
         );
     }
