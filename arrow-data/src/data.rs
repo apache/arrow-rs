@@ -591,6 +591,12 @@ impl ArrayData {
 
     /// Returns a new [`ArrayData`] valid for `data_type` containing `len` null values
     pub fn new_null(data_type: &DataType, len: usize) -> Self {
+        if let DataType::Extension(extension) = data_type {
+            let mut storage_data = Self::new_null(extension.storage_type(), len);
+            storage_data.data_type = data_type.clone();
+            return storage_data;
+        }
+
         let bit_len = bit_util::ceil(len, 8);
         let zeroed = |len: usize| Buffer::from(MutableBuffer::from_len_zeroed(len));
 
@@ -2121,7 +2127,7 @@ impl From<ArrayData> for ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_schema::{Field, Fields};
+    use arrow_schema::{extension::TestExtension, Field, Fields};
 
     // See arrow/tests/array_data_validation.rs for test of array validation
 
@@ -2449,5 +2455,16 @@ mod tests {
         for i in 0..array.len() {
             assert!(array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_data_extension() {
+        let data_type = DataType::Extension(Arc::new(TestExtension {
+            storage_type: DataType::Utf8,
+        }));
+        let array_null = ArrayData::new_null(&data_type, 3);
+        assert_eq!(array_null.len(), 3);
+        assert_eq!(array_null.data_type(), &data_type);
+        assert_eq!(array_null.null_count(), 3);
     }
 }
