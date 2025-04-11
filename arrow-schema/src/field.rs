@@ -727,7 +727,7 @@ impl Field {
             DataType::Null => {
                 self.nullable = true;
                 self.data_type = from.data_type.clone();
-            }
+            },
             | DataType::Boolean
             | DataType::Int8
             | DataType::Int16
@@ -761,7 +761,8 @@ impl Field {
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => {
+            | DataType::Decimal256(_, _)
+            | DataType::Extension(_) => {
                 if from.data_type == DataType::Null {
                     self.nullable = true;
                 } else if self.data_type != from.data_type {

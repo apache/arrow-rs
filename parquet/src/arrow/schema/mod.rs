@@ -767,6 +767,12 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         DataType::RunEndEncoded(_, _) => Err(arrow_err!(
             "Converting RunEndEncodedType to parquet not supported",
         )),
+        DataType::Extension(extension) => arrow_to_parquet_type(
+            &field
+                .clone()
+                .with_data_type(extension.storage_type().clone()),
+            coerce_types,
+        ),
     }
 }
 
