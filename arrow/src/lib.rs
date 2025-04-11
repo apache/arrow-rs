@@ -369,7 +369,6 @@
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
 pub use arrow_buffer::{alloc, buffer};
-pub use arrow_data::UnsafeFlag;
 
 /// Arrow crate version
 pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
