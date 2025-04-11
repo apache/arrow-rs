@@ -50,11 +50,13 @@ use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::{Array, StringViewArray};
-use parquet::arrow::arrow_reader::{
-    ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, RowFilter,
-};
-use parquet::arrow::{ArrowWriter, ProjectionMask};
+use criterion::async_executor::FuturesExecutor;
+use futures::TryStreamExt;
+use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::properties::WriterProperties;
+use tokio::fs::File;
+use tokio::runtime::Runtime;
 
 /// Create a RecordBatch with 100K rows and four columns.
 fn make_record_batch() -> RecordBatch {
@@ -226,6 +228,8 @@ impl std::fmt::Display for FilterType {
 fn benchmark_filters_and_projections(c: &mut Criterion) {
     let parquet_file = write_parquet_file();
 
+    let runtime = Runtime::new().unwrap(); // Create a new Tokio runtime
+
     // Define filter functions associated with each FilterType.
     type FilterFn = fn(&RecordBatch) -> BooleanArray;
     let filter_funcs: Vec<(FilterType, FilterFn)> = vec![
@@ -270,47 +274,51 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                 format!("filter_case: {} project_case: {}", filter_type, proj_case),
                 "",
             );
+
             group.bench_function(bench_id, |b| {
-                b.iter(|| {
-                    // Reopen the Parquet file for each iteration.
-                    let file = parquet_file.reopen().unwrap();
-                    let options = ArrowReaderOptions::new().with_page_index(true);
-                    let builder = ArrowReaderBuilder::try_new_with_options(file, options).unwrap();
-                    let file_metadata = builder.metadata().file_metadata().clone();
-                    // Build the projection mask from the output projection (clone to avoid move)
-                    let mask = ProjectionMask::roots(
-                        file_metadata.schema_descr(),
-                        output_projection.clone(),
-                    );
+                b.to_async(FuturesExecutor).iter(|| async {
+                    runtime.block_on(async {
+                        // Reopen the Parquet file for each iteration.
+                        let file = File::open(parquet_file.path()).await.unwrap();
 
-                    // Build the predicate mask from the predicate projection (clone to avoid move)
-                    let pred_mask = ProjectionMask::roots(
-                        file_metadata.schema_descr(),
-                        predicate_projection.clone(),
-                    );
+                        // Create a async parquet reader builder with batch_size.
+                        let options = ArrowReaderOptions::new().with_page_index(true);
 
-                    // Copy the filter function pointer.
-                    let f = filter_fn;
-                    // Wrap the filter function in a closure to satisfy the expected signature.
-                    let filter =
-                        ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| Ok(f(&batch)));
-                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
+                        let builder =
+                            ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                                .await
+                                .unwrap()
+                                .with_batch_size(8192);
 
-                    // Build the reader with row filter and output projection.
-                    let reader = builder
-                        .with_row_filter(row_filter)
-                        .with_projection(mask)
-                        .build()
-                        .unwrap();
+                        let file_metadata = builder.metadata().file_metadata().clone();
 
-                    // Collect result batches, unwrapping errors.
-                    let _result: Vec<RecordBatch> = reader.map(|r| r.unwrap()).collect();
+                        let mask = ProjectionMask::roots(
+                            file_metadata.schema_descr(),
+                            output_projection.clone(),
+                        );
+
+                        let pred_mask = ProjectionMask::roots(
+                            file_metadata.schema_descr(),
+                            predicate_projection.clone(),
+                        );
+
+                        let f = filter_fn;
+                        let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                            Ok(f(&batch))
+                        });
+                        let stream = builder
+                            .with_projection(mask)
+                            .with_row_filter(RowFilter::new(vec![Box::new(filter)]))
+                            .build()
+                            .unwrap();
+
+                        // Collect the results into a vector of RecordBatches.
+                        stream.try_collect::<Vec<_>>().await.unwrap();
+                    })
                 });
             });
         }
     }
-
-    group.finish();
 }
 
 criterion_group!(benches, benchmark_filters_and_projections);
