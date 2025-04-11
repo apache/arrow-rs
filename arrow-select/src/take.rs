@@ -190,6 +190,12 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
+    if let DataType::Extension(_) = values.data_type() {
+        let extension_array: ExtensionArray = values.to_data().into();
+        let storage_result = take_impl(extension_array.storage(), indices)?;
+        return Ok(Arc::new(extension_array.with_storage(storage_result)));
+    }
+
     downcast_primitive_array! {
         values => Ok(Arc::new(take_primitive(values, indices)?)),
         DataType::Boolean => {
@@ -949,7 +955,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use arrow_schema::{extension::TestExtension, Field, Fields, TimeUnit, UnionFields};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -2399,5 +2405,29 @@ mod tests {
         let indicies = Int64Array::from(vec![0, 2, 4]);
         let array = take(&array, &indicies, None).unwrap();
         assert_eq!(array.len(), 3);
+    }
+
+    #[test]
+    fn test_take_extension() {
+        let indices = Int32Array::from(vec![1, 3]);
+        let storage = Arc::new(StringArray::from(vec![
+            "one banana",
+            "two banana",
+            "three banana",
+            "four",
+        ]));
+        let array = ExtensionArray::new(
+            Arc::new(TestExtension {
+                storage_type: DataType::Utf8,
+            }),
+            storage.clone(),
+        );
+        let result_ref = take(&array, &indices, None).unwrap();
+        assert_eq!(result_ref.data_type(), array.data_type());
+        assert_eq!(result_ref.len(), 2);
+
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected = create_array!(Utf8, ["two banana", "four"]);
+        assert_eq!(result_array.storage().to_data(), expected.to_data());
     }
 }
