@@ -68,6 +68,8 @@ use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
 
+use super::decoder::ColumnValueDecoderOptions;
+
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 ///
 /// Notes:
@@ -488,6 +490,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
         let reader = ReaderFactory {
+            column_value_decoder_options: self.column_value_decoder_options,
             input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
@@ -536,6 +539,8 @@ struct ReaderFactory<T> {
     limit: Option<usize>,
 
     offset: Option<usize>,
+
+    column_value_decoder_options: ColumnValueDecoderOptions,
 }
 
 impl<T> ReaderFactory<T>
@@ -581,8 +586,12 @@ where
                     .fetch(&mut self.input, predicate_projection, selection.as_ref())
                     .await?;
 
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
+                let array_reader = build_array_reader(
+                    self.column_value_decoder_options.clone(),
+                    self.fields.as_deref(),
+                    predicate_projection,
+                    &row_group,
+                )?;
 
                 selection = Some(evaluate_predicate(
                     batch_size,
@@ -632,7 +641,12 @@ where
 
         let reader = ParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
+            build_array_reader(
+                self.column_value_decoder_options.clone(),
+                self.fields.as_deref(),
+                &projection,
+                &row_group,
+            )?,
             selection,
         );
 
@@ -1065,9 +1079,10 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int32Array, Int8Array, RecordBatchReader, Scalar, StringArray,
-        StructArray, UInt64Array,
+        Array, ArrayRef, DictionaryArray, Int32Array, Int8Array, RecordBatchReader, Scalar,
+        StringArray, StringViewArray, StructArray, UInt64Array,
     };
+    use arrow_data::UnsafeFlag;
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
     use rand::{thread_rng, Rng};
@@ -1802,6 +1817,7 @@ mod tests {
         let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), vec![0]);
 
         let reader_factory = ReaderFactory {
+            column_value_decoder_options: ColumnValueDecoderOptions::default(),
             metadata,
             fields: fields.map(Arc::new),
             input: async_reader,
@@ -2335,5 +2351,159 @@ mod tests {
         // Panics here
         let result = reader.try_collect::<Vec<_>>().await.unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_skip_utf8_validation() {
+        let mut file = tempfile().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("item", DataType::Utf8, false)]));
+        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                "hello_datafusion✨",
+                "datafusion-arrow🎷",
+                "c",
+            ]))],
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        // open file with parquet data
+        let mut file = tokio::fs::File::from_std(file);
+
+        let mut skip_validation = UnsafeFlag::new();
+        unsafe {
+            skip_validation.set(true);
+        }
+
+        // load metadata once
+        let meta = ArrowReaderMetadata::load_async(
+            &mut file,
+            ArrowReaderOptions::new()
+                .with_column_value_decoder_options(ColumnValueDecoderOptions::new(skip_validation)),
+        )
+        .await
+        .unwrap();
+        // create two readers, a and b, from the same underlying file
+        // without reading the metadata again
+        let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            file.try_clone().await.unwrap(),
+            meta.clone(),
+        )
+        .build()
+        .unwrap();
+        let r = a.next().await.unwrap().unwrap();
+
+        let arr = r.column(0).as_string::<i32>();
+        assert_eq!(arr.value(0), "hello_datafusion✨");
+        assert_eq!(arr.value(1), "datafusion-arrow🎷");
+        assert_eq!(arr.value(2), "c");
+    }
+
+    #[tokio::test]
+    async fn test_skip_utf8view_validation() {
+        let mut file = tempfile().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "item",
+            DataType::Utf8View,
+            false,
+        )]));
+        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringViewArray::from(vec![
+                "hello_datafusion✨",
+                "datafusion-arrow🎷",
+                "c",
+            ]))],
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        // open file with parquet data
+        let mut file = tokio::fs::File::from_std(file);
+
+        let mut skip_validation = UnsafeFlag::new();
+        unsafe {
+            skip_validation.set(true);
+        }
+
+        // load metadata once
+        let meta = ArrowReaderMetadata::load_async(
+            &mut file,
+            ArrowReaderOptions::new()
+                .with_column_value_decoder_options(ColumnValueDecoderOptions::new(skip_validation)),
+        )
+        .await
+        .unwrap();
+        // create two readers, a and b, from the same underlying file
+        // without reading the metadata again
+        let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            file.try_clone().await.unwrap(),
+            meta.clone(),
+        )
+        .build()
+        .unwrap();
+        let r = a.next().await.unwrap().unwrap();
+
+        let arr = r.column(0).as_string_view();
+        assert_eq!(arr.value(0), "hello_datafusion✨");
+        assert_eq!(arr.value(1), "datafusion-arrow🎷");
+        assert_eq!(arr.value(2), "c");
+    }
+
+    #[tokio::test]
+    async fn test_skip_utf8_dict_validation() {
+        let mut file = tempfile().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+
+        let values =
+            StringArray::from_iter_values(["hello_datafusion✨", "datafusion-arrow🎷", "c"]);
+        let keys = Int32Array::from_iter_values([0, 0, 1, 2]);
+        let array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        // open file with parquet data
+        let mut file = tokio::fs::File::from_std(file);
+
+        let mut skip_validation = UnsafeFlag::new();
+        unsafe {
+            skip_validation.set(true);
+        }
+
+        // load metadata once
+        let meta = ArrowReaderMetadata::load_async(
+            &mut file,
+            ArrowReaderOptions::new()
+                .with_column_value_decoder_options(ColumnValueDecoderOptions::new(skip_validation)),
+        )
+        .await
+        .unwrap();
+        // create two readers, a and b, from the same underlying file
+        // without reading the metadata again
+        let mut a = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            file.try_clone().await.unwrap(),
+            meta.clone(),
+        )
+        .build()
+        .unwrap();
+        let r = a.next().await.unwrap().unwrap();
+
+        let arr = r
+            .column(0)
+            .as_dictionary::<Int32Type>()
+            .values()
+            .as_string::<i32>();
+        assert_eq!(arr.value(0), "hello_datafusion✨");
+        assert_eq!(arr.value(1), "datafusion-arrow🎷");
+        assert_eq!(arr.value(2), "c");
     }
 }

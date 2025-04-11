@@ -27,6 +27,7 @@ use parquet::arrow::array_reader::{
     make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
     ListArrayReader,
 };
+use parquet::arrow::ColumnValueDecoderOptions;
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
@@ -626,9 +627,13 @@ fn create_decimal_by_bytes_reader(
 ) -> Box<dyn ArrayReader> {
     let physical_type = column_desc.physical_type();
     match physical_type {
-        Type::BYTE_ARRAY => {
-            make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
-        }
+        Type::BYTE_ARRAY => make_byte_array_reader(
+            ColumnValueDecoderOptions::default(),
+            Box::new(page_iterator),
+            column_desc,
+            None,
+        )
+        .unwrap(),
         Type::FIXED_LEN_BYTE_ARRAY => {
             make_fixed_len_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
         }
@@ -647,21 +652,39 @@ fn create_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+    make_byte_array_reader(
+        ColumnValueDecoderOptions::default(),
+        Box::new(page_iterator),
+        column_desc,
+        None,
+    )
+    .unwrap()
 }
 
 fn create_byte_view_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    make_byte_view_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+    make_byte_view_array_reader(
+        ColumnValueDecoderOptions::default(),
+        Box::new(page_iterator),
+        column_desc,
+        None,
+    )
+    .unwrap()
 }
 
 fn create_string_view_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    make_byte_view_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
+    make_byte_view_array_reader(
+        ColumnValueDecoderOptions::default(),
+        Box::new(page_iterator),
+        column_desc,
+        None,
+    )
+    .unwrap()
 }
 
 fn create_string_byte_array_dictionary_reader(
@@ -671,8 +694,13 @@ fn create_string_byte_array_dictionary_reader(
     use parquet::arrow::array_reader::make_byte_array_dictionary_reader;
     let arrow_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
-    make_byte_array_dictionary_reader(Box::new(page_iterator), column_desc, Some(arrow_type))
-        .unwrap()
+    make_byte_array_dictionary_reader(
+        ColumnValueDecoderOptions::default(),
+        Box::new(page_iterator),
+        column_desc,
+        Some(arrow_type),
+    )
+    .unwrap()
 }
 
 fn create_string_list_reader(

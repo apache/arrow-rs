@@ -21,6 +21,7 @@ use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
+use crate::arrow::ColumnValueDecoderOptions;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
@@ -39,6 +40,7 @@ use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 pub fn make_byte_array_reader(
+    options: ColumnValueDecoderOptions,
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
@@ -56,7 +58,7 @@ pub fn make_byte_array_reader(
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
         | ArrowType::Decimal256(_, _) => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader = GenericRecordReader::new_with_options(options, column_desc);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -178,6 +180,17 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
 
     fn new(desc: &ColumnDescPtr) -> Self {
         let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        Self {
+            dict: None,
+            decoder: None,
+            validate_utf8,
+        }
+    }
+
+    fn new_with_options(options: ColumnValueDecoderOptions, desc: &ColumnDescPtr) -> Self {
+        let validate_utf8 =
+            !options.skip_validation.get() && desc.converted_type() == ConvertedType::UTF8;
+
         Self {
             dict: None,
             decoder: None,

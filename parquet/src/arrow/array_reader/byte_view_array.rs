@@ -20,6 +20,7 @@ use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
+use crate::arrow::ColumnValueDecoderOptions;
 use crate::basic::{ConvertedType, Encoding};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
@@ -37,6 +38,7 @@ use std::any::Any;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 pub fn make_byte_view_array_reader(
+    options: ColumnValueDecoderOptions,
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
@@ -52,7 +54,7 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader = GenericRecordReader::new_with_options(options, column_desc);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -138,6 +140,16 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
 
     fn new(desc: &ColumnDescPtr) -> Self {
         let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
+        Self {
+            dict: None,
+            decoder: None,
+            validate_utf8,
+        }
+    }
+
+    fn new_with_options(options: ColumnValueDecoderOptions, col: &ColumnDescPtr) -> Self {
+        let validate_utf8 =
+            !options.skip_validation.get() && col.converted_type() == ConvertedType::UTF8;
         Self {
             dict: None,
             decoder: None,
@@ -372,7 +384,7 @@ impl ByteViewArrayDecoderPlain {
                 //
                 // The implementation keeps a water mark `utf8_validation_begin` to track the beginning of the buffer that is not validated.
                 // If the length is smaller than 128, then we continue to next string.
-                // If the length is larger than 128, then we validate the buffer before the length bytes, and move the water mark to the beginning of next string.
+                // If the length is larger than 128, then we validate the buffer before the length bytes, and ve the water mark to the beginning of next string.
                 if len < 128 {
                     // fast path, move to next string.
                     // the len bytes are valid utf8.

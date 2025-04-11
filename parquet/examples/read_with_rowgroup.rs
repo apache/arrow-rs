@@ -16,10 +16,13 @@
 // under the License.
 
 use arrow::util::pretty::print_batches;
+use arrow_data::UnsafeFlag;
 use bytes::{Buf, Bytes};
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroups, RowSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, ParquetRecordBatchReader, RowGroups, RowSelection,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{parquet_to_arrow_field_levels, ProjectionMask};
+use parquet::arrow::{parquet_to_arrow_field_levels, ColumnValueDecoderOptions, ProjectionMask};
 use parquet::column::page::{PageIterator, PageReader};
 use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::RowGroupMetaData;
@@ -37,8 +40,14 @@ async fn main() -> Result<()> {
     // The metadata could be cached in other places, this example only shows how to read
     let metadata = file.get_metadata().await?;
 
+    // By default validation is not skipped
+    let skip_validation = UnsafeFlag::new();
+    let options = ArrowReaderOptions::new()
+        .with_column_value_decoder_options(ColumnValueDecoderOptions::new(skip_validation));
+
     for rg in metadata.row_groups() {
-        let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
+        let mut rowgroup =
+            InMemoryRowGroup::create(options.clone(), rg.clone(), ProjectionMask::all());
         rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
@@ -100,6 +109,7 @@ impl ChunkReader for ColumnChunkData {
 
 #[derive(Clone)]
 pub struct InMemoryRowGroup {
+    options: ArrowReaderOptions,
     pub metadata: RowGroupMetaData,
     mask: ProjectionMask,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
@@ -132,10 +142,15 @@ impl RowGroups for InMemoryRowGroup {
 }
 
 impl InMemoryRowGroup {
-    pub fn create(metadata: RowGroupMetaData, mask: ProjectionMask) -> Self {
+    pub fn create(
+        options: ArrowReaderOptions,
+        metadata: RowGroupMetaData,
+        mask: ProjectionMask,
+    ) -> Self {
         let column_chunks = metadata.columns().iter().map(|_| None).collect::<Vec<_>>();
 
         Self {
+            options,
             metadata,
             mask,
             column_chunks,
@@ -153,7 +168,13 @@ impl InMemoryRowGroup {
             None,
         )?;
 
-        ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)
+        ParquetRecordBatchReader::try_new_with_row_groups(
+            self.options.clone(),
+            &levels,
+            self,
+            batch_size,
+            selection,
+        )
     }
 
     /// fetch data from a reader in sync mode

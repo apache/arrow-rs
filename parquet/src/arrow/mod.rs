@@ -118,6 +118,8 @@ pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
 
+pub use self::decoder::ColumnValueDecoderOptions;
+
 // continue to export deprecated methods until they are removed
 #[allow(deprecated)]
 pub use self::schema::arrow_to_parquet_schema;

@@ -21,6 +21,7 @@ use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
+use crate::arrow::ColumnValueDecoderOptions;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
@@ -311,6 +312,10 @@ impl ColumnValueDecoder for ValueDecoder {
             dict_page: None,
             decoder: None,
         }
+    }
+
+    fn new_with_options(_options: ColumnValueDecoderOptions, col: &ColumnDescPtr) -> Self {
+        Self::new(col)
     }
 
     fn set_dict(
