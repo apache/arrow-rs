@@ -99,6 +99,18 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
                 false => hinted,
             }
         }
+
+        // Special case for Binary with extension types
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        (DataType::Binary, _) => {
+            // For now, we'll use the hint if it's Binary or LargeBinary
+            // The extension type will be applied later by parquet_to_arrow_field
+            if matches!(&hint, DataType::Binary | DataType::LargeBinary) {
+                return hint;
+            }
+            parquet
+        },
+
         _ => parquet,
     }
 }
@@ -286,6 +298,8 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
             _,
         ) => decimal_type(s, p),
         (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
+        #[cfg(feature = "arrow_canonical_extension_types")] // by default, convert variant to binary
+        (Some(LogicalType::Variant { .. }), _) => Ok(DataType::Binary),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,
