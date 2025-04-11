@@ -17,10 +17,12 @@
 
 //! [`zip`]: Combine values from two arrays based on boolean mask
 
+use std::sync::Arc;
+
 use crate::filter::SlicesIterator;
 use arrow_array::*;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 
 /// Zip two arrays by some boolean mask.
 ///
@@ -116,6 +118,16 @@ pub fn zip(
         ));
     }
 
+    if let DataType::Extension(extension) = truthy.data_type() {
+        let truthy_extension: ExtensionArray = truthy.to_data().into();
+        let falsy_extension: ExtensionArray = falsy.to_data().into();
+        let storage_result = zip(mask, truthy_extension.storage(), falsy_extension.storage())?;
+        return Ok(Arc::new(ExtensionArray::new(
+            extension.clone(),
+            storage_result,
+        )));
+    }
+
     let falsy = falsy.to_data();
     let truthy = truthy.to_data();
 
@@ -168,6 +180,10 @@ pub fn zip(
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
+    use arrow_schema::{extension::TestExtension, DataType};
+
     use super::*;
 
     #[test]
@@ -278,5 +294,34 @@ mod test {
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_extension() {
+        let mask = BooleanArray::from(vec![true, false, true, false]);
+        let truthy_storage = Arc::new(StringArray::from(vec![
+            "one banana",
+            "two banana",
+            "three banana",
+            "four",
+        ]));
+        let falsy_storage = Arc::new(StringArray::from(vec![
+            "five banana",
+            "six banana",
+            "seven banana",
+            "more",
+        ]));
+        let extension = Arc::new(TestExtension {
+            storage_type: DataType::Utf8,
+        });
+        let truthy = ExtensionArray::new(extension.clone(), truthy_storage.clone());
+        let falsy = ExtensionArray::new(extension.clone(), falsy_storage.clone());
+        let result_ref = zip(&mask, &truthy, &falsy).unwrap();
+        assert_eq!(result_ref.data_type(), truthy.data_type());
+        assert_eq!(result_ref.len(), 4);
+
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected = create_array!(Utf8, ["one banana", "six banana", "three banana", "more"]);
+        assert_eq!(result_array.storage().to_data(), expected.to_data());
     }
 }
