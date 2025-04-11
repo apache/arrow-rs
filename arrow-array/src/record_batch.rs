@@ -241,7 +241,9 @@ impl RecordBatch {
         Self::try_new_impl(schema, columns, &options)
     }
 
-    /// Creates a `RecordBatch` from a schema and columns
+    /// Creates a `RecordBatch` from a schema and columns, without validation.
+    ///
+    /// See [`Self::try_new`] for the checked version.
     ///
     /// # Safety
     ///
@@ -250,6 +252,10 @@ impl RecordBatch {
     ///  * `schema.fields.len() == columns.len()`
     ///  * `schema.fields[i].data_type() == columns[i].data_type()`
     ///  * `columns[i].len() == row_count`
+    ///
+    /// Note: if the schema does not match the underlying data exactly, it can lead to undefined
+    /// behavior, for example, via conversion to a `StructArray`, which in turn could lead
+    /// to incorrect access.
     pub unsafe fn new_unchecked(
         schema: SchemaRef,
         columns: Vec<Arc<dyn Array>>,
