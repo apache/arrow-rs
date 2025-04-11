@@ -46,11 +46,7 @@ pub fn create_random_batch(
         .map(|field| create_random_array(field, size, null_density, true_density))
         .collect::<Result<Vec<ArrayRef>>>()?;
 
-    RecordBatch::try_new_with_options(
-        schema,
-        columns,
-        &RecordBatchOptions::new().with_match_field_names(false),
-    )
+    RecordBatch::try_new(schema, columns)
 }
 
 /// Create a random [ArrayRef] from a [DataType] with a length,

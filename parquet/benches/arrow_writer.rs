@@ -198,7 +198,7 @@ fn create_float_bench_batch_with_nans(size: usize, nan_density: f32) -> Result<R
     Ok(RecordBatch::try_new_with_options(
         Arc::new(schema),
         columns,
-        &RecordBatchOptions::new().with_match_field_names(false),
+        &RecordBatchOptions::new(),
     )?)
 }
 
