@@ -228,6 +228,8 @@ pub enum LogicalType {
     Uuid,
     /// A 16-bit floating point number.
     Float16,
+    /// A Variant.
+    Variant,
 }
 
 // ----------------------------------------------------------------------
@@ -607,6 +609,7 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Variant => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -870,6 +873,7 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
+            parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
         }
     }
 }
@@ -911,6 +915,7 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
+            LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
         }
     }
 }
@@ -960,9 +965,10 @@ impl From<Option<LogicalType>> for ConvertedType {
                 },
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
-                    ConvertedType::NONE
-                }
+                LogicalType::Uuid
+                | LogicalType::Float16
+                | LogicalType::Variant
+                | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
         }
