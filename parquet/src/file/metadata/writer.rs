@@ -347,7 +347,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
     /// Sets whether to use IEEE 754 total order for statistics.
     ///
-    /// See [`crate::file::properties::WriterBuilderProperties::set_ieee754_total_order`] for
+    /// See [`crate::file::properties::WriterPropertiesBuilder::set_ieee754_total_order`] for
     /// more information.
     pub fn with_ieee754_total_order(mut self, ieee754_total_order: bool) -> Self {
         self.ieee754_total_order = ieee754_total_order;
