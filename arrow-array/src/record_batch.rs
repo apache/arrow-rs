@@ -891,7 +891,7 @@ mod tests {
     use crate::{
         BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
     };
-    use arrow_buffer::{Buffer, OffsetBuffer, ToByteSlice};
+    use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::Fields;
     use std::collections::HashMap;
