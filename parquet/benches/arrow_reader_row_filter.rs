@@ -40,83 +40,137 @@
 //!
 //! # To run:
 //! To run the benchmark, use `cargo bench --bench bench_filter_projection`.
+//!
+//! This benchmark creates a Parquet file in memory with 100K rows and four columns:
+//!  - int64: random integers generated using a fixed seed (range: 0..100)
+//!  - float64: random floating-point values generated using a fixed seed (range: 0.0..100.0)
+//!  - utf8View: random strings (with some empty values and the constant "const").
+//!             Randomly produces short strings (3-12 bytes) and long strings (13-20 bytes).
+//!  - ts: sequential timestamps in milliseconds
+//!
+//! Filters tested:
+//!  - utf8View <> '' (no selective) %80
+//!  - utf8View = 'const' (selective) %5
+//!  - int64 = 0 (selective)
+//!  - ts > 50_000 (no selective) %50
+//!
+//! Projections tested:
+//!  - All columns.
+//!  - All columns except the one used for filtering.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-use arrow::array::{
-    ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Int64Array, TimestampMillisecondArray,
-};
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
+use arrow::array::{ArrayRef, Float64Array, Int64Array, TimestampMillisecondArray};
+use arrow::compute::kernels::cmp::{eq, gt, neq};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::StringViewBuilder;
-use arrow_array::{Array, StringViewArray};
-use criterion::async_executor::FuturesExecutor;
+use arrow_array::StringViewArray;
+use arrow_cast::pretty::pretty_format_batches;
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::properties::WriterProperties;
 use tokio::fs::File;
-use tokio::runtime::Runtime;
 
-/// Create a RecordBatch with 100K rows and four columns.
-///
-///  - int64: sequential integers
-///  - float64: floating-point values (derived from the integers)
-///  - utf8View: string values where about half are non-empty,
-///    and a few rows (every 10Kth row) are the constant "const"
-///  - ts: timestamp values (using, e.g., a millisecond epoch)
+fn create_random_array(
+    field: &Field,
+    size: usize,
+    null_density: f32,
+    _true_density: f32,
+) -> arrow::error::Result<ArrayRef> {
+    match field.data_type() {
+        DataType::Int64 => {
+            let mut rng = StdRng::seed_from_u64(42);
+            let values: Vec<i64> = (0..size).map(|_| rng.random_range(0..100)).collect();
+            Ok(Arc::new(Int64Array::from(values)) as ArrayRef)
+        }
+        DataType::Float64 => {
+            let mut rng = StdRng::seed_from_u64(43);
+            let values: Vec<f64> = (0..size).map(|_| rng.random_range(0.0..100.0)).collect();
+            Ok(Arc::new(Float64Array::from(values)) as ArrayRef)
+        }
+        DataType::Utf8View => {
+            let mut builder = StringViewBuilder::with_capacity(size);
+            let mut rng = StdRng::seed_from_u64(44);
+            for _ in 0..size {
+                let choice = rng.random_range(0..100);
+                if choice < (null_density * 100.0) as u32 {
+                    builder.append_value("");
+                } else if choice < 25 {
+                    builder.append_value("const");
+                } else {
+                    let is_long = rng.random_bool(0.5);
+                    let len = if is_long {
+                        rng.random_range(13..21)
+                    } else {
+                        rng.random_range(3..12)
+                    };
+                    let charset = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                    let s: String = (0..len)
+                        .map(|_| {
+                            let idx = rng.random_range(0..charset.len());
+                            charset[idx] as char
+                        })
+                        .collect();
+                    builder.append_value(&s);
+                }
+            }
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let values: Vec<i64> = (0..size as i64).collect();
+            Ok(Arc::new(TimestampMillisecondArray::from(values)) as ArrayRef)
+        }
+        _ => unimplemented!("Field type not supported in create_random_array"),
+    }
+}
+
+pub fn create_random_batch(
+    schema: SchemaRef,
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> arrow::error::Result<RecordBatch> {
+    let columns = schema
+        .fields()
+        .iter()
+        .map(|field| create_random_array(field, size, null_density, true_density))
+        .collect::<arrow::error::Result<Vec<ArrayRef>>>()?;
+    RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::new().with_match_field_names(false),
+    )
+}
+
+>>>>>>> 69a2617
 fn make_record_batch() -> RecordBatch {
     let num_rows = 100_000;
-
-    // int64 column: sequential numbers 0..num_rows
-    let int_values: Vec<i64> = (0..num_rows as i64).collect();
-    let int_array = Arc::new(Int64Array::from(int_values)) as ArrayRef;
-
-    // float64 column: derived from int64 (e.g., multiplied by 0.1)
-    let float_values: Vec<f64> = (0..num_rows).map(|i| i as f64 * 0.1).collect();
-    let float_array = Arc::new(Float64Array::from(float_values)) as ArrayRef;
-
-    // utf8View column: even rows get non-empty strings; odd rows get an empty string;
-    // every 10Kth even row is "const" to be selective.
-    let mut string_view_builder = StringViewBuilder::with_capacity(100_000);
-    for i in 0..num_rows {
-        if i % 2 == 0 {
-            if i % 10_000 == 0 {
-                string_view_builder.append_value("const");
-            } else {
-                string_view_builder.append_value("nonempty");
-            }
-        } else {
-            string_view_builder.append_value("");
-        }
-    }
-    let utf8_view_array = Arc::new(string_view_builder.finish()) as ArrayRef;
-
-    // Timestamp column: using milliseconds from an epoch (simply using the row index)
-    let ts_values: Vec<i64> = (0..num_rows as i64).collect();
-    let ts_array = Arc::new(TimestampMillisecondArray::from(ts_values)) as ArrayRef;
-
-    let schema = Arc::new(Schema::new(vec![
+    let fields = vec![
         Field::new("int64", DataType::Int64, false),
         Field::new("float64", DataType::Float64, false),
-        Field::new("utf8View", DataType::Utf8View, false),
+        Field::new("utf8View", DataType::Utf8View, true),
         Field::new(
             "ts",
             DataType::Timestamp(TimeUnit::Millisecond, None),
             false,
         ),
-    ]));
+    ];
+    let schema = Arc::new(Schema::new(fields));
+    let batch = create_random_batch(schema, num_rows, 0.2, 0.5).unwrap();
 
-    RecordBatch::try_new(
-        schema,
-        vec![int_array, float_array, utf8_view_array, ts_array],
-    )
-    .unwrap()
+    println!("Batch created with {} rows", num_rows);
+    println!(
+        "First 100 rows:\n{}",
+        pretty_format_batches(&[batch.clone().slice(0, 100)]).unwrap()
+    );
+    batch
 }
 
-/// Writes the record batch to a temporary Parquet file.
 fn write_parquet_file() -> NamedTempFile {
     let batch = make_record_batch();
     let schema = batch.schema();
@@ -129,87 +183,41 @@ fn write_parquet_file() -> NamedTempFile {
     {
         let file_reopen = file.reopen().unwrap();
         let mut writer = ArrowWriter::try_new(file_reopen, schema.clone(), Some(props)).unwrap();
-        // Write the entire batch as a single row group.
         writer.write(&batch).unwrap();
         writer.close().unwrap();
     }
     file
 }
 
-/// Filter function: returns a BooleanArray with true when utf8View <> "".
-fn filter_utf8_view_nonempty(batch: &RecordBatch) -> BooleanArray {
-    let array = batch
-        .column(batch.schema().index_of("utf8View").unwrap())
-        .as_any()
-        .downcast_ref::<StringViewArray>()
-        .unwrap();
-    let mut builder = BooleanBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        let keep = !array.value(i).is_empty();
-        builder.append_value(keep);
-    }
-    builder.finish()
+// Use Arrow compute kernels for filtering.
+// Returns a BooleanArray where true indicates the row satisfies the condition.
+fn filter_utf8_view_nonempty(
+    batch: &RecordBatch,
+) -> arrow::error::Result<arrow::array::BooleanArray> {
+    let array = batch.column(batch.schema().index_of("utf8View").unwrap());
+    let string_view_scalar = StringViewArray::new_scalar("");
+    // Compare with empty string
+    let not_equals_empty = neq(array, &string_view_scalar)?;
+    Ok(not_equals_empty)
 }
 
-/// Filter function: returns a BooleanArray with true when utf8View == "const".
-fn filter_utf8_view_const(batch: &RecordBatch) -> BooleanArray {
-    let array = batch
-        .column(batch.schema().index_of("utf8View").unwrap())
-        .as_any()
-        .downcast_ref::<StringViewArray>()
-        .unwrap();
-    let mut builder = BooleanBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        let keep = array.value(i) == "const";
-        builder.append_value(keep);
-    }
-    builder.finish()
+fn filter_utf8_view_const(batch: &RecordBatch) -> arrow::error::Result<arrow::array::BooleanArray> {
+    let array = batch.column(batch.schema().index_of("utf8View").unwrap());
+    let string_view_scalar = StringViewArray::new_scalar("const");
+    let eq_const = eq(array, &string_view_scalar)?;
+    Ok(eq_const)
+}
+fn filter_int64_eq_zero(batch: &RecordBatch) -> arrow::error::Result<arrow::array::BooleanArray> {
+    let array = batch.column(batch.schema().index_of("int64").unwrap());
+    let eq_zero = eq(array, &Int64Array::new_scalar(0))?;
+    Ok(eq_zero)
 }
 
-/// Integer non-selective filter: returns true for even numbers.
-fn filter_int64_even(batch: &RecordBatch) -> BooleanArray {
-    let array = batch
-        .column(batch.schema().index_of("int64").unwrap())
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .unwrap();
-    let mut builder = BooleanBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        let keep = array.value(i) % 2 == 0;
-        builder.append_value(keep);
-    }
-    builder.finish()
-}
-
-/// Integer selective filter: returns true only when int64 equals 0.
-fn filter_int64_eq_zero(batch: &RecordBatch) -> BooleanArray {
-    let array = batch
-        .column(batch.schema().index_of("int64").unwrap())
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .unwrap();
-    let mut builder = BooleanBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        let keep = array.value(i) == 0;
-        builder.append_value(keep);
-    }
-    builder.finish()
-}
-
-/// Timestamp filter: returns true when ts > threshold (using 50_000 as example threshold).
-fn filter_timestamp_gt(batch: &RecordBatch) -> BooleanArray {
-    let array = batch
-        .column(batch.schema().index_of("ts").unwrap())
-        .as_any()
-        .downcast_ref::<TimestampMillisecondArray>()
-        .unwrap();
-    let threshold = 50_000;
-    let mut builder = BooleanBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        let keep = array.value(i) > threshold;
-        builder.append_value(keep);
-    }
-    builder.finish()
+fn filter_timestamp_gt(batch: &RecordBatch) -> arrow::error::Result<arrow::array::BooleanArray> {
+    let array = batch.column(batch.schema().index_of("ts").unwrap());
+    // For Timestamp arrays, use ScalarValue::TimestampMillisecond.
+    let gt_thresh = gt(array, &TimestampMillisecondArray::new_scalar(50_000))?;
+    Ok(gt_thresh)
 }
 
 /// Filters tested:
@@ -222,7 +230,6 @@ fn filter_timestamp_gt(batch: &RecordBatch) -> BooleanArray {
 enum FilterType {
     Utf8ViewNonEmpty,
     Utf8ViewConst,
-    Int64Even,
     Int64EqZero,
     TimestampGt,
 }
@@ -232,7 +239,6 @@ impl std::fmt::Display for FilterType {
         match self {
             FilterType::Utf8ViewNonEmpty => write!(f, "utf8View <> ''"),
             FilterType::Utf8ViewConst => write!(f, "utf8View = 'const'"),
-            FilterType::Int64Even => write!(f, "int64 even"),
             FilterType::Int64EqZero => write!(f, "int64 = 0"),
             FilterType::TimestampGt => write!(f, "ts > 50_000"),
         }
@@ -249,62 +255,53 @@ impl std::fmt::Display for FilterType {
 fn benchmark_filters_and_projections(c: &mut Criterion) {
     let parquet_file = write_parquet_file();
 
-    let runtime = Runtime::new().unwrap(); // Create a new Tokio runtime
-
-    // Define filter functions associated with each FilterType.
-    type FilterFn = fn(&RecordBatch) -> BooleanArray;
+    type FilterFn = fn(&RecordBatch) -> arrow::error::Result<arrow::array::BooleanArray>;
     let filter_funcs: Vec<(FilterType, FilterFn)> = vec![
         (FilterType::Utf8ViewNonEmpty, filter_utf8_view_nonempty),
         (FilterType::Utf8ViewConst, filter_utf8_view_const),
-        (FilterType::Int64Even, filter_int64_even),
         (FilterType::Int64EqZero, filter_int64_eq_zero),
         (FilterType::TimestampGt, filter_timestamp_gt),
     ];
 
     let mut group = c.benchmark_group("arrow_reader_row_filter");
 
-    // Iterate by value (Copy is available for FilterType and fn pointers)
     for (filter_type, filter_fn) in filter_funcs.into_iter() {
         for proj_case in ["all_columns", "exclude_filter_column"].iter() {
-            // Define indices for all columns: [0: "int64", 1: "float64", 2: "utf8View", 3: "ts"]
             let all_indices = vec![0, 1, 2, 3];
 
-            // For the output projection, conditionally exclude the filter column.
             let output_projection: Vec<usize> = if *proj_case == "all_columns" {
                 all_indices.clone()
             } else {
                 all_indices
                     .into_iter()
                     .filter(|i| match filter_type {
-                        FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewConst => *i != 2, // Exclude "utf8" (index 2)
-                        FilterType::Int64Even | FilterType::Int64EqZero => *i != 0, // Exclude "int64" (index 0)
-                        FilterType::TimestampGt => *i != 3, // Exclude "ts" (index 3)
+                        FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewConst => *i != 2,
+                        FilterType::Int64EqZero => *i != 0,
+                        FilterType::TimestampGt => *i != 3,
                     })
                     .collect()
             };
 
-            // For predicate pushdown, define a projection that includes the column required for the predicate.
             let predicate_projection: Vec<usize> = match filter_type {
                 FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewConst => vec![2],
-                FilterType::Int64Even | FilterType::Int64EqZero => vec![0],
+                FilterType::Int64EqZero => vec![0],
                 FilterType::TimestampGt => vec![3],
             };
 
-            // Create a benchmark id combining filter type and projection case.
             let bench_id = BenchmarkId::new(
                 format!("filter_case: {} project_case: {}", filter_type, proj_case),
                 "",
             );
 
             group.bench_function(bench_id, |b| {
-                b.to_async(FuturesExecutor).iter(|| async {
-                    runtime.block_on(async {
-                        // Reopen the Parquet file for each iteration.
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                b.iter(|| {
+                    rt.block_on(async {
                         let file = File::open(parquet_file.path()).await.unwrap();
-
-                        // Create a async parquet reader builder with batch_size.
                         let options = ArrowReaderOptions::new().with_page_index(true);
-
                         let builder =
                             ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                                 .await
@@ -312,12 +309,10 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                                 .with_batch_size(8192);
 
                         let file_metadata = builder.metadata().file_metadata().clone();
-
                         let mask = ProjectionMask::roots(
                             file_metadata.schema_descr(),
                             output_projection.clone(),
                         );
-
                         let pred_mask = ProjectionMask::roots(
                             file_metadata.schema_descr(),
                             predicate_projection.clone(),
@@ -325,7 +320,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
 
                         let f = filter_fn;
                         let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                            Ok(f(&batch))
+                            Ok(f(&batch).unwrap())
                         });
                         let stream = builder
                             .with_projection(mask)
@@ -333,7 +328,6 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                             .build()
                             .unwrap();
 
-                        // Collect the results into a vector of RecordBatches.
                         stream.try_collect::<Vec<_>>().await.unwrap();
                     })
                 });
