@@ -17,6 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use criterion::Criterion;
 use rand::distr::Uniform;
@@ -108,6 +109,7 @@ fn from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer {
     })
 }
 
+#[allow(deprecated)]
 fn create_data(size: usize) -> Vec<Vec<u32>> {
     let rng = &mut seedable_rng();
     let range = Uniform::new(0, 33).unwrap();
@@ -123,6 +125,7 @@ fn create_data(size: usize) -> Vec<Vec<u32>> {
         .collect()
 }
 
+#[allow(deprecated)]
 fn create_data_bool(size: usize) -> Vec<Vec<bool>> {
     let rng = &mut seedable_rng();
     let range = Uniform::new(0, 33).unwrap();

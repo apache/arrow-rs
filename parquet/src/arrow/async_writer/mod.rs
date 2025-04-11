@@ -292,6 +292,7 @@ mod tests {
 
     use super::*;
 
+    #[allow(deprecated)]
     fn get_test_reader() -> ParquetRecordBatchReader {
         let testdata = arrow::util::test_util::parquet_test_data();
         // This test file is large enough to generate multiple row groups.

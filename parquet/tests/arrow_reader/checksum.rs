@@ -19,6 +19,7 @@
 
 use std::path::PathBuf;
 
+#[allow(deprecated)]
 use arrow::util::test_util::parquet_test_data;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 
@@ -61,6 +62,7 @@ fn test_rle_dict_snappy_checksum() {
 
 /// Reads a file and returns a vector with one element per record batch.
 /// The record batch data is replaced with () and errors are stringified.
+#[allow(deprecated)]
 fn read_file_batch_errors(name: &str) -> Vec<Result<(), String>> {
     let path = PathBuf::from(parquet_test_data()).join(name);
     println!("Reading file: {:?}", path);

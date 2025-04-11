@@ -26,6 +26,7 @@ use std::time::SystemTime;
 use tokio::fs::File;
 
 #[tokio::main(flavor = "current_thread")]
+#[allow(deprecated)]
 async fn main() -> Result<()> {
     // Create parquet file that will be read.
     let testdata = arrow::util::test_util::parquet_test_data();

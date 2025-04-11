@@ -22,6 +22,7 @@ use arrow::util::bench_util::{
     create_primitive_array, create_string_array, create_string_array_with_len,
     create_string_dict_array,
 };
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow_array::{Array, ListArray, RecordBatch, StructArray};
 use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
@@ -59,11 +60,13 @@ fn create_mixed(len: usize) -> RecordBatch {
     .unwrap()
 }
 
+#[allow(deprecated)]
 fn create_nulls(len: usize) -> NullBuffer {
     let mut rng = seedable_rng();
     BooleanBuffer::from_iter((0..len).map(|_| rng.random_bool(0.2))).into()
 }
 
+#[allow(deprecated)]
 fn create_offsets(len: usize) -> (usize, OffsetBuffer<i32>) {
     let mut rng = seedable_rng();
     let mut last_offset = 0;

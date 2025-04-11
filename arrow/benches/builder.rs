@@ -25,6 +25,7 @@ use criterion::*;
 use rand::distr::StandardUniform;
 
 use arrow::array::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::i256;
 use rand::Rng;
@@ -66,6 +67,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
     group.finish();
 }
 
+#[allow(deprecated)]
 fn bench_bool(c: &mut Criterion) {
     let data: Vec<bool> = seedable_rng()
         .sample_iter(&StandardUniform)
