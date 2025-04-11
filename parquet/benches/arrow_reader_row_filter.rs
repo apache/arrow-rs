@@ -17,26 +17,28 @@
 
 //! Benchmark for evaluating row filters and projections on a Parquet file.
 //!
-//! This benchmark creates a Parquet file in memory with 100K rows and four columns:
-//!  - int64: sequential integers
-//!  - float64: floating-point values (derived from the integers)
-//!  - utf8View: string values where about half are non-empty,
-//!    and a few rows (every 10Kth row) are the constant "const"
-//!  - ts: timestamp values (using, e.g., a millisecond epoch)
+//! # Background:
 //!
-//! It then applies several filter functions and projections, benchmarking the read-back speed.
+//! As described in [Efficient Filter Pushdown in Parquet], evaluating
+//! pushdown filters is a two step process:
 //!
-//! Filters tested:
-//!  - A string filter: `utf8View <> ''` (non-empty)
-//!  - A string filter: `utf8View = 'const'` (selective)
-//!  - An integer non-selective filter (e.g. even numbers)
-//!  - An integer selective filter (e.g. `int64 = 0`)
-//!  - A timestamp filter (e.g. `ts > threshold`)
+//! 1. Build a filter mask by decoding and evaluating filter functions on
+//!    the filter column(s).
 //!
-//! Projections tested:
-//!  - All 4 columns.
-//!  - All columns except the one used for the filter.
+//! 2. Decode the rows that match the filter mask from the projected columns.
 //!
+//! The performance of this process depending on several factors, including:
+//!
+//! 1. How many rows are selected as well and how well clustered the results
+//!    are, where the representation of the filter mask is important.
+//! 2. If the same column is used for both filtering and projection, as the
+//!    columns that appear in both filtering and projection are decoded twice.
+//!
+//! This benchmark helps measure the performance of these operations.
+//!
+//! [Efficient Filter Pushdown in Parquet]: https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/
+//!
+//! # To run:
 //! To run the benchmark, use `cargo bench --bench bench_filter_projection`.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
@@ -59,6 +61,12 @@ use tokio::fs::File;
 use tokio::runtime::Runtime;
 
 /// Create a RecordBatch with 100K rows and four columns.
+///
+///  - int64: sequential integers
+///  - float64: floating-point values (derived from the integers)
+///  - utf8View: string values where about half are non-empty,
+///    and a few rows (every 10Kth row) are the constant "const"
+///  - ts: timestamp values (using, e.g., a millisecond epoch)
 fn make_record_batch() -> RecordBatch {
     let num_rows = 100_000;
 
@@ -204,6 +212,12 @@ fn filter_timestamp_gt(batch: &RecordBatch) -> BooleanArray {
     builder.finish()
 }
 
+/// Filters tested:
+///  - A string filter: `utf8View <> ''` (non-empty)
+///  - A string filter: `utf8View = 'const'` (selective)
+///  - An integer non-selective filter (e.g. even numbers)
+///  - An integer selective filter (e.g. `int64 = 0`)
+///  - A timestamp filter (e.g. `ts > threshold`)
 #[derive(Clone)]
 enum FilterType {
     Utf8ViewNonEmpty,
@@ -225,6 +239,13 @@ impl std::fmt::Display for FilterType {
     }
 }
 
+/// This benchmark tests the performance of row filters and projections
+///
+/// Tests combinations of FilterType and ProjectionType
+///
+/// Projections tested:
+///  - All 4 columns.
+///  - All columns except the one used for the filter.
 fn benchmark_filters_and_projections(c: &mut Criterion) {
     let parquet_file = write_parquet_file();
 
