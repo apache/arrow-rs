@@ -17,7 +17,9 @@
 
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
-use crate::encryption_util::{verify_encryption_test_data, TestKeyRetriever};
+use crate::encryption_util::{
+    verify_column_indexes, verify_encryption_test_data, TestKeyRetriever,
+};
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
@@ -29,6 +31,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
+use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -724,6 +727,53 @@ pub fn test_retrieve_row_group_statistics_after_encrypted_write() {
         column_stats.max_value.as_deref(),
         Some(19i32.to_le_bytes().as_slice())
     );
+}
+
+#[test]
+fn test_decrypt_page_index_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
+
+    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties).unwrap();
+}
+
+#[test]
+fn test_decrypt_page_index_non_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+
+    let footer_key = "0123456789012345".as_bytes().to_vec();
+    let column_1_key = "1234567890123450".as_bytes().to_vec();
+    let column_2_key = "1234567890123451".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties).unwrap();
+}
+
+fn test_decrypt_page_index(
+    path: &str,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<(), ParquetError> {
+    let file = File::open(path)?;
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties)
+        .with_page_index(true);
+
+    let arrow_metadata = ArrowReaderMetadata::load(&file, options)?;
+
+    verify_column_indexes(arrow_metadata.metadata());
+
+    Ok(())
 }
 
 fn read_and_roundtrip_to_encrypted_file(

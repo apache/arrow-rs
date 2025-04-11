@@ -17,7 +17,9 @@
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
-use crate::encryption_util::{verify_encryption_test_data, TestKeyRetriever};
+use crate::encryption_util::{
+    verify_column_indexes, verify_encryption_test_data, TestKeyRetriever,
+};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
@@ -380,6 +382,58 @@ async fn test_uniform_encryption_with_key_retriever() {
     verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn test_decrypt_page_index_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
+
+    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_decrypt_page_index_non_uniform() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+
+    let footer_key = "0123456789012345".as_bytes().to_vec();
+    let column_1_key = "1234567890123450".as_bytes().to_vec();
+    let column_2_key = "1234567890123451".as_bytes().to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key)
+        .with_column_key("float_field", column_2_key)
+        .build()
+        .unwrap();
+
+    test_decrypt_page_index(&path, decryption_properties)
+        .await
+        .unwrap();
+}
+
+async fn test_decrypt_page_index(
+    path: &str,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<(), ParquetError> {
+    let mut file = File::open(&path).await?;
+
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(decryption_properties)
+        .with_page_index(true);
+
+    let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
+
+    verify_column_indexes(arrow_metadata.metadata());
+
+    Ok(())
 }
 
 async fn verify_encryption_test_file_read_async(

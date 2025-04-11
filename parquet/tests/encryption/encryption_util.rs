@@ -88,6 +88,38 @@ pub fn verify_encryption_test_data(record_batches: Vec<RecordBatch>, metadata: &
     assert_eq!(row_count, file_metadata.num_rows() as usize);
 }
 
+/// Verifies that the column and offset indexes were successfully read from an
+/// encrypted test file.
+pub fn verify_column_indexes(metadata: &ParquetMetaData) {
+    let offset_index = metadata.offset_index().unwrap();
+    // 1 row group, 8 columns
+    assert_eq!(offset_index.len(), 1);
+    assert_eq!(offset_index[0].len(), 8);
+    // Check float column, which is encrypted in the non-uniform test file
+    let float_col_idx = 4;
+    let offset_index = &offset_index[0][float_col_idx];
+    assert_eq!(offset_index.page_locations.len(), 1);
+    assert!(offset_index.page_locations[0].offset > 0);
+
+    let column_index = metadata.column_index().unwrap();
+    assert_eq!(column_index.len(), 1);
+    assert_eq!(column_index[0].len(), 8);
+    let column_index = &column_index[0][float_col_idx];
+
+    match column_index {
+        parquet::file::page_index::index::Index::FLOAT(float_index) => {
+            assert_eq!(float_index.indexes.len(), 1);
+            assert_eq!(float_index.indexes[0].min, Some(0.0f32));
+            assert!(float_index.indexes[0]
+                .max
+                .is_some_and(|max| (max - 53.9).abs() < 1e-6));
+        }
+        _ => {
+            panic!("Expected a float column index for column {}", float_col_idx);
+        }
+    };
+}
+
 /// A KeyRetriever to use in Parquet encryption tests,
 /// which stores a map from key names/metadata to encryption key bytes.
 pub struct TestKeyRetriever {
