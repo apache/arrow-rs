@@ -113,12 +113,17 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
-    use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
+    use arrow_array::{
+        create_array, ExtensionArray, Int32Array, NullArray, StringArray, StructArray,
+    };
     use arrow_data::ArrayData;
+    use arrow_schema::extension::TextExtension;
     use arrow_schema::{Field, Fields};
     use rand::{rng, Rng};
 
@@ -525,5 +530,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_nullif_extension() {
+        let predicate = BooleanArray::from(vec![true, false, true, false]);
+        let storage = Arc::new(StringArray::from(vec![
+            "one banana",
+            "two banana",
+            "three banana",
+            "four",
+        ]));
+        let array = ExtensionArray::new(
+            Arc::new(TextExtension {
+                storage_type: DataType::Utf8,
+            }),
+            storage.clone(),
+        );
+        let result_ref = nullif(&array, &predicate).unwrap();
+        assert_eq!(result_ref.data_type(), array.data_type());
+        assert_eq!(result_ref.len(), 4);
+
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected = create_array!(Utf8, [None, Some("two banana"), None, Some("four")]);
+        assert_eq!(result_array.storage().to_data(), expected.to_data());
     }
 }
