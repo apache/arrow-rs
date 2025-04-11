@@ -18,6 +18,16 @@
 //! This module implements Parquet Modular Encryption, as described in the
 //! [specification](https://github.com/apache/parquet-format/blob/master/Encryption.md).
 //!
+//! [`FileEncryptionProperties`](encrypt::FileEncryptionProperties) define how to encrypt
+//! a Parquet file when writing, and [`FileDecryptionProperties`](decrypt::FileDecryptionProperties)
+//! are used when reading an encrypted file.
+//!
+//! If you need to integrate with a Key Management Server (KMS), it's recommended
+//! to use the [`key_management`] module rather than building encryption and
+//! decryption properties yourself.
+//! The [`key_management`] module also allows compatibility with PyArrow,
+//! which doesn't support directly specifying encryption and decryption keys.
+//!
 //! # Example of writing and reading an encrypted Parquet file
 //!
 //! ```
@@ -109,4 +119,6 @@
 pub(crate) mod ciphers;
 pub mod decrypt;
 pub mod encrypt;
+#[cfg(feature = "key_management")]
+pub mod key_management;
 pub(crate) mod modules;
