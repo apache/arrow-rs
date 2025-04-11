@@ -17,6 +17,30 @@
 
 //! Benchmark for evaluating row filters and projections on a Parquet file.
 //!
+//! # Background:
+//!
+//! As described in [Efficient Filter Pushdown in Parquet], evaluating
+//! pushdown filters is a two step process:
+//!
+//! 1. Build a filter mask by decoding and evaluating filter functions on
+//!    the filter column(s).
+//!
+//! 2. Decode the rows that match the filter mask from the projected columns.
+//!
+//! The performance of this process depending on several factors, including:
+//!
+//! 1. How many rows are selected as well and how well clustered the results
+//!    are, where the representation of the filter mask is important.
+//! 2. If the same column is used for both filtering and projection, as the
+//!    columns that appear in both filtering and projection are decoded twice.
+//!
+//! This benchmark helps measure the performance of these operations.
+//!
+//! [Efficient Filter Pushdown in Parquet]: https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/
+//!
+//! # To run:
+//! To run the benchmark, use `cargo bench --bench bench_filter_projection`.
+//!
 //! This benchmark creates a Parquet file in memory with 100K rows and four columns:
 //!  - int64: random integers generated using a fixed seed (range: 0..100)
 //!  - float64: random floating-point values generated using a fixed seed (range: 0.0..100.0)
@@ -33,8 +57,6 @@
 //! Projections tested:
 //!  - All columns.
 //!  - All columns except the one used for filtering.
-//!
-//! To run the benchmark, use `cargo bench --bench bench_filter_projection`.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
