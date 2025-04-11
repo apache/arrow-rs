@@ -54,13 +54,13 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Test
         run: |
-          cargo test -p arrow-flight
+          cargo test -p arrow-flight --features=router
       - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features
       - name: Test --examples
         run: |
-          cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
+          cargo test -p arrow-flight  --features=flight-sql-experimental,tls,router --examples
 
   vendor:
     name: Verify Vendored Code
