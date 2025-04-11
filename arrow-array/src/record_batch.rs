@@ -211,10 +211,11 @@ impl RecordBatch {
     /// Creates a `RecordBatch` from a schema and columns.
     ///
     /// Expects the following:
-    ///  * the vec of columns to not be empty
-    ///  * the schema and column data types to have equal lengths
-    ///    and match
-    ///  * each array in columns to have the same length
+    ///
+    ///  * `!columns.is_empty()`
+    ///  * `schema.fields.len() == columns.len()`
+    ///  * `schema.fields[i].data_type() == columns[i].data_type()`
+    ///  * `columns[i].len() == columns[j].len()`
     ///
     /// If the conditions are not met, an error is returned.
     ///
@@ -238,6 +239,27 @@ impl RecordBatch {
     pub fn try_new(schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<Self, ArrowError> {
         let options = RecordBatchOptions::new();
         Self::try_new_impl(schema, columns, &options)
+    }
+
+    /// Creates a `RecordBatch` from a schema and columns
+    ///
+    /// # Safety
+    ///
+    /// Expects the following:
+    ///
+    ///  * `schema.fields.len() == columns.len()`
+    ///  * `schema.fields[i].data_type() == columns[i].data_type()`
+    ///  * `columns[i].len() == row_count`
+    pub unsafe fn new_unchecked(
+        schema: SchemaRef,
+        columns: Vec<Arc<dyn Array>>,
+        row_count: usize,
+    ) -> Self {
+        Self {
+            schema,
+            columns,
+            row_count,
+        }
     }
 
     /// Creates a `RecordBatch` from a schema and columns, with additional options,
