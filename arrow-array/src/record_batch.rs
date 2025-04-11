@@ -359,11 +359,12 @@ impl RecordBatch {
         })
     }
 
-    /// Overrides the schema of this [`RecordBatch`]
-    /// without additional schema checks. Note, however, that this pushes all the schema compatibility responsibilities
-    /// to the caller site. In particular, the caller guarantees that `schema` is a superset
-    /// of the current schema as determined by [`Schema::contains`].
-    pub fn with_schema_unchecked(self, schema: SchemaRef) -> Result<Self, ArrowError> {
+    /// Overrides the schema of this [`RecordBatch`] without additional schema checks.
+    ///
+    /// # Safety
+    ///
+    /// `schema` must be a superset of the current schema as determined by [`Schema::contains`]
+    pub unsafe fn with_schema_unchecked(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         Ok(Self {
             schema,
             columns: self.columns,
