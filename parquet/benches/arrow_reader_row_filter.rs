@@ -81,7 +81,7 @@ fn create_random_array(
                 } else if choice < 25 {
                     builder.append_value("const");
                 } else {
-                    let is_long = rng.random_range(0.5);
+                    let is_long = rng.random_bool(0.5);
                     let len = if is_long {
                         rng.random_range(13..21)
                     } else {
