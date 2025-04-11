@@ -411,12 +411,12 @@ impl DynExtensionTypeFactory for CanonicalExtensionTypeFactory {
 
 /// Extension for tests
 #[derive(Debug)]
-pub struct TextExtension {
+pub struct TestExtension {
     /// Arbitrary storage type
     pub storage_type: DataType,
 }
 
-impl DynExtensionType for TextExtension {
+impl DynExtensionType for TestExtension {
     fn as_any(&self) -> &dyn Any {
         self
     }

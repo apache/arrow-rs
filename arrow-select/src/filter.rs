@@ -869,7 +869,7 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use arrow_schema::extension::TextExtension;
+    use arrow_schema::extension::TestExtension;
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
@@ -2062,7 +2062,7 @@ mod tests {
             "four",
         ]));
         let array = ExtensionArray::new(
-            Arc::new(TextExtension {
+            Arc::new(TestExtension {
                 storage_type: DataType::Utf8,
             }),
             storage.clone(),

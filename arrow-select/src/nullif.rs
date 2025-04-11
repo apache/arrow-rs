@@ -123,7 +123,7 @@ mod tests {
         create_array, ExtensionArray, Int32Array, NullArray, StringArray, StructArray,
     };
     use arrow_data::ArrayData;
-    use arrow_schema::extension::TextExtension;
+    use arrow_schema::extension::TestExtension;
     use arrow_schema::{Field, Fields};
     use rand::{rng, Rng};
 
@@ -542,7 +542,7 @@ mod tests {
             "four",
         ]));
         let array = ExtensionArray::new(
-            Arc::new(TextExtension {
+            Arc::new(TestExtension {
                 storage_type: DataType::Utf8,
             }),
             storage.clone(),

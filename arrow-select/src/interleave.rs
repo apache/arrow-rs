@@ -94,13 +94,19 @@ pub fn interleave(
     }
 
     if let DataType::Extension(extension) = data_type {
-        let storage: Vec<_> = values.iter().map(|array| {
-            let extension_array: ExtensionArray = array.to_data().into();
-            extension_array.storage().clone()
-        }).collect();
+        let storage: Vec<_> = values
+            .iter()
+            .map(|array| {
+                let extension_array: ExtensionArray = array.to_data().into();
+                extension_array.storage().clone()
+            })
+            .collect();
         let storage_ref: Vec<_> = storage.iter().map(|array| array.as_ref()).collect();
         let storage_result = interleave(&storage_ref, indices)?;
-        return Ok(Arc::new(ExtensionArray::new(extension.clone(), storage_result)));
+        return Ok(Arc::new(ExtensionArray::new(
+            extension.clone(),
+            storage_result,
+        )));
     }
 
     downcast_primitive! {
@@ -379,7 +385,7 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_schema::extension::TextExtension;
+    use arrow_schema::extension::TestExtension;
 
     #[test]
     fn test_primitive() {
@@ -741,7 +747,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_interleave_extension() {
         let indices = [(0, 0), (1, 3), (0, 2)];
@@ -753,7 +758,7 @@ mod tests {
         ]));
 
         let array = ExtensionArray::new(
-            Arc::new(TextExtension {
+            Arc::new(TestExtension {
                 storage_type: DataType::Utf8,
             }),
             storage.clone(),
