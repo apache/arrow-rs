@@ -2071,7 +2071,8 @@ mod tests {
         assert_eq!(result_ref.data_type(), array.data_type());
         assert_eq!(result_ref.len(), 2);
 
-        let result_array: ExtensionArray = array.to_data().into();
-        assert_eq!(result_array.storage().to_data(), storage.to_data());
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected = create_array!(Utf8, ["one banana", "three banana"]);
+        assert_eq!(result_array.storage().to_data(), expected.to_data());
     }
 }

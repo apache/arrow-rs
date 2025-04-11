@@ -93,6 +93,16 @@ pub fn interleave(
         return Ok(new_empty_array(data_type));
     }
 
+    if let DataType::Extension(extension) = data_type {
+        let storage: Vec<_> = values.iter().map(|array| {
+            let extension_array: ExtensionArray = array.to_data().into();
+            extension_array.storage().clone()
+        }).collect();
+        let storage_ref: Vec<_> = storage.iter().map(|array| array.as_ref()).collect();
+        let storage_result = interleave(&storage_ref, indices)?;
+        return Ok(Arc::new(ExtensionArray::new(extension.clone(), storage_result)));
+    }
+
     downcast_primitive! {
         data_type => (primitive_helper, values, indices, data_type),
         DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
@@ -369,6 +379,7 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder};
+    use arrow_schema::extension::TextExtension;
 
     #[test]
     fn test_primitive() {
@@ -728,5 +739,32 @@ mod tests {
                 3, // Second buffer from array B (reused)
             ]
         );
+    }
+
+
+    #[test]
+    fn test_interleave_extension() {
+        let indices = [(0, 0), (1, 3), (0, 2)];
+        let storage = Arc::new(StringArray::from(vec![
+            "one banana",
+            "two banana",
+            "three banana",
+            "four",
+        ]));
+
+        let array = ExtensionArray::new(
+            Arc::new(TextExtension {
+                storage_type: DataType::Utf8,
+            }),
+            storage.clone(),
+        );
+
+        let result_ref = interleave(&[&array, &array], &indices).unwrap();
+        assert_eq!(result_ref.data_type(), array.data_type());
+        assert_eq!(result_ref.len(), 3);
+
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected_storage = create_array!(Utf8, ["one banana", "four", "three banana"]);
+        assert_eq!(**result_array.storage(), *expected_storage);
     }
 }
