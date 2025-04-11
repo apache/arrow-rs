@@ -1031,12 +1031,10 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .tempfile()
         .expect("tempfile creation");
 
-    let total_order = match scenario {
-        Scenario::Float16TotalOrder | Scenario::Float32TotalOrder | Scenario::Float64TotalOrder => {
-            true
-        }
-        _ => false,
-    };
+    let total_order = matches!(
+        scenario,
+        Scenario::Float16TotalOrder | Scenario::Float32TotalOrder | Scenario::Float64TotalOrder
+    );
 
     // TODO(ets): need to get total order option down here
     let props = WriterProperties::builder()

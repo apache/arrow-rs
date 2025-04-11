@@ -1502,14 +1502,12 @@ fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, 
                 return a.total_cmp(&b) == Ordering::Greater;
             }
         }
-    } else {
-        if let Some(LogicalType::Float16) = descr.logical_type() {
+    } else if let Some(LogicalType::Float16) = descr.logical_type() {
             let a = a.as_bytes();
             let a = f16::from_le_bytes([a[0], a[1]]);
             let b = b.as_bytes();
             let b = f16::from_le_bytes([b[0], b[1]]);
             return a > b;
-        }
     }
 
     a > b
