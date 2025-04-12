@@ -290,6 +290,21 @@ impl<'a> StringRecord<'a> {
     }
 }
 
+impl std::fmt::Display for StringRecord<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let num_fields = self.offsets.len() - 1;
+        write!(f, "[")?;
+        for i in 0..num_fields {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{}", self.get(i))?;
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::reader::records::RecordDecoder;

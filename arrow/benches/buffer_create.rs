@@ -50,7 +50,7 @@ fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
         data.iter()
             .map(|datum| {
                 let mut result =
-                    MutableBuffer::new((data.len() + 7) / 8).with_bitset(datum.len(), false);
+                    MutableBuffer::new(data.len().div_ceil(8)).with_bitset(datum.len(), false);
                 for (i, value) in datum.iter().enumerate() {
                     if *value {
                         unsafe {

@@ -19,6 +19,18 @@
 
 # Historical Changelog
 
+## [54.3.1](https://github.com/apache/arrow-rs/tree/54.3.1) (2025-03-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.3.0...54.3.1)
+
+**Fixed bugs:**
+
+- Round trip encoding of list of fixed list fails when offset is not zero [\#7315](https://github.com/apache/arrow-rs/issues/7315)
+
+**Merged pull requests:**
+
+- Add missing type annotation [\#7326](https://github.com/apache/arrow-rs/pull/7326) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mbrobbel](https://github.com/mbrobbel))
+- bugfix: correct offsets when serializing a list of fixed sized list and non-zero start offset [\#7318](https://github.com/apache/arrow-rs/pull/7318) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([timsaucer](https://github.com/timsaucer))
 ## [54.3.0](https://github.com/apache/arrow-rs/tree/54.3.0) (2025-03-17)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/53.4.1...54.3.0)
