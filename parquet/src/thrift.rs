@@ -193,9 +193,13 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
             Some(b) => Ok(b),
             None => {
                 let b = self.read_byte()?;
+                // Previous versions of the thrift specification said to use 0 and 1 inside collections,
+                // but that differed from existing implementations.
+                // The specification was updated in https://github.com/apache/thrift/commit/2c29c5665bc442e703480bb0ee60fe925ffe02e8.
+                // At least the go implementation seems to have followed the previously documented values.
                 match b {
                     0x01 => Ok(true),
-                    0x02 => Ok(false),
+                    0x00 | 0x02 => Ok(false),
                     unkn => Err(thrift::Error::Protocol(thrift::ProtocolError {
                         kind: thrift::ProtocolErrorKind::InvalidData,
                         message: format!("cannot convert {} into bool", unkn),
@@ -274,7 +278,12 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
 
 fn collection_u8_to_type(b: u8) -> thrift::Result<TType> {
     match b {
-        0x01 => Ok(TType::Bool),
+        // For historical and compatibility reasons, a reader should be capable to deal with both cases.
+        // The only valid value in the original spec was 2, but due to an widespread implementation bug
+        // the defacto standard across large parts of the library became 1 instead.
+        // As a result, both values are now allowed.
+        // https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
+        0x01 | 0x02 => Ok(TType::Bool),
         o => u8_to_type(o),
     }
 }
@@ -304,4 +313,53 @@ fn eof_error() -> thrift::Error {
         kind: thrift::TransportErrorKind::EndOfFile,
         message: "Unexpected EOF".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::format::{BoundaryOrder, ColumnIndex};
+    use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+
+    #[test]
+    pub fn read_boolean_list_field_type() {
+        // Boolean collection type encoded as 0x01, as used by this crate when writing.
+        // Values encoded as 1 (true) or 2 (false) as in the current version of the thrift
+        // documentation.
+        let bytes = vec![0x19, 0x21, 2, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
+
+        let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
+        let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
+        let expected = ColumnIndex {
+            null_pages: vec![false, true],
+            min_values: vec![],
+            max_values: vec![],
+            boundary_order: BoundaryOrder::UNORDERED,
+            null_counts: None,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
+        };
+
+        assert_eq!(&index, &expected);
+    }
+
+    #[test]
+    pub fn read_boolean_list_alternative_encoding() {
+        // Boolean collection type encoded as 0x02, as allowed by the spec.
+        // Values encoded as 1 (true) or 0 (false) as before the thrift documentation change on 2024-12-13.
+        let bytes = vec![0x19, 0x22, 0, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
+
+        let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
+        let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
+        let expected = ColumnIndex {
+            null_pages: vec![false, true],
+            min_values: vec![],
+            max_values: vec![],
+            boundary_order: BoundaryOrder::UNORDERED,
+            null_counts: None,
+            repetition_level_histograms: None,
+            definition_level_histograms: None,
+        };
+
+        assert_eq!(&index, &expected);
+    }
 }

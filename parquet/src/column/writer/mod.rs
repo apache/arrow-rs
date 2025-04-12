@@ -32,14 +32,18 @@ use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnIndexBuilder, LevelHistogram, OffsetIndexBuilder};
-use crate::file::properties::EnabledStatistics;
-use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::file::{
-    metadata::ColumnChunkMetaData,
-    properties::{WriterProperties, WriterPropertiesPtr, WriterVersion},
+use crate::file::metadata::{
+    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
+    OffsetIndexBuilder,
 };
+use crate::file::page_encoding_stats::PageEncodingStats;
+use crate::file::properties::{
+    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+};
+use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
 pub(crate) mod encoder;
@@ -341,6 +345,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     /// The order of encodings within the generated metadata does not impact its meaning,
     /// but we use a BTreeSet so that the output is deterministic
     encodings: BTreeSet<Encoding>,
+    encoding_stats: Vec<PageEncodingStats>,
     // Reused buffers
     def_levels_sink: Vec<i16>,
     rep_levels_sink: Vec<i16>,
@@ -416,6 +421,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             column_index_builder,
             offset_index_builder,
             encodings,
+            encoding_stats: vec![],
             data_page_boundary_ascending: true,
             data_page_boundary_descending: true,
             last_non_null_data_page_min_max: None,
@@ -1121,6 +1127,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
+            .set_page_encoding_stats(self.encoding_stats.clone())
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
@@ -1199,6 +1206,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 );
         }
 
+        builder = self.set_column_chunk_encryption_properties(builder);
+
         let metadata = builder.build()?;
         Ok(metadata)
     }
@@ -1224,6 +1233,23 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn write_data_page(&mut self, page: CompressedPage) -> Result<()> {
         self.encodings.insert(page.encoding());
+        match self.encoding_stats.last_mut() {
+            Some(encoding_stats)
+                if encoding_stats.page_type == page.page_type()
+                    && encoding_stats.encoding == page.encoding() =>
+            {
+                encoding_stats.count += 1;
+            }
+            _ => {
+                // data page type does not change inside a file
+                // encoding can currently only change from dictionary to non-dictionary once
+                self.encoding_stats.push(PageEncodingStats {
+                    page_type: page.page_type(),
+                    encoding: page.encoding(),
+                    count: 1,
+                });
+            }
+        }
         let page_spec = self.page_writer.write_page(page)?;
         // update offset index
         // compressed_size = header_size + compressed_data_size
@@ -1262,6 +1288,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         self.encodings.insert(compressed_page.encoding());
+        self.encoding_stats.push(PageEncodingStats {
+            page_type: PageType::DICTIONARY_PAGE,
+            encoding: compressed_page.encoding(),
+            count: 1,
+        });
         let page_spec = self.page_writer.write_page(compressed_page)?;
         self.update_metrics_for_page(page_spec);
         // For the directory page, don't need to update column/offset index.
@@ -1291,6 +1322,31 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             }
             _ => {}
         }
+    }
+
+    #[inline]
+    #[cfg(feature = "encryption")]
+    fn set_column_chunk_encryption_properties(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+    ) -> ColumnChunkMetaDataBuilder {
+        if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
+            builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                encryption_properties,
+                &self.descr,
+            ))
+        } else {
+            builder
+        }
+    }
+
+    #[inline]
+    #[cfg(not(feature = "encryption"))]
+    fn set_column_chunk_encryption_properties(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+    ) -> ColumnChunkMetaDataBuilder {
+        builder
     }
 }
 
@@ -1528,7 +1584,7 @@ mod tests {
         schema::parser::parse_message_type,
     };
     use core::str;
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{fs::File, sync::Arc};
 
     use crate::column::{
@@ -1664,6 +1720,7 @@ mod tests {
             &[true, false],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
             WriterVersion::PARQUET_1_0,
@@ -1671,6 +1728,7 @@ mod tests {
             &[true, false],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<BoolType>(
             WriterVersion::PARQUET_2_0,
@@ -1678,6 +1736,7 @@ mod tests {
             &[true, false],
             None,
             &[Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE, 1)],
         );
         check_encoding_write_support::<BoolType>(
             WriterVersion::PARQUET_2_0,
@@ -1685,6 +1744,7 @@ mod tests {
             &[true, false],
             None,
             &[Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE, 1)],
         );
     }
 
@@ -1696,6 +1756,10 @@ mod tests {
             &[1, 2],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int32Type>(
             WriterVersion::PARQUET_1_0,
@@ -1703,6 +1767,7 @@ mod tests {
             &[1, 2],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int32Type>(
             WriterVersion::PARQUET_2_0,
@@ -1710,6 +1775,10 @@ mod tests {
             &[1, 2],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int32Type>(
             WriterVersion::PARQUET_2_0,
@@ -1717,6 +1786,11 @@ mod tests {
             &[1, 2],
             None,
             &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[encoding_stats(
+                PageType::DATA_PAGE_V2,
+                Encoding::DELTA_BINARY_PACKED,
+                1,
+            )],
         );
     }
 
@@ -1728,6 +1802,10 @@ mod tests {
             &[1, 2],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int64Type>(
             WriterVersion::PARQUET_1_0,
@@ -1735,6 +1813,7 @@ mod tests {
             &[1, 2],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int64Type>(
             WriterVersion::PARQUET_2_0,
@@ -1742,6 +1821,10 @@ mod tests {
             &[1, 2],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int64Type>(
             WriterVersion::PARQUET_2_0,
@@ -1749,6 +1832,11 @@ mod tests {
             &[1, 2],
             None,
             &[Encoding::RLE, Encoding::DELTA_BINARY_PACKED],
+            &[encoding_stats(
+                PageType::DATA_PAGE_V2,
+                Encoding::DELTA_BINARY_PACKED,
+                1,
+            )],
         );
     }
 
@@ -1760,6 +1848,10 @@ mod tests {
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int96Type>(
             WriterVersion::PARQUET_1_0,
@@ -1767,6 +1859,7 @@ mod tests {
             &[Int96::from(vec![1, 2, 3])],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<Int96Type>(
             WriterVersion::PARQUET_2_0,
@@ -1774,6 +1867,10 @@ mod tests {
             &[Int96::from(vec![1, 2, 3])],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<Int96Type>(
             WriterVersion::PARQUET_2_0,
@@ -1781,6 +1878,7 @@ mod tests {
             &[Int96::from(vec![1, 2, 3])],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
 
@@ -1792,6 +1890,10 @@ mod tests {
             &[1.0, 2.0],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<FloatType>(
             WriterVersion::PARQUET_1_0,
@@ -1799,6 +1901,7 @@ mod tests {
             &[1.0, 2.0],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FloatType>(
             WriterVersion::PARQUET_2_0,
@@ -1806,6 +1909,10 @@ mod tests {
             &[1.0, 2.0],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<FloatType>(
             WriterVersion::PARQUET_2_0,
@@ -1813,6 +1920,7 @@ mod tests {
             &[1.0, 2.0],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
 
@@ -1824,6 +1932,10 @@ mod tests {
             &[1.0, 2.0],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<DoubleType>(
             WriterVersion::PARQUET_1_0,
@@ -1831,6 +1943,7 @@ mod tests {
             &[1.0, 2.0],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<DoubleType>(
             WriterVersion::PARQUET_2_0,
@@ -1838,6 +1951,10 @@ mod tests {
             &[1.0, 2.0],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<DoubleType>(
             WriterVersion::PARQUET_2_0,
@@ -1845,6 +1962,7 @@ mod tests {
             &[1.0, 2.0],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE_V2, Encoding::PLAIN, 1)],
         );
     }
 
@@ -1856,6 +1974,10 @@ mod tests {
             &[ByteArray::from(vec![1u8])],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<ByteArrayType>(
             WriterVersion::PARQUET_1_0,
@@ -1863,6 +1985,7 @@ mod tests {
             &[ByteArray::from(vec![1u8])],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<ByteArrayType>(
             WriterVersion::PARQUET_2_0,
@@ -1870,6 +1993,10 @@ mod tests {
             &[ByteArray::from(vec![1u8])],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<ByteArrayType>(
             WriterVersion::PARQUET_2_0,
@@ -1877,6 +2004,11 @@ mod tests {
             &[ByteArray::from(vec![1u8])],
             None,
             &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[encoding_stats(
+                PageType::DATA_PAGE_V2,
+                Encoding::DELTA_BYTE_ARRAY,
+                1,
+            )],
         );
     }
 
@@ -1888,6 +2020,7 @@ mod tests {
             &[ByteArray::from(vec![1u8]).into()],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
@@ -1895,6 +2028,7 @@ mod tests {
             &[ByteArray::from(vec![1u8]).into()],
             None,
             &[Encoding::PLAIN, Encoding::RLE],
+            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
         );
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_2_0,
@@ -1902,6 +2036,10 @@ mod tests {
             &[ByteArray::from(vec![1u8]).into()],
             Some(0),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE_V2, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_2_0,
@@ -1909,6 +2047,11 @@ mod tests {
             &[ByteArray::from(vec![1u8]).into()],
             None,
             &[Encoding::RLE, Encoding::DELTA_BYTE_ARRAY],
+            &[encoding_stats(
+                PageType::DATA_PAGE_V2,
+                Encoding::DELTA_BYTE_ARRAY,
+                1,
+            )],
         );
     }
 
@@ -2306,6 +2449,21 @@ mod tests {
                 (PageType::DATA_PAGE, 9, 10),
                 (PageType::DATA_PAGE, 1, 3),
             ]
+        );
+        assert_eq!(
+            r.metadata.page_encoding_stats(),
+            Some(&vec![
+                PageEncodingStats {
+                    page_type: PageType::DICTIONARY_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 1
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::RLE_DICTIONARY,
+                    count: 2,
+                }
+            ])
         );
     }
 
@@ -3801,6 +3959,15 @@ mod tests {
         writer.close().unwrap().metadata
     }
 
+    // Helper function to more compactly create a PageEncodingStats struct.
+    fn encoding_stats(page_type: PageType, encoding: Encoding, count: i32) -> PageEncodingStats {
+        PageEncodingStats {
+            page_type,
+            encoding,
+            count,
+        }
+    }
+
     // Function to use in tests for EncodingWriteSupport. This checks that dictionary
     // offset and encodings to make sure that column writer uses provided by trait
     // encodings.
@@ -3810,6 +3977,7 @@ mod tests {
         data: &[T::T],
         dictionary_page_offset: Option<i64>,
         encodings: &[Encoding],
+        page_encoding_stats: &[PageEncodingStats],
     ) {
         let props = WriterProperties::builder()
             .set_writer_version(version)
@@ -3817,7 +3985,8 @@ mod tests {
             .build();
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
-        assert_eq!(meta.encodings(), &encodings);
+        assert_eq!(meta.encodings(), encodings);
+        assert_eq!(meta.page_encoding_stats().unwrap(), page_encoding_stats);
     }
 
     /// Returns column writer.

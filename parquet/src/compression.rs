@@ -340,7 +340,7 @@ impl Default for GzipLevel {
 
 impl CompressionLevel<u32> for GzipLevel {
     const MINIMUM_LEVEL: u32 = 0;
-    const MAXIMUM_LEVEL: u32 = 10;
+    const MAXIMUM_LEVEL: u32 = 9;
 }
 
 impl GzipLevel {

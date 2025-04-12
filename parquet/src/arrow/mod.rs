@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! High-level API for reading/writing Arrow
-//! [RecordBatch](arrow_array::RecordBatch)es and
+//! API for reading/writing
+//! Arrow [RecordBatch](arrow_array::RecordBatch)es and
 //! [Array](arrow_array::Array)s to/from Parquet Files.
 //!
-//! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
-//! in-memory data.
+//! See the [crate-level documentation](crate) for more details.
 //!
-//!# Example of writing Arrow record batch to Parquet file
+//! # Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
@@ -92,6 +91,58 @@
 //! let record_batch = reader.next().unwrap().unwrap();
 //!
 //! println!("Read {} records.", record_batch.num_rows());
+//! ```
+//!
+//! # Example of reading non-uniformly encrypted parquet file into arrow record batch
+//!
+//! Note: This requires the experimental `encryption` feature to be enabled at compile time.
+//!
+//!
+#![cfg_attr(feature = "encryption", doc = "```rust")]
+#![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
+//! # use arrow_array::{Int32Array, ArrayRef};
+//! # use arrow_array::{types, RecordBatch};
+//! # use parquet::arrow::arrow_reader::{
+//! #     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+//! # };
+//! # use arrow_array::cast::AsArray;
+//! # use parquet::file::metadata::ParquetMetaData;
+//! # use tempfile::tempfile;
+//! # use std::fs::File;
+//! # use parquet::encryption::decrypt::FileDecryptionProperties;
+//! # let test_data = arrow::util::test_util::parquet_test_data();
+//! # let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+//! #
+//! let file = File::open(path).unwrap();
+//!
+//! // Define the AES encryption keys required required for decrypting the footer metadata
+//! // and column-specific data. If only a footer key is used then it is assumed that the
+//! // file uses uniform encryption and all columns are encrypted with the footer key.
+//! // If any column keys are specified, other columns without a key provided are assumed
+//! // to be unencrypted
+//! let footer_key = "0123456789012345".as_bytes(); // Keys are 128 bits (16 bytes)
+//! let column_1_key = "1234567890123450".as_bytes();
+//! let column_2_key = "1234567890123451".as_bytes();
+//!
+//! let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+//!     .with_column_key("double_field", column_1_key.to_vec())
+//!     .with_column_key("float_field", column_2_key.to_vec())
+//!     .build()
+//!     .unwrap();
+//!
+//! let options = ArrowReaderOptions::default()
+//!  .with_file_decryption_properties(decryption_properties);
+//! let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+//! let file_metadata = reader_metadata.metadata().file_metadata();
+//! assert_eq!(50, file_metadata.num_rows());
+//!
+//! let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+//!   .unwrap()
+//!   .build()
+//!   .unwrap();
+//!
+//! let record_batch = reader.next().unwrap().unwrap();
+//! assert_eq!(50, record_batch.num_rows());
 //! ```
 
 experimental!(mod array_reader);

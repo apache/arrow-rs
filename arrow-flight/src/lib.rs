@@ -36,6 +36,12 @@
 //!    `flight-sql-experimental` feature of this crate to be activated.
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
+
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
@@ -891,5 +897,27 @@ mod tests {
         let result: SchemaResult = schema_ipc.try_into().unwrap();
         let des_schema: Schema = (&result).try_into().unwrap();
         assert_eq!(schema, des_schema);
+    }
+
+    #[test]
+    fn test_dict_schema() {
+        // Test for https://github.com/apache/arrow-rs/issues/7058
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+
+        let flight_info = FlightInfo::new().try_with_schema(&schema).unwrap();
+
+        let new_schema = Schema::try_from(flight_info).unwrap();
+        assert_eq!(schema, new_schema);
     }
 }

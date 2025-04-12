@@ -112,7 +112,7 @@ async fn get_metadata_from_remote_parquet_file(
     // tell the reader to read the page index
     ParquetMetaDataReader::new()
         .with_page_indexes(true)
-        .load_and_finish(remote_file, file_size as usize)
+        .load_and_finish(remote_file, file_size)
         .await
         .unwrap()
 }

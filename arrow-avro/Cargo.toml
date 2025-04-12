@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_avro"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["deflate", "snappy", "zstd"]
@@ -49,7 +51,5 @@ snap = { version = "1.0", default-features = false, optional = true }
 zstd = { version = "0.13", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
 
-
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }

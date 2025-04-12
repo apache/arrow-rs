@@ -72,6 +72,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// Show types in visual representation batches
+    types_info: bool,
 }
 
 impl Default for FormatOptions<'_> {
@@ -92,6 +94,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: None,
             time_format: None,
             duration_format: DurationFormat::ISO8601,
+            types_info: false,
         }
     }
 
@@ -157,6 +160,18 @@ impl<'a> FormatOptions<'a> {
             duration_format,
             ..self
         }
+    }
+
+    /// Overrides if types should be shown
+    ///
+    /// Defaults to [`false`]
+    pub const fn with_types_info(self, types_info: bool) -> Self {
+        Self { types_info, ..self }
+    }
+
+    /// Returns true if type info should be included in visual representation of batches
+    pub const fn types_info(&self) -> bool {
+        self.types_info
     }
 }
 
