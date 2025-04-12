@@ -981,8 +981,16 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 }
                 Ok(())
             }
-            SerializedPageReaderState::Pages { page_locations, .. } => {
-                page_locations.pop_front();
+            SerializedPageReaderState::Pages {
+                page_locations,
+                dictionary_page, .. } => {
+                if dictionary_page.is_some() {
+                    // If a dictionary page exists, consume it by taking it (sets to None)
+                    dictionary_page.take();
+                } else {
+                    // If no dictionary page exists, simply pop the data page from page_locations
+                    page_locations.pop_front();
+                }
 
                 Ok(())
             }
