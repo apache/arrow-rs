@@ -349,7 +349,8 @@ impl std::fmt::Display for ProjectionCase {
 enum FilterType {
     Utf8ViewNonEmpty,
     Utf8ViewConst,
-    Int64EqZero,
+    Int64GTZero,
+    Float64GTHalf,
     TimestampGt,
     PointLookup,
     SelectiveUnclustered,
@@ -365,7 +366,8 @@ impl std::fmt::Display for FilterType {
         let s = match self {
             Utf8ViewNonEmpty => "utf8View <> ''",
             Utf8ViewConst => "utf8View = 'const'",
-            Int64EqZero => "int64 = 0",
+            Int64GTZero => "int64 > 0",
+            Float64GTHalf => "float64 > 50.0",
             TimestampGt => "ts > 50_000",
             PointLookup => "Point Lookup",
             SelectiveUnclustered => "1% Unclustered Filter",
@@ -394,9 +396,13 @@ impl FilterType {
                 let scalar = StringViewArray::new_scalar("const");
                 eq(array, &scalar)
             }
-            Int64EqZero => {
+            Int64GTZero => {
                 let array = batch.column(batch.schema().index_of("int64").unwrap());
-                eq(array, &Int64Array::new_scalar(0))
+                gt(array, &Int64Array::new_scalar(0))
+            }
+            Float64GTHalf => {
+                let array = batch.column(batch.schema().index_of("float64").unwrap());
+                gt(array, &Float64Array::new_scalar(50.0))
             }
             TimestampGt => {
                 let array = batch.column(batch.schema().index_of("ts").unwrap());
@@ -444,7 +450,8 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
     let filter_types = vec![
         FilterType::Utf8ViewNonEmpty,
         FilterType::Utf8ViewConst,
-        FilterType::Int64EqZero,
+        FilterType::Int64GTZero,
+        FilterType::Float64GTHalf,
         FilterType::TimestampGt,
         FilterType::PointLookup,
         FilterType::SelectiveUnclustered,
@@ -466,7 +473,8 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
             // Determine the filter column index based on the filter type.
             let filter_col = match filter_type {
                 FilterType::Utf8ViewNonEmpty | FilterType::Utf8ViewConst => 2,
-                FilterType::Int64EqZero => 0,
+                FilterType::Int64GTZero => 0,
+                FilterType::Float64GTHalf => 1,
                 FilterType::TimestampGt => 3,
                 FilterType::PointLookup => 4,
                 FilterType::SelectiveUnclustered => 5,
