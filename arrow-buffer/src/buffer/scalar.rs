@@ -51,7 +51,10 @@ pub struct ScalarBuffer<T: ArrowNativeType> {
 impl<T: ArrowNativeType> Default for ScalarBuffer<T> {
     #[inline]
     fn default() -> Self {
-        Self::from(vec![])
+        Self {
+            buffer: Default::default(),
+            phantom: Default::default(),
+        }
     }
 }
 
