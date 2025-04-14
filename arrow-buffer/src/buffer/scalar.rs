@@ -357,7 +357,7 @@ mod tests {
                 &ScalarBuffer::<i16>::from(vec![23]),
                 &ScalarBuffer::<i16>::from(vec![23])
             ),
-            "ScalarBuffer should implement Eq if the inner typedoes"
+            "ScalarBuffer should implement Eq if the inner type does"
         );
     }
 }
