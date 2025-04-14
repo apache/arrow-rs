@@ -221,6 +221,9 @@ impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
     }
 }
 
+/// If T implements Eq, then so does ScalarBuffer.
+impl<T: ArrowNativeType + Eq> Eq for ScalarBuffer<T> {}
+
 #[cfg(test)]
 mod tests {
     use std::{ptr::NonNull, sync::Arc};
@@ -341,5 +344,20 @@ mod tests {
         let vec = Vec::from(scalar_buffer);
         assert_eq!(vec, input.as_slice());
         assert_ne!(vec.as_ptr(), input.as_ptr());
+    }
+
+    #[test]
+    fn scalar_buffer_impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &ScalarBuffer::<i16>::from(vec![23]),
+                &ScalarBuffer::<i16>::from(vec![23])
+            ),
+            "ScalarBuffer should implement Eq if the inner typedoes"
+        );
     }
 }
