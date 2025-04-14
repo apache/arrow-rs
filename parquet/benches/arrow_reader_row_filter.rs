@@ -371,6 +371,20 @@ impl FilterType {
             }
         }
     }
+
+    /// Return the indexes in the batch's schema that are used for filtering.
+    fn filter_columns(&self) -> &'static [usize] {
+        match self {
+            FilterType::PointLookup => &[0],
+            FilterType::SelectiveUnclustered => &[1],
+            FilterType::ModeratelySelectiveClustered => &[3],
+            FilterType::ModeratelySelectiveUnclustered => &[0],
+            FilterType::UnselectiveUnclustered => &[1],
+            FilterType::UnselectiveClustered => &[3],
+            FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
+            FilterType::Utf8ViewNonEmpty => &[2],
+        }
+    }
 }
 
 /// Benchmark filters and projections by reading the Parquet file.
@@ -398,18 +412,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
         for proj_case in &projection_cases {
             // All indices corresponding to the 10 columns.
             let all_indices = vec![0, 1, 2, 3];
-            // Determine the filter column index based on the filter type.
-            let filter_col = match filter_type {
-                FilterType::PointLookup => vec![0],
-                FilterType::SelectiveUnclustered => vec![1],
-                FilterType::ModeratelySelectiveClustered => vec![3],
-                FilterType::ModeratelySelectiveUnclustered => vec![0],
-                FilterType::UnselectiveUnclustered => vec![1],
-                FilterType::UnselectiveClustered => vec![3],
-                FilterType::Composite => vec![1, 3], // Use float64 column and ts column as representative for composite
-                FilterType::Utf8ViewNonEmpty => vec![2],
-            };
-
+            let filter_col = filter_type.filter_columns();
             // For the projection, either select all columns or exclude the filter column(s).
             let output_projection: Vec<usize> = match proj_case {
                 ProjectionCase::AllColumns => all_indices.clone(),
