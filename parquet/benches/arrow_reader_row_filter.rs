@@ -69,6 +69,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::fs::File;
+use parquet::basic::Compression;
 
 /// Generates a random string. Has a 50% chance to generate a short string (3–11 characters)
 /// or a long string (13–20 characters).
@@ -159,7 +160,7 @@ fn write_parquet_file() -> NamedTempFile {
         pretty_format_batches(&[batch.clone().slice(0, 100)]).unwrap()
     );
     let schema = batch.schema();
-    let props = WriterProperties::builder().build();
+    let props = WriterProperties::builder().set_compression( Compression::SNAPPY).build();
     let file = tempfile::Builder::new()
         .suffix(".parquet")
         .tempfile()
