@@ -58,7 +58,7 @@ use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::StringViewBuilder;
-use arrow_array::StringViewArray;
+use arrow_array::{Array, StringViewArray};
 use arrow_cast::pretty::pretty_format_batches;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures::TryStreamExt;
@@ -197,7 +197,8 @@ impl std::fmt::Display for ProjectionCase {
 /// The variants correspond to the different filter patterns.
 #[derive(Clone)]
 enum FilterType {
-    /// Here is the 6 filter types:
+    /// "Point Lookup": selects a single row
+    /// ```text
     /// ┌───────────────┐    ┌───────────────┐
     /// │               │    │               │
     /// │               │    │      ...      │
@@ -209,10 +210,11 @@ enum FilterType {
     /// │               │    │               │
     /// │               │    │               │
     /// └───────────────┘    └───────────────┘
-    ///
-    /// "Point Lookup": selects a single row
+    /// ```
     /// (1 RowSelection of 1 row)
-    ///
+    PointLookup,
+    /// selective (1%) unclustered filter
+    /// ```text
     /// ┌───────────────┐    ┌───────────────┐
     /// │      ...      │    │               │
     /// │               │    │               │
@@ -224,45 +226,81 @@ enum FilterType {
     /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
     /// │               │    │               │
     /// └───────────────┘    └───────────────┘
-    /// selective (1%) unclustered filter
+    /// ```
     /// (1000 RowSelection of 10 rows each)
-    ///
-    ///
-    /// ┌───────────────┐    ┌───────────────┐                 ┌───────────────┐    ┌───────────────┐
-    /// │      ...      │    │               │                 │               │    │               │
-    /// │               │    │               │                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │     ...       │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │                 │               │    │               │
-    /// │               │    │               │                 │     ...       │    │               │
-    /// │               │    │      ...      │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘                 └───────────────┘    └───────────────┘
-    /// moderately selective (10%) unclustered filter           moderately selective (10%) clustered filter
-    /// (10000 RowSelection of 10 rows each)                    (10 RowSelections of 10,000 rows each)
-    /// ┌───────────────┐    ┌───────────────┐                 ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │     ...       │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │     ...       │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 └───────────────┘    └───────────────┘
-    /// └───────────────┘    └───────────────┘
-    /// unselective (99%) unclustered filter                   unselective (90%) clustered filter
-    /// (99,000 RowSelections of 10 rows each)                 (99 RowSelection of 10,000 rows each)
-    PointLookup,
     SelectiveUnclustered,
+    /// moderately selective (10%) clustered filter
+    /// ```text
+    ///  ┌───────────────┐    ┌───────────────┐
+    ///  │               │    │               │
+    ///  │               │    │               │
+    ///  │               │    │     ...       │
+    ///  │               │    │               │
+    ///  │     ...       │    │               │
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  └───────────────┘    └───────────────┘
+    /// ```
+    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveClustered,
+    /// moderately selective (10%) clustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │      ...      │    │               │
+    /// │               │    │               │
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
+    /// │               │    │               │
+    /// │               │    │      ...      │
+    /// │      ...      │    │               │
+    /// │               │    │               │
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveUnclustered,
+    /// unselective (99%) unclustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (99,000 RowSelections of 10 rows each)
     UnselectiveUnclustered,
+    /// unselective (90%) clustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │               │    │               │
+    /// │               │    │               │
+    /// │               │    │     ...       │
+    /// │               │    │               │
+    /// │     ...       │    │               │
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (99 RowSelection of 10,000 rows each)
     UnselectiveClustered,
-    /// The following are Composite and Utf8ViewNonEmpty filters, which is the additional to above 6 filters.
+    /// [`Self::SelectivelUnclusered`] `AND`
+    /// [`Self::ModeratelySelectiveClustered`]
     Composite,
+    /// `utf8View <> ''` modeling [ClickBench] [Q21-Q27]
+    ///
+    /// [ClickBench]: https://github.com/ClickHouse/ClickBench
+    /// [Q21-Q27]: https://github.com/apache/datafusion/blob/b7177234e65cbbb2dcc04c252f6acd80bb026362/benchmarks/queries/clickbench/queries.sql#L22-L28
     Utf8ViewNonEmpty,
 }
 
