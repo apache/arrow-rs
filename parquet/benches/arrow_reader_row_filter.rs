@@ -484,11 +484,12 @@ impl AsyncFileReader for MemoryAsyncReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        _options: Option<&'a ArrowReaderOptions>,
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let inner = self.inner.clone();
+        let page_index = options.map(|o| o.page_index()).unwrap_or(true);
         async move {
-            let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+            let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(page_index);
             metadata_reader.try_parse(&inner)?;
             metadata_reader.finish().map(Arc::new)
         }
