@@ -64,6 +64,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::sync::Arc;
@@ -159,7 +160,9 @@ fn write_parquet_file() -> NamedTempFile {
         pretty_format_batches(&[batch.clone().slice(0, 100)]).unwrap()
     );
     let schema = batch.schema();
-    let props = WriterProperties::builder().build();
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
     let file = tempfile::Builder::new()
         .suffix(".parquet")
         .tempfile()
@@ -285,35 +288,35 @@ impl FilterType {
         match self {
             // Point Lookup on int64 column
             FilterType::PointLookup => {
-                let array = batch.column(batch.schema().index_of("int64").unwrap());
+                let array = batch.column(batch.schema().index_of("int64")?);
                 let scalar = Int64Array::new_scalar(9999);
                 eq(array, &scalar)
             }
             // Selective Unclustered on float64 column: float64 > 99.0
             FilterType::SelectiveUnclustered => {
-                let array = batch.column(batch.schema().index_of("float64").unwrap());
+                let array = batch.column(batch.schema().index_of("float64")?);
                 let scalar = Float64Array::new_scalar(99.0);
                 gt(array, &scalar)
             }
             // Moderately Selective Clustered on ts column: ts >= 9000 (implemented as > 8999)
             FilterType::ModeratelySelectiveClustered => {
-                let array = batch.column(batch.schema().index_of("ts").unwrap());
+                let array = batch.column(batch.schema().index_of("ts")?);
                 gt(array, &TimestampMillisecondArray::new_scalar(8999))
             }
             // Moderately Selective Unclustered on int64 column: int64 > 90
             FilterType::ModeratelySelectiveUnclustered => {
-                let array = batch.column(batch.schema().index_of("int64").unwrap());
+                let array = batch.column(batch.schema().index_of("int64")?);
                 let scalar = Int64Array::new_scalar(90);
                 gt(array, &scalar)
             }
             // Unselective Unclustered on float64 column: NOT (float64 > 99.0)
             FilterType::UnselectiveUnclustered => {
-                let array = batch.column(batch.schema().index_of("float64").unwrap());
+                let array = batch.column(batch.schema().index_of("float64")?);
                 gt(array, &Float64Array::new_scalar(99.0))
             }
             // Unselective Clustered on ts column: ts < 9000
             FilterType::UnselectiveClustered => {
-                let array = batch.column(batch.schema().index_of("ts").unwrap());
+                let array = batch.column(batch.schema().index_of("ts")?);
                 lt(array, &TimestampMillisecondArray::new_scalar(9000))
             }
             // Composite filter: logical AND of (float64 > 99.0) and (ts >= 9000)
@@ -324,7 +327,7 @@ impl FilterType {
             }
             // Utf8ViewNonEmpty: selects rows where the utf8View column is not an empty string.
             FilterType::Utf8ViewNonEmpty => {
-                let array = batch.column(batch.schema().index_of("utf8View").unwrap());
+                let array = batch.column(batch.schema().index_of("utf8View")?);
                 let scalar = StringViewArray::new_scalar("");
                 neq(array, &scalar)
             }
@@ -359,21 +362,22 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
             let all_indices = vec![0, 1, 2, 3];
             // Determine the filter column index based on the filter type.
             let filter_col = match filter_type {
-                FilterType::PointLookup => 0,
-                FilterType::SelectiveUnclustered => 1,
-                FilterType::ModeratelySelectiveClustered => 3,
-                FilterType::ModeratelySelectiveUnclustered => 0,
-                FilterType::UnselectiveUnclustered => 1,
-                FilterType::UnselectiveClustered => 3,
-                FilterType::Composite => 1, // Use float64 column as representative for composite
-                FilterType::Utf8ViewNonEmpty => 2,
+                FilterType::PointLookup => vec![0],
+                FilterType::SelectiveUnclustered => vec![1],
+                FilterType::ModeratelySelectiveClustered => vec![3],
+                FilterType::ModeratelySelectiveUnclustered => vec![0],
+                FilterType::UnselectiveUnclustered => vec![1],
+                FilterType::UnselectiveClustered => vec![3],
+                FilterType::Composite => vec![1, 3], // Use float64 column and ts column as representative for composite
+                FilterType::Utf8ViewNonEmpty => vec![2],
             };
-            // For the projection, either select all columns or exclude the filter column.
+
+            // For the projection, either select all columns or exclude the filter column(s).
             let output_projection: Vec<usize> = match proj_case {
                 ProjectionCase::AllColumns => all_indices.clone(),
                 ProjectionCase::ExcludeFilterColumn => all_indices
                     .into_iter()
-                    .filter(|i| *i != filter_col)
+                    .filter(|i| !filter_col.contains(i))
                     .collect(),
             };
 
@@ -400,7 +404,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                             output_projection.clone(),
                         );
                         let pred_mask =
-                            ProjectionMask::roots(file_metadata.schema_descr(), vec![filter_col]);
+                            ProjectionMask::roots(file_metadata.schema_descr(), filter_col.clone());
                         let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
                             Ok(filter_type_inner.filter_batch(&batch).unwrap())
                         });
