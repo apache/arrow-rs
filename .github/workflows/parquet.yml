@@ -57,6 +57,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: "1.85.0"
       - name: Test
         run: cargo test -p parquet
       - name: Test --all-features
@@ -80,6 +82,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: "1.85.0"
 
         # Run different tests for the library on its own as well as
         # all targets to ensure that it still works in the absence of
@@ -127,6 +131,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
+          rust-version: "1.85.0"
           target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Install clang # Needed for zlib compilation
         run: apt-get update && apt-get install -y clang gcc-multilib
@@ -178,6 +183,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: "1.85.0"
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Run clippy

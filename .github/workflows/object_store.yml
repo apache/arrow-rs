@@ -46,6 +46,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+        with:
+          rust-version: "1.85.0"
       - name: Setup Clippy
         run: rustup component add clippy
       # Run different tests for the library on its own as well as
@@ -160,8 +162,8 @@ jobs:
 
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install stable
-          rustup default stable
+          rustup install 1.85.0
+          rustup default 1.85.0
 
       - name: Run object_store tests
         run: cargo test --features=aws,azure,gcp,http
@@ -204,6 +206,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
+          rust-version: "1.85.0"
           target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Install clang (needed for ring)
         run: apt-get update && apt-get install -y clang
