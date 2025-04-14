@@ -48,6 +48,13 @@ pub struct ScalarBuffer<T: ArrowNativeType> {
     phantom: PhantomData<T>,
 }
 
+impl<T: ArrowNativeType> Default for ScalarBuffer<T> {
+    #[inline]
+    fn default() -> Self {
+        Self::from(vec![])
+    }
+}
+
 impl<T: ArrowNativeType> std::fmt::Debug for ScalarBuffer<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("ScalarBuffer").field(&self.as_ref()).finish()
