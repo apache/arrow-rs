@@ -58,18 +58,21 @@ use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::StringViewBuilder;
-use arrow_array::{Array, StringViewArray};
+use arrow_array::StringViewArray;
 use arrow_cast::pretty::pretty_format_batches;
+use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use futures::TryStreamExt;
+use futures::future::BoxFuture;
+use futures::{FutureExt, TryStreamExt};
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::ops::Range;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
-use tokio::fs::File;
 
 /// Generates a random string. Has a 50% chance to generate a short string (3–11 characters)
 /// or a long string (13–20 characters).
@@ -151,8 +154,8 @@ fn create_record_batch(size: usize) -> RecordBatch {
     RecordBatch::try_new(schema, arrays).unwrap()
 }
 
-/// Writes the RecordBatch to a temporary Parquet file and returns the file handle.
-fn write_parquet_file() -> NamedTempFile {
+/// Writes the RecordBatch to an in memory buffer, returning the buffer
+fn write_parquet_file() -> Vec<u8> {
     let batch = create_record_batch(100_000);
     println!("Batch created with {} rows", 100_000);
     println!(
@@ -163,17 +166,13 @@ fn write_parquet_file() -> NamedTempFile {
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
-    let file = tempfile::Builder::new()
-        .suffix(".parquet")
-        .tempfile()
-        .unwrap();
+    let mut buffer = vec![];
     {
-        let file_reopen = file.reopen().unwrap();
-        let mut writer = ArrowWriter::try_new(file_reopen, schema.clone(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
     }
-    file
+    buffer
 }
 
 /// ProjectionCase defines the projection mode for the benchmark:
@@ -195,7 +194,7 @@ impl std::fmt::Display for ProjectionCase {
 
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum FilterType {
     /// "Point Lookup": selects a single row
     /// ```text
@@ -373,7 +372,7 @@ impl FilterType {
     }
 
     /// Return the indexes in the batch's schema that are used for filtering.
-    fn filter_columns(&self) -> &'static [usize] {
+    fn filter_projection(&self) -> &'static [usize] {
         match self {
             FilterType::PointLookup => &[0],
             FilterType::SelectiveUnclustered => &[1],
@@ -391,7 +390,8 @@ impl FilterType {
 /// This benchmark iterates over all individual filter types and two projection cases.
 /// It measures the time to read and filter the Parquet file according to each scenario.
 fn benchmark_filters_and_projections(c: &mut Criterion) {
-    let parquet_file = write_parquet_file();
+    // make the parquet file in memory that can be shared
+    let parquet_file = Bytes::from(write_parquet_file());
     let filter_types = vec![
         FilterType::PointLookup,
         FilterType::SelectiveUnclustered,
@@ -408,11 +408,11 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
     ];
     let mut group = c.benchmark_group("arrow_reader_row_filter");
 
-    for filter_type in filter_types.clone() {
+    for filter_type in filter_types {
         for proj_case in &projection_cases {
             // All indices corresponding to the 10 columns.
             let all_indices = vec![0, 1, 2, 3];
-            let filter_col = filter_type.filter_columns();
+            let filter_col = filter_type.filter_projection().to_vec();
             // For the projection, either select all columns or exclude the filter column(s).
             let output_projection: Vec<usize> = match proj_case {
                 ProjectionCase::AllColumns => all_indices.clone(),
@@ -430,12 +430,11 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                     .build()
                     .unwrap();
                 b.iter(|| {
-                    let filter_type_inner = filter_type.clone();
                     rt.block_on(async {
-                        let file = File::open(parquet_file.path()).await.unwrap();
+                        let reader = MemoryAsyncReader::new(&parquet_file);
                         let options = ArrowReaderOptions::new().with_page_index(true);
                         let builder =
-                            ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                            ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                                 .await
                                 .unwrap()
                                 .with_batch_size(8192);
@@ -447,7 +446,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                         let pred_mask =
                             ProjectionMask::roots(file_metadata.schema_descr(), filter_col.clone());
                         let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                            Ok(filter_type_inner.filter_batch(&batch).unwrap())
+                            Ok(filter_type.filter_batch(&batch).unwrap())
                         });
                         let stream = builder
                             .with_projection(mask)
@@ -459,6 +458,41 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                 });
             });
         }
+    }
+}
+
+/// Adapter to read asynchronously from in memory bytes
+#[derive(Debug)]
+struct MemoryAsyncReader {
+    inner: Bytes,
+}
+
+impl MemoryAsyncReader {
+    fn new(inner: &Bytes) -> Self {
+        // clone of bytes is cheap -- increments a refcount
+        Self {
+            inner: inner.clone(),
+        }
+    }
+}
+
+impl AsyncFileReader for MemoryAsyncReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        let data = self.inner.slice(range.start as usize..range.end as usize);
+        async move { Ok(data) }.boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let inner = self.inner.clone();
+        async move {
+            let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+            metadata_reader.try_parse(&inner)?;
+            metadata_reader.finish().map(Arc::new)
+        }
+        .boxed()
     }
 }
 
