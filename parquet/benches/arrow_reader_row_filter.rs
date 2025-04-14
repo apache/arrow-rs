@@ -63,8 +63,10 @@ use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures::future::BoxFuture;
-use futures::{FutureExt, TryStreamExt};
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use futures::{FutureExt, StreamExt};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
@@ -194,7 +196,7 @@ impl std::fmt::Display for ProjectionCase {
 
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum FilterType {
     /// "Point Lookup": selects a single row
     /// ```text
@@ -406,6 +408,12 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
         ProjectionCase::AllColumns,
         ProjectionCase::ExcludeFilterColumn,
     ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let mut group = c.benchmark_group("arrow_reader_row_filter");
 
     for filter_type in filter_types {
@@ -422,61 +430,123 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                     .collect(),
             };
 
-            let bench_id =
-                BenchmarkId::new(format!("filter: {} proj: {}", filter_type, proj_case), "");
+            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+            let metadata = Arc::clone(reader.metadata());
+
+            let schema_descr = metadata.file_metadata().schema_descr();
+            let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
+            let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
+
+            let benchmark_name = format!("{filter_type:?}/{proj_case}",);
+
+            // run the benchmark for the async reader
+            let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
+            let rt_captured = rt.handle().clone();
             group.bench_function(bench_id, |b| {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
                 b.iter(|| {
-                    rt.block_on(async {
-                        let reader = MemoryAsyncReader::new(&parquet_file);
-                        let options = ArrowReaderOptions::new().with_page_index(true);
-                        let builder =
-                            ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
-                                .await
-                                .unwrap()
-                                .with_batch_size(8192);
-                        let file_metadata = builder.metadata().file_metadata().clone();
-                        let mask = ProjectionMask::roots(
-                            file_metadata.schema_descr(),
-                            output_projection.clone(),
-                        );
-                        let pred_mask =
-                            ProjectionMask::roots(file_metadata.schema_descr(), filter_col.clone());
-                        let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                            Ok(filter_type.filter_batch(&batch).unwrap())
-                        });
-                        let stream = builder
-                            .with_projection(mask)
-                            .with_row_filter(RowFilter::new(vec![Box::new(filter)]))
-                            .build()
-                            .unwrap();
-                        stream.try_collect::<Vec<_>>().await.unwrap();
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let projection_mask = projection_mask.clone();
+                    // row filters are not clone, so must make it each iter
+                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                        Ok(filter_type.filter_batch(&batch).unwrap())
+                    });
+                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
+
+                    rt_captured.block_on(async {
+                        benchmark_async_reader(reader, projection_mask, row_filter).await;
                     })
+                });
+            });
+
+            // run the benchmark for the sync reader
+            let bench_id = BenchmarkId::new(benchmark_name, "sync");
+            group.bench_function(bench_id, |b| {
+                b.iter(|| {
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let projection_mask = projection_mask.clone();
+                    // row filters are not clone, so must make it each iter
+                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                        Ok(filter_type.filter_batch(&batch).unwrap())
+                    });
+                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
+
+                    benchmark_sync_reader(reader, projection_mask, row_filter)
                 });
             });
         }
     }
 }
 
-/// Adapter to read asynchronously from in memory bytes
-#[derive(Debug)]
-struct MemoryAsyncReader {
-    inner: Bytes,
-}
-
-impl MemoryAsyncReader {
-    fn new(inner: &Bytes) -> Self {
-        // clone of bytes is cheap -- increments a refcount
-        Self {
-            inner: inner.clone(),
-        }
+/// Use async API
+async fn benchmark_async_reader(
+    reader: InMemoryReader,
+    projection_mask: ProjectionMask,
+    row_filter: RowFilter,
+) {
+    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .with_row_filter(row_filter)
+        .build()
+        .unwrap();
+    while let Some(b) = stream.next().await {
+        b.unwrap(); // consume the batches, no buffering
     }
 }
 
-impl AsyncFileReader for MemoryAsyncReader {
+/// Use sync API
+fn benchmark_sync_reader(
+    reader: InMemoryReader,
+    projection_mask: ProjectionMask,
+    row_filter: RowFilter,
+) {
+    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .with_row_filter(row_filter)
+        .build()
+        .unwrap();
+    for b in stream {
+        b.unwrap(); // consume the batches, no buffering
+    }
+}
+
+/// Adapter to read asynchronously from in memory bytes and always loads the
+/// metadata with page indexes.
+#[derive(Debug, Clone)]
+struct InMemoryReader {
+    inner: Bytes,
+    metadata: Arc<ParquetMetaData>,
+}
+
+impl InMemoryReader {
+    fn try_new(inner: &Bytes) -> parquet::errors::Result<Self> {
+        let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        metadata_reader.try_parse(inner)?;
+        let metadata = metadata_reader.finish().map(Arc::new)?;
+
+        Ok(Self {
+            // clone of bytes is cheap -- increments a refcount
+            inner: inner.clone(),
+            metadata,
+        })
+    }
+
+    fn metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.metadata
+    }
+
+    fn into_inner(self) -> Bytes {
+        self.inner
+    }
+}
+
+impl AsyncFileReader for InMemoryReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         let data = self.inner.slice(range.start as usize..range.end as usize);
         async move { Ok(data) }.boxed()
@@ -484,16 +554,10 @@ impl AsyncFileReader for MemoryAsyncReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        options: Option<&'a ArrowReaderOptions>,
+        _options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let inner = self.inner.clone();
-        let page_index = options.map(|o| o.page_index()).unwrap_or(true);
-        async move {
-            let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(page_index);
-            metadata_reader.try_parse(&inner)?;
-            metadata_reader.finish().map(Arc::new)
-        }
-        .boxed()
+        let metadata = Arc::clone(&self.metadata);
+        async move { Ok(metadata) }.boxed()
     }
 }
 
