@@ -95,6 +95,11 @@ fn test_int96_stats() {
         .build();
 
     // Create writer and write data
+    let first_timestamp = "2020-01-01 00:00:00.000";  // First timestamp
+    let last_timestamp = "2025-12-31 23:59:59.999";   // Last timestamp
+    let expected_min = datetime_to_int96(first_timestamp);
+    let expected_max = datetime_to_int96(last_timestamp);
+    
     {
         let file = File::create(&file_path).unwrap();
         let mut writer = SerializedFileWriter::new(file, schema.into(), Arc::new(props)).unwrap();
@@ -141,8 +146,14 @@ fn test_int96_stats() {
         let max = stats.max_opt().unwrap();
         
         // Verify the statistics
-        assert!(min < max, "min value should be less than max value");
+         println!("Min timestamp ({}): {:?}", first_timestamp, min.data());
+        println!("Max timestamp ({}): {:?}", last_timestamp, max.data());
+        assert_eq!(*min, expected_min, "Min value should be {}", first_timestamp);
+        assert_eq!(*max, expected_max, "Max value should be {}", last_timestamp);
         assert_eq!(stats.null_count_opt(), Some(0));
+        
+        println!("Min timestamp ({}): {:?}", first_timestamp, min.data());
+        println!("Max timestamp ({}): {:?}", last_timestamp, max.data());
     } else {
         panic!("Expected Int96 statistics");
     }
