@@ -60,16 +60,21 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::StringViewArray;
 use arrow_cast::pretty::pretty_format_batches;
+use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use futures::TryStreamExt;
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
+};
+use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use std::ops::Range;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
-use tokio::fs::File;
 
 /// Generates a random string. Has a 50% chance to generate a short string (3–11 characters)
 /// or a long string (13–20 characters).
@@ -151,8 +156,8 @@ fn create_record_batch(size: usize) -> RecordBatch {
     RecordBatch::try_new(schema, arrays).unwrap()
 }
 
-/// Writes the RecordBatch to a temporary Parquet file and returns the file handle.
-fn write_parquet_file() -> NamedTempFile {
+/// Writes the RecordBatch to an in memory buffer, returning the buffer
+fn write_parquet_file() -> Vec<u8> {
     let batch = create_record_batch(100_000);
     println!("Batch created with {} rows", 100_000);
     println!(
@@ -163,17 +168,13 @@ fn write_parquet_file() -> NamedTempFile {
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
-    let file = tempfile::Builder::new()
-        .suffix(".parquet")
-        .tempfile()
-        .unwrap();
+    let mut buffer = vec![];
     {
-        let file_reopen = file.reopen().unwrap();
-        let mut writer = ArrowWriter::try_new(file_reopen, schema.clone(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
     }
-    file
+    buffer
 }
 
 /// ProjectionCase defines the projection mode for the benchmark:
@@ -195,9 +196,10 @@ impl std::fmt::Display for ProjectionCase {
 
 /// FilterType encapsulates the different filter comparisons.
 /// The variants correspond to the different filter patterns.
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug)]
 enum FilterType {
-    /// Here is the 6 filter types:
+    /// "Point Lookup": selects a single row
+    /// ```text
     /// ┌───────────────┐    ┌───────────────┐
     /// │               │    │               │
     /// │               │    │      ...      │
@@ -209,10 +211,11 @@ enum FilterType {
     /// │               │    │               │
     /// │               │    │               │
     /// └───────────────┘    └───────────────┘
-    ///
-    /// "Point Lookup": selects a single row
+    /// ```
     /// (1 RowSelection of 1 row)
-    ///
+    PointLookup,
+    /// selective (1%) unclustered filter
+    /// ```text
     /// ┌───────────────┐    ┌───────────────┐
     /// │      ...      │    │               │
     /// │               │    │               │
@@ -224,45 +227,81 @@ enum FilterType {
     /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
     /// │               │    │               │
     /// └───────────────┘    └───────────────┘
-    /// selective (1%) unclustered filter
+    /// ```
     /// (1000 RowSelection of 10 rows each)
-    ///
-    ///
-    /// ┌───────────────┐    ┌───────────────┐                 ┌───────────────┐    ┌───────────────┐
-    /// │      ...      │    │               │                 │               │    │               │
-    /// │               │    │               │                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │     ...       │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │                 │               │    │               │
-    /// │               │    │               │                 │     ...       │    │               │
-    /// │               │    │      ...      │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │      ...      │    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// └───────────────┘    └───────────────┘                 └───────────────┘    └───────────────┘
-    /// moderately selective (10%) unclustered filter           moderately selective (10%) clustered filter
-    /// (10000 RowSelection of 10 rows each)                    (10 RowSelections of 10,000 rows each)
-    /// ┌───────────────┐    ┌───────────────┐                 ┌───────────────┐    ┌───────────────┐
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │     ...       │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │     ...       │    │               │
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│                 └───────────────┘    └───────────────┘
-    /// └───────────────┘    └───────────────┘
-    /// unselective (99%) unclustered filter                   unselective (90%) clustered filter
-    /// (99,000 RowSelections of 10 rows each)                 (99 RowSelection of 10,000 rows each)
-    PointLookup,
     SelectiveUnclustered,
+    /// moderately selective (10%) clustered filter
+    /// ```text
+    ///  ┌───────────────┐    ┌───────────────┐
+    ///  │               │    │               │
+    ///  │               │    │               │
+    ///  │               │    │     ...       │
+    ///  │               │    │               │
+    ///  │     ...       │    │               │
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    ///  └───────────────┘    └───────────────┘
+    /// ```
+    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveClustered,
+    /// moderately selective (10%) clustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │      ...      │    │               │
+    /// │               │    │               │
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
+    /// │               │    │               │
+    /// │               │    │      ...      │
+    /// │      ...      │    │               │
+    /// │               │    │               │
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (10 RowSelections of 10,000 rows each)
     ModeratelySelectiveUnclustered,
+    /// unselective (99%) unclustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │               │
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (99,000 RowSelections of 10 rows each)
     UnselectiveUnclustered,
+    /// unselective (90%) clustered filter
+    /// ```text
+    /// ┌───────────────┐    ┌───────────────┐
+    /// │               │    │               │
+    /// │               │    │               │
+    /// │               │    │     ...       │
+    /// │               │    │               │
+    /// │     ...       │    │               │
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// │               │    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+    /// └───────────────┘    └───────────────┘
+    /// ```
+    /// (99 RowSelection of 10,000 rows each)
     UnselectiveClustered,
-    /// The following are Composite and Utf8ViewNonEmpty filters, which is the additional to above 6 filters.
+    /// [`Self::SelectivelUnclusered`] `AND`
+    /// [`Self::ModeratelySelectiveClustered`]
     Composite,
+    /// `utf8View <> ''` modeling [ClickBench] [Q21-Q27]
+    ///
+    /// [ClickBench]: https://github.com/ClickHouse/ClickBench
+    /// [Q21-Q27]: https://github.com/apache/datafusion/blob/b7177234e65cbbb2dcc04c252f6acd80bb026362/benchmarks/queries/clickbench/queries.sql#L22-L28
     Utf8ViewNonEmpty,
 }
 
@@ -333,13 +372,28 @@ impl FilterType {
             }
         }
     }
+
+    /// Return the indexes in the batch's schema that are used for filtering.
+    fn filter_projection(&self) -> &'static [usize] {
+        match self {
+            FilterType::PointLookup => &[0],
+            FilterType::SelectiveUnclustered => &[1],
+            FilterType::ModeratelySelectiveClustered => &[3],
+            FilterType::ModeratelySelectiveUnclustered => &[0],
+            FilterType::UnselectiveUnclustered => &[1],
+            FilterType::UnselectiveClustered => &[3],
+            FilterType::Composite => &[1, 3], // Use float64 column and ts column as representative for composite
+            FilterType::Utf8ViewNonEmpty => &[2],
+        }
+    }
 }
 
 /// Benchmark filters and projections by reading the Parquet file.
 /// This benchmark iterates over all individual filter types and two projection cases.
 /// It measures the time to read and filter the Parquet file according to each scenario.
 fn benchmark_filters_and_projections(c: &mut Criterion) {
-    let parquet_file = write_parquet_file();
+    // make the parquet file in memory that can be shared
+    let parquet_file = Bytes::from(write_parquet_file());
     let filter_types = vec![
         FilterType::PointLookup,
         FilterType::SelectiveUnclustered,
@@ -354,24 +408,19 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
         ProjectionCase::AllColumns,
         ProjectionCase::ExcludeFilterColumn,
     ];
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let mut group = c.benchmark_group("arrow_reader_row_filter");
 
-    for filter_type in filter_types.clone() {
+    for filter_type in filter_types {
         for proj_case in &projection_cases {
             // All indices corresponding to the 10 columns.
             let all_indices = vec![0, 1, 2, 3];
-            // Determine the filter column index based on the filter type.
-            let filter_col = match filter_type {
-                FilterType::PointLookup => vec![0],
-                FilterType::SelectiveUnclustered => vec![1],
-                FilterType::ModeratelySelectiveClustered => vec![3],
-                FilterType::ModeratelySelectiveUnclustered => vec![0],
-                FilterType::UnselectiveUnclustered => vec![1],
-                FilterType::UnselectiveClustered => vec![3],
-                FilterType::Composite => vec![1, 3], // Use float64 column and ts column as representative for composite
-                FilterType::Utf8ViewNonEmpty => vec![2],
-            };
-
+            let filter_col = filter_type.filter_projection().to_vec();
             // For the projection, either select all columns or exclude the filter column(s).
             let output_projection: Vec<usize> = match proj_case {
                 ProjectionCase::AllColumns => all_indices.clone(),
@@ -381,43 +430,134 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
                     .collect(),
             };
 
-            let bench_id =
-                BenchmarkId::new(format!("filter: {} proj: {}", filter_type, proj_case), "");
+            let reader = InMemoryReader::try_new(&parquet_file).unwrap();
+            let metadata = Arc::clone(reader.metadata());
+
+            let schema_descr = metadata.file_metadata().schema_descr();
+            let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
+            let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
+
+            let benchmark_name = format!("{filter_type:?}/{proj_case}",);
+
+            // run the benchmark for the async reader
+            let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
+            let rt_captured = rt.handle().clone();
             group.bench_function(bench_id, |b| {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
                 b.iter(|| {
-                    let filter_type_inner = filter_type.clone();
-                    rt.block_on(async {
-                        let file = File::open(parquet_file.path()).await.unwrap();
-                        let options = ArrowReaderOptions::new().with_page_index(true);
-                        let builder =
-                            ParquetRecordBatchStreamBuilder::new_with_options(file, options)
-                                .await
-                                .unwrap()
-                                .with_batch_size(8192);
-                        let file_metadata = builder.metadata().file_metadata().clone();
-                        let mask = ProjectionMask::roots(
-                            file_metadata.schema_descr(),
-                            output_projection.clone(),
-                        );
-                        let pred_mask =
-                            ProjectionMask::roots(file_metadata.schema_descr(), filter_col.clone());
-                        let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
-                            Ok(filter_type_inner.filter_batch(&batch).unwrap())
-                        });
-                        let stream = builder
-                            .with_projection(mask)
-                            .with_row_filter(RowFilter::new(vec![Box::new(filter)]))
-                            .build()
-                            .unwrap();
-                        stream.try_collect::<Vec<_>>().await.unwrap();
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let projection_mask = projection_mask.clone();
+                    // row filters are not clone, so must make it each iter
+                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                        Ok(filter_type.filter_batch(&batch).unwrap())
+                    });
+                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
+
+                    rt_captured.block_on(async {
+                        benchmark_async_reader(reader, projection_mask, row_filter).await;
                     })
                 });
             });
+
+            // run the benchmark for the sync reader
+            let bench_id = BenchmarkId::new(benchmark_name, "sync");
+            group.bench_function(bench_id, |b| {
+                b.iter(|| {
+                    let reader = reader.clone();
+                    let pred_mask = pred_mask.clone();
+                    let projection_mask = projection_mask.clone();
+                    // row filters are not clone, so must make it each iter
+                    let filter = ArrowPredicateFn::new(pred_mask, move |batch: RecordBatch| {
+                        Ok(filter_type.filter_batch(&batch).unwrap())
+                    });
+                    let row_filter = RowFilter::new(vec![Box::new(filter)]);
+
+                    benchmark_sync_reader(reader, projection_mask, row_filter)
+                });
+            });
         }
+    }
+}
+
+/// Use async API
+async fn benchmark_async_reader(
+    reader: InMemoryReader,
+    projection_mask: ProjectionMask,
+    row_filter: RowFilter,
+) {
+    let mut stream = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .with_row_filter(row_filter)
+        .build()
+        .unwrap();
+    while let Some(b) = stream.next().await {
+        b.unwrap(); // consume the batches, no buffering
+    }
+}
+
+/// Use sync API
+fn benchmark_sync_reader(
+    reader: InMemoryReader,
+    projection_mask: ProjectionMask,
+    row_filter: RowFilter,
+) {
+    let stream = ParquetRecordBatchReaderBuilder::try_new(reader.into_inner())
+        .unwrap()
+        .with_batch_size(8192)
+        .with_projection(projection_mask)
+        .with_row_filter(row_filter)
+        .build()
+        .unwrap();
+    for b in stream {
+        b.unwrap(); // consume the batches, no buffering
+    }
+}
+
+/// Adapter to read asynchronously from in memory bytes and always loads the
+/// metadata with page indexes.
+#[derive(Debug, Clone)]
+struct InMemoryReader {
+    inner: Bytes,
+    metadata: Arc<ParquetMetaData>,
+}
+
+impl InMemoryReader {
+    fn try_new(inner: &Bytes) -> parquet::errors::Result<Self> {
+        let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        metadata_reader.try_parse(inner)?;
+        let metadata = metadata_reader.finish().map(Arc::new)?;
+
+        Ok(Self {
+            // clone of bytes is cheap -- increments a refcount
+            inner: inner.clone(),
+            metadata,
+        })
+    }
+
+    fn metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.metadata
+    }
+
+    fn into_inner(self) -> Bytes {
+        self.inner
+    }
+}
+
+impl AsyncFileReader for InMemoryReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        let data = self.inner.slice(range.start as usize..range.end as usize);
+        async move { Ok(data) }.boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let metadata = Arc::clone(&self.metadata);
+        async move { Ok(metadata) }.boxed()
     }
 }
 
