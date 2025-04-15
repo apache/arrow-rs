@@ -82,20 +82,16 @@ pub fn take(
     options: Option<TakeOptions>,
 ) -> Result<ArrayRef, ArrowError> {
     let options = options.unwrap_or_default();
-    macro_rules! helper {
-        ($t:ty, $values:expr, $indices:expr, $options:expr) => {{
-            let indices = indices.as_primitive::<$t>();
-            if $options.check_bounds {
-                check_bounds($values.len(), indices)?;
+    downcast_integer_array!(
+        indices => {
+            if options.check_bounds {
+                check_bounds(values.len(), indices)?;
             }
             let indices = indices.to_indices();
-            take_impl($values, &indices)
-        }};
-    }
-    downcast_integer! {
-        indices.data_type() => (helper, values, indices, options),
+            take_impl(values, &indices)
+        },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
-    }
+    )
 }
 
 /// For each [ArrayRef] in the [`Vec<ArrayRef>`], take elements by index and create a new
@@ -254,7 +250,12 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
                 })
                 .collect();
 
-            Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
+            if fields.is_empty() {
+                let nulls = NullBuffer::new(BooleanBuffer::new(is_valid, 0, indices.len()));
+                Ok(Arc::new(StructArray::new_empty_fields(indices.len(), Some(nulls))))
+            } else {
+                Ok(Arc::new(StructArray::from((fields, is_valid))) as ArrayRef)
+            }
         }
         DataType::Dictionary(_, _) => downcast_dictionary_array! {
             values => Ok(Arc::new(take_dict(values, indices)?)),
@@ -1968,6 +1969,15 @@ mod tests {
         ]);
 
         assert_eq!(&expected, actual);
+
+        let nulls = NullBuffer::from(&[false, true, false, true, false, true]);
+        let empty_struct_arr = StructArray::new_empty_fields(6, Some(nulls));
+        let index = UInt32Array::from(vec![0, 2, 1, 4]);
+        let actual = take(&empty_struct_arr, &index, None).unwrap();
+
+        let expected_nulls = NullBuffer::from(&[false, false, true, false]);
+        let expected_struct_arr = StructArray::new_empty_fields(4, Some(expected_nulls));
+        assert_eq!(&expected_struct_arr, actual.as_struct());
     }
 
     #[test]

@@ -28,7 +28,6 @@ use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::data::private::UnsafeFlag;
 use crate::{equal, validate_binary_view, validate_string_view};
 
 #[inline]
@@ -202,26 +201,50 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
 
 #[derive(Debug, Clone)]
 pub struct ArrayData {
-    /// The data type for this array data
+    /// The data type
     data_type: DataType,
 
-    /// The number of elements in this array data
+    /// The number of elements
     len: usize,
 
-    /// The offset into this array data, in number of items
+    /// The offset in number of items (not bytes).
+    ///
+    /// The offset applies to [`Self::child_data`] and [`Self::buffers`]. It
+    /// does NOT apply to [`Self::nulls`].
     offset: usize,
 
-    /// The buffers for this array data. Note that depending on the array types, this
-    /// could hold different kinds of buffers (e.g., value buffer, value offset buffer)
-    /// at different positions.
+    /// The buffers that store the actual data for this array, as defined
+    /// in the [Arrow Spec].
+    ///
+    /// Depending on the array types, [`Self::buffers`] can hold different
+    /// kinds of buffers (e.g., value buffer, value offset buffer) at different
+    /// positions.
+    ///
+    /// The buffer may be larger than needed.  Some items at the beginning may be skipped if
+    /// there is an `offset`.  Some items at the end may be skipped if the buffer is longer than
+    /// we need to satisfy `len`.
+    ///
+    /// [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout)
     buffers: Vec<Buffer>,
 
-    /// The child(ren) of this array. Only non-empty for nested types, currently
-    /// `ListArray` and `StructArray`.
+    /// The child(ren) of this array.
+    ///
+    /// Only non-empty for nested types, such as `ListArray` and
+    /// `StructArray`.
+    ///
+    /// The first logical element in each child element begins at `offset`.
+    ///
+    /// If the child element also has an offset then these offsets are
+    /// cumulative.
     child_data: Vec<ArrayData>,
 
-    /// The null bitmap. A `None` value for this indicates all values are non-null in
-    /// this array.
+    /// The null bitmap.
+    ///
+    /// `None` indicates all values are non-null in this array.
+    ///
+    /// [`Self::offset]` does not apply to the null bitmap. While the
+    /// BooleanBuffer may be sliced (have its own offset) internally, this
+    /// `NullBuffer` always represents exactly `len` elements.
     nulls: Option<NullBuffer>,
 }
 
@@ -556,6 +579,7 @@ impl ArrayData {
     }
 
     /// Returns the `buffer` as a slice of type `T` starting at self.offset
+    ///
     /// # Panics
     /// This function panics if:
     /// * the buffer is not byte-aligned with type T, or
@@ -1017,7 +1041,7 @@ impl ArrayData {
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, list_size, list_size, self.data_type
+                        values_data.len, self.len, list_size, self.data_type
                     )));
                 }
 
@@ -1781,33 +1805,62 @@ impl PartialEq for ArrayData {
     }
 }
 
-mod private {
-    /// A boolean flag that cannot be mutated outside of unsafe code.
-    ///
-    /// Defaults to a value of false.
-    ///
-    /// This structure is used to enforce safety in the [`ArrayDataBuilder`]
-    ///
-    /// [`ArrayDataBuilder`]: super::ArrayDataBuilder
-    #[derive(Debug)]
-    pub struct UnsafeFlag(bool);
+/// A boolean flag that cannot be mutated outside of unsafe code.
+///
+/// Defaults to a value of false.
+///
+/// This structure is used to enforce safety in the [`ArrayDataBuilder`]
+///
+/// [`ArrayDataBuilder`]: super::ArrayDataBuilder
+///
+/// # Example
+/// ```rust
+/// use arrow_data::UnsafeFlag;
+/// assert!(!UnsafeFlag::default().get()); // default is false
+/// let mut flag = UnsafeFlag::new();
+/// assert!(!flag.get()); // defaults to false
+/// // can only set it to true in unsafe code
+/// unsafe { flag.set(true) };
+/// assert!(flag.get()); // now true
+/// ```
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub struct UnsafeFlag(bool);
 
-    impl UnsafeFlag {
-        /// Creates a new `UnsafeFlag` with the value set to `false`
-        #[inline]
-        pub const fn new() -> Self {
-            Self(false)
-        }
+impl UnsafeFlag {
+    /// Creates a new `UnsafeFlag` with the value set to `false`.
+    ///
+    /// See examples on [`Self::new`]
+    #[inline]
+    pub const fn new() -> Self {
+        Self(false)
+    }
 
-        #[inline]
-        pub unsafe fn set(&mut self, val: bool) {
-            self.0 = val;
-        }
+    /// Sets the value of the flag to the given value
+    ///
+    /// Note this can purposely only be done in `unsafe` code
+    ///
+    /// # Safety
+    ///
+    /// If set, the flag will be set to the given value. There is nothing
+    /// immediately unsafe about doing so, however, the flag can be used to
+    /// subsequently bypass safety checks in the [`ArrayDataBuilder`].
+    #[inline]
+    pub unsafe fn set(&mut self, val: bool) {
+        self.0 = val;
+    }
 
-        #[inline]
-        pub fn get(&self) -> bool {
-            self.0
-        }
+    /// Returns the value of the flag
+    #[inline]
+    pub fn get(&self) -> bool {
+        self.0
+    }
+}
+
+// Manual impl to make it clear you can not construct unsafe with true
+impl Default for UnsafeFlag {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1929,7 +1982,13 @@ impl ArrayDataBuilder {
 
     /// Creates an array data, without any validation
     ///
-    /// Note: This is shorthand for `self.skip_validation(true).build().unwrap()`
+    /// Note: This is shorthand for
+    /// ```rust
+    /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
+    /// # let _ = unsafe {
+    /// builder.skip_validation(true).build().unwrap()
+    /// # };
+    /// ```
     ///
     /// # Safety
     ///

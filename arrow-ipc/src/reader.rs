@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -136,24 +136,7 @@ impl RecordBatchDecoder<'_> {
                     let child = self.create_array(struct_field, variadic_counts)?;
                     struct_arrays.push(child);
                 }
-                let null_count = struct_node.null_count() as usize;
-                let struct_array = if struct_arrays.is_empty() {
-                    // `StructArray::from` can't infer the correct row count
-                    // if we have zero fields
-                    let len = struct_node.length() as usize;
-                    StructArray::new_empty_fields(
-                        len,
-                        (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
-                    )
-                } else if null_count > 0 {
-                    // create struct array from fields, arrays and null data
-                    let len = struct_node.length() as usize;
-                    let nulls = BooleanBuffer::new(null_buffer, 0, len).into();
-                    StructArray::try_new(struct_fields.clone(), struct_arrays, Some(nulls))?
-                } else {
-                    StructArray::try_new(struct_fields.clone(), struct_arrays, None)?
-                };
-                Ok(Arc::new(struct_array))
+                self.create_struct_array(struct_node, null_buffer, struct_fields, struct_arrays)
             }
             RunEndEncoded(run_ends_field, values_field) => {
                 let run_node = self.next_node(field)?;
@@ -161,15 +144,12 @@ impl RecordBatchDecoder<'_> {
                 let values = self.create_array(values_field, variadic_counts)?;
 
                 let run_array_length = run_node.length() as usize;
-                let array_data = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(run_array_length)
                     .offset(0)
                     .add_child_data(run_ends.into_data())
-                    .add_child_data(values.into_data())
-                    .align_buffers(!self.require_alignment)
-                    .build()?;
-
-                Ok(make_array(array_data))
+                    .add_child_data(values.into_data());
+                self.create_array_from_builder(builder)
             }
             // Create dictionary array from RecordBatch
             Dictionary(_, _) => {
@@ -223,7 +203,14 @@ impl RecordBatchDecoder<'_> {
                     children.push(child);
                 }
 
-                let array = UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?;
+                let array = if self.skip_validation.get() {
+                    // safety: flag can only be set via unsafe code
+                    unsafe {
+                        UnionArray::new_unchecked(fields.clone(), type_ids, value_offsets, children)
+                    }
+                } else {
+                    UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?
+                };
                 Ok(Arc::new(array))
             }
             Null => {
@@ -237,14 +224,10 @@ impl RecordBatchDecoder<'_> {
                     )));
                 }
 
-                let array_data = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(length as usize)
-                    .offset(0)
-                    .align_buffers(!self.require_alignment)
-                    .build()?;
-
-                // no buffer increases
-                Ok(Arc::new(NullArray::from(array_data)))
+                    .offset(0);
+                self.create_array_from_builder(builder)
             }
             _ => {
                 let field_node = self.next_node(field)?;
@@ -286,9 +269,17 @@ impl RecordBatchDecoder<'_> {
             t => unreachable!("Data type {:?} either unsupported or not primitive", t),
         };
 
-        let array_data = builder.align_buffers(!self.require_alignment).build()?;
+        self.create_array_from_builder(builder)
+    }
 
-        Ok(make_array(array_data))
+    /// Update the ArrayDataBuilder based on settings in this decoder
+    fn create_array_from_builder(&self, builder: ArrayDataBuilder) -> Result<ArrayRef, ArrowError> {
+        let mut builder = builder.align_buffers(!self.require_alignment);
+        if self.skip_validation.get() {
+            // SAFETY: flag can only be set via unsafe code
+            unsafe { builder = builder.skip_validation(true) }
+        };
+        Ok(make_array(builder.build()?))
     }
 
     /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -318,9 +309,34 @@ impl RecordBatchDecoder<'_> {
             _ => unreachable!("Cannot create list or map array from {:?}", data_type),
         };
 
-        let array_data = builder.align_buffers(!self.require_alignment).build()?;
+        self.create_array_from_builder(builder)
+    }
 
-        Ok(make_array(array_data))
+    fn create_struct_array(
+        &self,
+        struct_node: &FieldNode,
+        null_buffer: Buffer,
+        struct_fields: &Fields,
+        struct_arrays: Vec<ArrayRef>,
+    ) -> Result<ArrayRef, ArrowError> {
+        let null_count = struct_node.null_count() as usize;
+        let len = struct_node.length() as usize;
+
+        let nulls = (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into());
+        if struct_arrays.is_empty() {
+            // `StructArray::from` can't infer the correct row count
+            // if we have zero fields
+            return Ok(Arc::new(StructArray::new_empty_fields(len, nulls)));
+        }
+
+        let struct_array = if self.skip_validation.get() {
+            // safety: flag can only be set via unsafe code
+            unsafe { StructArray::new_unchecked(struct_fields.clone(), struct_arrays, nulls) }
+        } else {
+            StructArray::try_new(struct_fields.clone(), struct_arrays, nulls)?
+        };
+
+        Ok(Arc::new(struct_array))
     }
 
     /// Reads the correct number of buffers based on list type and null_count, and creates a
@@ -334,15 +350,12 @@ impl RecordBatchDecoder<'_> {
     ) -> Result<ArrayRef, ArrowError> {
         if let Dictionary(_, _) = *data_type {
             let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-            let array_data = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(field_node.length() as usize)
                 .add_buffer(buffers[1].clone())
                 .add_child_data(value_array.into_data())
-                .null_bit_buffer(null_buffer)
-                .align_buffers(!self.require_alignment)
-                .build()?;
-
-            Ok(make_array(array_data))
+                .null_bit_buffer(null_buffer);
+            self.create_array_from_builder(builder)
         } else {
             unreachable!("Cannot create dictionary array from {:?}", data_type)
         }
@@ -376,6 +389,10 @@ struct RecordBatchDecoder<'a> {
     /// Are buffers required to already be aligned? See
     /// [`RecordBatchDecoder::with_require_alignment`] for details
     require_alignment: bool,
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    skip_validation: UnsafeFlag,
 }
 
 impl<'a> RecordBatchDecoder<'a> {
@@ -410,6 +427,7 @@ impl<'a> RecordBatchDecoder<'a> {
             buffers: buffers.iter(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -429,6 +447,22 @@ impl<'a> RecordBatchDecoder<'a> {
     /// if necessary.
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// Note this API is somewhat "funky" as it allows the caller to skip validation
+    /// without having to use `unsafe` code. If this is ever made public
+    /// it should be made clearer that this is a potentially unsafe by
+    /// using an `unsafe` function that takes a boolean flag.
+    ///
+    /// # Safety
+    ///
+    /// Relies on the caller only passing a flag with `true` value if they are
+    /// certain that the data is valid
+    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+        self.skip_validation = skip_validation;
         self
     }
 
@@ -601,7 +635,15 @@ pub fn read_dictionary(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
-    read_dictionary_impl(buf, batch, schema, dictionaries_by_id, metadata, false)
+    read_dictionary_impl(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        false,
+        UnsafeFlag::new(),
+    )
 }
 
 fn read_dictionary_impl(
@@ -611,6 +653,7 @@ fn read_dictionary_impl(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -642,6 +685,7 @@ fn read_dictionary_impl(
                 metadata,
             )?
             .with_require_alignment(require_alignment)
+            .with_skip_validation(skip_validation)
             .read_record_batch()?;
 
             Some(record_batch.column(0).clone())
@@ -772,6 +816,7 @@ pub struct FileDecoder {
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 }
 
 impl FileDecoder {
@@ -783,6 +828,7 @@ impl FileDecoder {
             dictionaries: Default::default(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         }
     }
 
@@ -792,7 +838,7 @@ impl FileDecoder {
         self
     }
 
-    /// Specifies whether or not array data in input buffers is required to be properly aligned.
+    /// Specifies if the array data in input buffers is required to be properly aligned.
     ///
     /// If `require_alignment` is true, this decoder will return an error if any array data in the
     /// input `buf` is not properly aligned.
@@ -806,6 +852,21 @@ impl FileDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust the input data and are sure the data you are
+    /// reading is a valid Arrow IPC file, otherwise undefined behavior may
+    /// result.
+    ///
+    /// For example, some programs may wish to trust reading IPC files written
+    /// by the same process that created the files.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
         self
     }
 
@@ -834,6 +895,7 @@ impl FileDecoder {
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
+                    self.skip_validation.clone(),
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -867,6 +929,7 @@ impl FileDecoder {
                 )?
                 .with_projection(self.projection.as_deref())
                 .with_require_alignment(self.require_alignment)
+                .with_skip_validation(self.skip_validation.clone())
                 .read_record_batch()
                 .map(Some)
             }
@@ -1062,7 +1125,7 @@ impl FileReaderBuilder {
 /// For an example creating Arrays without copying using  memory mapped (`mmap`)
 /// files see the [`zero_copy_ipc`] example.
 ///
-/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+/// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 /// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking
@@ -1177,6 +1240,16 @@ impl<R: Read + Seek> FileReader<R> {
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// See [`FileDecoder::with_skip_validation`]
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.decoder = self.decoder.with_skip_validation(skip_validation);
+        self
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
@@ -1250,6 +1323,11 @@ pub struct StreamReader<R> {
 
     /// Optional projection
     projection: Option<(Vec<usize>, Schema)>,
+
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    skip_validation: UnsafeFlag,
 }
 
 impl<R> fmt::Debug for StreamReader<R> {
@@ -1329,6 +1407,7 @@ impl<R: Read> StreamReader<R> {
             finished: false,
             dictionaries_by_id,
             projection,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -1417,6 +1496,7 @@ impl<R: Read> StreamReader<R> {
                 )?
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
+                .with_skip_validation(self.skip_validation.clone())
                 .read_record_batch()
                 .map(Some)
             }
@@ -1437,6 +1517,7 @@ impl<R: Read> StreamReader<R> {
                     &mut self.dictionaries_by_id,
                     &message.version(),
                     false,
+                    self.skip_validation.clone(),
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1462,6 +1543,16 @@ impl<R: Read> StreamReader<R> {
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// See [`FileDecoder::with_skip_validation`]
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
+        self
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1480,12 +1571,14 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+    use crate::convert::fb_to_schema;
+    use crate::writer::{
+        unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
+    };
 
     use super::*;
 
-    use crate::convert::fb_to_schema;
-    use crate::{root_as_footer, root_as_message};
+    use crate::{root_as_footer, root_as_message, size_prefixed_root_as_message};
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
     use arrow_buffer::{NullBuffer, OffsetBuffer};
@@ -1740,6 +1833,15 @@ mod tests {
         reader.next().unwrap()
     }
 
+    /// Return the first record batch read from the IPC File buffer, disabling
+    /// validation
+    fn read_ipc_skip_validation(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = unsafe {
+            FileReader::try_new(std::io::Cursor::new(buf), None)?.with_skip_validation(true)
+        };
+        reader.next().unwrap()
+    }
+
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
         let buf = write_ipc(rb);
         read_ipc(&buf).unwrap()
@@ -1748,6 +1850,19 @@ mod tests {
     /// Return the first record batch read from the IPC File buffer
     /// using the FileDecoder API
     fn read_ipc_with_decoder(buf: Vec<u8>) -> Result<RecordBatch, ArrowError> {
+        read_ipc_with_decoder_inner(buf, false)
+    }
+
+    /// Return the first record batch read from the IPC File buffer
+    /// using the FileDecoder API, disabling validation
+    fn read_ipc_with_decoder_skip_validation(buf: Vec<u8>) -> Result<RecordBatch, ArrowError> {
+        read_ipc_with_decoder_inner(buf, true)
+    }
+
+    fn read_ipc_with_decoder_inner(
+        buf: Vec<u8>,
+        skip_validation: bool,
+    ) -> Result<RecordBatch, ArrowError> {
         let buffer = Buffer::from_vec(buf);
         let trailer_start = buffer.len() - 10;
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap())?;
@@ -1756,7 +1871,10 @@ mod tests {
 
         let schema = fb_to_schema(footer.schema().unwrap());
 
-        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        let mut decoder = unsafe {
+            FileDecoder::new(Arc::new(schema), footer.version())
+                .with_skip_validation(skip_validation)
+        };
         // Read dictionaries
         for block in footer.dictionaries().iter().flatten() {
             let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
@@ -1786,6 +1904,15 @@ mod tests {
     /// Return the first record batch read from the IPC Stream buffer
     fn read_stream(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
         let mut reader = StreamReader::try_new(std::io::Cursor::new(buf), None)?;
+        reader.next().unwrap()
+    }
+
+    /// Return the first record batch read from the IPC Stream buffer,
+    /// disabling validation
+    fn read_stream_skip_validation(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = unsafe {
+            StreamReader::try_new(std::io::Cursor::new(buf), None)?.with_skip_validation(true)
+        };
         reader.next().unwrap()
     }
 
@@ -2421,12 +2548,7 @@ mod tests {
     fn test_invalid_struct_array_ipc_read_errors() {
         let a_field = Field::new("a", DataType::Int32, false);
         let b_field = Field::new("b", DataType::Int32, false);
-
-        let schema = Arc::new(Schema::new(vec![Field::new_struct(
-            "s",
-            vec![a_field.clone(), b_field.clone()],
-            false,
-        )]));
+        let struct_fields = Fields::from(vec![a_field.clone(), b_field.clone()]);
 
         let a_array_data = ArrayData::builder(a_field.data_type().clone())
             .len(4)
@@ -2439,6 +2561,54 @@ mod tests {
             .build()
             .unwrap();
 
+        let invalid_struct_arr = unsafe {
+            StructArray::new_unchecked(
+                struct_fields,
+                vec![make_array(a_array_data), make_array(b_array_data)],
+                None,
+            )
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(invalid_struct_arr),
+            "Invalid argument error: Incorrect array length for StructArray field \"b\", expected 4 got 3",
+        );
+    }
+
+    #[test]
+    fn test_invalid_nested_array_ipc_read_errors() {
+        // one of the nested arrays has invalid data
+        let a_field = Field::new("a", DataType::Int32, false);
+        let b_field = Field::new("b", DataType::Utf8, false);
+
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "s",
+            vec![a_field.clone(), b_field.clone()],
+            false,
+        )]));
+
+        let a_array_data = ArrayData::builder(a_field.data_type().clone())
+            .len(4)
+            .add_buffer(Buffer::from_slice_ref([1, 2, 3, 4]))
+            .build()
+            .unwrap();
+        // invalid nested child array -- length is correct, but has invalid utf8 data
+        let b_array_data = {
+            let valid: &[u8] = b"   ";
+            let mut invalid = vec![];
+            invalid.extend_from_slice(b"ValidString");
+            invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+            let binary_array =
+                BinaryArray::from_iter(vec![None, Some(valid), None, Some(&invalid)]);
+            let array = unsafe {
+                StringArray::new_unchecked(
+                    binary_array.offsets().clone(),
+                    binary_array.values().clone(),
+                    binary_array.nulls().cloned(),
+                )
+            };
+            array.into_data()
+        };
         let struct_data_type = schema.field(0).data_type();
 
         let invalid_struct_arr = unsafe {
@@ -2452,7 +2622,7 @@ mod tests {
         };
         expect_ipc_validation_error(
             Arc::new(invalid_struct_arr),
-            "Invalid argument error: Incorrect array length for StructArray field \"b\", expected 4 got 3",
+            "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
         );
     }
 
@@ -2592,6 +2762,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_validation_of_invalid_union_array() {
+        let array = unsafe {
+            let fields = UnionFields::new(
+                vec![1, 3], // typeids : type id 2 is not valid
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Utf8, false),
+                ],
+            );
+            let type_ids = ScalarBuffer::from(vec![1i8, 2, 3]); // 2 is invalid
+            let offsets = None;
+            let children: Vec<ArrayRef> = vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ];
+
+            UnionArray::new_unchecked(fields, type_ids, offsets, children)
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Type Ids values must match one of the field type ids",
+        );
+    }
+
     /// Invalid Utf-8 sequence in the first character
     /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
     const INVALID_UTF8_FIRST_CHAR: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
@@ -2602,19 +2798,58 @@ mod tests {
 
         // IPC Stream format
         let buf = write_stream(&rb); // write is ok
+        read_stream_skip_validation(&buf).unwrap();
         let err = read_stream(&buf).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
 
         // IPC File format
         let buf = write_ipc(&rb); // write is ok
+        read_ipc_skip_validation(&buf).unwrap();
         let err = read_ipc(&buf).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
 
-        // TODO verify there is no error when validation is disabled
-        // see https://github.com/apache/arrow-rs/issues/3287
-
         // IPC Format with FileDecoder
+        read_ipc_with_decoder_skip_validation(buf.clone()).unwrap();
         let err = read_ipc_with_decoder(buf).unwrap_err();
         assert_eq!(err.to_string(), expected_err);
+    }
+
+    #[test]
+    fn test_roundtrip_schema() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+
+        let options = IpcWriteOptions::default();
+        let data_gen = IpcDataGenerator::default();
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let encoded_data =
+            data_gen.schema_to_bytes_with_dictionary_tracker(&schema, &mut dict_tracker, &options);
+        let mut schema_bytes = vec![];
+        write_message(&mut schema_bytes, encoded_data, &options).expect("write_message");
+
+        let begin_offset: usize = if schema_bytes[0..4].eq(&CONTINUATION_MARKER) {
+            4
+        } else {
+            0
+        };
+
+        size_prefixed_root_as_message(&schema_bytes[begin_offset..])
+            .expect_err("size_prefixed_root_as_message");
+
+        let msg = parse_message(&schema_bytes).expect("parse_message");
+        let ipc_schema = msg.header_as_schema().expect("header_as_schema");
+        let new_schema = fb_to_schema(ipc_schema);
+
+        assert_eq!(schema, new_schema);
     }
 }

@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains async writer which writes arrow data into parquet data.
+//! `async` API for writing [`RecordBatch`]es to Parquet files
 //!
-//! Provides `async` API for writing [`RecordBatch`]es as parquet files. The API is
-//! similar to the [`sync` API](crate::arrow::arrow_writer::ArrowWriter), so please
+//! See the [crate-level documentation](crate) for more details.
+//!
+//! The `async` API for writing [`RecordBatch`]es is
+//! similar to the [`sync` API](ArrowWriter), so please
 //! read the documentation there before using this API.
 //!
 //! Here is an example for using [`AsyncArrowWriter`]:

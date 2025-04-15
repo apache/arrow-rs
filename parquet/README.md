@@ -63,6 +63,7 @@ The `parquet` crate provides the following features which may be enabled in your
 - `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
 - `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
+- `encryption` - support for reading / writing encrypted Parquet files
 
 [`arrow`]: https://crates.io/crates/arrow
 [`simdutf8`]: https://crates.io/crates/simdutf8
@@ -76,12 +77,14 @@ The `parquet` crate provides the following features which may be enabled in your
   - [x] Row record reader
   - [x] Arrow record reader
   - [x] Async support (to Arrow)
+  - [x] Encrypted files
 - [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
   - [x] Async support
+  - [x] Encrypted files
 - [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 

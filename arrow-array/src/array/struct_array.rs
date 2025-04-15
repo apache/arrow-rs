@@ -189,6 +189,10 @@ impl StructArray {
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(fields, arrays, nulls);
+        }
+
         let len = arrays.first().map(|x| x.len()).unwrap_or_default();
         Self {
             len,
@@ -290,10 +294,19 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
+        let parent_offset = data.offset();
+        let parent_len = data.len();
+
         let fields = data
             .child_data()
             .iter()
-            .map(|cd| make_array(cd.clone()))
+            .map(|cd| {
+                if parent_offset != 0 || parent_len != cd.len() {
+                    make_array(cd.slice(parent_offset, parent_len))
+                } else {
+                    make_array(cd.clone())
+                }
+            })
             .collect();
 
         Self {
@@ -412,7 +425,7 @@ impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
 impl std::fmt::Debug for StructArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         writeln!(f, "StructArray")?;
-        writeln!(f, "-- validity: ")?;
+        writeln!(f, "-- validity:")?;
         writeln!(f, "[")?;
         print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
         writeln!(f, "]\n[")?;
@@ -517,6 +530,81 @@ mod tests {
         assert_eq!(4, struct_array.len());
         assert_eq!(0, struct_array.null_count());
         assert_eq!(0, struct_array.offset());
+    }
+
+    #[test]
+    fn test_struct_array_from_data_with_offset_and_length() {
+        // Various ways to make the struct array:
+        //
+        // [{x: 2}, {x: 3}, None]
+        //
+        // from slicing larger buffers/arrays with offsets and lengths
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        // Case 1: Offset + length, nulls are not sliced
+        let case1 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
+
+        // Case 2: Offset + length, nulls are sliced
+        let struct_nulls =
+            NullBuffer::new(BooleanBuffer::from(vec![true, true, true, false, true]).slice(1, 3));
+        let case2 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls.clone()))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
+
+        // Case 3: struct length is smaller than child length but no offset
+        let offset_int_data = int_data.slice(1, 4);
+        let case3 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .nulls(Some(struct_nulls))
+            .add_child_data(offset_int_data)
+            .build()
+            .unwrap();
+
+        let expected = StructArray::new(
+            Fields::from(vec![int_field.clone()]),
+            vec![Arc::new(int_arr)],
+            Some(NullBuffer::new(BooleanBuffer::from(vec![
+                true, true, true, false, true,
+            ]))),
+        )
+        .slice(1, 3);
+
+        for case in [case1, case2, case3] {
+            let struct_arr_from_data = StructArray::from(case);
+            assert_eq!(struct_arr_from_data, expected);
+            assert_eq!(struct_arr_from_data.column(0), expected.column(0));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
+    fn test_struct_array_from_data_with_offset_and_length_error() {
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        // If parent offset is 3 and len is 3 then child must have 6 items
+        let struct_data =
+            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+                .len(3)
+                .offset(3)
+                .nulls(Some(struct_nulls))
+                .add_child_data(int_data)
+                .build()
+                .unwrap();
+        let _ = StructArray::from(struct_data);
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
@@ -752,6 +840,6 @@ mod tests {
                 (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
             ))),
         );
-        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity: \n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
+        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
     }
 }

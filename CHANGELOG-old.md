@@ -19,6 +19,149 @@
 
 # Historical Changelog
 
+## [54.3.1](https://github.com/apache/arrow-rs/tree/54.3.1) (2025-03-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.3.0...54.3.1)
+
+**Fixed bugs:**
+
+- Round trip encoding of list of fixed list fails when offset is not zero [\#7315](https://github.com/apache/arrow-rs/issues/7315)
+
+**Merged pull requests:**
+
+- Add missing type annotation [\#7326](https://github.com/apache/arrow-rs/pull/7326) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mbrobbel](https://github.com/mbrobbel))
+- bugfix: correct offsets when serializing a list of fixed sized list and non-zero start offset [\#7318](https://github.com/apache/arrow-rs/pull/7318) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([timsaucer](https://github.com/timsaucer))
+## [54.3.0](https://github.com/apache/arrow-rs/tree/54.3.0) (2025-03-17)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/53.4.1...54.3.0)
+
+**Implemented enhancements:**
+
+- Using column chunk offset index in `InMemoryRowGroup::fetch` [\#7300](https://github.com/apache/arrow-rs/issues/7300)
+- Support reading parquet with modular encryption [\#7296](https://github.com/apache/arrow-rs/issues/7296) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add example for how to read/write encrypted parquet files [\#7281](https://github.com/apache/arrow-rs/issues/7281) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Have writer return parsed `ParquetMetadata` [\#7254](https://github.com/apache/arrow-rs/issues/7254) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- feat: Support Utf8View in  JSON reader [\#7244](https://github.com/apache/arrow-rs/issues/7244) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- StructBuilder should provide a way to get a &dyn ArrayBuilder of a field builder [\#7193](https://github.com/apache/arrow-rs/issues/7193) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support div\_wrapping/rem\_wrapping for numeric arithmetic kernels [\#7158](https://github.com/apache/arrow-rs/issues/7158) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve RleDecoder performance [\#7195](https://github.com/apache/arrow-rs/pull/7195) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Dandandan](https://github.com/Dandandan))
+- Improve arrow-json deserialization performance by 30% [\#7157](https://github.com/apache/arrow-rs/pull/7157) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mwylde](https://github.com/mwylde))
+- Add `with_skip_validation` flag to IPC `StreamReader`, `FileReader` and `FileDecoder` [\#7120](https://github.com/apache/arrow-rs/pull/7120) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+
+**Fixed bugs:**
+
+- Archery integration CI test is failing on main:  error: package `half v2.5.0` cannot be built because it requires rustc 1.81 or newer, while the currently active rustc version is 1.77.2 [\#7291](https://github.com/apache/arrow-rs/issues/7291)
+- MSRV CI check is failing on main [\#7289](https://github.com/apache/arrow-rs/issues/7289)
+- Incorrect IPC schema encoding for multiple dictionaries [\#7058](https://github.com/apache/arrow-rs/issues/7058) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+
+**Documentation updates:**
+
+- Add example for how to read encrypted parquet files [\#7283](https://github.com/apache/arrow-rs/pull/7283) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([rok](https://github.com/rok))
+- Update the relative path of the test data in docs [\#7221](https://github.com/apache/arrow-rs/pull/7221) ([Ziy1-Tan](https://github.com/Ziy1-Tan))
+- Minor: fix doc and remove unused code [\#7194](https://github.com/apache/arrow-rs/pull/7194) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([lewiszlw](https://github.com/lewiszlw))
+- doc: modify wrong comment [\#7190](https://github.com/apache/arrow-rs/pull/7190) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([YichiZhang0613](https://github.com/YichiZhang0613))
+- doc: fix IPC file reader/writer docs [\#7178](https://github.com/apache/arrow-rs/pull/7178) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
+
+**Merged pull requests:**
+
+- chore: require ffi feature in arrow-schema benchmark [\#7298](https://github.com/apache/arrow-rs/pull/7298) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([ethe](https://github.com/ethe))
+- Fix archery integration test [\#7292](https://github.com/apache/arrow-rs/pull/7292) ([alamb](https://github.com/alamb))
+- Minor: run `test_decimal_list` again [\#7282](https://github.com/apache/arrow-rs/pull/7282) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
+- Move Parquet encryption tests into the arrow\_reader integration tests [\#7279](https://github.com/apache/arrow-rs/pull/7279) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([adamreeve](https://github.com/adamreeve))
+- Include license and notice files in published crates, part 2 [\#7275](https://github.com/apache/arrow-rs/pull/7275) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([ankane](https://github.com/ankane))
+- feat: Support Utf8View in JSON reader [\#7263](https://github.com/apache/arrow-rs/pull/7263) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([zhuqi-lucas](https://github.com/zhuqi-lucas))
+- feat: use `force_validate` feature flag when creating an arrays [\#7241](https://github.com/apache/arrow-rs/pull/7241) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
+- fix: take on empty struct array returns empty array [\#7224](https://github.com/apache/arrow-rs/pull/7224) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([westonpace](https://github.com/westonpace))
+- fix: correct `bloom_filter_position` description [\#7223](https://github.com/apache/arrow-rs/pull/7223) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([romanz](https://github.com/romanz))
+- Minor: Move `make_builder` into mod.rs [\#7218](https://github.com/apache/arrow-rs/pull/7218) ([lewiszlw](https://github.com/lewiszlw))
+- Expose `field_builders` in `StructBuilder` [\#7217](https://github.com/apache/arrow-rs/pull/7217) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([lewiszlw](https://github.com/lewiszlw))
+- Minor: Fix json StructMode docs links [\#7215](https://github.com/apache/arrow-rs/pull/7215) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gstvg](https://github.com/gstvg))
+- \[main\] Bump arrow version to 54.2.1 \(\#7207\) [\#7212](https://github.com/apache/arrow-rs/pull/7212) ([alamb](https://github.com/alamb))
+- feat: add `downcast_integer_array` macro helper [\#7211](https://github.com/apache/arrow-rs/pull/7211) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
+- Remove zstd pin [\#7199](https://github.com/apache/arrow-rs/pull/7199) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- fix: Use chrono's quarter\(\) to avoid conflict [\#7198](https://github.com/apache/arrow-rs/pull/7198) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([yutannihilation](https://github.com/yutannihilation))
+- Fix some Clippy 1.85 warnings [\#7167](https://github.com/apache/arrow-rs/pull/7167) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mbrobbel](https://github.com/mbrobbel))
+- feat: add to concat different data types error message the data types [\#7166](https://github.com/apache/arrow-rs/pull/7166) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
+- Add Week ISO, Year ISO computation [\#7163](https://github.com/apache/arrow-rs/pull/7163) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([kosiew](https://github.com/kosiew))
+- fix: create\_random\_batch fails with timestamp types having a timezone [\#7162](https://github.com/apache/arrow-rs/pull/7162) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([niebayes](https://github.com/niebayes))
+- Avoid overflow of remainder [\#7159](https://github.com/apache/arrow-rs/pull/7159) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([wForget](https://github.com/wForget))
+- fix: Data type inference for NaN, inf and -inf in csv files [\#7150](https://github.com/apache/arrow-rs/pull/7150) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Mottl](https://github.com/Mottl))
+- Preserve null dictionary values in `interleave` and `concat` kernels [\#7144](https://github.com/apache/arrow-rs/pull/7144) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([kawadakk](https://github.com/kawadakk))
+- Support casting `Date` to a time zone-specific timestamp [\#7141](https://github.com/apache/arrow-rs/pull/7141) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([friendlymatthew](https://github.com/friendlymatthew))
+- Minor: Add doctest to ArrayDataBuilder::build\_unchecked  [\#7139](https://github.com/apache/arrow-rs/pull/7139) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gstvg](https://github.com/gstvg))
+- arrow-ord: add support for nested types to `partition` [\#7131](https://github.com/apache/arrow-rs/pull/7131) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
+- Update prost-build requirement from =0.13.4 to =0.13.5 [\#7127](https://github.com/apache/arrow-rs/pull/7127) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Avoid use of `flatbuffers::size_prefixed_root`, fix validation error in arrow-flight [\#7109](https://github.com/apache/arrow-rs/pull/7109) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([bkietz](https://github.com/bkietz))
+- Optimise decimal casting for infallible conversions [\#7021](https://github.com/apache/arrow-rs/pull/7021) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([aweltsch](https://github.com/aweltsch))
+
+## [53.4.1](https://github.com/apache/arrow-rs/tree/53.4.1) (2025-03-04)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.2.1...53.4.1)
+
+**Fixed bugs:**
+
+- Take empty struct array would get array with length 0 [\#7225](https://github.com/apache/arrow-rs/issues/7225)
+
+**Closed issues:**
+
+- Release arrow-rs / parquet patch version 54.2.1 \(Feb 2025\) \(HOTFIX\) [\#7209](https://github.com/apache/arrow-rs/issues/7209) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+## [54.2.1](https://github.com/apache/arrow-rs/tree/54.2.1) (2025-02-27)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.2.0...54.2.1)
+
+**Fixed bugs:**
+
+- Use chrono >= 0.4.34, < 0.4.40 to avoid breaking [\#7210](https://github.com/apache/arrow-rs/pull/7210)
+
+**Fixed bugs:**
+## [54.2.0](https://github.com/apache/arrow-rs/tree/54.2.0) (2025-02-12)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/54.1.0...54.2.0)
+
+**Implemented enhancements:**
+
+- Casting from Utf8View to Dict\(k, Utf8View\) [\#7114](https://github.com/apache/arrow-rs/issues/7114)
+- Support creating map arrays with key metadata [\#7100](https://github.com/apache/arrow-rs/issues/7100) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[parquet\] Print Parquet BasicTypeInfo id when present [\#7081](https://github.com/apache/arrow-rs/issues/7081) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add arrow-ipc benchmarks for the IPC reader and writer [\#6968](https://github.com/apache/arrow-rs/issues/6968) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Fixed bugs:**
+
+- NullBufferBuilder::allocated_size Returns Size in Bits [\#7121](https://github.com/apache/arrow-rs/issues/7121) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Regression in 54.0.0\]. Decimal cast to smaller precision gives invalid \(off-by-one\) result in some cases [\#7069](https://github.com/apache/arrow-rs/issues/7069) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Minor: Fix deprecated note to point to the correct const [\#7067](https://github.com/apache/arrow-rs/issues/7067) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- incorrect error message for reading definition levels [\#7056](https://github.com/apache/arrow-rs/issues/7056) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- First None in ListArray panics in `cast_with_options` [\#7043](https://github.com/apache/arrow-rs/issues/7043) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Documentation updates:**
+
+- Minor: Clarify documentation on `NullBufferBuilder::allocated_size` [\#7089](https://github.com/apache/arrow-rs/pull/7089) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Minor: Update release schedule [\#7086](https://github.com/apache/arrow-rs/pull/7086) ([alamb](https://github.com/alamb))
+- Improve `ListArray` documentation for slices [\#7039](https://github.com/apache/arrow-rs/pull/7039) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+
+**Merged pull requests:**
+
+- fix: NullBufferBuilder::allocated_size should return Size in Bytes [\#7122](https://github.com/apache/arrow-rs/pull/7122) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([shuozel](https://github.com/shuozel))
+- minor: fix deprecated_note [\#7105](https://github.com/apache/arrow-rs/pull/7105) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Chen-Yuan-Lai](https://github.com/Chen-Yuan-Lai))
+- Minor: Fix ArrayDataBuilder::build_unchecked docs [\#7103](https://github.com/apache/arrow-rs/pull/7103) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gstvg](https://github.com/gstvg))
+- Support setting key field in MapBuilder [\#7101](https://github.com/apache/arrow-rs/pull/7101) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rshkv](https://github.com/rshkv))
+- Add tests that arrow IPC data is validated [\#7096](https://github.com/apache/arrow-rs/pull/7096) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Print Parquet BasicTypeInfo id when present [\#7094](https://github.com/apache/arrow-rs/pull/7094) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([devinrsmith](https://github.com/devinrsmith))
+- Expose record boundary information in JSON decoder [\#7092](https://github.com/apache/arrow-rs/pull/7092) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([scovich](https://github.com/scovich))
+- Benchmarks for Arrow IPC reader [\#7091](https://github.com/apache/arrow-rs/pull/7091) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Benchmarks for Arrow IPC writer [\#7090](https://github.com/apache/arrow-rs/pull/7090) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Add another decimal cast edge test case [\#7078](https://github.com/apache/arrow-rs/pull/7078) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([findepi](https://github.com/findepi))
+- minor: re-export `OffsetBufferBuilder` in `arrow` crate [\#7077](https://github.com/apache/arrow-rs/pull/7077) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Support converting large dates \(i.e. +10999-12-31\) from string to Date32 [\#7074](https://github.com/apache/arrow-rs/pull/7074) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([phillipleblanc](https://github.com/phillipleblanc))
+- fix: issue introduced in \#6833 - less than equal check for scale in decimal conversion [\#7070](https://github.com/apache/arrow-rs/pull/7070) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([himadripal](https://github.com/himadripal))
+- perf: inline `from_iter` for `ScalarBuffer` [\#7066](https://github.com/apache/arrow-rs/pull/7066) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([0ax1](https://github.com/0ax1))
+- fix: first none/empty list in `ListArray` panics in `cast_with_options` [\#7065](https://github.com/apache/arrow-rs/pull/7065) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([irenjj](https://github.com/irenjj))
+- Minor: add ticket reference for todo [\#7064](https://github.com/apache/arrow-rs/pull/7064) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
+- Refactor some decimal-related code and tests [\#7062](https://github.com/apache/arrow-rs/pull/7062) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([CurtHagenlocher](https://github.com/CurtHagenlocher))
+- fix error message for reading definition levels [\#7057](https://github.com/apache/arrow-rs/pull/7057) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jp0317](https://github.com/jp0317))
+- Update release schedule README.md [\#7053](https://github.com/apache/arrow-rs/pull/7053) ([alamb](https://github.com/alamb))
+- Support both 0x01 and 0x02 as type for list of booleans in thrift metadata [\#7052](https://github.com/apache/arrow-rs/pull/7052) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jhorstmann](https://github.com/jhorstmann))
+- Refactor arrow-ipc: Move `create_*_array` methods into `RecordBatchDecoder` [\#7029](https://github.com/apache/arrow-rs/pull/7029) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 ## [54.1.0](https://github.com/apache/arrow-rs/tree/54.1.0) (2025-01-29)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/53.4.0...54.1.0)

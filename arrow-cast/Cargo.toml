@@ -30,11 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_cast"
-path = "src/lib.rs"
 bench = false
 
 [package.metadata.docs.rs]
-features = ["prettyprint"]
+all-features = true
 
 [features]
 prettyprint = ["comfy-table"]
@@ -58,9 +57,7 @@ ryu = "1.0.16"
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
 half = { version = "2.1", default-features = false }
-rand = "0.8"
-
-[build-dependencies]
+rand = "0.9"
 
 [[bench]]
 name = "parse_timestamp"
