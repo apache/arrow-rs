@@ -82,6 +82,13 @@ pub struct Buffer {
     length: usize,
 }
 
+impl Default for Buffer {
+    #[inline]
+    fn default() -> Self {
+        MutableBuffer::default().into()
+    }
+}
+
 impl PartialEq for Buffer {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())

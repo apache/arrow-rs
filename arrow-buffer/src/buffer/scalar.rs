@@ -41,7 +41,7 @@ use std::ops::Deref;
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
