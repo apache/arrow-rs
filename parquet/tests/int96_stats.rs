@@ -146,7 +146,7 @@ fn test_int96_stats() {
         let max = stats.max_opt().unwrap();
         
         // Verify the statistics
-         println!("Min timestamp ({}): {:?}", first_timestamp, min.data());
+        println!("Min timestamp ({}): {:?}", first_timestamp, min.data());
         println!("Max timestamp ({}): {:?}", last_timestamp, max.data());
         assert_eq!(*min, expected_min, "Min value should be {}", first_timestamp);
         assert_eq!(*max, expected_max, "Max value should be {}", last_timestamp);
