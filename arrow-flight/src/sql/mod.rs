@@ -49,6 +49,17 @@ mod gen {
     // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.sql.rs");
+
+    /// The descriptor used for making the Arrow Flight SQL gRPC API available for [gRPC
+    /// reflection](https://grpc.io/docs/guides/reflection/).
+    ///
+    /// ```
+    /// let reflection_server = tonic_reflection::server::Builder::configure()
+    ///    .register_encoded_file_descriptor_set(arrow_flight::sql::FILE_DESCRIPTOR_SET)
+    ///    .build_v1()
+    ///    .unwrap();
+    /// ```
+    pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("flight_sql_descriptor.bin");
 }
 
 pub use gen::action_end_transaction_request::EndTransaction;
@@ -109,6 +120,7 @@ pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 pub use gen::XdbcDataType;
 pub use gen::XdbcDatetimeSubcode;
+pub use gen::FILE_DESCRIPTOR_SET;
 
 pub mod client;
 pub mod metadata;
