@@ -33,7 +33,7 @@ use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
@@ -177,6 +177,24 @@ impl Int96 {
         let day = self.data()[2] as i32;
         let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
         (day, nanos)
+    }
+}
+
+impl PartialOrd for Int96 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int96 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let (self_days, self_nanos) = self.data_as_days_and_nanos();
+        let (other_days, other_nanos) = other.data_as_days_and_nanos();
+        
+        match self_days.cmp(&other_days) {
+            Ordering::Equal => self_nanos.cmp(&other_nanos),
+            ord => ord,
+        }
     }
 }
 
