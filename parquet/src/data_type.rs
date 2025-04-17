@@ -155,10 +155,8 @@ impl Int96 {
     pub fn set_data_from_nanos(&mut self, nanos: i64) {
         let days = nanos / NANOSECONDS_IN_DAY;
         let remaining_nanos = nanos % NANOSECONDS_IN_DAY;
-        let julian_day = (days + JULIAN_DAY_OF_EPOCH) as u32;
-        let nanos_low = (remaining_nanos & 0xFFFFFFFF) as u32;
-        let nanos_high = ((remaining_nanos >> 32) & 0xFFFFFFFF) as u32;
-        self.set_data(nanos_low, nanos_high, julian_day);
+        let julian_day = (days + JULIAN_DAY_OF_EPOCH) as i32;
+        self.set_data_from_days_and_nanos(julian_day, remaining_nanos);
     }
 
     /// Sets the INT96 data directly from days and nanoseconds
