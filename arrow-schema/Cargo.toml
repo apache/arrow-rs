@@ -40,9 +40,9 @@ serde = { version = "1.0", default-features = false, features = [
 ], optional = true }
 bitflags = { version = "2.0.0", default-features = false, optional = true }
 serde_json = { version = "1.0", optional = true }
-
+base64 = { version = "0.21", optional = true }
 [features]
-canonical_extension_types = ["dep:serde", "dep:serde_json"]
+canonical_extension_types = ["dep:serde", "dep:serde_json", "dep:base64"]
 # Enable ffi support
 ffi = ["bitflags"]
 serde = ["dep:serde"]

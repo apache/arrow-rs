@@ -327,6 +327,7 @@ fn print_logical_and_converted(
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
+            LogicalType::Variant { .. } => "VARIANT".to_string(), // TODO: add support for variant
         },
         None => {
             // Also print converted type if it is available
