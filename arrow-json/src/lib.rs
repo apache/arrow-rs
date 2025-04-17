@@ -63,6 +63,11 @@
 //! [binary-to-text encoding]: https://en.wikipedia.org/wiki/Binary-to-text_encoding
 //!
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -92,8 +97,8 @@ use serde_json::{Number, Value};
 /// lists, the entries must be the same number and in the same order as the
 /// struct fields. Map columns are not affected by this option.
 ///
-/// [Presto]: (https://prestodb.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
-/// [Trino]: (https://trino.io/docs/current/develop/client-protocol.html#important-queryresults-attributes)
+/// [Presto]: https://prestodb.io/docs/current/develop/client-protocol.html#important-queryresults-attributes
+/// [Trino]: https://trino.io/docs/current/develop/client-protocol.html#important-queryresults-attributes
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum StructMode {
     #[default]

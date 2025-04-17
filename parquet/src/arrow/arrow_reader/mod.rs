@@ -17,9 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 use arrow_array::cast::AsArray;
 use arrow_array::Array;
 use arrow_array::{RecordBatch, RecordBatchReader};
@@ -27,12 +24,16 @@ use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -265,6 +266,9 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
+    /// If encryption is enabled, the file decryption properties can be provided
+    #[cfg(feature = "encryption")]
+    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
 }
 
 impl ArrowReaderOptions {
@@ -341,7 +345,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create the reader and read the data using the supplied schema.
     /// let mut reader = builder.build().unwrap();
-    /// let _batch = reader.next().unwrap().unwrap();   
+    /// let _batch = reader.next().unwrap().unwrap();
     /// ```
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
@@ -365,6 +369,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
+    }
+
+    /// Provide the file decryption properties to use when reading encrypted parquet files.
+    ///
+    /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
+    #[cfg(feature = "encryption")]
+    pub fn with_file_decryption_properties(
+        self,
+        file_decryption_properties: FileDecryptionProperties,
+    ) -> Self {
+        Self {
+            file_decryption_properties: Some(file_decryption_properties),
+            ..self
+        }
     }
 }
 
@@ -406,9 +424,11 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(options.page_index)
-            .parse_and_finish(reader)?;
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
 
@@ -590,6 +610,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
+    /// #
     /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
@@ -716,14 +737,55 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
         let meta = rg.column(self.column_idx);
         let offset_index = self.metadata.offset_index();
         // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.oolumn_idx`] panic, we need to filter out empty `i[rg_idx]`.
+        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
         let page_locations = offset_index
             .filter(|i| !i[rg_idx].is_empty())
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
+        #[cfg(feature = "encryption")]
+        let crypto_context = if let Some(file_decryptor) = self.metadata.file_decryptor() {
+            let column_name = self
+                .metadata
+                .file_metadata()
+                .schema_descr()
+                .column(self.column_idx);
+
+            if file_decryptor.is_column_encrypted(column_name.name()) {
+                let data_decryptor = file_decryptor.get_column_data_decryptor(column_name.name());
+                let data_decryptor = match data_decryptor {
+                    Ok(data_decryptor) => data_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
+
+                let metadata_decryptor =
+                    file_decryptor.get_column_metadata_decryptor(column_name.name());
+                let metadata_decryptor = match metadata_decryptor {
+                    Ok(metadata_decryptor) => metadata_decryptor,
+                    Err(err) => return Some(Err(err)),
+                };
+
+                let crypto_context = CryptoContext::new(
+                    rg_idx,
+                    self.column_idx,
+                    data_decryptor,
+                    metadata_decryptor,
+                    file_decryptor.file_aad().clone(),
+                );
+                Some(Arc::new(crypto_context))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let ret = SerializedPageReader::new(reader, meta, total_rows, page_locations);
+
+        #[cfg(feature = "encryption")]
+        let ret = ret.map(|reader| reader.with_crypto_context(crypto_context));
+
         Some(ret.map(|x| Box::new(x) as _))
     }
 }
@@ -1715,7 +1777,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // https://github.com/apache/arrow-rs/issues/2253
     fn test_decimal_list() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
 

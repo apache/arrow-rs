@@ -327,6 +327,10 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     ///
     /// Safe provided [`Self::try_new`] would not return an error
     pub unsafe fn new_unchecked(keys: PrimitiveArray<K>, values: ArrayRef) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(keys, values);
+        }
+
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),

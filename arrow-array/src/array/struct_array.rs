@@ -189,6 +189,10 @@ impl StructArray {
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(fields, arrays, nulls);
+        }
+
         let len = arrays.first().map(|x| x.len()).unwrap_or_default();
         Self {
             len,

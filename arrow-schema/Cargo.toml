@@ -30,7 +30,6 @@ rust-version = "1.64"
 
 [lib]
 name = "arrow_schema"
-path = "src/lib.rs"
 bench = false
 
 [dependencies]
@@ -49,7 +48,7 @@ ffi = ["bitflags"]
 serde = ["dep:serde"]
 
 [package.metadata.docs.rs]
-features = ["ffi"]
+all-features = true
 
 [dev-dependencies]
 bincode = { version = "1.3.3", default-features = false }
@@ -58,3 +57,4 @@ criterion = { version = "0.5", default-features = false }
 [[bench]]
 name = "ffi"
 harness = false
+required-features = ["ffi"]

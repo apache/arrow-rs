@@ -15,22 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::client::UserDelegationKey;
 use crate::azure::STORE;
+use crate::client::builder::{add_query_pairs, HttpRequestBuilder};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::client::{CredentialProvider, TokenProvider};
+use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::util::hmac_sha256;
 use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
 use base64::Engine;
 use chrono::{DateTime, SecondsFormat, Utc};
-use reqwest::header::{
+use http::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
     CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
     IF_UNMODIFIED_SINCE, RANGE,
 };
-use reqwest::{Client, Method, Request, RequestBuilder};
+use http::Method;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -41,8 +43,6 @@ use std::str;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use url::Url;
-
-use super::client::UserDelegationKey;
 
 static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2023-11-03");
 static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
@@ -73,10 +73,12 @@ const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Error performing token request: {}", source)]
-    TokenRequest { source: crate::client::retry::Error },
+    TokenRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting token response body: {}", source)]
-    TokenResponseBody { source: reqwest::Error },
+    TokenResponseBody { source: HttpError },
 
     #[error("Error reading federated token file ")]
     FederatedTokenFile,
@@ -206,7 +208,7 @@ impl AzureSigner {
     }
 }
 
-fn add_date_and_version_headers(request: &mut Request) {
+fn add_date_and_version_headers(request: &mut HttpRequest) {
     // rfc2822 string should never contain illegal characters
     let date = Utc::now();
     let date_str = date.format(RFC1123_FMT).to_string();
@@ -218,7 +220,7 @@ fn add_date_and_version_headers(request: &mut Request) {
         .insert(&VERSION, AZURE_VERSION.clone());
 }
 
-/// Authorize a [`Request`] with an [`AzureAuthorizer`]
+/// Authorize a [`HttpRequest`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
     credential: &'a AzureCredential,
@@ -235,14 +237,15 @@ impl<'a> AzureAuthorizer<'a> {
     }
 
     /// Authorize `request`
-    pub fn authorize(&self, request: &mut Request) {
+    pub fn authorize(&self, request: &mut HttpRequest) {
         add_date_and_version_headers(request);
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
+                let url = Url::parse(&request.uri().to_string()).unwrap();
                 let signature = generate_authorization(
                     request.headers(),
-                    request.url(),
+                    &url,
                     request.method(),
                     self.account,
                     key,
@@ -262,10 +265,7 @@ impl<'a> AzureAuthorizer<'a> {
                 );
             }
             AzureCredential::SASToken(query_pairs) => {
-                request
-                    .url_mut()
-                    .query_pairs_mut()
-                    .extend_pairs(query_pairs);
+                add_query_pairs(request.uri_mut(), query_pairs);
             }
         }
     }
@@ -281,13 +281,13 @@ pub(crate) trait CredentialExt {
     ) -> Self;
 }
 
-impl CredentialExt for RequestBuilder {
+impl CredentialExt for HttpRequestBuilder {
     fn with_azure_authorization(
         self,
         credential: &Option<impl Deref<Target = AzureCredential>>,
         account: &str,
     ) -> Self {
-        let (client, request) = self.build_split();
+        let (client, request) = self.into_parts();
         let mut request = request.expect("request valid");
 
         match credential.as_deref() {
@@ -622,13 +622,13 @@ impl TokenProvider for ClientSecretOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
-            .form(&[
+            .form([
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
                 ("scope", AZURE_STORAGE_SCOPE),
@@ -639,6 +639,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
             .send()
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .json()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
@@ -712,7 +713,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let mut query_items = vec![
@@ -747,6 +748,7 @@ impl TokenProvider for ImdsManagedIdentityProvider {
             .send_retry(retry)
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .json()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
@@ -798,7 +800,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
@@ -808,7 +810,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
         let response: OAuthTokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
-            .form(&[
+            .form([
                 ("client_id", self.client_id.as_str()),
                 (
                     "client_assertion_type",
@@ -823,6 +825,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
             .send()
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .json()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
@@ -1009,7 +1012,7 @@ impl TokenProvider for FabricTokenOAuthProvider {
     /// Fetch a token
     async fn fetch_token(
         &self,
-        client: &Client,
+        client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         if let Some(storage_access_token) = &self.storage_access_token {
@@ -1037,6 +1040,7 @@ impl TokenProvider for FabricTokenOAuthProvider {
             .send()
             .await
             .map_err(|source| Error::TokenRequest { source })?
+            .into_body()
             .text()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
@@ -1061,8 +1065,8 @@ impl CredentialProvider for AzureCliCredential {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
+    use http::{Response, StatusCode};
     use http_body_util::BodyExt;
-    use hyper::{Response, StatusCode};
     use reqwest::{Client, Method};
     use tempfile::NamedTempFile;
 
@@ -1078,7 +1082,7 @@ mod tests {
         std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
 
         let endpoint = server.url();
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
         let retry_config = RetryConfig::default();
 
         // Test IMDS
@@ -1137,7 +1141,7 @@ mod tests {
         std::fs::write(tokenfile.path(), "federated-token").unwrap();
 
         let endpoint = server.url();
-        let client = Client::new();
+        let client = HttpClient::new(Client::new());
         let retry_config = RetryConfig::default();
 
         // Test IMDS
