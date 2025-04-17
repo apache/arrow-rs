@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use bytes::Bytes;
 use std::collections::HashMap;
+
+use bytes::Bytes;
 
 use crate::basic::Encoding;
 use crate::data_type::DataType;
