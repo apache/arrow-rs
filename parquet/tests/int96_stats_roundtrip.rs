@@ -19,8 +19,7 @@ fn datetime_to_int96(dt: &str) -> Int96 {
     int96
 }
 
-#[test]
-fn test_int96_stats() {
+fn verify_ordering(data: Vec<Int96>) {
     // Create a temporary file
     let tmp = Builder::new()
         .prefix("test_int96_stats")
@@ -40,20 +39,6 @@ fn test_int96_stats() {
     let props = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)
         .build();
-
-    // Create INT96 data from timestamps
-    let data = vec![
-        datetime_to_int96("2020-01-01 00:00:00.000"),   // New Year 2020
-        datetime_to_int96("2020-02-29 23:59:59.999"),   // Leap day 2020
-        datetime_to_int96("2020-12-31 23:59:59.999"),   // End of 2020
-        datetime_to_int96("2021-01-01 00:00:00.000"),   // Start of 2021
-        datetime_to_int96("2023-06-15 12:30:45.500"),   // Mid-2023
-        datetime_to_int96("2024-02-29 15:45:30.750"),   // Leap day 2024
-        datetime_to_int96("2024-12-25 07:00:00.000"),   // Christmas 2024
-        datetime_to_int96("2025-01-01 00:00:00.000"),   // New Year 2025
-        datetime_to_int96("2025-07-04 20:00:00.000"),   // July 4th 2025
-        datetime_to_int96("2025-12-31 23:59:59.999"),   // End of 2025
-    ];
 
     let expected_min = data[0];
     let expected_max = data[data.len() - 1];
@@ -97,4 +82,21 @@ fn test_int96_stats() {
     } else {
         panic!("Expected Int96 statistics");
     }
+}
+
+#[test]
+fn test_int96_stats() {
+    let data = vec![
+        datetime_to_int96("2020-01-01 00:00:00.000"),   // New Year 2020
+        datetime_to_int96("2020-02-29 23:59:59.999"),   // Leap day 2020
+        datetime_to_int96("2020-12-31 23:59:59.999"),   // End of 2020
+        datetime_to_int96("2021-01-01 00:00:00.000"),   // Start of 2021
+        datetime_to_int96("2023-06-15 12:30:45.500"),   // Mid-2023
+        datetime_to_int96("2024-02-29 15:45:30.750"),   // Leap day 2024
+        datetime_to_int96("2024-12-25 07:00:00.000"),   // Christmas 2024
+        datetime_to_int96("2025-01-01 00:00:00.000"),   // New Year 2025
+        datetime_to_int96("2025-07-04 20:00:00.000"),   // July 4th 2025
+        datetime_to_int96("2025-12-31 23:59:59.999"),   // End of 2025
+    ];
+    verify_ordering(data);
 } 
