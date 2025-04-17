@@ -17,7 +17,8 @@
 
 use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::cursor::AvroCursor;
-use arrow_array::builder::{Decimal128Builder, Decimal256Builder, PrimitiveBuilder};
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder, PrimitiveBuilder, StructBuilder};
+use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
@@ -442,8 +443,13 @@ impl Decoder {
                         )));
                     }
                 }
-                let sarr = StructArray::new(fields.clone(), child_arrays, nulls);
-                Ok(Arc::new(sarr) as Arc<dyn Array>)
+                match fields.is_empty() {
+                    true => Ok(Arc::new(StructArray::new_empty_fields(1, None)) as Arc<dyn Array>),
+                    false => Ok(
+                        Arc::new(StructArray::new(fields.clone(), child_arrays, nulls))
+                            as Arc<dyn Array>,
+                    ),
+                }
             }
             Self::Enum(symbols, idxs) => {
                 let dict_vals = StringArray::from_iter_values(symbols.iter());

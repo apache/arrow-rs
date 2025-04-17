@@ -345,9 +345,15 @@ fn make_data_type<'a>(
                 Ok(rec)
             }
             ComplexType::Enum(e) => {
+                // Insert "avro.enum.symbols" into metadata so we can preserve it.
+                let mut md = e.attributes.field_metadata();
+                if let Ok(symbols_json) = serde_json::to_string(&e.symbols) {
+                    md.insert("avro.enum.symbols".to_string(), symbols_json);
+                }
+
                 let en = AvroDataType {
                     nullability: None,
-                    metadata: Arc::new(e.attributes.field_metadata()),
+                    metadata: Arc::new(md),
                     codec: Codec::Enum(
                         Arc::from(e.symbols.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
                         Arc::from(vec![]),

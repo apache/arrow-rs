@@ -1211,6 +1211,7 @@ mod test {
         ];
 
         fn build_expected_enum() -> RecordBatch {
+            // Build the DictionaryArrays for f1, f2, f3
             let keys_f1 = Int32Array::from(vec![0, 1, 2, 3]);
             let vals_f1 = StringArray::from(vec!["a", "b", "c", "d"]);
             let f1_dict =
@@ -1225,11 +1226,25 @@ mod test {
                 DictionaryArray::<Int32Type>::try_new(keys_f3, Arc::new(vals_f3)).unwrap();
             let dict_type =
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-            let expected_schema = Arc::new(Schema::new(vec![
-                Field::new("f1", dict_type.clone(), false),
-                Field::new("f2", dict_type.clone(), false),
-                Field::new("f3", dict_type.clone(), true),
-            ]));
+            let mut md_f1 = HashMap::new();
+            md_f1.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["a","b","c","d"]"#.to_string(),
+            );
+            let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+            let mut md_f2 = HashMap::new();
+            md_f2.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["e","f","g","h"]"#.to_string(),
+            );
+            let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+            let mut md_f3 = HashMap::new();
+            md_f3.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["i","j","k"]"#.to_string(),
+            );
+            let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
+            let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
             RecordBatch::try_new(
                 expected_schema,
                 vec![
@@ -1278,7 +1293,7 @@ mod test {
 
     #[test]
     fn test_single_nan() {
-        let file = crate::test_util::arrow_test_data("avro/single_nan.avro");
+        let file = arrow_test_data("avro/single_nan.avro");
         let actual = read_file(&file, 1, false);
         use arrow_array::Float64Array;
         let schema = Arc::new(Schema::new(vec![Field::new(
