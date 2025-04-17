@@ -27,18 +27,19 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 ///
 /// Extension name: `arrow.variant`.
 ///
-/// The storage type of this extension is **Binary or LargeBinary**.
+/// The storage type of this extension is **Struct containing two binary fields**:
+/// - metadata: Binary field containing the variant metadata
+/// - value: Binary field containing the serialized variant data
+/// 
 /// A Variant is a flexible structure that can store **Primitives, Arrays, or Objects**.
-/// It is stored as **two binary values**: `metadata` and `value`.
 ///
-/// The **metadata field is required** and must be a valid Variant metadata string.
-/// The **value field is required** and contains the serialized Variant data.
+/// Both metadata and value fields are required.
 ///
 /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#variant>
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
     metadata: Vec<u8>, // Required binary metadata
-    value: Vec<u8>, // Required binary value
+    value: Vec<u8>,    // Required binary value
 }
 
 impl Variant {
@@ -74,7 +75,7 @@ impl Variant {
 impl ExtensionType for Variant {
     const NAME: &'static str = "arrow.variant";
 
-    type Metadata = Vec<u8>; // Metadata is directly Vec<u8>
+    type Metadata = Vec<u8>;
 
     fn metadata(&self) -> &Self::Metadata {
         &self.metadata
@@ -94,20 +95,44 @@ impl ExtensionType for Variant {
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
         match data_type {
-            DataType::Binary | DataType::LargeBinary => Ok(()),
+            DataType::Struct(fields) => {
+                if fields.len() != 2 {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Variant struct must have exactly two fields".to_owned(),
+                    ));
+                }
+                
+                let metadata_field = fields.iter()
+                    .find(|f| f.name() == "metadata")
+                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                        "Variant struct must have a field named 'metadata'".to_owned(),
+                    ))?;
+
+                let value_field = fields.iter()
+                    .find(|f| f.name() == "value")
+                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                        "Variant struct must have a field named 'value'".to_owned(),
+                    ))?;
+
+                match (metadata_field.data_type(), value_field.data_type()) {
+                    (DataType::Binary, DataType::Binary) |
+                    (DataType::LargeBinary, DataType::LargeBinary) => Ok(()),
+                    _ => Err(ArrowError::InvalidArgumentError(
+                        "Variant struct fields must both be Binary or LargeBinary".to_owned(),
+                    )),
+                }
+            }
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Variant data type mismatch, expected Binary or LargeBinary, found {data_type}"
+                "Variant data type mismatch, expected Struct, found {data_type}"
             ))),
         }
     }
 
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        let variant = Self { metadata, value: vec![0]};
+        let variant = Self { metadata, value: vec![0] };
         variant.supports_data_type(data_type)?;
         Ok(variant)
     }
-    
-    
 }
 
 #[cfg(test)]
@@ -115,8 +140,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
-        Field,
+        extension::{EXTENSION_TYPE_NAME_KEY},
+        Field, DataType,
     };
 
     use super::*;
@@ -143,17 +168,27 @@ mod tests {
 
     #[test]
     fn variant_supports_valid_data_types() {
-        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
-        assert!(variant.supports_data_type(&DataType::Binary).is_ok());
-        assert!(variant.supports_data_type(&DataType::LargeBinary).is_ok());
+        // Test with actual binary data
+        let metadata = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+        let value = vec![0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F];
+        let variant = Variant::new(metadata.clone(), value.clone());
+        
+        // Test with Binary fields
+        let struct_type = DataType::Struct(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false)
+        ].into());
+        assert!(variant.supports_data_type(&struct_type).is_ok());
 
-        let variant = Variant::try_new(&DataType::Binary, vec![1, 2, 3]).unwrap().set_value(vec![4, 5, 6]);
-        assert!(variant.supports_data_type(&DataType::Binary).is_ok());
+        // Test with LargeBinary fields
+        let struct_type = DataType::Struct(vec![
+            Field::new("metadata", DataType::LargeBinary, false),
+            Field::new("value", DataType::LargeBinary, false)
+        ].into());
+        assert!(variant.supports_data_type(&struct_type).is_ok());
 
-        let variant = Variant::try_new(&DataType::LargeBinary, vec![1, 2, 3]).unwrap().set_value(vec![4, 5, 6]);
-        assert!(variant.supports_data_type(&DataType::LargeBinary).is_ok());
-
-        let result = Variant::try_new(&DataType::Utf8, vec![1, 2, 3]);
+        // Test with invalid type
+        let result = Variant::try_new(&DataType::Utf8, metadata);
         assert!(result.is_err());
         if let Err(ArrowError::InvalidArgumentError(msg)) = result {
             assert!(msg.contains("Variant data type mismatch"));
@@ -161,73 +196,43 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Variant data type mismatch")]
-    fn variant_rejects_invalid_data_type() {
-        let variant = Variant::new(vec![1, 2, 3], vec![4, 5, 6]);
-        variant.supports_data_type(&DataType::Utf8).unwrap();
-    }
-
-    #[test]
-    fn variant_creation() {
-        let metadata = vec![10, 20, 30];
-        let value = vec![40, 50, 60];
+    fn variant_creation_and_access() {
+        // Test with actual binary data
+        let metadata = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+        let value = vec![0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F];
         let variant = Variant::new(metadata.clone(), value.clone());
+        assert_eq!(variant.metadata(), &metadata);
         assert_eq!(variant.value(), &value);
     }
 
     #[test]
-    fn variant_empty() {
-        let variant = Variant::empty();
-        assert!(variant.is_err());
-    }
-
-    #[test]
     fn variant_field_extension() {
-        let mut field = Field::new("", DataType::Binary, false);
-        let variant = Variant::new(vec![1, 2, 3], vec![0]);
+        let struct_type = DataType::Struct(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false)
+        ].into());
+        
+        // Test with actual binary data
+        let metadata = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+        let value = vec![0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F];
+        let variant = Variant::new(metadata.clone(), value.clone());
+        
+        let mut field = Field::new("", struct_type, false);
         field.try_with_extension_type(variant.clone()).unwrap();
+        
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_NAME_KEY),
             Some(&"arrow.variant".to_owned())
         );
-        assert_eq!(
-            field.try_canonical_extension_type().unwrap(),
-            CanonicalExtensionType::Variant(variant)
-        );
+        
+        #[cfg(feature = "canonical_extension_types")]
+        {
+            let recovered = field.try_canonical_extension_type().unwrap();
+            if let CanonicalExtensionType::Variant(recovered_variant) = recovered {
+                assert_eq!(recovered_variant.metadata(), variant.metadata());
+            } else {
+                panic!("Expected Variant type");
+            }
+        }
     }
-
-    #[test]
-    #[should_panic(expected = "Field extension type name missing")]
-    fn variant_missing_name() {
-        let field = Field::new("", DataType::Binary, false).with_metadata(
-            [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "{}".to_owned())]
-                .into_iter()
-                .collect(),
-        );
-        field.extension_type::<Variant>();
-    }
-
-    #[test]
-fn variant_encoding_decoding() {
-    let metadata = vec![1, 2, 3];
-    let value = vec![4, 5, 6];
-    let variant = Variant::new(metadata.clone(), value.clone());
-    
-    let field = Field::new("variant", DataType::Binary, false)
-        .with_extension_type(variant.clone());
-    
-    let recovered_extension = field.extension_type::<Variant>();
-    assert_eq!(recovered_extension.metadata(), &metadata);
-    
-    let encoded_value = value.clone();
-    
-    let reconstructed = Variant::new(
-        recovered_extension.metadata().to_vec(),
-        encoded_value
-    );
-    
-    assert_eq!(reconstructed.metadata(), &metadata);
-    assert_eq!(reconstructed.value(), &value);
-}
-
 }

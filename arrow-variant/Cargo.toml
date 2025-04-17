@@ -17,19 +17,19 @@
 
 [package]
 name = "arrow-variant"
-version = "54.3.0"
+version = { workspace = true }
 description = "JSON to Arrow Variant conversion utilities"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
 keywords = ["arrow"]
 include = [
     "src/**/*.rs",
     "Cargo.toml",
 ]
-edition = "2021"
-rust-version = "1.62"
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "arrow_variant"
@@ -39,14 +39,13 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-arrow-array = { version = "54.3.0", path = "../arrow-array", features = ["canonical_extension_types"] }
-arrow-buffer = { version = "54.3.0", path = "../arrow-buffer" }
-arrow-cast = { version = "54.3.0", path = "../arrow-cast", optional = true }
-arrow-data = { version = "54.3.0", path = "../arrow-data" }
-arrow-schema = { version = "54.3.0", path = "../arrow-schema", features = ["canonical_extension_types"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1.0"
+arrow-array = { workspace = true, features = ["canonical_extension_types"] }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true, optional = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
+serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-arrow-cast = { version = "54.3.0", path = "../arrow-cast" } 
+arrow-cast = { workspace = true } 

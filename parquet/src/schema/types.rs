@@ -436,7 +436,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
 
         match self.converted_type {
             ConvertedType::NONE => {}
-            ConvertedType::UTF8 | ConvertedType::BSON | ConvertedType::JSON | ConvertedType::VARIANT => {
+            ConvertedType::UTF8 | ConvertedType::BSON | ConvertedType::JSON => {
                 if self.physical_type != PhysicalType::BYTE_ARRAY {
                     return Err(general_err!(
                         "{} cannot annotate field '{}' because it is not a BYTE_ARRAY field",
@@ -1816,8 +1816,7 @@ mod tests {
         let result = Type::group_type_builder("variant")
             .with_repetition(Repetition::OPTIONAL) // The whole variant is optional 
             .with_logical_type(Some(LogicalType::Variant { 
-                metadata: vec![1, 2, 3], 
-                value: vec![0] 
+                specification_version: None,
             }))
             .with_fields(fields)
             .with_id(Some(2))
@@ -1831,9 +1830,8 @@ mod tests {
         assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
         assert_eq!(
             basic_info.logical_type(), 
-            Some(LogicalType::Variant { 
-                metadata: vec![1, 2, 3], 
-                value: vec![0] 
+            Some(LogicalType::Variant {
+                specification_version: None,
             })
         );
         assert_eq!(basic_info.id(), 2);
@@ -1934,8 +1932,7 @@ mod tests {
         let variant = Type::group_type_builder("variant")
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::Variant { 
-                metadata: vec![1, 2, 3], 
-                value: vec![0] 
+                specification_version: None,
             }))
             .with_fields(vec![Arc::new(metadata), Arc::new(value)])
             .build()?;

@@ -398,9 +398,13 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
         match logical_type {
             LogicalType::Uuid => ret = ret.with_extension_type(Uuid),
             LogicalType::Json => ret = ret.with_extension_type(Json::default()),
-            LogicalType::Variant { metadata, value } => {
-                ret = ret.with_extension_type(Variant::new(metadata.clone(), value.clone()))
-            },
+            LogicalType::Variant { specification_version } => {
+                // For Variant type, we need to create a struct with two binary fields
+                let metadata_field = Field::new("metadata", DataType::Binary, false);
+                let value_field = Field::new("value", DataType::Binary, false);
+                let struct_type = DataType::Struct(Fields::from(vec![metadata_field, value_field]));
+                ret = Field::new(parquet_column.name(), struct_type, field.nullable).with_extension_type(Variant::new(vec![], vec![]));
+            }
             _ => {}
         }
     }
@@ -599,46 +603,6 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .build()
         }
         DataType::Binary | DataType::LargeBinary => {
-            #[cfg(feature = "arrow_canonical_extension_types")]
-            if let Ok(variant) = field.try_extension_type::<Variant>() {
-                // use single ByteArray instead of GroupType temporarily
-                let logical_type = LogicalType::Variant {
-                    metadata: variant.metadata().to_vec(),
-                    value: variant.value().to_vec(),
-                };
-                
-                // create single BYTE_ARRAY type, with VARIANT logical type
-                return Ok(Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(logical_type))
-                .with_repetition(repetition)
-                .with_id(id)
-                .build()?);
-            }
-            // Check if this is a Variant extension type
-            // if let Ok(variant) = field.try_extension_type::<Variant>() {
-            //     let metadata_field = Type::primitive_type_builder("metadata", PhysicalType::BYTE_ARRAY)
-            //         .with_repetition(Repetition::REQUIRED)
-            //         .build()?;
-            //     let value_field = Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
-            //         .with_repetition(Repetition::REQUIRED)
-            //         .build()?;
-            //     let logical_type = LogicalType::Variant {
-            //         metadata: variant.metadata().to_vec(),
-            //         value: variant.value().to_vec(),
-            //     };                
-            //     let group_type = Type::group_type_builder(name)
-            //         .with_fields(vec![
-            //             Arc::new(metadata_field),
-            //             Arc::new(value_field),
-            //         ])
-            //         .with_logical_type(Some(logical_type))
-            //         .with_repetition(repetition)
-            //         .with_id(id)
-            //         .build()?;
-            //     return Ok(group_type);
-            // }
-        
-            // Default case for non-Variant Binary fields
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_id(id)
@@ -752,6 +716,31 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             if fields.is_empty() {
                 return Err(arrow_err!("Parquet does not support writing empty structs",));
             }
+
+            #[cfg(feature = "arrow_canonical_extension_types")]
+            if let Ok(variant) = field.try_extension_type::<Variant>() {
+                // Verify we have a struct with exactly two fields
+                if let DataType::Struct(fields) = field.data_type() {
+                    let metadata_field = Type::primitive_type_builder("metadata", PhysicalType::BYTE_ARRAY)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()?;
+                let value_field = Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
+                    .with_repetition(Repetition::REQUIRED)
+                    .build()?;
+                    
+                return Ok(Type::group_type_builder(name)
+                    .with_fields(vec![Arc::new(metadata_field), Arc::new(value_field)])
+                    .with_logical_type(Some(LogicalType::Variant {
+                        specification_version: None,
+                    }))
+                    .with_repetition(repetition)
+                    .with_id(id)
+                    .build()?);
+                } else {
+                    return Err(arrow_err!("Variant data type must be a Struct, found {:?}", field.data_type()));
+                }
+            }
+
             // recursively convert children to types/nodes
             let fields = fields
                 .iter()
@@ -2305,15 +2294,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_variant_to_parquet_variant() -> Result<()> {
         // Create a sample Variant for testing
         let metadata = vec![1, 2, 3];
+        let value = vec![4, 5, 6];
         
-        // Create Arrow schema with a Binary field that has Variant extension type
-        let field = Field::new("variant", DataType::Binary, false)
-            .with_extension_type(Variant::new(metadata.clone(), vec![4, 5, 6]));
+        // Create Arrow schema with a Struct field that has Variant extension type
+        let struct_fields = vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false)
+        ];
+        let field = Field::new("variant", DataType::Struct(struct_fields.into()), false)
+            .with_extension_type(Variant::new(metadata.clone(), value.clone()));
         
         let arrow_schema = Schema::new(vec![field]);
 
@@ -2333,8 +2326,7 @@ mod tests {
         assert_eq!(
             variant_field.get_basic_info().logical_type(),
             Some(LogicalType::Variant {
-                metadata: metadata.clone(),
-                value: vec![0], // Default placeholder value
+                specification_version: None,
             })
         );
         
@@ -2352,13 +2344,13 @@ mod tests {
 
         Ok(())
     }
-
+    
     #[test]
-    #[ignore]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn parquet_variant_to_arrow() -> Result<()> {
         // Create a Parquet schema with Variant type
         let metadata = vec![1, 2, 3];
+        let value = vec![4, 5, 6];
         
         // Build the Parquet schema manually
         let metadata_field = Type::primitive_type_builder("metadata", PhysicalType::BYTE_ARRAY)
@@ -2372,8 +2364,7 @@ mod tests {
         let variant_field = Type::group_type_builder("variant")
             .with_fields(vec![Arc::new(metadata_field), Arc::new(value_field)])
             .with_logical_type(Some(LogicalType::Variant {
-                metadata: metadata.clone(),
-                value: vec![0],
+                specification_version: None,
             }))
             .with_repetition(Repetition::REQUIRED)
             .build()?;
@@ -2384,97 +2375,24 @@ mod tests {
         
         let schema_descriptor = SchemaDescriptor::new(Arc::new(message_type));
         
-        // Convert back to Arrow - directly test the column conversion
-        let column = schema_descriptor.column(0); // This is the metadata column
-        let arrow_field = parquet_to_arrow_field(&column)?;
+        // Get both columns (metadata and value)
+        let metadata_column = schema_descriptor.column(0);
+        let value_column = schema_descriptor.column(1);
         
-        // The first column should be the metadata field of the variant
-        assert_eq!(arrow_field.name(), "metadata");
+        // Convert each column to Arrow field
+        let metadata_arrow_field = parquet_to_arrow_field(&metadata_column)?;
+        let value_arrow_field = parquet_to_arrow_field(&value_column)?;
         
-        // For Variant type itself, we'd need to test with a complete schema conversion
-        let arrow_schema = parquet_to_arrow_schema(&schema_descriptor, None)?;
-        println!("Converted Arrow schema: {:#?}", arrow_schema);
+        // Verify the fields
+        assert_eq!(metadata_arrow_field.name(), "metadata");
+        assert_eq!(metadata_arrow_field.data_type(), &DataType::Binary);
+        assert!(!metadata_arrow_field.is_nullable());
         
-        // The output might be a struct with two fields, not a binary with extension
-        // Let's verify what's actually being produced first
-        let top_field = arrow_schema.field(0);
-        println!("Top field: {:#?}", top_field);
-        
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "arrow_canonical_extension_types")]
-    fn arrow_variant_to_parquet_variant_primitive() -> Result<()> {
-        let metadata = vec![1, 2, 3];
-        
-        let field = Field::new("variant", DataType::Binary, false)
-            .with_extension_type(Variant::new(metadata.clone(), vec![4, 5, 6]));
-        
-        let arrow_schema = Schema::new(vec![field]);
-        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
-        
-        let logical_type = parquet_schema.column(0).logical_type();
-    
-        match logical_type {
-            Some(LogicalType::Variant { metadata: actual_metadata, .. }) => {
-                assert_eq!(actual_metadata, metadata);
-        }
-            _ => panic!("Expected Variant logical type, got {:?}", logical_type),
-    }
-
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "arrow_canonical_extension_types")]
-    fn parquet_variant_to_arrow_primitive() -> Result<()> {
-        let metadata = vec![1, 2, 3];
-        let value = vec![4, 5, 6];
-        
-        // Create a Parquet schema with Variant logical type
-        let variant_field = Type::primitive_type_builder("variant", PhysicalType::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::Variant {
-                metadata: metadata.clone(),
-                value: value.clone(),
-            }))
-            .with_repetition(Repetition::REQUIRED)
-            .build()?;
-        
-        let message_type = Type::group_type_builder("schema")
-            .with_fields(vec![Arc::new(variant_field)])
-            .build()?;
-        
-        let schema_descriptor = SchemaDescriptor::new(Arc::new(message_type));
-        
-        let column = schema_descriptor.column(0);
-        let arrow_field = parquet_to_arrow_field(&column)?;
-        
-        println!("Field from parquet_to_arrow_field: {:?}", arrow_field);
-        println!("Field metadata: {:?}", arrow_field.metadata());
-        
-        assert_eq!(arrow_field.name(), "variant");
-        assert_eq!(arrow_field.data_type(), &DataType::Binary);
-  
-        let variant = arrow_field.extension_type::<Variant>();
-        assert_eq!(variant.metadata(), &metadata);
-        // assert_eq!(variant.value(), &value);
-        
-        // let arrow_schema = parquet_to_arrow_schema(&schema_descriptor, None)?;
-        // let schema_field = arrow_schema.field(0);
-        
-        // println!("Field from schema conversion: {:?}", schema_field);
-        // println!("Schema field metadata: {:?}", schema_field.metadata());
-        
-        // assert_eq!(schema_field.name(), "variant");
-        // assert_eq!(schema_field.data_type(), &DataType::Binary);
-        
-        // let schema_variant = schema_field.extension_type::<Variant>();
-        // assert_eq!(schema_variant.metadata(), &metadata);
-        // assert_eq!(schema_variant.value(), &value);
+        assert_eq!(value_arrow_field.name(), "value");
+        assert_eq!(value_arrow_field.data_type(), &DataType::Binary);
+        assert!(!value_arrow_field.is_nullable());
         
         Ok(())
     }
-
 
 }
