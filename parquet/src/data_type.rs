@@ -1521,4 +1521,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_int96_ord() {
+        let test_pairs = [
+    
+            ((99, 5), (100, 4)),
+            ((100, 10), (100, 5523)),
+            ((0, 0), (100, 0)),
+            ((10000, 1_000_000_000), (10000, 2_000_000_000)),
+            ((10000, 1_000_000_000), (20000, 1_000_000_000)),
+        ];
+
+        for (smaller, larger) in test_pairs {
+            let mut small = Int96::new();
+            small.set_data_from_days_and_nanos(smaller.0, smaller.1);
+            let mut large = Int96::new();
+            large.set_data_from_days_and_nanos(larger.0, larger.1);
+            
+            assert!(small < large, "Expected {:?} < {:?}", smaller, larger);
+            assert!(large > small, "Expected {:?} > {:?}", larger, smaller);
+            assert!(small == small, "Expected {:?} == {:?}", smaller, smaller);
+            assert!(large == large, "Expected {:?} == {:?}", larger, larger);
+        }
+    }
 }
