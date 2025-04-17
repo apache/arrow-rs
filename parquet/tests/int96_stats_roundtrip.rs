@@ -87,16 +87,16 @@ fn verify_ordering(data: Vec<Int96>) {
 #[test]
 fn test_int96_stats() {
     let data = vec![
-        datetime_to_int96("2020-01-01 00:00:00.000"),   // New Year 2020
-        datetime_to_int96("2020-02-29 23:59:59.999"),   // Leap day 2020
-        datetime_to_int96("2020-12-31 23:59:59.999"),   // End of 2020
-        datetime_to_int96("2021-01-01 00:00:00.000"),   // Start of 2021
-        datetime_to_int96("2023-06-15 12:30:45.500"),   // Mid-2023
-        datetime_to_int96("2024-02-29 15:45:30.750"),   // Leap day 2024
-        datetime_to_int96("2024-12-25 07:00:00.000"),   // Christmas 2024
-        datetime_to_int96("2025-01-01 00:00:00.000"),   // New Year 2025
-        datetime_to_int96("2025-07-04 20:00:00.000"),   // July 4th 2025
-        datetime_to_int96("2025-12-31 23:59:59.999"),   // End of 2025
+        datetime_to_int96("2020-01-01 00:00:00.000"),
+        datetime_to_int96("2020-02-29 23:59:59.999"),
+        datetime_to_int96("2020-12-31 23:59:59.999"),
+        datetime_to_int96("2021-01-01 00:00:00.000"),
+        datetime_to_int96("2023-06-15 12:30:45.500"),
+        datetime_to_int96("2024-02-29 15:45:30.750"),
+        datetime_to_int96("2024-12-25 07:00:00.000"),
+        datetime_to_int96("2025-01-01 00:00:00.000"),
+        datetime_to_int96("2025-07-04 20:00:00.000"),
+        datetime_to_int96("2025-12-31 23:59:59.999"),
     ];
     verify_ordering(data);
-} 
+}
