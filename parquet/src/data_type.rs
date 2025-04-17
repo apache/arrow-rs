@@ -124,6 +124,43 @@ impl Int96 {
             .wrapping_add(nanos)
     }
 
+    /// Sets the INT96 data from seconds since epoch
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn set_data_from_seconds(&mut self, seconds: i64) {
+        self.set_data_from_nanos(seconds.wrapping_mul(NANOSECONDS));
+    }
+
+    /// Sets the INT96 data from milliseconds since epoch
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn set_data_from_millis(&mut self, millis: i64) {
+        self.set_data_from_nanos(millis.wrapping_mul(MICROSECONDS));
+    }
+
+    /// Sets the INT96 data from microseconds since epoch
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn set_data_from_micros(&mut self, micros: i64) {
+        self.set_data_from_nanos(micros.wrapping_mul(MILLISECONDS));
+    }
+
+    /// Sets the INT96 data from nanoseconds since epoch
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn set_data_from_nanos(&mut self, nanos: i64) {
+        let days = nanos / NANOSECONDS_IN_DAY;
+        let remaining_nanos = nanos % NANOSECONDS_IN_DAY;
+        let julian_day = (days + JULIAN_DAY_OF_EPOCH) as u32;
+        let nanos_low = (remaining_nanos & 0xFFFFFFFF) as u32;
+        let nanos_high = ((remaining_nanos >> 32) & 0xFFFFFFFF) as u32;
+        self.set_data(nanos_low, nanos_high, julian_day);
+    }
+
     #[inline]
     fn data_as_days_and_nanos(&self) -> (i32, i64) {
         let day = self.data()[2] as i32;
@@ -1408,5 +1445,28 @@ mod tests {
         assert!(ba1 > ba4);
         assert_eq!(ba1, ba11);
         assert!(ba5 > ba1);
+    }
+
+    #[test]
+    fn test_int96_time_conversions() {
+        let test_values = [
+            0, 1, 60, 3600, 86400, 1234567, 31536000,
+        ];
+
+        for &value in &test_values {
+            let mut i96 = Int96::new();
+            
+            i96.set_data_from_seconds(value);
+            assert_eq!(i96.to_seconds(), value, "seconds roundtrip failed for {}", value);
+            
+            i96.set_data_from_seconds(value);
+            assert_eq!(i96.to_millis(), value, "millis roundtrip failed for {}", value);
+
+            i96.set_data_from_seconds(value);
+            assert_eq!(i96.to_micros(), value, "micros roundtrip failed for {}", value);
+
+            i96.set_data_from_seconds(value);
+            assert_eq!(i96.to_nanos(), value, "nanos roundtrip failed for {}", value);
+        }
     }
 }
