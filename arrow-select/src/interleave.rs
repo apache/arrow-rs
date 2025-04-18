@@ -169,14 +169,14 @@ fn interleave_bytes<T: ByteArrayType>(
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
     let mut capacity = 0;
-    let mut offsets = BufferBuilder::<T::Offset>::new(indices.len() + 1);
-    offsets.append(T::Offset::from_usize(0).unwrap());
-    for (a, b) in indices {
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(T::Offset::from_usize(0).unwrap());
+    offsets.extend(indices.iter().map(|(a, b)| {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        offsets.append(T::Offset::from_usize(capacity).expect("overflow"));
-    }
+        T::Offset::from_usize(capacity).expect("overflow")
+    }));
 
     let mut values = MutableBuffer::new(capacity);
     for (a, b) in indices {
@@ -185,7 +185,7 @@ fn interleave_bytes<T: ByteArrayType>(
 
     // Safety: safe by construction
     let array = unsafe {
-        let offsets = OffsetBuffer::new_unchecked(offsets.finish().into());
+        let offsets = OffsetBuffer::new_unchecked(offsets.into());
         GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
