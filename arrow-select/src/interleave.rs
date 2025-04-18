@@ -177,7 +177,7 @@ fn interleave_bytes<T: ByteArrayType>(
         T::Offset::from_usize(capacity).expect("overflow")
     }));
 
-    let mut values = MutableBuffer::new(capacity);
+    let mut values = Vec::with_capacity(capacity);
     for (a, b) in indices {
         values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
