@@ -458,7 +458,43 @@ pub enum UnionMode {
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            DataType::List(field) | DataType::LargeList(field) => {
+                let null_str = if field.is_nullable() { ";N" } else { "" };
+                let metadata_str = if field.metadata().is_empty() {
+                    String::new()
+                } else {
+                    format!(", metadata = {:?}", field.metadata())
+                };
+                write!(
+                    f,
+                    "List({}{}, field = '{}'{})",
+                    field.data_type(),
+                    null_str,
+                    field.name(),
+                    metadata_str,
+                )
+            }
+            DataType::FixedSizeList(field, size) => {
+                let null_str = if field.is_nullable() { ";N" } else { "" };
+                let metadata_str = if field.metadata().is_empty() {
+                    String::new()
+                } else {
+                    format!(", metadata = {:?}", field.metadata())
+                };
+                write!(
+                    f,
+                    "FixedSizeList({}{}, field = '{}', size = {}{})",
+                    field.data_type(),
+                    null_str,
+                    field.name(),
+                    size,
+                    metadata_str,
+                )
+            }
+
+            _ => write!(f, "{self:?}"),
+        }
     }
 }
 
@@ -817,6 +853,8 @@ pub const DECIMAL_DEFAULT_SCALE: i8 = 10;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -1128,5 +1166,96 @@ mod tests {
     fn test_from_str() {
         let data_type: DataType = "UInt64".parse().unwrap();
         assert_eq!(data_type, DataType::UInt64);
+    }
+
+    #[test]
+    fn test_display_list() {
+        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(Int32;N, field = 'item')";
+        assert_eq!(list_data_type_string, expected_string);
+    }
+
+    #[test]
+    fn test_display_list_with_named_field() {
+        let list_data_type = DataType::List(Arc::new(Field::new("foo", DataType::UInt64, false)));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(UInt64, field = 'foo')";
+        assert_eq!(list_data_type_string, expected_string);
+    }
+
+    #[test]
+    fn test_display_nested_list() {
+        let nested_data_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        )));
+        let nested_data_type_string = nested_data_type.to_string();
+        let nested_expected_string = "List(List(UInt64, field = 'item'), field = 'item')";
+        assert_eq!(nested_data_type_string, nested_expected_string);
+    }
+
+    #[test]
+    fn test_display_list_with_metadata() {
+        let mut field = Field::new_list_field(DataType::Int32, true);
+        let metadata = HashMap::from([("foo1".to_string(), "value1".to_string())]);
+        field.set_metadata(metadata);
+        let list_data_type = DataType::List(Arc::new(field));
+        let list_data_type_string = list_data_type.to_string();
+        let expected_string = "List(Int32;N, field = 'item', metadata = {\"foo1\": \"value1\"})";
+
+        assert_eq!(list_data_type_string, expected_string);
+    }
+
+    #[test]
+    fn test_display_large_list() {
+        let large_list_data_type =
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let large_list_data_type_string = large_list_data_type.to_string();
+        let expected_string = "List(Int32;N, field = 'item')";
+        assert_eq!(large_list_data_type_string, expected_string);
+
+        // Test with named field
+        let large_list_named =
+            DataType::LargeList(Arc::new(Field::new("bar", DataType::UInt64, false)));
+        let large_list_named_string = large_list_named.to_string();
+        let expected_named_string = "List(UInt64, field = 'bar')";
+        assert_eq!(large_list_named_string, expected_named_string);
+
+        // Test with metadata
+        let mut field = Field::new_list_field(DataType::Int32, true);
+        let metadata = HashMap::from([("key1".to_string(), "value1".to_string())]);
+        field.set_metadata(metadata);
+        let large_list_metadata = DataType::LargeList(Arc::new(field));
+        let large_list_metadata_string = large_list_metadata.to_string();
+        let expected_metadata_string =
+            "List(Int32;N, field = 'item', metadata = {\"key1\": \"value1\"})";
+        assert_eq!(large_list_metadata_string, expected_metadata_string);
+    }
+
+    #[test]
+    fn test_display_fixed_size_list() {
+        let fixed_size_list =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 5);
+        let fixed_size_list_string = fixed_size_list.to_string();
+        let expected_string = "FixedSizeList(Int32;N, field = 'item', size = 5)";
+        assert_eq!(fixed_size_list_string, expected_string);
+
+        // Test with named field
+        let fixed_size_named =
+            DataType::FixedSizeList(Arc::new(Field::new("baz", DataType::UInt64, false)), 3);
+        let fixed_size_named_string = fixed_size_named.to_string();
+        let expected_named_string = "FixedSizeList(UInt64, field = 'baz', size = 3)";
+        assert_eq!(fixed_size_named_string, expected_named_string);
+
+        // Test with metadata
+        let mut field = Field::new_list_field(DataType::Int32, true);
+        let metadata = HashMap::from([("key2".to_string(), "value2".to_string())]);
+        field.set_metadata(metadata);
+        let fixed_size_metadata = DataType::FixedSizeList(Arc::new(field), 4);
+        let fixed_size_metadata_string = fixed_size_metadata.to_string();
+        let expected_metadata_string =
+            "FixedSizeList(Int32;N, field = 'item', size = 4, metadata = {\"key2\": \"value2\"})";
+        assert_eq!(fixed_size_metadata_string, expected_metadata_string);
     }
 }
