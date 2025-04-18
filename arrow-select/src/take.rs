@@ -468,18 +468,25 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let data_len = indices.len();
 
     let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
-    let mut offsets = MutableBuffer::new(bytes_offset);
+    let mut offsets = Vec::with_capacity(bytes_offset);
     offsets.push(T::Offset::default());
 
     let mut values = MutableBuffer::new(0);
 
     let nulls;
     if array.null_count() == 0 && indices.null_count() == 0 {
-        offsets.extend(indices.values().iter().map(|index| {
-            let s: &[u8] = array.value(index.as_usize()).as_ref();
-            values.extend_from_slice(s);
-            T::Offset::usize_as(values.len())
-        }));
+        let input_offsets = array.value_offsets();
+        let mut capacity = 0;
+        for index in indices.values() {
+            let index = index.as_usize();
+            capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
+            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
+        }
+        values = MutableBuffer::new(capacity);
+
+        for index in indices.values() {
+            values.extend_from_slice(array.value(index.as_usize()).as_ref());
+        }
         nulls = None
     } else if indices.null_count() == 0 {
         let num_bytes = bit_util::ceil(data_len, 8);
