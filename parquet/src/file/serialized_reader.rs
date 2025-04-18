@@ -983,6 +983,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             }
             SerializedPageReaderState::Pages {
                 page_locations,
+
                 dictionary_page, .. } => {
                 if dictionary_page.is_some() {
                     // If a dictionary page exists, consume it by taking it (sets to None)
@@ -1902,6 +1903,52 @@ mod tests {
             statistics.min_bytes_opt().unwrap_or_default(),
             statistics.max_bytes_opt().unwrap_or_default(),
         )
+    }
+
+    #[test]
+    fn test_skip_next_page_with_dictionary_page() {
+        let test_file = get_test_file("alltypes_tiny_pages.parquet");
+        let builder = ReadOptionsBuilder::new();
+        // enable read page index
+        let options = builder.with_page_index().build();
+        let reader_result = SerializedFileReader::new_with_options(test_file, options);
+        let reader = reader_result.unwrap();
+
+        let row_group_reader = reader.get_row_group(0).unwrap();
+
+        // use 'string_col', Boundary order: UNORDERED, total 352 data pages and 1 dictionary page.
+        let mut column_page_reader = row_group_reader.get_column_page_reader(9).unwrap();
+
+        let mut vec = vec![];
+
+        // Step 1: Peek and ensure dictionary page is correctly identified
+        let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+        assert!(meta.is_dict);
+
+        // Step 2: Call skip_next_page to skip the dictionary page
+        column_page_reader.skip_next_page().unwrap();
+
+        // Step 3: Read the next data page after skipping the dictionary page
+        let page = column_page_reader.get_next_page().unwrap().unwrap();
+        assert!(matches!(page.page_type(), basic::PageType::DATA_PAGE));
+
+        // Step 4: Continue reading remaining data pages and verify correctness
+        for _i in 0..351 {
+            // 352 total pages, 1 dictionary page is skipped
+            let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+            assert!(!meta.is_dict); // Verify no dictionary page here
+            vec.push(meta);
+
+            let page = column_page_reader.get_next_page().unwrap().unwrap();
+            assert!(matches!(page.page_type(), basic::PageType::DATA_PAGE));
+        }
+
+        // Step 5: Check if all pages are read
+        assert!(column_page_reader.peek_next_page().unwrap().is_none());
+        assert!(column_page_reader.get_next_page().unwrap().is_none());
+
+        // Step 6: Verify the number of data pages read (should be 351 data pages)
+        assert_eq!(vec.len(), 351);
     }
 
     #[test]
