@@ -119,7 +119,8 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
-
+# Enable high level encryption key management tools
+key_management = ["encryption", "base64", "serde", "serde_json"]
 
 [[example]]
 name = "external_metadata"
