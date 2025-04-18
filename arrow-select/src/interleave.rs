@@ -22,7 +22,9 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
+};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
@@ -132,12 +134,11 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
 
         let nulls = match has_nulls {
             true => {
-                let mut builder = NullBufferBuilder::new(indices.len());
-                for (a, b) in indices {
-                    let v = arrays[*a].is_valid(*b);
-                    builder.append(v)
-                }
-                builder.finish()
+                let nulls = BooleanBuffer::collect_bool(indices.len(), |i| {
+                    let (a, b) = indices[i];
+                    arrays[a].is_valid(b)
+                });
+                Some(nulls.into())
             }
             false => None,
         };
