@@ -22,9 +22,7 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
-};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
