@@ -29,8 +29,9 @@ use arrow_array::{
         TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
     },
     ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::{i256, BooleanBuffer, Buffer};
 use arrow_data::ArrayDataBuilder;
@@ -261,6 +262,45 @@ where
         // - date64: cast int32 to date32, then date32 to date64.
         // - decimal: cast int32 to decimal, int64 to decimal
         let array = match target_type {
+            // Using `arrow_cast::cast` has been found to be very slow for converting
+            // INT32 physical type to lower bitwidth logical types. Since rust casts
+            // are infallible, instead use `unary` which is much faster (by up to 40%).
+            // One consequence of this approach is that some malformed integer columns
+            // will return (an arguably correct) result rather than null.
+            // See https://github.com/apache/arrow-rs/issues/7040 for a discussion of this
+            // issue.
+            ArrowType::UInt8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u8) as UInt8Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i8) as Int8Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u16) as UInt16Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i16) as Int16Array;
+                Arc::new(array) as ArrayRef
+            }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
