@@ -40,6 +40,7 @@ use std::fs::File;
 use std::sync::Arc;
 
 #[test]
+#[allow(deprecated)]
 fn test_non_uniform_encryption_plaintext_footer() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -61,6 +62,7 @@ fn test_non_uniform_encryption_plaintext_footer() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_non_uniform_encryption_disabled_aad_storage() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path =
@@ -125,6 +127,7 @@ fn test_plaintext_footer_read_without_decryption() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_non_uniform_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
@@ -144,6 +147,7 @@ fn test_non_uniform_encryption() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_uniform_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
@@ -156,6 +160,7 @@ fn test_uniform_encryption() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_decrypting_without_decryption_properties_fails() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
@@ -171,6 +176,7 @@ fn test_decrypting_without_decryption_properties_fails() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_aes_ctr_encryption() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer_ctr.parquet.encrypted");
@@ -201,6 +207,7 @@ fn test_aes_ctr_encryption() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
@@ -220,6 +227,7 @@ fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_non_uniform_encryption_with_key_retriever() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
@@ -239,6 +247,7 @@ fn test_non_uniform_encryption_with_key_retriever() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_uniform_encryption_with_key_retriever() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
@@ -373,6 +382,7 @@ fn test_uniform_encryption_roundtrip() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_write_non_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
@@ -399,6 +409,7 @@ fn test_write_non_uniform_encryption() {
 // todo: currently we raise if writing with plaintext footer, but we should support it
 // for uniform and non-uniform encryption (see https://github.com/apache/arrow-rs/issues/7320)
 #[test]
+#[allow(deprecated)]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
@@ -441,6 +452,7 @@ fn test_write_uniform_encryption_plaintext_footer() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_write_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
@@ -459,6 +471,7 @@ fn test_write_uniform_encryption() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_write_non_uniform_encryption_column_missmatch() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");

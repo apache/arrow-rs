@@ -29,6 +29,7 @@ use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_primitive_array, create_string_array_with_len};
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
@@ -57,6 +58,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     }
 }
 
+#[allow(deprecated)]
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = seedable_rng();
 

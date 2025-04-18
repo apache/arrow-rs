@@ -1945,6 +1945,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_decimal_file() {
         use arrow_array::Decimal128Array;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1979,6 +1980,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_float16_nonzeros_file() {
         use arrow_array::Float16Array;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2011,6 +2013,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_float16_zeros_file() {
         use arrow_array::Float16Array;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2035,6 +2038,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_float32_float64_byte_stream_split() {
         let path = format!(
             "{}/byte_stream_split.zstd.parquet",
@@ -2064,6 +2068,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_extended_byte_stream_split() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",
@@ -2144,6 +2149,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_incorrect_map_schema_file() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // see https://github.com/apache/parquet-testing/pull/47
@@ -2766,6 +2772,7 @@ mod tests {
         writer.close()
     }
 
+    #[allow(deprecated)]
     fn get_test_file(file_name: &str) -> File {
         let mut path = PathBuf::new();
         path.push(arrow::util::test_util::arrow_test_data());
@@ -2775,6 +2782,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_structs() {
         // This particular test file has columns of struct types where there is
         // a column that has the same name as one of the struct fields
@@ -2828,6 +2836,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     // same as test_read_structs but constructs projection mask via column names
     fn test_read_structs_by_name() {
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2881,6 +2890,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_maps() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/nested_maps.snappy.parquet");
@@ -3270,6 +3280,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_null_list() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/null_list.parquet");
@@ -3294,6 +3305,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_null_schema_inference() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/null_list.parquet");
@@ -3743,6 +3755,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_empty_projection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
@@ -3910,6 +3923,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_scan_row_with_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -3964,6 +3978,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
@@ -3982,6 +3997,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_with_page_index_enabled() {
         let testdata = arrow::util::test_util::parquet_test_data();
 
@@ -4081,6 +4097,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_lz4_raw() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/lz4_raw_compressed.parquet");
@@ -4121,6 +4138,7 @@ mod tests {
     //
     // For more information, check: https://github.com/apache/arrow-rs/issues/2988
     #[test]
+    #[allow(deprecated)]
     fn test_read_lz4_hadoop_fallback() {
         for file in [
             "hadoop_lz4_compressed.parquet",
@@ -4157,6 +4175,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_lz4_hadoop_large() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/hadoop_lz4_compressed_larger.parquet");
@@ -4183,6 +4202,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "snap")]
+    #[allow(deprecated)]
     fn test_read_nested_lists() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/nested_lists.snappy.parquet");
@@ -4496,6 +4516,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_read_old_nested_list() {
         use arrow::datatypes::DataType;
         use arrow::datatypes::ToByteSlice;
@@ -4546,6 +4567,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_map_no_value() {
         // File schema:
         // message schema {

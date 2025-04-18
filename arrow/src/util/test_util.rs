@@ -201,6 +201,7 @@ impl<T: Clone> Iterator for BadIterator<T> {
 }
 
 #[cfg(test)]
+#[cfg(not(clippy))]
 mod tests {
     use super::*;
 

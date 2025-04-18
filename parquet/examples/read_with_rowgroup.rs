@@ -29,6 +29,7 @@ use std::sync::Arc;
 use tokio::fs::File;
 
 #[tokio::main(flavor = "current_thread")]
+#[allow(deprecated)]
 async fn main() -> Result<()> {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/alltypes_plain.parquet");

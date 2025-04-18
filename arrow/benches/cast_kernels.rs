@@ -30,6 +30,7 @@ use arrow::array::*;
 use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 
 fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
@@ -40,6 +41,7 @@ where
     Arc::new(array)
 }
 
+#[allow(deprecated)]
 fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
     use chrono::NaiveDate;
 
@@ -62,6 +64,7 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
+#[allow(deprecated)]
 fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     // use random numbers to avoid spurious compiler optimizations wrt to branching
     let mut rng = seedable_rng();
@@ -82,6 +85,7 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
+#[allow(deprecated)]
 fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
@@ -97,6 +101,7 @@ fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     )
 }
 
+#[allow(deprecated)]
 fn build_decimal256_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal256Builder::with_capacity(size);

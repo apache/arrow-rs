@@ -21,6 +21,7 @@ extern crate criterion;
 
 use arrow::compute::kernels::cmp::*;
 use arrow::util::bench_util::*;
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_buffer::IntervalMonthDayNano;
@@ -78,6 +79,7 @@ fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Opti
     })
 }
 
+#[allow(deprecated)]
 fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);

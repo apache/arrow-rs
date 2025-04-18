@@ -31,6 +31,7 @@ use crate::{
     datatypes::*,
 };
 
+#[allow(deprecated)]
 use super::{bench_util::*, bit_util, test_util::seedable_rng};
 
 /// Create a random [RecordBatch] from a schema
@@ -369,6 +370,7 @@ fn create_random_map_array(
 }
 
 /// Generate random offsets for list arrays
+#[allow(deprecated)]
 fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     size: usize,
     min: T,
@@ -389,6 +391,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     (offsets, current_offset)
 }
 
+#[allow(deprecated)]
 fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
     let mut rng = seedable_rng();
     let mut mut_buf = MutableBuffer::new_null(size);
@@ -506,6 +509,7 @@ impl RandomTemporalValue for Time64NanosecondType {
     }
 }
 
+#[allow(deprecated)]
 fn create_random_temporal_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
 where
     T: RandomTemporalValue,
