@@ -1236,9 +1236,14 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> Vec<usize> {
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
                 lengths.iter_mut().enumerate().for_each(|(idx, length)| {
-                    match array.is_valid(idx) {
-                        true => *length += 1 + rows.row(idx).as_ref().len(),
-                        false => *length += 1 + null.data.len(),
+                    if array.is_valid(idx) {
+                        // Only calculate row length if there are rows
+                        if rows.num_rows() > 0 {
+                            *length += rows.row(idx).as_ref().len();
+                        }
+                        *length += 1;
+                    } else {
+                        *length += 1 + null.data.len();
                     }
                 });
             }
@@ -1330,9 +1335,18 @@ fn encode_column(
                 .skip(1)
                 .enumerate()
                 .for_each(|(idx, offset)| {
-                    let (row, sentinel) = match array.is_valid(idx) {
-                        true => (rows.row(idx), 0x01),
-                        false => (*null, null_sentinel),
+                    let (row, sentinel) = if array.is_valid(idx) {
+                        let row = if rows.num_rows() == 0 {
+                            Row {
+                                data: &[],
+                                config: &rows.config,
+                            }
+                        } else {
+                            rows.row(idx)
+                        };
+                        (row, 0x01)
+                    } else {
+                        (*null, null_sentinel)
                     };
                     let end_offset = *offset + 1 + row.as_ref().len();
                     data[*offset] = sentinel;
@@ -2538,5 +2552,18 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
+    }
+
+    #[test]
+    fn test_empty_struct() {
+        let s = Arc::new(StructArray::new_empty_fields(5, None)) as ArrayRef;
+
+        let sort_fields = vec![SortField::new(s.data_type().clone())];
+        let converter = RowConverter::new(sort_fields).unwrap();
+        let r = converter.convert_columns(&[Arc::clone(&s)]).unwrap();
+
+        let back = converter.convert_rows(&r).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(&back[0], &s);
     }
 }
