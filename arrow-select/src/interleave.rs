@@ -153,9 +153,10 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let values = indices.iter().map(|(a,b)|
-        interleaved.arrays[*a].value(*b)
-    ).collect::<Vec<_>>();
+    let values = indices
+        .iter()
+        .map(|(a, b)| interleaved.arrays[*a].value(*b))
+        .collect::<Vec<_>>();
 
     let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
     Ok(Arc::new(array.with_data_type(data_type.clone())))
