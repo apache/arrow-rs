@@ -499,8 +499,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             let index = index.as_usize();
             if array.is_valid(index) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-                offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
             }
+            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
         }
         values = MutableBuffer::new(capacity);
 
@@ -510,9 +510,10 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 values.extend_from_slice(array.value(index).as_ref());
             }
         }
+        let new_nulls: Option<NullBuffer> = take_nulls(array.nulls(), indices);
         let array = unsafe {
             let offsets = OffsetBuffer::new_unchecked(offsets.into());
-            GenericByteArray::<T>::new_unchecked(offsets, values.into(), None)
+            GenericByteArray::<T>::new_unchecked(offsets, values.into(), new_nulls)
         };
         return Ok(array);
     } else if array.null_count() == 0 {
@@ -531,7 +532,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 let s: &[u8] = array.value(index.as_usize()).as_ref();
                 values.extend_from_slice(s);
             }
-        };
+        }
         let array = unsafe {
             let offsets = OffsetBuffer::new_unchecked(offsets.into());
             GenericByteArray::<T>::new_unchecked(offsets, values.into(), None)
@@ -581,7 +582,7 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
-    let new_nulls = take_nulls(array.nulls(), indices);
+    let new_nulls: Option<NullBuffer> = take_nulls(array.nulls(), indices);
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
     Ok(unsafe {
         GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
