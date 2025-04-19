@@ -472,7 +472,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let mut offsets = Vec::with_capacity(bytes_offset);
     offsets.push(T::Offset::default());
 
-    let mut values = MutableBuffer::new(0);
+    let mut values = vec![];
     let input_offsets = array.value_offsets();
 
     let nulls;
