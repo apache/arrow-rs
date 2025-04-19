@@ -432,7 +432,8 @@ impl ByteViewArrayDecoderDictionary {
         }
     }
 
-    /// Reads the next indexes from self.decoder
+    /// Reads the next `len` indexes from self.decoder
+    ///
     /// the indexes are assumed to be indexes into `dict`
     /// the output values are written to output
     ///
@@ -463,6 +464,8 @@ impl ByteViewArrayDecoderDictionary {
                 output.buffers.push(b.clone());
             }
         }
+
+        output.views.reserve(len);
 
         // Calculate the offset of the dictionary buffers in the output buffers
         // For example if the 2nd buffer in the dictionary is the 5th buffer in the output buffers,
