@@ -20,10 +20,7 @@
 use std::sync::Arc;
 
 use rand::{
-    distr::{
-        uniform::{SampleRange, SampleUniform},
-        Distribution, StandardUniform,
-    },
+    distr::uniform::{SampleRange, SampleUniform},
     Rng,
 };
 
@@ -269,11 +266,9 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
                 Decimal256Array::from(values).with_precision_and_scale(*precision, *scale)?,
             ))
         }
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create decimal array for field {field:?}"
-            )))
-        }
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create decimal array for field {field:?}"
+        ))),
     }
 }
 
