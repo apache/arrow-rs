@@ -474,11 +474,11 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
     let (offsets, values, nulls) = if array.null_count() == 0 && indices.null_count() == 0 {
         let mut capacity = 0;
-        for index in indices.values() {
+        offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
-        }
+            T::Offset::from_usize(capacity).expect("overflow")
+        }));
         let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
@@ -487,13 +487,13 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         (offsets, values, None)
     } else if indices.null_count() == 0 {
         let mut capacity = 0;
-        for index in indices.values() {
+        offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             if array.is_valid(index) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
-            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
-        }
+            T::Offset::from_usize(capacity).expect("overflow")
+        }));
         let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
@@ -506,13 +506,13 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         (offsets, values, new_nulls)
     } else if array.null_count() == 0 {
         let mut capacity = 0;
-        for index in indices.values() {
+        offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             if indices.is_valid(index) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
-            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
-        }
+            T::Offset::from_usize(capacity).expect("overflow")
+        }));
         let mut values = Vec::with_capacity(capacity);
 
         for (i, index) in indices.values().iter().enumerate() {
