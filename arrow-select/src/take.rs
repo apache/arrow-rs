@@ -483,7 +483,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
         }
-        values = MutableBuffer::new(capacity);
+        let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
             values.extend_from_slice(array.value(index.as_usize()).as_ref());
@@ -502,7 +502,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             }
             offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
         }
-        values = MutableBuffer::new(capacity);
+        let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
             let index = index.as_usize();
@@ -522,10 +522,10 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             let index = index.as_usize();
             if indices.is_valid(index) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-                offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
             }
+            offsets.push(T::Offset::from_usize(capacity).expect("overflow"));
         }
-        values = MutableBuffer::new(capacity);
+        let mut values = Vec::with_capacity(capacity);
 
         for (i, index) in indices.values().iter().enumerate() {
             if indices.is_valid(i) {
@@ -535,7 +535,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }
         let array = unsafe {
             let offsets = OffsetBuffer::new_unchecked(offsets.into());
-            GenericByteArray::<T>::new_unchecked(offsets, values.into(), None)
+            GenericByteArray::<T>::new_unchecked(offsets, values.into(), indices.nulls().cloned())
         };
         return Ok(array);
     } else {
