@@ -466,17 +466,13 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
-    let data_len = indices.len();
-
-    let bytes_offset = (data_len + 1) * std::mem::size_of::<T::Offset>();
+    let bytes_offset = (indices.len() + 1) * std::mem::size_of::<T::Offset>();
     let mut offsets = Vec::with_capacity(bytes_offset);
     offsets.push(T::Offset::default());
 
-    let mut values = vec![];
     let input_offsets = array.value_offsets();
 
-    let nulls;
-    if array.null_count() == 0 && indices.null_count() == 0 {
+    let (offsets, values, nulls) = if array.null_count() == 0 && indices.null_count() == 0 {
         let mut capacity = 0;
         for index in indices.values() {
             let index = index.as_usize();
@@ -488,11 +484,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         for index in indices.values() {
             values.extend_from_slice(array.value(index.as_usize()).as_ref());
         }
-        let array = unsafe {
-            let offsets = OffsetBuffer::new_unchecked(offsets.into());
-            GenericByteArray::<T>::new_unchecked(offsets, values.into(), None)
-        };
-        return Ok(array);
+        (offsets, values, None)
     } else if indices.null_count() == 0 {
         let mut capacity = 0;
         for index in indices.values() {
@@ -511,11 +503,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             }
         }
         let new_nulls: Option<NullBuffer> = take_nulls(array.nulls(), indices);
-        let array = unsafe {
-            let offsets = OffsetBuffer::new_unchecked(offsets.into());
-            GenericByteArray::<T>::new_unchecked(offsets, values.into(), new_nulls)
-        };
-        return Ok(array);
+        (offsets, values, new_nulls)
     } else if array.null_count() == 0 {
         let mut capacity = 0;
         for index in indices.values() {
@@ -533,16 +521,14 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 values.extend_from_slice(s);
             }
         }
-        let array = unsafe {
-            let offsets = OffsetBuffer::new_unchecked(offsets.into());
-            GenericByteArray::<T>::new_unchecked(offsets, values.into(), indices.nulls().cloned())
-        };
-        return Ok(array);
+        (offsets, values, indices.nulls().cloned())
     } else {
-        let num_bytes = bit_util::ceil(data_len, 8);
+        let num_bytes = bit_util::ceil(indices.len(), 8);
 
         let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
         let null_slice = null_buf.as_slice_mut();
+        let mut values: Vec<u8> = vec![];
+
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             // check index is valid before using index. The value in
             // NULL index slots may not be within bounds of array
@@ -556,8 +542,9 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             }
             T::Offset::usize_as(values.len())
         }));
-        nulls = Some(null_buf.into())
-    }
+        let nulls: BooleanBuffer = BooleanBuffer::new(null_buf.into(), 0, indices.len());
+        (offsets, values, Some(nulls.into()))
+    };
 
     T::Offset::from_usize(values.len()).ok_or(ArrowError::ComputeError(format!(
         "Offset overflow for {}BinaryArray: {}",
@@ -565,15 +552,12 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         values.len()
     )))?;
 
-    let array_data = ArrayData::builder(T::DATA_TYPE)
-        .len(data_len)
-        .add_buffer(offsets.into())
-        .add_buffer(values.into())
-        .null_bit_buffer(nulls);
+    let array = unsafe {
+        let offsets = OffsetBuffer::new_unchecked(offsets.into());
+        GenericByteArray::<T>::new_unchecked(offsets, values.into(), nulls)
+    };
 
-    let array_data = unsafe { array_data.build_unchecked() };
-
-    Ok(GenericByteArray::from(array_data))
+    Ok(array)
 }
 
 /// `take` implementation for byte view arrays
