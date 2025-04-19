@@ -804,13 +804,12 @@ mod tests {
     fn test_create_decimal_array() {
         let size = 10;
         let fields = vec![
-            Field::new("a", DataType::Decimal128(10, 2), true),
-            Field::new("b", DataType::Decimal256(10, 2), true),
+            Field::new("a", DataType::Decimal128(10, -2), true),
+            Field::new("b", DataType::Decimal256(10, -2), true),
         ];
         let schema = Schema::new(fields);
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
-
 
         assert_eq!(batch.schema(), schema_ref);
         assert_eq!(batch.num_columns(), schema_ref.fields().len());
