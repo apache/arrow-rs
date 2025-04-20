@@ -596,6 +596,13 @@ impl DataType {
         matches!(self, Null)
     }
 
+    /// Returns true if this type is signed integer: (Int*).
+    #[inline]
+    pub fn is_string(&self) -> bool {
+        use DataType::*;
+        matches!(self, Utf8 | LargeUtf8 | Utf8View)
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
@@ -1083,6 +1090,14 @@ mod tests {
         assert!(DataType::is_dictionary_key_type(&DataType::Int32));
         assert!(DataType::is_dictionary_key_type(&DataType::UInt64));
         assert!(!DataType::is_dictionary_key_type(&DataType::Float16));
+    }
+
+    #[test]
+    fn test_string() {
+        assert!(DataType::is_string(&DataType::Utf8));
+        assert!(DataType::is_string(&DataType::LargeUtf8));
+        assert!(DataType::is_string(&DataType::Utf8View));
+        assert!(!DataType::is_string(&DataType::Int32));
     }
 
     #[test]
