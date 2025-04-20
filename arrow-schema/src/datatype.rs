@@ -596,7 +596,7 @@ impl DataType {
         matches!(self, Null)
     }
 
-    /// Returns true if this type is signed integer: (Int*).
+    /// Returns true if this type is a String type
     #[inline]
     pub fn is_string(&self) -> bool {
         use DataType::*;
