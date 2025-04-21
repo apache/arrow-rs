@@ -1771,7 +1771,7 @@ mod tests {
 
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as _)]).unwrap();
 
-        verify_encoded_split(batch, 56).await;
+        verify_encoded_split(batch, 0).await;
     }
 
     #[tokio::test]
