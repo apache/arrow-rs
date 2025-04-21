@@ -99,18 +99,6 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
                 false => hinted,
             }
         }
-
-        // Special case for Binary with extension types
-        #[cfg(feature = "arrow_canonical_extension_types")]
-        (DataType::Binary, _) => {
-            // For now, we'll use the hint if it's Binary or LargeBinary
-            // The extension type will be applied later by parquet_to_arrow_field
-            if matches!(&hint, DataType::Binary | DataType::LargeBinary) {
-                return hint;
-            }
-            parquet
-        },
-
         _ => parquet,
     }
 }

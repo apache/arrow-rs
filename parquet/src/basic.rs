@@ -623,7 +623,8 @@ impl ColumnOrder {
 
             ConvertedType::LIST | ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
                 SortOrder::UNDEFINED
-            },
+            }
+
             // Fall back to physical type.
             ConvertedType::NONE => Self::get_default_sort_order(physical_type),
         }
