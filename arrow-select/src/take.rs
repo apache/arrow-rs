@@ -470,9 +470,10 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     offsets.push(T::Offset::default());
 
     let input_offsets = array.value_offsets();
+    let mut capacity = 0;
+    let nulls = take_nulls(array.nulls(), indices);
 
-    let (offsets, values, nulls) = if array.null_count() == 0 && indices.null_count() == 0 {
-        let mut capacity = 0;
+    let (offsets, values) = if array.null_count() == 0 && indices.null_count() == 0 {
         offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
@@ -483,9 +484,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         for index in indices.values() {
             values.extend_from_slice(array.value(index.as_usize()).as_ref());
         }
-        (offsets, values, None)
+        (offsets, values)
     } else if indices.null_count() == 0 {
-        let mut capacity = 0;
         offsets.extend(indices.values().iter().map(|index| {
             let index = index.as_usize();
             if array.is_valid(index) {
@@ -501,10 +501,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
                 values.extend_from_slice(array.value(index).as_ref());
             }
         }
-        let new_nulls: Option<NullBuffer> = take_nulls(array.nulls(), indices);
-        (offsets, values, new_nulls)
+        (offsets, values)
     } else if array.null_count() == 0 {
-        let mut capacity = 0;
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             let index = index.as_usize();
             if indices.is_valid(i) {
@@ -516,33 +514,30 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
         for (i, index) in indices.values().iter().enumerate() {
             if indices.is_valid(i) {
-                let s: &[u8] = array.value(index.as_usize()).as_ref();
-                values.extend_from_slice(s);
+                values.extend_from_slice(array.value(index.as_usize()).as_ref());
             }
         }
-        (offsets, values, indices.nulls().cloned())
+        (offsets, values)
     } else {
-        let num_bytes = bit_util::ceil(indices.len(), 8);
-
-        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        let null_slice = null_buf.as_slice_mut();
-        let mut values: Vec<u8> = vec![];
-
+        let nulls = nulls.as_ref().unwrap();
         offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+            let index = index.as_usize();
+            if nulls.is_valid(i) {
+                capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
+            }
+            T::Offset::from_usize(capacity).expect("overflow")
+        }));
+        let mut values = Vec::with_capacity(capacity);
+
+        for (i, index) in indices.values().iter().enumerate() {
             // check index is valid before using index. The value in
             // NULL index slots may not be within bounds of array
             let index = index.as_usize();
-            if indices.is_valid(i) && array.is_valid(index) {
-                let s: &[u8] = array.value(index).as_ref();
-                values.extend_from_slice(s);
-            } else {
-                // set null bit
-                bit_util::unset_bit(null_slice, i);
+            if nulls.is_valid(i) {
+                values.extend_from_slice(array.value(index).as_ref());
             }
-            T::Offset::usize_as(values.len())
-        }));
-        let nulls: BooleanBuffer = BooleanBuffer::new(null_buf.into(), 0, indices.len());
-        (offsets, values, Some(nulls.into()))
+        }
+        (offsets, values)
     };
 
     T::Offset::from_usize(values.len()).ok_or(ArrowError::ComputeError(format!(
