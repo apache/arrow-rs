@@ -68,25 +68,9 @@ macro_rules! downcast_op {
             }
             DataType::Utf8View => $op($array.as_any().downcast_ref::<StringViewArray>().unwrap()$(, $arg)*),
             DataType::Binary => {
-                #[cfg(feature = "arrow_canonical_extension_types")]
-                if let Some(variant_array) = $array.as_any().downcast_ref::<arrow_array::VariantArray>() {
-                    encode_variant_array(variant_array, $($arg),*)
-                } else {
-                    $op($array.as_any().downcast_ref::<BinaryArray>().unwrap()$(, $arg)*)
-                }
-                
-                #[cfg(not(feature = "arrow_canonical_extension_types"))]
                 $op($array.as_any().downcast_ref::<BinaryArray>().unwrap()$(, $arg)*)
             }
             DataType::LargeBinary => {
-                #[cfg(feature = "arrow_canonical_extension_types")]
-                if let Some(variant_array) = $array.as_any().downcast_ref::<arrow_array::VariantArray>() {
-                    encode_variant_array(variant_array, $($arg),*)
-                } else {
-                    $op($array.as_any().downcast_ref::<LargeBinaryArray>().unwrap()$(, $arg)*)
-                }
-                
-                #[cfg(not(feature = "arrow_canonical_extension_types"))]
                 $op($array.as_any().downcast_ref::<LargeBinaryArray>().unwrap()$(, $arg)*)
             }
             DataType::BinaryView => {
@@ -558,7 +542,7 @@ fn encode<T>(values: T, indices: &[usize], encoder: &mut ByteArrayEncoder)
 where
     T: ArrayAccessor + Copy,
     T::Item: Copy + Ord + AsRef<[u8]>,
-{    
+{
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
             if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
@@ -608,156 +592,3 @@ where
     }
     Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
 }
-
-#[cfg(feature = "arrow_canonical_extension_types")]
-fn encode_variant_array(
-    array: &arrow_array::VariantArray,
-    indices: &[usize],
-    encoder: &mut ByteArrayEncoder,
-) {
-
-    // Update statistics and bloom filter
-    if encoder.statistics_enabled != EnabledStatistics::None {
-        let mut min_val: Option<ByteArray> = None;
-        let mut max_val: Option<ByteArray> = None;
-
-        for &idx in indices {
-            if array.is_null(idx) {
-                continue;
-            }
-
-            // Use match instead of unwrapping to safely handle the Result
-            match array.value(idx) {
-                Ok(variant) => {
-                    let mut data = Vec::new();
-                    data.extend_from_slice(variant.metadata());
-                    data.extend_from_slice(variant.value());
-                    let byte_array = ByteArray::from(data);
-
-                    if min_val.as_ref().map_or(true, |m| m > &byte_array) {
-                        min_val = Some(byte_array.clone());
-                    }
-
-                    if max_val.as_ref().map_or(true, |m| m < &byte_array) {
-                        max_val = Some(byte_array.clone());
-                    }
-                },
-                Err(_) => continue, 
-            }
-        }
-
-        if let Some(min) = min_val {
-            if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
-                encoder.min_value = Some(min);
-            }
-        }
-
-        if let Some(max) = max_val {
-            if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
-                encoder.max_value = Some(max);
-            }
-        }
-    }
-
-    // Encode values
-    match &mut encoder.dict_encoder {
-        Some(dict_encoder) => {
-            for &idx in indices {
-                if array.is_null(idx) {
-                    continue;
-                }
-
-                // Use match instead of unwrapping
-                match array.value(idx) {
-                    Ok(variant) => {
-                        let mut data = Vec::new();
-                        data.extend_from_slice(variant.metadata());
-                        data.extend_from_slice(variant.value());
-                        let byte_array = ByteArray::from(data);
-
-                        // Update bloom filter if enabled
-                        if let Some(bloom_filter) = &mut encoder.bloom_filter {
-                            bloom_filter.insert(byte_array.as_bytes());
-                        }
-
-                        let interned = dict_encoder.interner.intern(byte_array.as_bytes());
-                        dict_encoder.indices.push(interned);
-                        dict_encoder.variable_length_bytes += byte_array.len() as i64;
-                    },
-                    Err(_) => continue, // Skip errors in value retrieval
-                }
-            }
-        },
-        None => {
-            for &idx in indices {
-                if array.is_null(idx) {
-                    continue;
-                }
-
-                // Use match instead of unwrapping
-                match array.value(idx) {
-                    Ok(variant) => {
-                        let mut data = Vec::new();
-                        data.extend_from_slice(variant.metadata());
-                        data.extend_from_slice(variant.value());
-                        let byte_array = ByteArray::from(data);
-
-                        // Update bloom filter if enabled
-                        if let Some(bloom_filter) = &mut encoder.bloom_filter {
-                            bloom_filter.insert(byte_array.as_bytes());
-                        }
-
-                        // Directly encode to fallback encoder
-                        encoder.fallback.num_values += 1;
-                        match &mut encoder.fallback.encoder {
-                            FallbackEncoderImpl::Plain { buffer } => {
-                                let value = byte_array.as_bytes();
-                                buffer.extend_from_slice((value.len() as u32).as_bytes());
-                                buffer.extend_from_slice(value);
-                                encoder.fallback.variable_length_bytes += value.len() as i64;
-                            },
-                            FallbackEncoderImpl::DeltaLength { buffer, lengths } => {
-                                let value = byte_array.as_bytes();
-                                if let Err(_) = lengths.put(&[value.len() as i32]) {
-                                    continue; // Skip if encoding fails
-                                }
-                                buffer.extend_from_slice(value);
-                                encoder.fallback.variable_length_bytes += value.len() as i64;
-                            },
-                            FallbackEncoderImpl::Delta { buffer, last_value, prefix_lengths, suffix_lengths } => {
-                                let value = byte_array.as_bytes();
-                                let mut prefix_length = 0;
-
-                                while prefix_length < last_value.len()
-                                    && prefix_length < value.len()
-                                    && last_value[prefix_length] == value[prefix_length]
-                                {
-                                    prefix_length += 1;
-                                }
-
-                                let suffix_length = value.len() - prefix_length;
-
-                                last_value.clear();
-                                last_value.extend_from_slice(value);
-
-                                buffer.extend_from_slice(&value[prefix_length..]);
-                                
-                                // Safely handle potential encoding errors
-                                if let Err(_) = prefix_lengths.put(&[prefix_length as i32]) {
-                                    continue; // Skip if encoding fails
-                                }
-                                if let Err(_) = suffix_lengths.put(&[suffix_length as i32]) {
-                                    continue; // Skip if encoding fails
-                                }
-                                
-                                encoder.fallback.variable_length_bytes += value.len() as i64;
-                            }
-                        }
-                    },
-                    Err(_) => continue, // Skip errors in value retrieval
-                }
-            }
-        }
-    }
-}
-

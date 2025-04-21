@@ -152,7 +152,7 @@ fn decode_value_internal(data: &[u8], pos: &mut usize, keys: &[String]) -> Resul
             *pos += len as usize;
             
             let string = str::from_utf8(string_bytes)
-                .map_err(|e| Error::VariantRead(format!("Invalid UTF-8 string: {}", e)))?;
+                .map_err(|e| Error::InvalidMetadata(format!("Invalid UTF-8 string: {}", e)))?;
             
             Ok(Value::String(string.to_string()))
         },
@@ -307,7 +307,7 @@ fn decode_primitive(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
         18 => decode_timestamp_nanos(data, pos),
         19 => decode_timestamp_ntz_nanos(data, pos),
         20 => decode_uuid(data, pos),
-        _ => Err(Error::VariantRead(format!("Unknown primitive type ID: {}", type_id)))
+        _ => Err(Error::InvalidMetadata(format!("Unknown primitive type ID: {}", type_id)))
     }
 }
 
@@ -332,7 +332,7 @@ fn decode_short_string(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     
     // Convert to UTF-8 string
     let string = str::from_utf8(string_bytes)
-        .map_err(|e| Error::VariantRead(format!("Invalid UTF-8 string: {}", e)))?;
+        .map_err(|e| Error::InvalidMetadata(format!("Invalid UTF-8 string: {}", e)))?;
     
     Ok(Value::String(string.to_string()))
 }
@@ -405,7 +405,7 @@ fn decode_double(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     
     // Create a Number from the float
     let number = serde_json::Number::from_f64(value)
-        .ok_or_else(|| Error::VariantRead(format!("Invalid float value: {}", value)))?;
+        .ok_or_else(|| Error::InvalidMetadata(format!("Invalid float value: {}", value)))?;
     
     Ok(Value::Number(number))
 }
@@ -550,7 +550,7 @@ fn decode_float(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     
     // Create a Number from the float
     let number = serde_json::Number::from_f64(value as f64)
-        .ok_or_else(|| Error::VariantRead(format!("Invalid float value: {}", value)))?;
+        .ok_or_else(|| Error::InvalidMetadata(format!("Invalid float value: {}", value)))?;
     
     Ok(Value::Number(number))
 }
@@ -608,7 +608,7 @@ fn decode_long_string(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     
     // Convert to UTF-8 string
     let string = str::from_utf8(string_bytes)
-        .map_err(|e| Error::VariantRead(format!("Invalid UTF-8 string: {}", e)))?;
+        .map_err(|e| Error::InvalidMetadata(format!("Invalid UTF-8 string: {}", e)))?;
     
     Ok(Value::String(string.to_string()))
 }

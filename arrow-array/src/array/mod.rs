@@ -78,9 +78,6 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
-mod variant_array;
-pub use variant_array::*;
-
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be

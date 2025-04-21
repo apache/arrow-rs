@@ -41,8 +41,6 @@ mod map_array;
 mod null_array;
 mod primitive_array;
 mod struct_array;
-#[cfg(feature = "arrow_canonical_extension_types")]
-mod variant_array;
 
 #[cfg(test)]
 mod test_util;

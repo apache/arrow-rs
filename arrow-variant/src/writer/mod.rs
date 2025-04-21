@@ -17,12 +17,12 @@
 
 //! Writing Variant data to JSON
 
-use arrow_array::{Array, VariantArray};
+use arrow_array::{Array, StructArray};
 use arrow_schema::extension::Variant;
-#[allow(unused_imports)]
 use serde_json::Value;
 use crate::error::Error;
 use crate::decoder::decode_json;
+use crate::variant_utils::get_variant;
 
 /// Converts a Variant to a JSON Value
 ///
@@ -43,7 +43,7 @@ pub fn to_json_value(variant: &Variant) -> Result<Value, Error> {
     decode_json(variant.value(), variant.metadata())
 }
 
-/// Converts a VariantArray to an array of JSON Values
+/// Converts a StructArray with variant extension type to an array of JSON Values
 ///
 /// # Example
 ///
@@ -63,14 +63,15 @@ pub fn to_json_value(variant: &Variant) -> Result<Value, Error> {
 ///     json!({"name": "Jane", "age": 28})
 /// ]);
 /// ```
-pub fn to_json_value_array(variant_array: &VariantArray) -> Result<Vec<Value>, Error> {
+pub fn to_json_value_array(variant_array: &StructArray) -> Result<Vec<Value>, Error> {
     let mut result = Vec::with_capacity(variant_array.len());
     for i in 0..variant_array.len() {
         if variant_array.is_null(i) {
             result.push(Value::Null);
             continue;
         }
-        let variant = variant_array.value(i)
+        
+        let variant = get_variant(variant_array, i)
             .map_err(|e| Error::VariantRead(e.to_string()))?;
         result.push(to_json_value(&variant)?);
     }
@@ -97,7 +98,7 @@ pub fn to_json(variant: &Variant) -> Result<String, Error> {
     Ok(value.to_string())
 }
 
-/// Converts a VariantArray to an array of JSON strings
+/// Converts a StructArray with variant extension type to an array of JSON strings
 ///
 /// # Example
 ///
@@ -115,7 +116,7 @@ pub fn to_json(variant: &Variant) -> Result<String, Error> {
 /// // Note that the output JSON strings may have different formatting
 /// // but they are semantically equivalent
 /// ```
-pub fn to_json_array(variant_array: &VariantArray) -> Result<Vec<String>, Error> {
+pub fn to_json_array(variant_array: &StructArray) -> Result<Vec<String>, Error> {
     // Use the value-based function and convert each value to a string
     to_json_value_array(variant_array).map(|values| 
         values.into_iter().map(|v| v.to_string()).collect()

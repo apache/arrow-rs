@@ -20,6 +20,10 @@
 use crate::error::Error;
 use serde_json::Value;
 use std::collections::HashMap;
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, StructArray,
+};
+use arrow_array::builder::{BinaryBuilder, LargeBinaryBuilder};
 
 /// Creates a metadata binary vector for a JSON value according to the Arrow Variant specification
 ///

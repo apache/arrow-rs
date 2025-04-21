@@ -1816,7 +1816,7 @@ mod tests {
         let result = Type::group_type_builder("variant")
             .with_repetition(Repetition::OPTIONAL) // The whole variant is optional 
             .with_logical_type(Some(LogicalType::Variant { 
-                specification_version: None,
+                specification_version: Some(0),
             }))
             .with_fields(fields)
             .with_id(Some(2))
@@ -1831,7 +1831,7 @@ mod tests {
         assert_eq!(
             basic_info.logical_type(), 
             Some(LogicalType::Variant {
-                specification_version: None,
+                specification_version: Some(0),
             })
         );
         assert_eq!(basic_info.id(), 2);
@@ -1932,7 +1932,7 @@ mod tests {
         let variant = Type::group_type_builder("variant")
             .with_repetition(Repetition::OPTIONAL)
             .with_logical_type(Some(LogicalType::Variant { 
-                specification_version: None,
+                specification_version: Some(0),
             }))
             .with_fields(vec![Arc::new(metadata), Arc::new(value)])
             .build()?;

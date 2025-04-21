@@ -17,18 +17,17 @@
 
 //! Reading JSON and converting to Variant
 //! 
-use arrow_array::VariantArray;
+use arrow_array::{Array, StructArray};
 use arrow_schema::extension::Variant;
 use serde_json::Value;
 use crate::error::Error;
 use crate::metadata::{create_metadata, parse_metadata};
 use crate::encoder::encode_json;
+use crate::variant_utils::create_variant_array;
 #[allow(unused_imports)]
 use crate::decoder::decode_value;
 #[allow(unused_imports)]
 use std::collections::HashMap;
-#[allow(unused_imports)]
-use arrow_array::Array;
 
 /// Converts a JSON string to a Variant
 ///
@@ -52,7 +51,7 @@ pub fn from_json(json_str: &str) -> Result<Variant, Error> {
     from_json_value(&value)
 }
 
-/// Converts an array of JSON strings to a VariantArray
+/// Converts an array of JSON strings to a StructArray with variant extension type
 ///
 /// # Example
 ///
@@ -68,7 +67,7 @@ pub fn from_json(json_str: &str) -> Result<Variant, Error> {
 /// let variant_array = from_json_array(&json_strings).unwrap();
 /// assert_eq!(variant_array.len(), 2);
 /// ```
-pub fn from_json_array(json_strings: &[&str]) -> Result<VariantArray, Error> {
+pub fn from_json_array(json_strings: &[&str]) -> Result<StructArray, Error> {
     if json_strings.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -79,7 +78,7 @@ pub fn from_json_array(json_strings: &[&str]) -> Result<VariantArray, Error> {
         .map(|json_str| serde_json::from_str::<Value>(json_str).map_err(Error::from))
         .collect();
     
-    // Convert the values to a VariantArray
+    // Convert the values to a StructArray with variant extension type
     from_json_value_array(&values?)
 }
 
@@ -112,7 +111,7 @@ pub fn from_json_value(value: &Value) -> Result<Variant, Error> {
     Ok(Variant::new(metadata, value_bytes))
 }
 
-/// Converts an array of JSON Value objects to a VariantArray
+/// Converts an array of JSON Value objects to a StructArray with variant extension type
 ///
 /// # Example
 ///
@@ -129,7 +128,7 @@ pub fn from_json_value(value: &Value) -> Result<Variant, Error> {
 /// let variant_array = from_json_value_array(&values).unwrap();
 /// assert_eq!(variant_array.len(), 2);
 /// ```
-pub fn from_json_value_array(values: &[Value]) -> Result<VariantArray, Error> {
+pub fn from_json_value_array(values: &[Value]) -> Result<StructArray, Error> {
     if values.is_empty() {
         return Err(Error::EmptyInput);
     }
@@ -142,18 +141,15 @@ pub fn from_json_value_array(values: &[Value]) -> Result<VariantArray, Error> {
     
     let variants = variants?;
     
-    // Always use empty metadata for the VariantArray type
-    // This separates the concept of type metadata from value metadata
-    let variant_type = Variant::new(Vec::new(), vec![]);
-    
-    // Create the VariantArray
-    VariantArray::from_variants(variant_type, variants)
+    // Create a StructArray with the variants
+    create_variant_array(variants)
         .map_err(|e| Error::VariantArrayCreation(e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::variant_utils::get_variant;
     
     #[test]
     fn test_from_json() {
@@ -185,7 +181,7 @@ mod tests {
         
         // Verify the values are properly encoded
         for i in 0..variant_array.len() {
-            let variant = variant_array.value(i).unwrap();
+            let variant = get_variant(&variant_array, i).unwrap();
             assert!(!variant.value().is_empty());
             // First byte should be an object header
             assert_eq!(variant.value()[0], 0b00000010);

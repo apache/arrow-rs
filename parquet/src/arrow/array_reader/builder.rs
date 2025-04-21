@@ -287,21 +287,6 @@ fn build_primitive_reader(
             Some(DataType::Utf8View | DataType::BinaryView) => {
                 make_byte_view_array_reader(page_iterator, column_desc, arrow_type)?
             }
-            #[cfg(feature = "arrow_canonical_extension_types")]
-            _ => {
-                let field = parquet_to_arrow_field(column_desc.as_ref())?;
-                if let Some(extension_name) = field.metadata().get("ARROW:extension:name") {
-                    if extension_name == "arrow.variant" {
-                        return Ok(Some(crate::arrow::array_reader::variant_array::make_variant_array_reader(
-                            page_iterator, 
-                            column_desc, 
-                            arrow_type
-                        )?));
-                    }
-                }
-                make_byte_array_reader(page_iterator, column_desc, arrow_type)?
-            }
-            #[cfg(not(feature = "arrow_canonical_extension_types"))]
             _ => make_byte_array_reader(page_iterator, column_desc, arrow_type)?,
         },
         PhysicalType::FIXED_LEN_BYTE_ARRAY => {

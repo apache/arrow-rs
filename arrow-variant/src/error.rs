@@ -18,34 +18,64 @@
 //! Error types for the arrow-variant crate
 
 use arrow_schema::ArrowError;
-use thiserror::Error;
+use std::error::Error as StdError;
+use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Error type for operations in this crate
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum Error {
     /// Error when parsing metadata
-    #[error("Invalid metadata: {0}")]
     InvalidMetadata(String),
 
     /// Error when parsing JSON
-    #[error("JSON parse error: {0}")]
-    JsonParse(#[from] serde_json::Error),
+    JsonParse(serde_json::Error),
 
     /// Error when creating a Variant
-    #[error("Failed to create Variant: {0}")]
     VariantCreation(String),
 
     /// Error when reading a Variant
-    #[error("Failed to read Variant: {0}")]
     VariantRead(String),
 
     /// Error when creating a VariantArray
-    #[error("Failed to create VariantArray: {0}")]
-    VariantArrayCreation(#[from] ArrowError),
+    VariantArrayCreation(ArrowError),
 
     /// Error for empty input
-    #[error("Empty input")]
     EmptyInput,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Error::InvalidMetadata(msg) => write!(f, "Invalid metadata: {}", msg),
+            Error::JsonParse(err) => write!(f, "JSON parse error: {}", err),
+            Error::VariantCreation(msg) => write!(f, "Failed to create Variant: {}", msg),
+            Error::VariantRead(msg) => write!(f, "Failed to read Variant: {}", msg),
+            Error::VariantArrayCreation(err) => write!(f, "Failed to create VariantArray: {}", err),
+            Error::EmptyInput => write!(f, "Empty input"),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Error::JsonParse(err) => Some(err),
+            Error::VariantArrayCreation(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::JsonParse(err)
+    }
+}
+
+impl From<ArrowError> for Error {
+    fn from(err: ArrowError) -> Self {
+        Error::VariantArrayCreation(err)
+    }
 }
 
 impl From<Error> for ArrowError {

@@ -891,7 +891,7 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
             LogicalType::Variant { specification_version } => parquet::LogicalType::VARIANT(VariantType {
-                specification_version,
+                specification_version: Some(0),
             }),
 
      
@@ -1197,7 +1197,7 @@ impl str::FromStr for LogicalType {
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
             "VARIANT" => Ok(LogicalType::Variant {
-                specification_version: None,
+                specification_version: Some(0),
             }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
@@ -1854,7 +1854,7 @@ mod tests {
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Variant {
-                specification_version: None,
+                specification_version: Some(0),
             })),
             ConvertedType::NONE
         );
@@ -2245,7 +2245,7 @@ mod tests {
             LogicalType::List,
             LogicalType::Map,
             LogicalType::Variant {
-                specification_version: None,
+                specification_version: Some(0),
             },
         ];
         check_sort_order(undefined, SortOrder::UNDEFINED);

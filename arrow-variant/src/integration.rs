@@ -17,15 +17,12 @@
 
 //! Integration tests and utilities for the arrow-variant crate
 
-use arrow_array::VariantArray;
-#[allow(unused_imports)]
-use arrow_array::Array;
+use arrow_array::{Array, StructArray};
 use arrow_schema::extension::Variant;
 use serde_json::{json, Value};
 
 use crate::error::Error;
 use crate::reader::{from_json, from_json_array};
-#[allow(unused_imports)]
 use crate::writer::{to_json, to_json_array};
 
 /// Creates a test Variant from a JSON value
@@ -34,8 +31,8 @@ pub fn create_test_variant(json_value: Value) -> Result<Variant, Error> {
     from_json(&json_str)
 }
 
-/// Creates a test VariantArray from a list of JSON values
-pub fn create_test_variant_array(json_values: Vec<Value>) -> Result<VariantArray, Error> {
+/// Creates a test StructArray with variant data from a list of JSON values
+pub fn create_test_variant_array(json_values: Vec<Value>) -> Result<StructArray, Error> {
     let json_strings: Vec<String> = json_values.into_iter().map(|v| v.to_string()).collect();
     let str_refs: Vec<&str> = json_strings.iter().map(|s| s.as_str()).collect();
     from_json_array(&str_refs)
@@ -78,8 +75,8 @@ pub fn create_sample_variant() -> Result<Variant, Error> {
     create_test_variant(json)
 }
 
-/// Creates a sample VariantArray with multiple entries
-pub fn create_sample_variant_array() -> Result<VariantArray, Error> {
+/// Creates a sample StructArray with variant data containing multiple entries
+pub fn create_sample_variant_array() -> Result<StructArray, Error> {
     let json_values = vec![
         json!({
             "name": "John",
