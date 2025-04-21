@@ -560,7 +560,7 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
-    let new_nulls= take_nulls(array.nulls(), indices);
+    let new_nulls = take_nulls(array.nulls(), indices);
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
     Ok(unsafe {
         GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
