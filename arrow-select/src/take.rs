@@ -505,9 +505,9 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         (offsets, values, new_nulls)
     } else if array.null_count() == 0 {
         let mut capacity = 0;
-        offsets.extend(indices.values().iter().map(|index| {
+        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
             let index = index.as_usize();
-            if indices.is_valid(index) {
+            if indices.is_valid(i) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
             T::Offset::from_usize(capacity).expect("overflow")
