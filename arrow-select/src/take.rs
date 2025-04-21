@@ -466,7 +466,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     array: &GenericByteArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteArray<T>, ArrowError> {
-    let mut offsets = Vec::with_capacity(indices.len());
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::default());
 
     let input_offsets = array.value_offsets();
