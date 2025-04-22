@@ -36,19 +36,37 @@ pub mod reader;
 /// Avro schema parsing and representation
 ///
 /// Provides types for parsing and representing Avro schema definitions.
-mod schema;
+pub mod schema;
 
 /// Compression codec implementations for Avro
 ///
 /// Provides support for various compression algorithms used in Avro files,
 /// including Deflate, Snappy, and ZStandard.
-mod compression;
+pub mod compression;
 
 /// Data type conversions between Avro and Arrow types
 ///
 /// This module contains the necessary types and functions to convert between
 /// Avro data types and Arrow data types.
-mod codec;
+pub mod codec;
+
+pub use reader::ReadOptions;
+
+/// Extension trait for AvroField to add Utf8View support
+///
+/// This trait adds methods for working with Utf8View support to the AvroField struct.
+pub trait AvroFieldExt {
+    /// Returns a new field with Utf8View support enabled for string data
+    ///
+    /// This will convert any string data to use StringViewArray instead of StringArray.
+    fn with_utf8view(&self) -> Self;
+}
+
+impl AvroFieldExt for codec::AvroField {
+    fn with_utf8view(&self) -> Self {
+        codec::AvroField::with_utf8view(self)
+    }
+}
 
 #[cfg(test)]
 mod test_util {

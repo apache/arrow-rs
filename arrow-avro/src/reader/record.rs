@@ -34,15 +34,32 @@ use std::sync::Arc;
 pub struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
+    use_utf8view: bool,
 }
 
 impl RecordDecoder {
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`]
     pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        Self::try_new_with_options(data_type, false)
+    }
+
+    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options
+    ///
+    /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
+    /// In particular, it allows enabling Utf8View support for better string performance.
+    ///
+    /// # Parameters
+    /// * `data_type` - The Avro data type to decode
+    /// * `use_utf8view` - If true, use StringViewArray instead of StringArray for string data
+    pub fn try_new_with_options(
+        data_type: &AvroDataType,
+        use_utf8view: bool,
+    ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
+                use_utf8view,
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
@@ -91,7 +108,10 @@ enum Decoder {
     TimestampMillis(bool, Vec<i64>),
     TimestampMicros(bool, Vec<i64>),
     Binary(OffsetBufferBuilder<i32>, Vec<u8>),
+    /// String data encoded as UTF-8 bytes, mapped to Arrow's StringArray
     String(OffsetBufferBuilder<i32>, Vec<u8>),
+    /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
+    StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     List(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
     Record(Fields, Vec<Decoder>),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
@@ -113,6 +133,10 @@ impl Decoder {
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
             Codec::Utf8 => Self::String(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            ),
+            Codec::Utf8View => Self::StringView(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
@@ -169,7 +193,9 @@ impl Decoder {
             | Self::TimestampMicros(_, v) => v.push(0),
             Self::Float32(v) => v.push(0.),
             Self::Float64(v) => v.push(0.),
-            Self::Binary(offsets, _) | Self::String(offsets, _) => offsets.push_length(0),
+            Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
+                offsets.push_length(0);
+            }
             Self::List(_, offsets, e) => {
                 offsets.push_length(0);
                 e.append_null();
@@ -193,7 +219,9 @@ impl Decoder {
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
-            Self::Binary(offsets, values) | Self::String(offsets, values) => {
+            Self::Binary(offsets, values)
+            | Self::String(offsets, values)
+            | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
                 offsets.push_length(data.len());
                 values.extend_from_slice(data);
@@ -255,6 +283,23 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(StringArray::new(offsets, values, nulls))
+            }
+            Self::StringView(offsets, values) => {
+                let offsets = flush_offsets(offsets);
+                let values = flush_values(values);
+                let array = StringArray::new(offsets, values.into(), nulls.clone());
+
+                let values: Vec<&str> = (0..array.len())
+                    .map(|i| {
+                        if array.is_valid(i) {
+                            array.value(i)
+                        } else {
+                            ""
+                        }
+                    })
+                    .collect();
+
+                Arc::new(StringViewArray::from(values))
             }
             Self::List(field, offsets, values) => {
                 let values = values.flush(None)?;
