@@ -28,12 +28,31 @@
 #![warn(missing_docs)]
 #![allow(unused)] // Temporary
 
+pub mod codec;
+
+pub mod compression;
+
 pub mod reader;
-mod schema;
 
-mod compression;
+pub mod schema;
 
-mod codec;
+pub use reader::ReadOptions;
+
+/// Extension trait for AvroField to add Utf8View support
+///
+/// This trait adds methods for working with Utf8View support to the AvroField struct.
+pub trait AvroFieldExt {
+    /// Returns a new field with Utf8View support enabled for string data
+    ///
+    /// This will convert any string data to use StringViewArray instead of StringArray.
+    fn with_utf8view(&self) -> Self;
+}
+
+impl AvroFieldExt for codec::AvroField {
+    fn with_utf8view(&self) -> Self {
+        codec::AvroField::with_utf8view(self)
+    }
+}
 
 #[cfg(test)]
 mod test_util {
