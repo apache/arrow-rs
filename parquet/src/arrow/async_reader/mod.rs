@@ -251,7 +251,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// // another async I/O reader such as a reader from an object store.
     /// let file = tokio::fs::File::open(path).await.unwrap();
     ///
-    /// // Configure options for reading from the async souce
+    /// // Configure options for reading from the async source
     /// let builder = ParquetRecordBatchStreamBuilder::new(file)
     ///     .await
     ///     .unwrap();
