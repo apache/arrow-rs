@@ -813,7 +813,7 @@ mod tests {
     async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let incoming = TcpIncoming::from_listener(listener, true, None).unwrap();
+        let incoming = TcpIncoming::from(listener);
         (incoming, addr)
     }
 
@@ -917,6 +917,9 @@ mod tests {
 
         let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
 
+        // Set dafault crypto provider to use
+        // See: https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#using-the-per-process-default-cryptoprovider
+        rustls::crypto::ring::default_provider();
         let serve_future = Server::builder()
             .tls_config(tls_config)
             .unwrap()

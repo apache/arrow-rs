@@ -1571,7 +1571,9 @@ pub mod flight_service_server {
                 }
                 _ => {
                     Box::pin(async move {
-                        let mut response = http::Response::new(tonic::body::Body::default());
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
                         let headers = response.headers_mut();
                         headers
                             .insert(
