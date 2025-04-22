@@ -297,6 +297,22 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
+    if let DataType::Extension(extension) = d {
+        let storage: Vec<_> = arrays
+            .iter()
+            .map(|array| {
+                let extension_array: ExtensionArray = array.to_data().into();
+                extension_array.storage().clone()
+            })
+            .collect();
+        let storage_ref: Vec<_> = storage.iter().map(|array| array.as_ref()).collect();
+        let storage_result = concat(&storage_ref)?;
+        return Ok(Arc::new(ExtensionArray::new(
+            extension.clone(),
+            storage_result,
+        )));
+    }
+
     downcast_primitive! {
         d => (primitive_concat, arrays),
         DataType::Boolean => concat_boolean(arrays),
@@ -374,7 +390,7 @@ pub fn concat_batches<'a>(
 mod tests {
     use super::*;
     use arrow_array::builder::{GenericListBuilder, StringDictionaryBuilder};
-    use arrow_schema::{Field, Schema};
+    use arrow_schema::{extension::TestExtension, Field, Schema};
     use std::fmt::Debug;
 
     #[test]
@@ -1266,5 +1282,28 @@ mod tests {
             values, unique_values,
             "There are duplicates in the value list (the value list here is sorted which is only for the assertion)"
         );
+    }
+
+    #[test]
+    fn test_concat_extension() {
+        let storage = Arc::new(StringArray::from(vec!["one banana", "two banana"]));
+
+        let array = ExtensionArray::new(
+            Arc::new(TestExtension {
+                storage_type: DataType::Utf8,
+            }),
+            storage.clone(),
+        );
+
+        let result_ref = concat(&[&array, &array]).unwrap();
+        assert_eq!(result_ref.data_type(), array.data_type());
+        assert_eq!(result_ref.len(), 4);
+
+        let result_array: ExtensionArray = result_ref.to_data().into();
+        let expected_storage = create_array!(
+            Utf8,
+            ["one banana", "two banana", "one banana", "two banana"]
+        );
+        assert_eq!(**result_array.storage(), *expected_storage);
     }
 }

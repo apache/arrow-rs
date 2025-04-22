@@ -535,7 +535,8 @@ macro_rules! get_statistics {
             DataType::LargeListView(_) |
             DataType::Struct(_) |
             DataType::Union(_, _) |
-            DataType::RunEndEncoded(_, _) => {
+            DataType::RunEndEncoded(_, _) |
+            DataType::Extension(_) => {
                 let len = $iterator.count();
                 // don't know how to extract statistics, so return a null array
                 Ok(new_null_array($data_type, len))
@@ -1056,7 +1057,8 @@ macro_rules! get_data_page_statistics {
                 DataType::Struct(_) |
                 DataType::Union(_, _) |
                 DataType::Map(_, _) |
-                DataType::RunEndEncoded(_, _) => {
+                DataType::RunEndEncoded(_, _) |
+                DataType::Extension(_) => {
                     let len = $iterator.count();
                     // don't know how to extract statistics, so return a null array
                     Ok(new_null_array($data_type, len))

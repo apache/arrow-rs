@@ -24,7 +24,13 @@ mod canonical;
 #[cfg(feature = "canonical_extension_types")]
 pub use canonical::*;
 
-use crate::{ArrowError, DataType};
+use crate::{ArrowError, DataType, Field};
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
+use std::panic::RefUnwindSafe;
+use std::sync::Arc;
 
 /// The metadata key for the string name identifying an [`ExtensionType`].
 pub const EXTENSION_TYPE_NAME_KEY: &str = "ARROW:extension:name";
@@ -257,4 +263,194 @@ pub trait ExtensionType: Sized {
     /// This should return an error if the given data type is not supported by
     /// this extension type.
     fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError>;
+}
+
+/// dyn-compatible ExtensionType
+pub trait DynExtensionType: Debug + RefUnwindSafe {
+    /// For dyn-compatible comparison methods
+    fn as_any(&self) -> &dyn Any;
+
+    /// Because DataType implements sized
+    fn size(&self) -> usize;
+
+    /// Concrete storage type for this extension
+    fn storage_type(&self) -> &DataType;
+
+    /// Name of the extension
+    fn extension_name(&self) -> &'static str;
+
+    /// Extension metadata
+    fn serialized_metadata(&self) -> String;
+
+    /// Because DataType implement Eq
+    fn extension_equals(&self, other: &dyn Any) -> bool;
+
+    /// Because DataType implements Hash
+    fn extension_hash(&self, hasher: &mut dyn Hasher);
+
+    /// Because DataType implements Ord
+    fn exension_cmp(&self, other: &dyn Any) -> Ordering;
+}
+
+impl PartialEq for dyn DynExtensionType + Send + Sync {
+    fn eq(&self, other: &Self) -> bool {
+        self.extension_equals(other.as_any())
+    }
+}
+
+impl Eq for dyn DynExtensionType + Send + Sync {}
+
+impl Hash for dyn DynExtensionType + Send + Sync {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.extension_hash(state);
+    }
+}
+
+impl PartialOrd for dyn DynExtensionType + Send + Sync {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for dyn DynExtensionType + Send + Sync {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.exension_cmp(other.as_any())
+    }
+}
+
+/// A way to create extension types for places where they might be imported
+pub trait DynExtensionTypeFactory {
+    /// Create an extension type from name, storage type, and metadata
+    fn make_extension_type(
+        &self,
+        extension_name: &str,
+        storage_type: &DataType,
+        extension_metadata: Option<&String>,
+    ) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError>;
+
+    /// Create an extension type from a field
+    fn make_from_field(
+        &self,
+        field: &Field,
+    ) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError> {
+        if let Some(extension_name) = field.metadata().get("ARROW:extension:name") {
+            self.make_extension_type(
+                extension_name,
+                field.data_type(),
+                field.metadata().get("ARROW:extension:metadata"),
+            )
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// Simple factory with registered types
+pub struct CanonicalExtensionTypeFactory {}
+
+#[cfg(feature = "canonical_extension_types")]
+impl DynExtensionType for Uuid {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn storage_type(&self) -> &DataType {
+        &DataType::FixedSizeBinary(16)
+    }
+
+    fn extension_name(&self) -> &'static str {
+        Self::NAME
+    }
+
+    fn serialized_metadata(&self) -> String {
+        "".to_string()
+    }
+
+    fn extension_equals(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Uuid>().is_some()
+    }
+
+    fn extension_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write("arrow.uuid".as_bytes());
+    }
+
+    fn exension_cmp(&self, other: &dyn Any) -> Ordering {
+        if self.extension_equals(other) {
+            Ordering::Equal
+        } else {
+            // Fishy...
+            Ordering::Less
+        }
+    }
+}
+
+#[cfg(feature = "canonical_extension_types")]
+impl DynExtensionTypeFactory for CanonicalExtensionTypeFactory {
+    fn make_extension_type(
+        &self,
+        extension_name: &str,
+        storage_type: &DataType,
+        extension_metadata: Option<&String>,
+    ) -> Result<Option<Arc<dyn DynExtensionType + Send + Sync>>, ArrowError> {
+        match extension_name {
+            "arrow.uuid" => {
+                let uuid = Uuid::try_new(
+                    storage_type,
+                    Uuid::deserialize_metadata(extension_metadata.map(|s| s.as_str()))?,
+                )?;
+                Ok(Some(Arc::new(uuid)))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Extension for tests
+#[derive(Debug)]
+pub struct TestExtension {
+    /// Arbitrary storage type
+    pub storage_type: DataType,
+}
+
+impl DynExtensionType for TestExtension {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn storage_type(&self) -> &DataType {
+        &self.storage_type
+    }
+
+    fn extension_name(&self) -> &'static str {
+        "arrow.rs.test"
+    }
+
+    fn serialized_metadata(&self) -> String {
+        "".to_string()
+    }
+
+    fn extension_equals(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Self>().is_some()
+    }
+
+    fn extension_hash(&self, hasher: &mut dyn Hasher) {
+        hasher.write("arrow.rs.test".as_bytes());
+    }
+
+    fn exension_cmp(&self, other: &dyn Any) -> Ordering {
+        if self.extension_equals(other) {
+            Ordering::Equal
+        } else {
+            // Fishy...
+            Ordering::Less
+        }
+    }
 }

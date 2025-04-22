@@ -76,6 +76,9 @@ mod list_view_array;
 
 pub use list_view_array::*;
 
+mod extension_array;
+pub use extension_array::*;
+
 use crate::iterator::ArrayIter;
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
@@ -829,6 +832,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
+        DataType::Extension(_) => Arc::new(ExtensionArray::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {dt:?}"),
     }
 }
