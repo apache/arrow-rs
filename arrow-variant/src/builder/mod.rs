@@ -57,7 +57,12 @@ use std::io::Write;
 use arrow_schema::extension::Variant;
 
 use arrow_schema::ArrowError;
-use crate::encoder::{VariantBasicType, VariantPrimitiveType};
+use crate::encoder::{
+    VariantBasicType, 
+    encode_null, encode_boolean, encode_integer, encode_float, encode_string,
+    encode_binary, encode_date, encode_timestamp, encode_timestamp_ntz, 
+    encode_time_ntz, encode_timestamp_nanos, encode_timestamp_ntz_nanos, encode_uuid
+};
 
 /// Values that can be stored in a Variant.
 #[derive(Debug, Clone)]
@@ -667,152 +672,68 @@ impl<'a, 'b> ArrayBuilder<'a, 'b> {
 
 /// Writes a primitive value to a buffer using the Variant format.
 ///
-/// This function handles the correct encoding of primitive values.
+/// This function handles the correct encoding of primitive values by utilizing 
+/// the encoder module functionality.
 fn write_value(buffer: &mut impl Write, value: &PrimitiveValue) -> Result<(), ArrowError> {
+    // Create a temporary buffer for encoder functions that expect Vec<u8>
+    let mut temp_buffer = Vec::new();
+    
     match value {
         PrimitiveValue::Null => {
-            // Basic type = Primitive, Primitive type = Null
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Null as u8) << 2);
-            buffer.write_all(&[header])?;
+            encode_null(&mut temp_buffer);
         },
         PrimitiveValue::Boolean(val) => {
-            // Basic type = Primitive, Primitive type = BooleanTrue/BooleanFalse
-            let prim_type = if *val { 
-                VariantPrimitiveType::BooleanTrue 
-            } else { 
-                VariantPrimitiveType::BooleanFalse 
-            };
-            
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((prim_type as u8) << 2);
-            buffer.write_all(&[header])?;
+            encode_boolean(*val, &mut temp_buffer);
         },
         PrimitiveValue::Int8(val) => {
-            // Basic type = Primitive, Primitive type = Int8
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Int8 as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&[*val as u8])?;
+            encode_integer(*val as i64, &mut temp_buffer);
         },
         PrimitiveValue::Int16(val) => {
-            // Basic type = Primitive, Primitive type = Int16
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Int16 as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_integer(*val as i64, &mut temp_buffer);
         },
         PrimitiveValue::Int32(val) => {
-            // Basic type = Primitive, Primitive type = Int32
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Int32 as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_integer(*val as i64, &mut temp_buffer);
         },
         PrimitiveValue::Int64(val) => {
-            // Basic type = Primitive, Primitive type = Int64
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Int64 as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_integer(*val, &mut temp_buffer);
         },
         PrimitiveValue::Float(val) => {
-            // Basic type = Primitive, Primitive type = Float
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Float as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_float(*val as f64, &mut temp_buffer);
         },
         PrimitiveValue::Double(val) => {
-            // Basic type = Primitive, Primitive type = Double
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Double as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_float(*val, &mut temp_buffer);
         },
         PrimitiveValue::String(val) => {
-            // For short strings (fits in a single byte), use ShortString type
-            // Otherwise use Primitive + String type
-            if val.len() <= 63 {
-                // Basic type = ShortString
-                let header = (VariantBasicType::ShortString as u8) & 0x03 | 
-                             ((val.len() as u8) << 2);
-                buffer.write_all(&[header])?;
-                buffer.write_all(val.as_bytes())?;
-            } else {
-                // Basic type = Primitive, Primitive type = String
-                let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                             ((VariantPrimitiveType::String as u8) << 2);
-                buffer.write_all(&[header])?;
-                
-                // Write length followed by bytes
-                let bytes = val.as_bytes();
-                let len = bytes.len() as u32;
-                buffer.write_all(&len.to_le_bytes())?;
-                buffer.write_all(bytes)?;
-            }
+            encode_string(val, &mut temp_buffer);
         },
         PrimitiveValue::Binary(val) => {
-            // Basic type = Primitive, Primitive type = Binary
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Binary as u8) << 2);
-            buffer.write_all(&[header])?;
-            
-            // Write length followed by bytes
-            let len = val.len() as u32;
-            buffer.write_all(&len.to_le_bytes())?;
-            buffer.write_all(val)?;
+            encode_binary(val, &mut temp_buffer);
         },
         PrimitiveValue::Date(val) => {
-            // Basic type = Primitive, Primitive type = Date
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Date as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_date(*val, &mut temp_buffer);
         },
         PrimitiveValue::Timestamp(val) => {
-            // Basic type = Primitive, Primitive type = Timestamp
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Timestamp as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_timestamp(*val, &mut temp_buffer);
         },
         PrimitiveValue::TimestampNTZ(val) => {
-            // Basic type = Primitive, Primitive type = TimestampNTZ
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::TimestampNTZ as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_timestamp_ntz(*val, &mut temp_buffer);
         },
         PrimitiveValue::TimeNTZ(val) => {
-            // Basic type = Primitive, Primitive type = TimeNTZ
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::TimeNTZ as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_time_ntz(*val, &mut temp_buffer);
         },
         PrimitiveValue::TimestampNanos(val) => {
-            // Basic type = Primitive, Primitive type = TimestampNanos
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::TimestampNanos as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_timestamp_nanos(*val, &mut temp_buffer);
         },
         PrimitiveValue::TimestampNTZNanos(val) => {
-            // Basic type = Primitive, Primitive type = TimestampNTZNanos
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::TimestampNTZNanos as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(&val.to_le_bytes())?;
+            encode_timestamp_ntz_nanos(*val, &mut temp_buffer);
         },
         PrimitiveValue::Uuid(val) => {
-            // Basic type = Primitive, Primitive type = Uuid
-            let header = ((VariantBasicType::Primitive as u8) & 0x03) | 
-                         ((VariantPrimitiveType::Uuid as u8) << 2);
-            buffer.write_all(&[header])?;
-            buffer.write_all(val)?;
+            encode_uuid(val, &mut temp_buffer);
         },
     }
+    
+    // Write the prepared buffer to the output
+    buffer.write_all(&temp_buffer)?;
     
     Ok(())
 }
@@ -1203,5 +1124,113 @@ mod tests {
         // Assert after the builders have been dropped
         assert!(!metadata_buffer.is_empty());
         assert!(!value_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_encoder_integration() {
+        // Create primitive values
+        let null_value = PrimitiveValue::Null;
+        let bool_value = PrimitiveValue::Boolean(true);
+        let int8_value = PrimitiveValue::Int8(42);
+        let int32_value = PrimitiveValue::Int32(12345);
+        let float_value = PrimitiveValue::Float(3.14);
+        let string_value = PrimitiveValue::String("Hello, world!".to_string());
+        
+        // Create additional test values for newly implemented encoder functions
+        let binary_value = PrimitiveValue::Binary(vec![0x01, 0x02, 0x03, 0x04]);
+        let date_value = PrimitiveValue::Date(18262); // Example date
+        let timestamp_value = PrimitiveValue::Timestamp(1618243200000); // Example timestamp
+        let timestamp_ntz_value = PrimitiveValue::TimestampNTZ(1618243200000);
+        let time_ntz_value = PrimitiveValue::TimeNTZ(43200000); // 12:00:00
+        let timestamp_nanos_value = PrimitiveValue::TimestampNanos(1618243200000000000);
+        let timestamp_ntz_nanos_value = PrimitiveValue::TimestampNTZNanos(1618243200000000000);
+        let uuid_value = PrimitiveValue::Uuid([
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF
+        ]);
+        
+        // Create test vectors using write_value (which now uses encoder functions)
+        let mut null_buffer = Vec::new();
+        let mut bool_buffer = Vec::new();
+        let mut int8_buffer = Vec::new();
+        let mut int32_buffer = Vec::new();
+        let mut float_buffer = Vec::new();
+        let mut string_buffer = Vec::new();
+        let mut binary_buffer = Vec::new();
+        let mut date_buffer = Vec::new();
+        let mut timestamp_buffer = Vec::new();
+        let mut timestamp_ntz_buffer = Vec::new();
+        let mut time_ntz_buffer = Vec::new();
+        let mut timestamp_nanos_buffer = Vec::new();
+        let mut timestamp_ntz_nanos_buffer = Vec::new();
+        let mut uuid_buffer = Vec::new();
+        
+        // Encode basic values
+        write_value(&mut null_buffer, &null_value).unwrap();
+        write_value(&mut bool_buffer, &bool_value).unwrap();
+        write_value(&mut int8_buffer, &int8_value).unwrap();
+        write_value(&mut int32_buffer, &int32_value).unwrap();
+        write_value(&mut float_buffer, &float_value).unwrap();
+        write_value(&mut string_buffer, &string_value).unwrap();
+        
+        // Encode new types
+        write_value(&mut binary_buffer, &binary_value).unwrap();
+        write_value(&mut date_buffer, &date_value).unwrap();
+        write_value(&mut timestamp_buffer, &timestamp_value).unwrap();
+        write_value(&mut timestamp_ntz_buffer, &timestamp_ntz_value).unwrap();
+        write_value(&mut time_ntz_buffer, &time_ntz_value).unwrap();
+        write_value(&mut timestamp_nanos_buffer, &timestamp_nanos_value).unwrap();
+        write_value(&mut timestamp_ntz_nanos_buffer, &timestamp_ntz_nanos_value).unwrap();
+        write_value(&mut uuid_buffer, &uuid_value).unwrap();
+        
+        // Verify encoded values are valid by decoding them
+        let keys = Vec::<String>::new();
+        
+        // Test basic values
+        let decoded_null = crate::decoder::decode_value(&null_buffer, &keys).unwrap();
+        assert!(decoded_null.is_null());
+        
+        let decoded_bool = crate::decoder::decode_value(&bool_buffer, &keys).unwrap();
+        assert_eq!(decoded_bool, serde_json::json!(true));
+        
+        let decoded_int8 = crate::decoder::decode_value(&int8_buffer, &keys).unwrap();
+        assert_eq!(decoded_int8, serde_json::json!(42));
+        
+        let decoded_int32 = crate::decoder::decode_value(&int32_buffer, &keys).unwrap();
+        assert_eq!(decoded_int32, serde_json::json!(12345));
+        
+        let decoded_float = crate::decoder::decode_value(&float_buffer, &keys).unwrap();
+        // Use is_f64 since json values may have slight precision differences
+        assert!(decoded_float.is_f64());
+        assert!((decoded_float.as_f64().unwrap() - 3.14).abs() < 1e-6);
+        
+        let decoded_string = crate::decoder::decode_value(&string_buffer, &keys).unwrap();
+        assert_eq!(decoded_string, serde_json::json!("Hello, world!"));
+        
+        // Test binary value (decoded as a string in JSON format)
+        let decoded_binary = crate::decoder::decode_value(&binary_buffer, &keys).unwrap();
+        assert!(decoded_binary.is_string());
+
+        // Date and timestamp types are converted to strings in the decoder
+        let decoded_date = crate::decoder::decode_value(&date_buffer, &keys).unwrap();
+        assert!(decoded_date.is_string());
+        
+        let decoded_timestamp = crate::decoder::decode_value(&timestamp_buffer, &keys).unwrap();
+        assert!(decoded_timestamp.is_string());
+        
+        let decoded_timestamp_ntz = crate::decoder::decode_value(&timestamp_ntz_buffer, &keys).unwrap();
+        assert!(decoded_timestamp_ntz.is_string());
+        
+        let decoded_time_ntz = crate::decoder::decode_value(&time_ntz_buffer, &keys).unwrap();
+        assert!(decoded_time_ntz.is_string());
+        
+        let decoded_timestamp_nanos = crate::decoder::decode_value(&timestamp_nanos_buffer, &keys).unwrap();
+        assert!(decoded_timestamp_nanos.is_string());
+        
+        let decoded_timestamp_ntz_nanos = crate::decoder::decode_value(&timestamp_ntz_nanos_buffer, &keys).unwrap();
+        assert!(decoded_timestamp_ntz_nanos.is_string());
+        
+        let decoded_uuid = crate::decoder::decode_value(&uuid_buffer, &keys).unwrap();
+        assert!(decoded_uuid.is_string());
     }
 } 

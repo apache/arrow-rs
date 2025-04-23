@@ -153,12 +153,12 @@ fn array_header(is_large: bool, offset_size: u8) -> u8 {
 }
 
 /// Encodes a null value
-fn encode_null(output: &mut Vec<u8>) {
+pub fn encode_null(output: &mut Vec<u8>) {
     output.push(primitive_header(VariantPrimitiveType::Null as u8));
 }
 
 /// Encodes a boolean value
-fn encode_boolean(value: bool, output: &mut Vec<u8>) {
+pub fn encode_boolean(value: bool, output: &mut Vec<u8>) {
     if value {
         output.push(primitive_header(VariantPrimitiveType::BooleanTrue as u8));
     } else {
@@ -167,7 +167,7 @@ fn encode_boolean(value: bool, output: &mut Vec<u8>) {
 }
 
 /// Encodes an integer value, choosing the smallest sufficient type
-fn encode_integer(value: i64, output: &mut Vec<u8>) {
+pub fn encode_integer(value: i64, output: &mut Vec<u8>) {
     if value >= -128 && value <= 127 {
         // Int8
         output.push(primitive_header(VariantPrimitiveType::Int8 as u8));
@@ -188,13 +188,13 @@ fn encode_integer(value: i64, output: &mut Vec<u8>) {
 }
 
 /// Encodes a float value
-fn encode_float(value: f64, output: &mut Vec<u8>) {
+pub fn encode_float(value: f64, output: &mut Vec<u8>) {
     output.push(primitive_header(VariantPrimitiveType::Double as u8));
     output.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Encodes a string value
-fn encode_string(value: &str, output: &mut Vec<u8>) {
+pub fn encode_string(value: &str, output: &mut Vec<u8>) {
     let bytes = value.as_bytes();
     let len = bytes.len();
     
@@ -214,6 +214,74 @@ fn encode_string(value: &str, output: &mut Vec<u8>) {
         // Write string bytes
         output.extend_from_slice(bytes);
     }
+}
+
+/// Encodes a binary value
+pub fn encode_binary(value: &[u8], output: &mut Vec<u8>) {
+    // Use primitive + binary type
+    let header = primitive_header(VariantPrimitiveType::Binary as u8);
+    output.push(header);
+    
+    // Write length followed by bytes
+    let len = value.len() as u32;
+    output.extend_from_slice(&len.to_le_bytes());
+    output.extend_from_slice(value);
+}
+
+/// Encodes a date value (days since epoch)
+pub fn encode_date(value: i32, output: &mut Vec<u8>) {
+    // Use primitive + date type
+    let header = primitive_header(VariantPrimitiveType::Date as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a timestamp value (milliseconds since epoch)
+pub fn encode_timestamp(value: i64, output: &mut Vec<u8>) {
+    // Use primitive + timestamp type
+    let header = primitive_header(VariantPrimitiveType::Timestamp as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a timestamp without timezone value (milliseconds since epoch)
+pub fn encode_timestamp_ntz(value: i64, output: &mut Vec<u8>) {
+    // Use primitive + timestamp_ntz type
+    let header = primitive_header(VariantPrimitiveType::TimestampNTZ as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a time without timezone value (milliseconds)
+pub fn encode_time_ntz(value: i64, output: &mut Vec<u8>) {
+    // Use primitive + time_ntz type
+    let header = primitive_header(VariantPrimitiveType::TimeNTZ as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a timestamp with nanosecond precision
+pub fn encode_timestamp_nanos(value: i64, output: &mut Vec<u8>) {
+    // Use primitive + timestamp_nanos type
+    let header = primitive_header(VariantPrimitiveType::TimestampNanos as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a timestamp without timezone with nanosecond precision
+pub fn encode_timestamp_ntz_nanos(value: i64, output: &mut Vec<u8>) {
+    // Use primitive + timestamp_ntz_nanos type
+    let header = primitive_header(VariantPrimitiveType::TimestampNTZNanos as u8);
+    output.push(header);
+    output.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Encodes a UUID value
+pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
+    // Use primitive + uuid type
+    let header = primitive_header(VariantPrimitiveType::Uuid as u8);
+    output.push(header);
+    output.extend_from_slice(value);
 }
 
 /// Encodes an array value
