@@ -146,7 +146,9 @@ impl StructArray {
 
             if !f.is_nullable() {
                 if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default() {
+                    if a.null_count() > 0
+                        && !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                    {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Found unmasked nulls for non-nullable StructArray field {:?}",
                             f.name()
