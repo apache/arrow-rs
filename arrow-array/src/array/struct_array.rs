@@ -855,6 +855,7 @@ mod tests {
         let array = Int32Array::new(values.into(), Some(nulls));
         let child = Arc::new(array) as ArrayRef;
         assert!(child.logical_nulls().is_some());
+        assert_eq!(child.logical_nulls().unwrap().null_count(), 0);
 
         let fields = Fields::from(vec![field]);
         let arrays = vec![child];
