@@ -438,7 +438,7 @@ fn test_write_non_uniform_encryption() {
 #[test]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
 
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
     let column_1_key = b"1234567890123450".to_vec();
@@ -455,26 +455,7 @@ fn test_write_uniform_encryption_plaintext_footer() {
         .build()
         .unwrap();
 
-    let file = File::open(path).unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-
-    let props = WriterProperties::builder()
-        .with_file_encryption_properties(file_encryption_properties)
-        .build();
-    let temp_file = tempfile::tempfile().unwrap();
-
-    let writer = ArrowWriter::try_new(
-        temp_file.try_clone().unwrap(),
-        metadata.schema().clone(),
-        Some(props),
-    );
-    assert!(writer.is_err());
-    assert_eq!(
-        writer.unwrap_err().to_string(),
-        "Parquet error: Writing encrypted files with plaintext footers is not supported yet"
-    )
+    read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
 
 #[test]
