@@ -3348,7 +3348,7 @@ mod tests {
         // own Hasher for the implementation used for metadata, run the above
         // code 20x and verify it does not change. This is not perfect but it
         // should be good enough.
-        let all_passed = [0..20].into_iter().all(|_| create_hash() == expected);
+        let all_passed = (0..20).all(|_| create_hash() == expected);
         assert!(all_passed);
     }
 }
