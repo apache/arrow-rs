@@ -33,8 +33,8 @@
 //! // Create an object
 //! let mut value_buffer = vec![];
 //! let mut object_builder = builder.new_object(&mut value_buffer);
-//! object_builder.append_value("foo", PrimitiveValue::Int32(1));
-//! object_builder.append_value("bar", PrimitiveValue::Int32(100));
+//! object_builder.append_value("foo", 1);
+//! object_builder.append_value("bar", 100);
 //! object_builder.finish();
 //! 
 //! // value_buffer now contains a valid variant value
@@ -43,8 +43,8 @@
 //! // Create another object reusing the same metadata
 //! let mut value_buffer2 = vec![];
 //! let mut object_builder2 = builder.new_object(&mut value_buffer2);
-//! object_builder2.append_value("foo", PrimitiveValue::Int32(2));
-//! object_builder2.append_value("bar", PrimitiveValue::Int32(200));
+//! object_builder2.append_value("foo", 2);
+//! object_builder2.append_value("bar", 200);
 //! object_builder2.finish();
 //! 
 //! // Finalize the metadata
@@ -61,7 +61,8 @@ use crate::encoder::{
     VariantBasicType, 
     encode_null, encode_boolean, encode_integer, encode_float, encode_string,
     encode_binary, encode_date, encode_timestamp, encode_timestamp_ntz, 
-    encode_time_ntz, encode_timestamp_nanos, encode_timestamp_ntz_nanos, encode_uuid
+    encode_time_ntz, encode_timestamp_nanos, encode_timestamp_ntz_nanos, encode_uuid,
+    encode_object_from_pre_encoded, encode_array_from_pre_encoded
 };
 
 /// Values that can be stored in a Variant.
@@ -509,8 +510,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             field_values.push(value.as_slice());
         }
         
-        // Use the helper function to encode the object
-        if let Err(e) = encode_object_to_writer(&field_ids, &field_values, &mut temp_buffer) {
+        // Use the encoder function to encode the object
+        if let Err(e) = encode_object_from_pre_encoded(&field_ids, &field_values, &mut temp_buffer) {
             panic!("Failed to encode object: {}", e);
         }
         
@@ -640,8 +641,8 @@ impl<'a, 'b> ArrayBuilder<'a, 'b> {
             .map(|v| v.as_slice())
             .collect();
         
-        // Use the helper function to encode the array
-        if let Err(e) = encode_array_to_writer(&values, &mut temp_buffer) {
+        // Use the encoder function to encode the array
+        if let Err(e) = encode_array_from_pre_encoded(&values, &mut temp_buffer) {
             panic!("Failed to encode array: {}", e);
         }
         
@@ -733,173 +734,6 @@ fn get_min_integer_size(value: usize) -> usize {
     } else {
         4
     }
-}
-
-/// Encodes an object using the correct encoder logic
-fn encode_object_to_writer(
-    field_ids: &[usize],
-    field_values: &[&[u8]],
-    output: &mut impl Write
-) -> Result<(), ArrowError> {
-    let len = field_ids.len();
-    
-    // Determine if we need large size encoding
-    let is_large = len > 255;
-    
-    // Calculate total value size to determine offset_size
-    let mut data_size = 0;
-    for value in field_values {
-        data_size += value.len();
-    }
-    
-    // Determine minimum sizes needed
-    let id_size = if field_ids.is_empty() { 1 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &255 { 1 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &65535 { 2 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &16777215 { 3 }
-                  else { 4 };
-                  
-    let offset_size = if data_size <= 255 { 1 }
-                      else if data_size <= 65535 { 2 }
-                      else if data_size <= 16777215 { 3 }
-                      else { 4 };
-    
-    // Write object header with correct flags
-    let header = object_header(is_large, id_size, offset_size);
-    output.write_all(&[header])?;
-    
-    // Write length as 1 or 4 bytes
-    if is_large {
-        output.write_all(&(len as u32).to_le_bytes())?;
-    } else {
-        output.write_all(&[len as u8])?;
-    }
-    
-    // Write field IDs
-    for id in field_ids {
-        match id_size {
-            1 => output.write_all(&[*id as u8])?,
-            2 => output.write_all(&(*id as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*id & 0xFF) as u8])?;
-                output.write_all(&[((*id >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*id >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*id as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
-    }
-    
-    // Calculate and write offsets
-    let mut offsets = Vec::with_capacity(len + 1);
-    let mut current_offset = 0u32;
-    
-    offsets.push(current_offset);
-    for value in field_values {
-        current_offset += value.len() as u32;
-        offsets.push(current_offset);
-    }
-    
-    for offset in &offsets {
-        match offset_size {
-            1 => output.write_all(&[*offset as u8])?,
-            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*offset & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
-    }
-    
-    // Write values
-    for value in field_values {
-        output.write_all(value)?;
-    }
-    
-    Ok(())
-}
-
-/// Encodes an array using the correct encoder logic
-fn encode_array_to_writer(
-    values: &[&[u8]],
-    output: &mut impl Write
-) -> Result<(), ArrowError> {
-    let len = values.len();
-    
-    // Determine if we need large size encoding
-    let is_large = len > 255;
-    
-    // Calculate total value size to determine offset_size
-    let mut data_size = 0;
-    for value in values {
-        data_size += value.len();
-    }
-    
-    // Determine minimum offset size
-    let offset_size = if data_size <= 255 { 1 } 
-                      else if data_size <= 65535 { 2 }
-                      else if data_size <= 16777215 { 3 }
-                      else { 4 };
-    
-    // Write array header with correct flags
-    let header = array_header(is_large, offset_size);
-    output.write_all(&[header])?;
-    
-    // Write length as 1 or 4 bytes
-    if is_large {
-        output.write_all(&(len as u32).to_le_bytes())?;
-    } else {
-        output.write_all(&[len as u8])?;
-    }
-    
-    // Calculate and write offsets
-    let mut offsets = Vec::with_capacity(len + 1);
-    let mut current_offset = 0u32;
-    
-    offsets.push(current_offset);
-    for value in values {
-        current_offset += value.len() as u32;
-        offsets.push(current_offset);
-    }
-    
-    for offset in &offsets {
-        match offset_size {
-            1 => output.write_all(&[*offset as u8])?,
-            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*offset & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
-    }
-    
-    // Write values
-    for value in values {
-        output.write_all(value)?;
-    }
-    
-    Ok(())
-}
-
-/// Creates a header byte for an object value with the correct format according to the encoding spec
-fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
-    ((is_large as u8) << 6) | 
-    ((id_size - 1) << 4) | 
-    ((offset_size - 1) << 2) | 
-    VariantBasicType::Object as u8
-}
-
-/// Creates a header byte for an array value with the correct format according to the encoding spec
-fn array_header(is_large: bool, offset_size: u8) -> u8 {
-    ((is_large as u8) << 4) | 
-    ((offset_size - 1) << 2) | 
-    VariantBasicType::Array as u8
 }
 
 /// Creates a simple variant object.
@@ -1464,5 +1298,51 @@ mod tests {
         
         // If we have a decoder function, we could call it here to validate
         // the full round-trip decoding
+    }
+
+    #[test]
+    fn test_metadata_reuse() {
+        // Create a shared metadata buffer
+        let mut metadata_buffer = vec![];
+        
+        // Create two value buffers
+        let mut value_buffer1 = vec![];
+        let mut value_buffer2 = vec![];
+        
+        // Use a scope to manage borrows
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            
+            // Create first object with keys "foo" and "bar"
+            {
+                let mut object_builder = builder.new_object(&mut value_buffer1);
+                object_builder.append_value("foo", 1);
+                object_builder.append_value("bar", 100);
+                object_builder.finish();
+            }
+            
+            // Create second object reusing the same metadata keys
+            {
+                let mut object_builder = builder.new_object(&mut value_buffer2);
+                object_builder.append_value("foo", 2);
+                object_builder.append_value("bar", 200);
+                object_builder.finish();
+            }
+            
+            // Finalize the metadata
+            builder.finish();
+        }
+        
+        // Create two variant objects with the same metadata
+        let variant1 = Variant::new(metadata_buffer.clone(), value_buffer1);
+        let variant2 = Variant::new(metadata_buffer, value_buffer2);
+        
+        // Validate the variants have valid data
+        assert!(!variant1.metadata().is_empty());
+        assert!(!variant1.value().is_empty());
+        assert!(!variant2.metadata().is_empty());
+        assert!(!variant2.value().is_empty());
+
+        assert_eq!(variant1.metadata(), variant2.metadata());
     }
 } 

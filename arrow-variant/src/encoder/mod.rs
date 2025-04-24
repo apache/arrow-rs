@@ -20,6 +20,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use arrow_schema::ArrowError;
+use std::io::Write;
 
 /// Variant basic types as defined in the Arrow Variant specification
 /// 
@@ -127,13 +128,13 @@ fn short_str_header(size: u8) -> u8 {
 }
 
 /// Creates a header byte for an object value
-/// 
+///
 /// The header byte contains:
 /// - Basic type (2 bits) in the lower bits
 /// - is_large (1 bit) at position 6
 /// - field_id_size_minus_one (2 bits) at positions 4-5
 /// - field_offset_size_minus_one (2 bits) at positions 2-3
-fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
+pub fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
     ((is_large as u8) << 6) | 
     ((id_size - 1) << 4) | 
     ((offset_size - 1) << 2) | 
@@ -141,12 +142,12 @@ fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
 }
 
 /// Creates a header byte for an array value
-/// 
+///
 /// The header byte contains:
 /// - Basic type (2 bits) in the lower bits
 /// - is_large (1 bit) at position 4
 /// - field_offset_size_minus_one (2 bits) at positions 2-3
-fn array_header(is_large: bool, offset_size: u8) -> u8 {
+pub fn array_header(is_large: bool, offset_size: u8) -> u8 {
     ((is_large as u8) << 4) | 
     ((offset_size - 1) << 2) | 
     VariantBasicType::Array as u8
@@ -288,78 +289,34 @@ pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
 fn encode_array(array: &[Value], output: &mut Vec<u8>, key_mapping: &HashMap<String, usize>) -> Result<(), ArrowError> {
     let len = array.len();
     
-    // Determine if we need large size encoding
-    let is_large = len > 255;
-    
-    // First pass to calculate offsets and collect encoded values
+    // First pass to collect encoded values
     let mut temp_outputs = Vec::with_capacity(len);
-    let mut offsets = Vec::with_capacity(len + 1);
-    offsets.push(0);
     
-    let mut max_offset = 0;
     for value in array {
         let mut temp_output = Vec::new();
         encode_value(value, &mut temp_output, key_mapping)?;
-        max_offset += temp_output.len();
-        offsets.push(max_offset);
         temp_outputs.push(temp_output);
     }
     
-    // Determine minimum offset size
-    let offset_size = if max_offset <= 255 { 1 } 
-                      else if max_offset <= 65535 { 2 }
-                      else { 3 };
+    // Convert to slices for encoding
+    let value_slices: Vec<&[u8]> = temp_outputs.iter()
+        .map(|v| v.as_slice())
+        .collect();
     
-    // Write array header
-    output.push(array_header(is_large, offset_size));
-    
-    // Write length as 1 or 4 bytes
-    if is_large {
-        output.extend_from_slice(&(len as u32).to_le_bytes());
-    } else {
-        output.push(len as u8);
-    }
-    
-    // Write offsets
-    for offset in &offsets {
-        match offset_size {
-            1 => output.push(*offset as u8),
-            2 => output.extend_from_slice(&(*offset as u16).to_le_bytes()),
-            3 => {
-                output.push((*offset & 0xFF) as u8);
-                output.push(((*offset >> 8) & 0xFF) as u8);
-                output.push(((*offset >> 16) & 0xFF) as u8);
-            },
-            _ => unreachable!(),
-        }
-    }
-    
-    // Write values
-    for temp_output in temp_outputs {
-        output.extend_from_slice(&temp_output);
-    }
-    
-    Ok(())
+    // Use the core encoding function
+    encode_array_from_pre_encoded(&value_slices, output)
 }
 
 /// Encodes an object value
 fn encode_object(obj: &serde_json::Map<String, Value>, output: &mut Vec<u8>, key_mapping: &HashMap<String, usize>) -> Result<(), ArrowError> {
-    let len = obj.len();
-    
-    // Determine if we need large size encoding
-    let is_large = len > 255;
-    
     // Collect and sort fields by key
     let mut fields: Vec<_> = obj.iter().collect();
     fields.sort_by(|a, b| a.0.cmp(b.0));
     
-    // First pass to calculate offsets and collect encoded values
-    let mut field_ids = Vec::with_capacity(len);
-    let mut temp_outputs = Vec::with_capacity(len);
-    let mut offsets = Vec::with_capacity(len + 1);
-    offsets.push(0);
+    // First pass to collect field IDs and encoded values
+    let mut field_ids = Vec::with_capacity(fields.len());
+    let mut temp_outputs = Vec::with_capacity(fields.len());
     
-    let mut data_size = 0;
     for (key, value) in &fields {
         let field_id = key_mapping.get(key.as_str())
             .ok_or_else(|| ArrowError::SchemaError(format!("Key not found in mapping: {}", key)))?;
@@ -367,68 +324,16 @@ fn encode_object(obj: &serde_json::Map<String, Value>, output: &mut Vec<u8>, key
         
         let mut temp_output = Vec::new();
         encode_value(value, &mut temp_output, key_mapping)?;
-        data_size += temp_output.len();
-        offsets.push(data_size);
         temp_outputs.push(temp_output);
     }
     
-    // Determine minimum sizes needed - use size 1 for empty objects
-    let id_size = if field_ids.is_empty() { 1 }
-                  else if field_ids.iter().max().unwrap() <= &255 { 1 }
-                  else if field_ids.iter().max().unwrap() <= &65535 { 2 }
-                  else if field_ids.iter().max().unwrap() <= &16777215 { 3 }
-                  else { 4 };
-                  
-    let offset_size = if data_size <= 255 { 1 }
-                      else if data_size <= 65535 { 2 }
-                      else { 3 };
+    // Convert to slices for encoding
+    let value_slices: Vec<&[u8]> = temp_outputs.iter()
+        .map(|v| v.as_slice())
+        .collect();
     
-    // Write object header
-    output.push(object_header(is_large, id_size, offset_size));
-    
-    // Write length as 1 or 4 bytes
-    if is_large {
-        output.extend_from_slice(&(len as u32).to_le_bytes());
-    } else {
-        output.push(len as u8);
-    }
-    
-    // Write field IDs
-    for id in &field_ids {
-        match id_size {
-            1 => output.push(*id as u8),
-            2 => output.extend_from_slice(&(*id as u16).to_le_bytes()),
-            3 => {
-                output.push((*id & 0xFF) as u8);
-                output.push(((*id >> 8) & 0xFF) as u8);
-                output.push(((*id >> 16) & 0xFF) as u8);
-            },
-            4 => output.extend_from_slice(&(*id as u32).to_le_bytes()),
-            _ => unreachable!(),
-        }
-    }
-    
-    // Write offsets
-    for offset in &offsets {
-        match offset_size {
-            1 => output.push(*offset as u8),
-            2 => output.extend_from_slice(&(*offset as u16).to_le_bytes()),
-            3 => {
-                output.push((*offset & 0xFF) as u8);
-                output.push(((*offset >> 8) & 0xFF) as u8);
-                output.push(((*offset >> 16) & 0xFF) as u8);
-            },
-            4 => output.extend_from_slice(&(*offset as u32).to_le_bytes()),
-            _ => unreachable!(),
-        }
-    }
-    
-    // Write values
-    for temp_output in temp_outputs {
-        output.extend_from_slice(&temp_output);
-    }
-    
-    Ok(())
+    // Use the core encoding function
+    encode_object_from_pre_encoded(&field_ids, &value_slices, output)
 }
 
 /// Encodes a JSON value to Variant binary format
@@ -458,6 +363,175 @@ pub fn encode_json(json: &Value, key_mapping: &HashMap<String, usize>) -> Result
     let mut output = Vec::new();
     encode_value(json, &mut output, key_mapping)?;
     Ok(output)
+}
+
+/// Encodes a pre-encoded array to the Variant binary format
+///
+/// This function takes an array of pre-encoded values and writes a properly formatted
+/// array according to the Arrow Variant encoding specification.
+///
+/// # Arguments
+///
+/// * `values` - A slice of byte slices containing pre-encoded variant values
+/// * `output` - The destination to write the encoded array
+pub fn encode_array_from_pre_encoded(
+    values: &[&[u8]],
+    output: &mut impl Write
+) -> Result<(), ArrowError> {
+    let len = values.len();
+    
+    // Determine if we need large size encoding
+    let is_large = len > 255;
+    
+    // Calculate total value size to determine offset_size
+    let mut data_size = 0;
+    for value in values {
+        data_size += value.len();
+    }
+    
+    // Determine minimum offset size
+    let offset_size = if data_size <= 255 { 1 } 
+                      else if data_size <= 65535 { 2 }
+                      else if data_size <= 16777215 { 3 }
+                      else { 4 };
+    
+    // Write array header with correct flags
+    let header = array_header(is_large, offset_size);
+    output.write_all(&[header])?;
+    
+    // Write length as 1 or 4 bytes
+    if is_large {
+        output.write_all(&(len as u32).to_le_bytes())?;
+    } else {
+        output.write_all(&[len as u8])?;
+    }
+    
+    // Calculate and write offsets
+    let mut offsets = Vec::with_capacity(len + 1);
+    let mut current_offset = 0u32;
+    
+    offsets.push(current_offset);
+    for value in values {
+        current_offset += value.len() as u32;
+        offsets.push(current_offset);
+    }
+    
+    for offset in &offsets {
+        match offset_size {
+            1 => output.write_all(&[*offset as u8])?,
+            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
+            3 => {
+                output.write_all(&[(*offset & 0xFF) as u8])?;
+                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
+                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
+            },
+            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
+            _ => unreachable!(),
+        }
+    }
+    
+    // Write values
+    for value in values {
+        output.write_all(value)?;
+    }
+    
+    Ok(())
+}
+
+/// Encodes a pre-encoded object to the Variant binary format
+///
+/// This function takes a collection of field IDs and pre-encoded values and writes a properly
+/// formatted object according to the Arrow Variant encoding specification.
+///
+/// # Arguments
+///
+/// * `field_ids` - A slice of field IDs corresponding to keys in the dictionary
+/// * `field_values` - A slice of byte slices containing pre-encoded variant values
+/// * `output` - The destination to write the encoded object
+pub fn encode_object_from_pre_encoded(
+    field_ids: &[usize],
+    field_values: &[&[u8]],
+    output: &mut impl Write
+) -> Result<(), ArrowError> {
+    let len = field_ids.len();
+    
+    // Determine if we need large size encoding
+    let is_large = len > 255;
+    
+    // Calculate total value size to determine offset_size
+    let mut data_size = 0;
+    for value in field_values {
+        data_size += value.len();
+    }
+    
+    // Determine minimum sizes needed
+    let id_size = if field_ids.is_empty() { 1 }
+                  else if field_ids.iter().max().unwrap_or(&0) <= &255 { 1 }
+                  else if field_ids.iter().max().unwrap_or(&0) <= &65535 { 2 }
+                  else if field_ids.iter().max().unwrap_or(&0) <= &16777215 { 3 }
+                  else { 4 };
+                  
+    let offset_size = if data_size <= 255 { 1 }
+                      else if data_size <= 65535 { 2 }
+                      else if data_size <= 16777215 { 3 }
+                      else { 4 };
+    
+    // Write object header with correct flags
+    let header = object_header(is_large, id_size, offset_size);
+    output.write_all(&[header])?;
+    
+    // Write length as 1 or 4 bytes
+    if is_large {
+        output.write_all(&(len as u32).to_le_bytes())?;
+    } else {
+        output.write_all(&[len as u8])?;
+    }
+    
+    // Write field IDs
+    for id in field_ids {
+        match id_size {
+            1 => output.write_all(&[*id as u8])?,
+            2 => output.write_all(&(*id as u16).to_le_bytes())?,
+            3 => {
+                output.write_all(&[(*id & 0xFF) as u8])?;
+                output.write_all(&[((*id >> 8) & 0xFF) as u8])?;
+                output.write_all(&[((*id >> 16) & 0xFF) as u8])?;
+            },
+            4 => output.write_all(&(*id as u32).to_le_bytes())?,
+            _ => unreachable!(),
+        }
+    }
+    
+    // Calculate and write offsets
+    let mut offsets = Vec::with_capacity(len + 1);
+    let mut current_offset = 0u32;
+    
+    offsets.push(current_offset);
+    for value in field_values {
+        current_offset += value.len() as u32;
+        offsets.push(current_offset);
+    }
+    
+    for offset in &offsets {
+        match offset_size {
+            1 => output.write_all(&[*offset as u8])?,
+            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
+            3 => {
+                output.write_all(&[(*offset & 0xFF) as u8])?;
+                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
+                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
+            },
+            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
+            _ => unreachable!(),
+        }
+    }
+    
+    // Write values
+    for value in field_values {
+        output.write_all(value)?;
+    }
+    
+    Ok(())
 }
 
 #[cfg(test)]
