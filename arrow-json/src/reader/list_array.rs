@@ -24,6 +24,9 @@ use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::marker::PhantomData;
+use std::sync::Arc;
+
+use super::DecoderFactory;
 
 pub struct ListArrayDecoder<O> {
     data_type: DataType,
@@ -39,6 +42,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
+        decoder_factory: Option<Arc<dyn DecoderFactory>>,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
             DataType::List(f) if !O::IS_LARGE => f,
@@ -51,6 +55,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             strict_mode,
             field.is_nullable(),
             struct_mode,
+            decoder_factory,
         )?;
 
         Ok(Self {
