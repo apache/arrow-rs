@@ -349,6 +349,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         );
 
         #[cfg(feature = "encryption")]
+        // todo
         {
             encoder = encoder.with_file_encryptor(self.file_encryptor.clone());
         }
