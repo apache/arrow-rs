@@ -17,7 +17,7 @@
 
 //! Configuration and utilities for Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
+use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor, NONCE_LEN, SIZE_LEN, TAG_LEN};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
@@ -371,6 +371,30 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
 ) -> Result<()> {
     let encrypted_buffer = encrypt_object_to_vec(object, encryptor, module_aad)?;
     sink.write_all(&encrypted_buffer)?;
+    Ok(())
+}
+
+pub(crate) fn sign_and_write_object<T: TSerializable, W: Write>(
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
+    sink: &mut W,
+    module_aad: &[u8],
+) -> Result<()> {
+    let mut buffer: Vec<u8> = vec![];
+    {
+        let mut protocol = TCompactOutputProtocol::new(&mut buffer);
+        object.write_to_out_protocol(&mut protocol)?;
+    }
+    let plaintext_len = buffer.len();
+    sink.write_all(&buffer)?;
+
+    let encrypted_buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
+ 
+    // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
+    let nonce = encrypted_buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN].to_vec();
+    let tag = encrypted_buffer[SIZE_LEN + NONCE_LEN + plaintext_len..SIZE_LEN + NONCE_LEN + plaintext_len + TAG_LEN].to_vec();
+    sink.write_all(&nonce)?;
+    sink.write_all(&tag)?;
     Ok(())
 }
 

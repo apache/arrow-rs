@@ -16,9 +16,7 @@
 // under the License.
 
 #[cfg(feature = "encryption")]
-use crate::encryption::ciphers::{NONCE_LEN, SIZE_LEN, TAG_LEN};
-#[cfg(feature = "encryption")]
-use crate::encryption::encrypt::{encrypt_object, encrypt_object_to_vec, FileEncryptor};
+use crate::encryption::encrypt::{encrypt_object, encrypt_object_to_vec, sign_and_write_object, FileEncryptor};
 #[cfg(feature = "encryption")]
 use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 #[cfg(feature = "encryption")]
@@ -507,35 +505,9 @@ impl MetadataObjectWriter {
             }
             Some(file_encryptor) if !file_encryptor.properties().encrypt_footer() => {
                 // todo: should we also check for file_metadata.encryption_algorithm.is_some() ?
-                // Write unencrypted footer
-                let data_len: usize;
-                {
-                    let mut buffer: Vec<u8> = vec![];
-                    let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
-                    file_metadata.write_to_out_protocol(&mut unencrypted_protocol)?;
-                    data_len = buffer.len();
-                    sink.write_all(&buffer)?;
-                }
-
-                // Write nonce and tag
-                {
-                    let mut encrypted_buffer: Vec<u8> = vec![];
-                    let aad = create_footer_aad(file_encryptor.file_aad())?;
-                    let mut encryptor = file_encryptor.get_footer_encryptor()?;
-
-                    let mut protocol = TCompactOutputProtocol::new(&mut encrypted_buffer);
-                    file_metadata.write_to_out_protocol(&mut protocol)?;
-                    encryptor.encrypt(encrypted_buffer.as_ref(), &aad)?;
-
-                    // todo: check for overflow when calculating lengths
-                    let nonce =
-                        &encrypted_buffer[SIZE_LEN + data_len..SIZE_LEN + data_len + NONCE_LEN];
-                    sink.write_all(nonce)?;
-                    let tag = &encrypted_buffer[SIZE_LEN + data_len + NONCE_LEN
-                        ..SIZE_LEN + data_len + NONCE_LEN + TAG_LEN];
-                    sink.write_all(tag)?;
-                }
-                Ok(())
+                let aad = create_footer_aad(file_encryptor.file_aad())?;
+                let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                sign_and_write_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
             _ => Self::write_object(file_metadata, &mut sink),
         }
