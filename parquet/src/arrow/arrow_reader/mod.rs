@@ -42,6 +42,7 @@ use crate::schema::types::SchemaDescriptor;
 mod filter;
 mod selection;
 pub mod statistics;
+mod boolean_selector;
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
