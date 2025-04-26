@@ -996,7 +996,9 @@ pub(crate) fn evaluate_predicate(
         };
     }
 
-    let raw = RowSelection::from_filters(&filters);
+    // let raw = RowSelection::from_filters(&filters);
+    // Testing using
+    let raw = RowSelection::from_filters_as_bitmap(&filters);
     Ok(match input_selection {
         Some(selection) => selection.and_then(&raw),
         None => raw,

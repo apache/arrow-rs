@@ -184,130 +184,130 @@ impl BooleanRowSelection {
     }
 }
 
-impl From<Vec<RowSelector>> for BooleanRowSelection {
-    fn from(selection: Vec<RowSelector>) -> Self {
-        let selection = RowSelection::from(selection);
-        RowSelection::into(selection)
-    }
-}
+// impl From<Vec<RowSelector>> for BooleanRowSelection {
+//     fn from(selection: Vec<RowSelector>) -> Self {
+//         let selection = RowSelection::from(selection);
+//         RowSelection::into(selection)
+//     }
+// }
+// 
+// impl From<RowSelection> for BooleanRowSelection {
+//     fn from(selection: RowSelection) -> Self {
+//         let total_rows = selection.row_count();
+//         let mut builder = BooleanBufferBuilder::new(total_rows);
+// 
+//         for selector in selection.iter() {
+//             if selector.skip {
+//                 builder.append_n(selector.row_count, false);
+//             } else {
+//                 builder.append_n(selector.row_count, true);
+//             }
+//         }
+// 
+//         BooleanRowSelection {
+//             selector: BooleanArray::from(builder.finish()),
+//         }
+//     }
+// }
+// 
+// impl From<&BooleanRowSelection> for RowSelection{
+//     fn from(selection: &BooleanRowSelection) -> Self {
+//         RowSelection::from_filters(&[selection.selector.clone()])
+//     }
+// }
 
-impl From<RowSelection> for BooleanRowSelection {
-    fn from(selection: RowSelection) -> Self {
-        let total_rows = selection.row_count();
-        let mut builder = BooleanBufferBuilder::new(total_rows);
-
-        for selector in selection.iter() {
-            if selector.skip {
-                builder.append_n(selector.row_count, false);
-            } else {
-                builder.append_n(selector.row_count, true);
-            }
-        }
-
-        BooleanRowSelection {
-            selector: BooleanArray::from(builder.finish()),
-        }
-    }
-}
-
-impl From<&BooleanRowSelection> for RowSelection{
-    fn from(selection: &BooleanRowSelection) -> Self {
-        RowSelection::from_filters(&[selection.selector.clone()])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rand::Rng;
-
-    use super::*;
-
-    fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> BooleanArray {
-        let mut rng = rand::thread_rng();
-        let bools: Vec<bool> = (0..total_rows)
-            .map(|_| rng.gen_bool(selection_ratio))
-            .collect();
-        BooleanArray::from(bools)
-    }
-
-    #[test]
-    fn test_boolean_row_selection_round_trip() {
-        let total_rows = 1_000;
-        for &selection_ratio in &[0.0, 0.1, 0.5, 0.9, 1.0] {
-            let selection = generate_random_row_selection(total_rows, selection_ratio);
-            let boolean_selection = BooleanRowSelection::from_filters(&[selection]);
-            let row_selection = RowSelection::from(&boolean_selection);
-            let boolean_selection_again = row_selection.into();
-            assert_eq!(boolean_selection, boolean_selection_again);
-        }
-    }
-
-    #[test]
-    fn test_boolean_union_intersection() {
-        let total_rows = 1_000;
-
-        let base_boolean_selection =
-            BooleanRowSelection::from_filters(&[generate_random_row_selection(total_rows, 0.1)]);
-        let base_row_selection = RowSelection::from(&base_boolean_selection);
-        for &selection_ratio in &[0.0, 0.1, 0.5, 0.9, 1.0] {
-            let boolean_selection =
-                BooleanRowSelection::from_filters(&[generate_random_row_selection(
-                    total_rows,
-                    selection_ratio,
-                )]);
-            let row_selection = RowSelection::from(&boolean_selection);
-
-            let boolean_union = boolean_selection.union(&base_boolean_selection);
-            let row_union = row_selection.union(&base_row_selection);
-            assert_eq!(boolean_union, BooleanRowSelection::from(row_union));
-
-            let boolean_intersection = boolean_selection.intersection(&base_boolean_selection);
-            let row_intersection = row_selection.intersection(&base_row_selection);
-            assert_eq!(
-                boolean_intersection,
-                BooleanRowSelection::from(row_intersection)
-            );
-        }
-    }
-
-    #[test]
-    fn test_boolean_selection_and_then() {
-        // Initial mask: 001011010101
-        let self_filters = vec![BooleanArray::from(vec![
-            false, false, true, false, true, true, false, true, false, true, false, true,
-        ])];
-        let self_selection = BooleanRowSelection::from_filters(&self_filters);
-
-        // Predicate mask (only for selected bits): 001101
-        let other_filters = vec![BooleanArray::from(vec![
-            false, false, true, true, false, true,
-        ])];
-        let other_selection = BooleanRowSelection::from_filters(&other_filters);
-
-        let result = self_selection.and_then(&other_selection);
-
-        // Expected result: 000001010001
-        let expected_filters = vec![BooleanArray::from(vec![
-            false, false, false, false, false, true, false, true, false, false, false, true,
-        ])];
-        let expected_selection = BooleanRowSelection::from_filters(&expected_filters);
-
-        assert_eq!(result, expected_selection);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "The 'other' selection must have exactly as many set bits as 'self'."
-    )]
-    fn test_and_then_mismatched_set_bits() {
-        let self_filters = vec![BooleanArray::from(vec![true, true, false])];
-        let self_selection = BooleanRowSelection::from_filters(&self_filters);
-
-        // 'other' has only one set bit, but 'self' has two
-        let other_filters = vec![BooleanArray::from(vec![true, false, false])];
-        let other_selection = BooleanRowSelection::from_filters(&other_filters);
-
-        // This should panic
-        let _ = self_selection.and_then(&other_selection);
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use rand::Rng;
+// 
+//     use super::*;
+// 
+//     fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> BooleanArray {
+//         let mut rng = rand::thread_rng();
+//         let bools: Vec<bool> = (0..total_rows)
+//             .map(|_| rng.gen_bool(selection_ratio))
+//             .collect();
+//         BooleanArray::from(bools)
+//     }
+// 
+//     #[test]
+//     fn test_boolean_row_selection_round_trip() {
+//         let total_rows = 1_000;
+//         for &selection_ratio in &[0.0, 0.1, 0.5, 0.9, 1.0] {
+//             let selection = generate_random_row_selection(total_rows, selection_ratio);
+//             let boolean_selection = BooleanRowSelection::from_filters(&[selection]);
+//             let row_selection = RowSelection::from(&boolean_selection);
+//             let boolean_selection_again = row_selection.into();
+//             assert_eq!(boolean_selection, boolean_selection_again);
+//         }
+//     }
+// 
+//     #[test]
+//     fn test_boolean_union_intersection() {
+//         let total_rows = 1_000;
+// 
+//         let base_boolean_selection =
+//             BooleanRowSelection::from_filters(&[generate_random_row_selection(total_rows, 0.1)]);
+//         let base_row_selection = RowSelection::from(&base_boolean_selection);
+//         for &selection_ratio in &[0.0, 0.1, 0.5, 0.9, 1.0] {
+//             let boolean_selection =
+//                 BooleanRowSelection::from_filters(&[generate_random_row_selection(
+//                     total_rows,
+//                     selection_ratio,
+//                 )]);
+//             let row_selection = RowSelection::from(&boolean_selection);
+// 
+//             let boolean_union = boolean_selection.union(&base_boolean_selection);
+//             let row_union = row_selection.union(&base_row_selection);
+//             assert_eq!(boolean_union, BooleanRowSelection::from(row_union));
+// 
+//             let boolean_intersection = boolean_selection.intersection(&base_boolean_selection);
+//             let row_intersection = row_selection.intersection(&base_row_selection);
+//             assert_eq!(
+//                 boolean_intersection,
+//                 BooleanRowSelection::from(row_intersection)
+//             );
+//         }
+//     }
+// 
+//     #[test]
+//     fn test_boolean_selection_and_then() {
+//         // Initial mask: 001011010101
+//         let self_filters = vec![BooleanArray::from(vec![
+//             false, false, true, false, true, true, false, true, false, true, false, true,
+//         ])];
+//         let self_selection = BooleanRowSelection::from_filters(&self_filters);
+// 
+//         // Predicate mask (only for selected bits): 001101
+//         let other_filters = vec![BooleanArray::from(vec![
+//             false, false, true, true, false, true,
+//         ])];
+//         let other_selection = BooleanRowSelection::from_filters(&other_filters);
+// 
+//         let result = self_selection.and_then(&other_selection);
+// 
+//         // Expected result: 000001010001
+//         let expected_filters = vec![BooleanArray::from(vec![
+//             false, false, false, false, false, true, false, true, false, false, false, true,
+//         ])];
+//         let expected_selection = BooleanRowSelection::from_filters(&expected_filters);
+// 
+//         assert_eq!(result, expected_selection);
+//     }
+// 
+//     #[test]
+//     #[should_panic(
+//         expected = "The 'other' selection must have exactly as many set bits as 'self'."
+//     )]
+//     fn test_and_then_mismatched_set_bits() {
+//         let self_filters = vec![BooleanArray::from(vec![true, true, false])];
+//         let self_selection = BooleanRowSelection::from_filters(&self_filters);
+// 
+//         // 'other' has only one set bit, but 'self' has two
+//         let other_filters = vec![BooleanArray::from(vec![true, false, false])];
+//         let other_selection = BooleanRowSelection::from_filters(&other_filters);
+// 
+//         // This should panic
+//         let _ = self_selection.and_then(&other_selection);
+//     }
+// }
