@@ -133,8 +133,6 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
         match self {
             Self::Dict { keys, values } => {
-                println!("keys = {:?}", keys);
-                println!("values = {:?}", values);
                 // Validate keys unless dictionary is empty
                 if !values.is_empty() {
                     let min = K::from_usize(0).unwrap();
@@ -156,23 +154,11 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
-                let values = match data_type {
-                    ArrowType::Dictionary(_, value_type) => {
-                        match **value_type{
-                            ArrowType::FixedSizeBinary(size) => {
-                                arrow_cast::cast(
-                                    &values,
-                                    &ArrowType::FixedSizeBinary(size),
-                                ).unwrap()
-                            }, 
-                            _ => {
-                                values
-                            }
-                        }
-                    }
-                    _ => {
-                        values
-                    }
+                let ArrowType::Dictionary(_, value_type) = data_type else { unreachable!() };
+                let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                    arrow_cast::cast(&values, &ArrowType::FixedSizeBinary(size)).unwrap()
+                } else {
+                    values
                 };
 
                 let builder = ArrayDataBuilder::new(data_type.clone())

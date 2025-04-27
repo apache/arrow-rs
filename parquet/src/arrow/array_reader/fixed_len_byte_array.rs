@@ -64,9 +64,6 @@ pub fn make_fixed_len_byte_array_reader(
     };
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
-        ArrowType::Dictionary(_,_) => {
-            // todo
-        }
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
@@ -158,8 +155,6 @@ impl ArrayReader for FixedLenByteArrayReader {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let record_data = self.record_reader.consume_record_data();
-
-        // println("{:?}")
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
             .len(self.record_reader.num_values())
