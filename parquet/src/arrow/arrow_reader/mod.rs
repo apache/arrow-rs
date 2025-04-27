@@ -678,7 +678,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
                 let array_reader =
                     build_array_reader(self.fields.as_deref(), predicate.projection(), &reader)?;
-
+                
                 selection = Some(evaluate_predicate(
                     batch_size,
                     array_reader,
@@ -1027,15 +1027,14 @@ pub(crate) fn evaluate_predicate(
                 filter.len()
             ));
         }
+        
         match filter.null_count() {
             0 => filters.push(filter),
             _ => filters.push(prep_null_mask_filter(&filter)),
         };
     }
 
-    // let raw = RowSelection::from_filters(&filters);
-    // Testing using
-    let raw = RowSelection::from_filters_as_bitmap(&filters);
+    let raw = RowSelection::from_filters(&filters);
     Ok(match input_selection {
         Some(selection) => selection.and_then(&raw),
         None => raw,

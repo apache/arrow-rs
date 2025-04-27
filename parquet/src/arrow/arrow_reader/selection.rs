@@ -23,6 +23,7 @@ use std::ops::Range;
 use arrow_buffer::{BooleanBufferBuilder, MutableBuffer};
 use arrow_schema::ArrowError::NotYetImplemented;
 use crate::arrow::arrow_reader::boolean_selector::BooleanRowSelection;
+use crate::schema::printer;
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
