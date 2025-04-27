@@ -55,7 +55,8 @@ pub fn make_byte_array_reader(
         ArrowType::Binary
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
-        | ArrowType::Decimal256(_, _) => {
+        | ArrowType::Decimal256(_, _) 
+        | ArrowType::Dictionary(_, _) => {
             let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,

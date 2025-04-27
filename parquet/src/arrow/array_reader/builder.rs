@@ -291,7 +291,7 @@ fn build_primitive_reader(
         },
         PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
             Some(DataType::Dictionary(_, _)) => {
-                make_byte_array_reader(page_iterator, column_desc, arrow_type)?
+                make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
             }
             _ => {
                 make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?
