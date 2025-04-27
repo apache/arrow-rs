@@ -154,7 +154,9 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
-                let ArrowType::Dictionary(_, value_type) = data_type else { unreachable!() };
+                let ArrowType::Dictionary(_, value_type) = data_type else {
+                    unreachable!()
+                };
                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
                     arrow_cast::cast(&values, &ArrowType::FixedSizeBinary(size)).unwrap()
                 } else {

@@ -27,8 +27,8 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray, FixedSizeBinaryArray
+    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
 };
 use arrow_schema::DataType;
 

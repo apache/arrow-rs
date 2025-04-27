@@ -1917,18 +1917,21 @@ mod tests {
     #[test]
     fn test_fixed_size_binary_in_dict() {
         let field = Field::new(
-            "a", 
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::FixedSizeBinary(4))),
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::UInt8),
+                Box::new(DataType::FixedSizeBinary(4)),
+            ),
             false,
         );
 
         let schema = Schema::new(vec![field]);
 
         let keys = UInt8Array::from_iter_values([0, 0, 1]);
-        let values = FixedSizeBinaryArray::try_from_iter(vec![
-            vec![0, 0, 0, 0],
-            vec![1, 1, 1, 1],
-        ].into_iter()).unwrap();
+        let values = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
+        )
+        .unwrap();
         let data = UInt8DictionaryArray::new(keys, Arc::new(values));
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
         roundtrip(batch, None);
