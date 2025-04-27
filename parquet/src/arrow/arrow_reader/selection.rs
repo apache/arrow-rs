@@ -571,11 +571,18 @@ impl RowSelection {
             }
         }
     }
+    
+    pub fn total_rows(&self) -> usize {
+        match self {
+            RowSelection::Ranges(selectors) => selectors.iter().map(|s| s.row_count).sum(),
+            RowSelection::BitMap(bitmap) => bitmap.len(),
+        }
+    }
 
     /// Returns the number of selected rows
     pub fn row_count(&self) -> usize {
         match self {
-            RowSelection::Ranges(selectors) => selectors.iter().map(|s| s.row_count).sum(),
+            RowSelection::Ranges(selectors) => selectors.iter().filter(|s| !s.skip).map(|s| s.row_count).sum(),
             RowSelection::BitMap(bitmap) => {
                 bitmap.true_count()
             }

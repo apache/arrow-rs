@@ -645,16 +645,20 @@ where
         row_group
             .fetch(&mut self.input, &projection, selection.as_ref())
             .await?;
-        
-        
+
+
+        let total_rows = selection
+            .as_ref()
+            .map(|s| s.total_rows())
+            .unwrap_or(row_group.row_count);
         
         let selection =  match selection { 
             Some(RowSelection::Ranges(selectors)) => {
-              if rows_after / selectors.len() > 100 {
+              if total_rows / selectors.len() > 200 {
                 Some(RowSelection::Ranges(selectors))
               } else {
                   let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
-          
+
                   for selector in selectors.iter() {
                       if selector.skip {
                           builder.append_n(selector.row_count, false);
@@ -662,7 +666,7 @@ where
                           builder.append_n(selector.row_count, true);
                       }
                   }
-                  Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish()))) 
+                  Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
               }
             }
             _ => None,
@@ -852,7 +856,7 @@ where
                     let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
-                    
+
                     let fut = reader
                         .read_row_group(
                             row_group_idx,
