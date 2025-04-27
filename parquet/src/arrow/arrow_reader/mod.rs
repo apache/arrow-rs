@@ -18,15 +18,16 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::collections::VecDeque;
+use std::mem::take;
 use std::sync::Arc;
-
+use arrow_select::take::take_record_batch;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -780,7 +781,7 @@ pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
-    selection: Option<VecDeque<RowSelector>>,
+    selection: Option<RowSelection>,
 }
 
 impl Iterator for ParquetRecordBatchReader {
@@ -788,10 +789,12 @@ impl Iterator for ParquetRecordBatchReader {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut read_records = 0;
+        let mut filter: Option<BooleanArray> = None;
         match self.selection.as_mut() {
-            Some(selection) => {
-                while read_records < self.batch_size && !selection.is_empty() {
-                    let front = selection.pop_front().unwrap();
+            Some(RowSelection::Ranges(selectors)) => {
+                let mut selectors: VecDeque<RowSelector> = VecDeque::from_iter(take(selectors));
+                while read_records < self.batch_size && !selectors.is_empty() {
+                    let front = selectors.pop_front().unwrap();
                     if front.skip {
                         let skipped = match self.array_reader.skip_records(front.row_count) {
                             Ok(skipped) => skipped,
@@ -821,7 +824,7 @@ impl Iterator for ParquetRecordBatchReader {
                         Some(remaining) if remaining != 0 => {
                             // if page row count less than batch_size we must set batch size to page row count.
                             // add check avoid dead loop
-                            selection.push_front(RowSelector::select(remaining));
+                            selectors.push_front(RowSelector::select(remaining));
                             need_read
                         }
                         _ => front.row_count,
@@ -832,7 +835,14 @@ impl Iterator for ParquetRecordBatchReader {
                         Err(error) => return Some(Err(error.into())),
                     }
                 }
+                self.selection = Some(RowSelection::Ranges(selectors.into()));
             }
+            Some(RowSelection::BitMap(bitmap)) => {
+                self.array_reader.read_records(bitmap.len()).unwrap();
+                filter = Some(bitmap.clone());
+                self.selection = None;
+            }
+
             None => {
                 if let Err(error) = self.array_reader.read_records(self.batch_size) {
                     return Some(Err(error.into()));
@@ -849,10 +859,37 @@ impl Iterator for ParquetRecordBatchReader {
                     )
                 });
 
-                match struct_array {
-                    Err(err) => Some(Err(err)),
-                    Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
+
+                let batch:RecordBatch = match struct_array {
+                    Err(err) => return Some(Err(err)),
+                    Ok(e) => e.into(),
+                };
+
+                if let Some(filter) = filter.as_mut() {
+                    if batch.num_rows() == 0 {
+                        return None
+                    }
+                    if filter.len() != batch.num_rows() {
+                        return Some(Err(ArrowError::ComputeError(format!(
+                            "Filter length ({}) does not match batch rows ({})",
+                            filter.len(),
+                            batch.num_rows()
+                        ))));
+                    }
+
+                    match arrow_select::filter::filter_record_batch(&batch, filter) {
+                        Ok(filtered_batch) => Some(Ok(filtered_batch)),
+                        Err(e) => Some(Err(e)),
+                    }
+
+                } else {
+                    if batch.num_rows() > 0 {
+                        Some(Ok(batch))
+                    } else {
+                        None
+                    }
                 }
+
             }
         }
     }
@@ -895,7 +932,7 @@ impl ParquetRecordBatchReader {
             batch_size,
             array_reader,
             schema: Arc::new(Schema::new(levels.fields.clone())),
-            selection: selection.map(|s| s.trim().into()),
+            selection: selection.map(|s| s.trim()),
         })
     }
 
@@ -916,7 +953,7 @@ impl ParquetRecordBatchReader {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-            selection: selection.map(|s| s.trim().into()),
+            selection: selection.map(|s| s.trim()),
         }
     }
 }

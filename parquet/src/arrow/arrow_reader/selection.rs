@@ -455,8 +455,7 @@ impl RowSelection {
                 selectors.iter().any(|x| !x.skip)
             }
             RowSelection::BitMap(bitmap) => {
-                // not implemented yet
-                unimplemented!("BitMap variant is not yet supported")
+                bitmap.true_count() > 0
             }
         }
     }
@@ -470,9 +469,17 @@ impl RowSelection {
                 }
                 RowSelection::Ranges(selectors)
             }
-            RowSelection::BitMap(_) => {
-                // not implemented yet
-                unimplemented!("BitMap variant is not yet supported")
+            RowSelection::BitMap(bitmap) => {
+                // find the last `true` in the mask
+                let new_len = bitmap
+                    .iter()
+                    .rposition(|opt| opt == Some(true))
+                    .map(|idx| idx + 1)
+                    .unwrap_or(0);
+
+                // slice off any trailing `false` (or null) values
+                let trimmed = bitmap.slice(0, new_len);
+                RowSelection::BitMap(trimmed)
             }
         }
     }
