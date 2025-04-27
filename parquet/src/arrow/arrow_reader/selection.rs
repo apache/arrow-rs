@@ -349,7 +349,7 @@ impl RowSelection {
             (RowSelection::Ranges(selectors), RowSelection::Ranges(other_selectors)) => {
                 let mut and_then_select = vec![];
                 let mut first = selectors.iter().cloned().peekable();
-                let mut second = selectors.iter().cloned().peekable();
+                let mut second = other_selectors.iter().cloned().peekable();
 
                 let mut to_skip = 0;
                 while let Some(b) = second.peek_mut() {
