@@ -17,14 +17,13 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-use bytes::Bytes;
-
 use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
     modules::create_footer_aad,
 };
+use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
@@ -963,15 +962,24 @@ impl ParquetMetaDataReader {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
         if let (Some(algo), Some(file_decryption_properties)) = (
-            t_file_metadata.encryption_algorithm,
+            t_file_metadata.encryption_algorithm.clone(),
             file_decryption_properties,
         ) {
             // File has a plaintext footer but encryption algorithm is set
             file_decryptor = Some(get_file_decryptor(
                 algo,
-                t_file_metadata.footer_signing_key_metadata.as_deref(),
+                t_file_metadata
+                    .footer_signing_key_metadata
+                    .clone()
+                    .as_deref(),
                 file_decryption_properties,
             )?);
+            if file_decryption_properties.check_plaintext_footer_integrity() {
+                file_decryptor
+                    .clone()
+                    .unwrap()
+                    .verify_signature(&t_file_metadata, buf.as_ref())?;
+            }
         }
 
         let mut row_groups = Vec::new();

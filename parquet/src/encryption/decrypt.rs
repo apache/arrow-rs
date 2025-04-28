@@ -17,8 +17,8 @@
 
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, NONCE_LEN, TAG_LEN, SIZE_LEN};
+use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use std::borrow::Cow;
@@ -26,6 +26,9 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
+use thrift::protocol::TCompactOutputProtocol;
+use crate::thrift::TSerializable;
+use crate::format::{FileMetaData as TFileMetaData};
 
 /// Trait for retrieving an encryption key using the key's metadata
 ///
@@ -331,6 +334,7 @@ impl PartialEq for DecryptionKeys {
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl FileDecryptionProperties {
@@ -349,6 +353,11 @@ impl FileDecryptionProperties {
     /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
         self.aad_prefix.as_ref()
+    }
+
+    /// Returns true if footer signature verification is enabled.
+    pub fn check_plaintext_footer_integrity(&self) -> bool {
+        self.footer_signature_verification
     }
 
     /// Get the encryption key for decrypting a file's footer,
@@ -415,6 +424,7 @@ pub struct DecryptionPropertiesBuilder {
     key_retriever: Option<Arc<dyn KeyRetriever>>,
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl DecryptionPropertiesBuilder {
@@ -426,6 +436,7 @@ impl DecryptionPropertiesBuilder {
             key_retriever: None,
             column_keys: HashMap::default(),
             aad_prefix: None,
+            footer_signature_verification: true,
         }
     }
 
@@ -439,6 +450,7 @@ impl DecryptionPropertiesBuilder {
             key_retriever: Some(key_retriever),
             column_keys: HashMap::default(),
             aad_prefix: None,
+            footer_signature_verification: true,
         }
     }
 
@@ -464,6 +476,7 @@ impl DecryptionPropertiesBuilder {
         Ok(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
+            footer_signature_verification: self.footer_signature_verification,
         })
     }
 
@@ -495,6 +508,13 @@ impl DecryptionPropertiesBuilder {
             self.column_keys.insert(column_name.to_string(), key);
         }
         Ok(self)
+    }
+
+    /// Specify if footer signature verification should be disabled.
+    /// Signature verification is enabled by default.
+    pub fn disable_footer_signature_verification(mut self) -> Self {
+        self.footer_signature_verification = false;
+        self
     }
 }
 
@@ -536,6 +556,38 @@ impl FileDecryptor {
 
     pub(crate) fn get_footer_decryptor(&self) -> Result<Arc<dyn BlockDecryptor>> {
         Ok(self.footer_decryptor.clone())
+    }
+
+    /// Verify the signature of the footer
+    pub(crate) fn verify_signature(&self, file_metadata: &TFileMetaData, buf: &[u8]) -> Result<()> {
+        let mut plaintext: Vec<u8> = vec![];
+        {
+            let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut plaintext);
+            file_metadata.write_to_out_protocol(&mut unencrypted_protocol)?;
+        }
+
+        // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
+        let nonce = &buf[SIZE_LEN..SIZE_LEN + NONCE_LEN];
+        let tag = &buf[buf.len() - TAG_LEN..];
+
+        let aad = create_footer_aad(self.file_aad())?;
+        // let aad = self.file_aad();
+        let footer_decryptor = self.get_footer_decryptor()?;
+
+        let computed_tag = footer_decryptor.compute_tag(
+            nonce,
+            aad.as_ref(),
+            &mut plaintext,
+        )?;
+
+        if computed_tag != tag {
+            return Err(general_err!(
+                "Footer signature verification failed. Computed: {:?}, Expected: {:?}",
+                computed_tag,
+                tag
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn get_column_data_decryptor(
