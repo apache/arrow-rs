@@ -16,9 +16,10 @@
 // under the License.
 
 #[cfg(feature = "encryption")]
-use crate::encryption::encrypt::{encrypt_object, encrypt_object_to_vec, sign_and_write_object, FileEncryptor};
-#[cfg(feature = "encryption")]
-use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
+use crate::encryption::{
+    encrypt::{encrypt_object, encrypt_object_to_vec, sign_and_write_object, FileEncryptor},
+    modules::{create_footer_aad, create_module_aad, ModuleType},
+};
 #[cfg(feature = "encryption")]
 use crate::errors::ParquetError;
 use crate::errors::Result;
@@ -141,6 +142,25 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
+        let mut encryption_algorithm = None;
+        if let Some(file_encryptor) = self.object_writer.file_encryptor.clone() {
+            let properties = file_encryptor.properties();
+            if !properties.encrypt_footer() {
+                let supply_aad_prefix = properties
+                    .aad_prefix()
+                    .map(|_| !properties.store_aad_prefix());
+                encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
+                    aad_prefix: if properties.store_aad_prefix() {
+                        properties.aad_prefix().cloned()
+                    } else {
+                        None
+                    },
+                    aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
+                    supply_aad_prefix,
+                }));
+            }
+        };
+
         let mut file_metadata = FileMetaData {
             num_rows,
             row_groups,
@@ -149,7 +169,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
             column_orders,
-            encryption_algorithm: None,
+            encryption_algorithm,
             footer_signing_key_metadata: None,
         };
 
@@ -503,8 +523,7 @@ impl MetadataObjectWriter {
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
                 encrypt_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
-            Some(file_encryptor) if !file_encryptor.properties().encrypt_footer() => {
-                // todo: should we also check for file_metadata.encryption_algorithm.is_some() ?
+            Some(file_encryptor) if file_metadata.encryption_algorithm.is_some() => {
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
                 sign_and_write_object(file_metadata, &mut encryptor, &mut sink, &aad)

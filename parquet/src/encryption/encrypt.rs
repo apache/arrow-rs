@@ -385,16 +385,19 @@ pub(crate) fn sign_and_write_object<T: TSerializable, W: Write>(
         let mut protocol = TCompactOutputProtocol::new(&mut buffer);
         object.write_to_out_protocol(&mut protocol)?;
     }
-    let plaintext_len = buffer.len();
     sink.write_all(&buffer)?;
+    buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
 
-    let encrypted_buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
- 
+    let ciphertext_length : u32 = buffer.len()
+        .try_into()
+        .map_err(|err| general_err!("Plaintext data too long. {:?}", err))?;
+
     // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
-    let nonce = encrypted_buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN].to_vec();
-    let tag = encrypted_buffer[SIZE_LEN + NONCE_LEN + plaintext_len..SIZE_LEN + NONCE_LEN + plaintext_len + TAG_LEN].to_vec();
+    let nonce = buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN].to_vec();
+    let tag = buffer[(ciphertext_length - TAG_LEN as u32) as usize..].to_vec();
     sink.write_all(&nonce)?;
     sink.write_all(&tag)?;
+
     Ok(())
 }
 
