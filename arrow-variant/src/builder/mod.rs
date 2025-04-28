@@ -52,17 +52,17 @@
 //! // metadata_buffer now contains valid variant metadata bytes
 //! ```
 
-use std::collections::HashMap;
 use std::io::Write;
-use arrow_schema::extension::Variant;
+use indexmap::IndexMap;
+use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
-use crate::encoder::{
-    VariantBasicType, 
+use crate::encoder::{ 
     encode_null, encode_boolean, encode_integer, encode_float, encode_string,
     encode_binary, encode_date, encode_timestamp, encode_timestamp_ntz, 
     encode_time_ntz, encode_timestamp_nanos, encode_timestamp_ntz_nanos, encode_uuid,
-    encode_object_from_pre_encoded, encode_array_from_pre_encoded
+    encode_object_from_pre_encoded, encode_array_from_pre_encoded, min_bytes_needed,
+    write_int_with_size, encode_decimal4, encode_decimal8, encode_decimal16
 };
 
 /// Values that can be stored in a Variant.
@@ -102,6 +102,12 @@ pub enum PrimitiveValue {
     TimestampNTZNanos(i64),
     /// UUID as 16 bytes
     Uuid([u8; 16]),
+    /// Decimal with scale and 32-bit unscaled value (precision 1-9)
+    Decimal4(u8, i32),
+    /// Decimal with scale and 64-bit unscaled value (precision 10-18)
+    Decimal8(u8, i64),
+    /// Decimal with scale and 128-bit unscaled value (precision 19-38)
+    Decimal16(u8, i128),
 }
 
 impl From<i32> for PrimitiveValue {
@@ -274,7 +280,7 @@ impl<'a> VariantBuilder<'a> {
     /// The index of the key in the dictionary
     pub(crate) fn add_key(&mut self, key: &str) -> Result<usize, ArrowError> {
         if self.is_finalized {
-            return Err(ArrowError::SchemaError("Cannot add keys after metadata has been finalized".to_string()));
+            return Err(ArrowError::VariantError("Cannot add keys after metadata has been finalized".to_string()));
         }
 
         if let Some(idx) = self.dictionary.get(key) {
@@ -308,7 +314,7 @@ impl<'a> VariantBuilder<'a> {
         
         // Determine offset size based on max possible offset value
         let max_offset = std::cmp::max(total_string_size, keys.len() + 1);
-        let offset_size = get_min_integer_size(max_offset);
+        let offset_size = min_bytes_needed(max_offset);
         let offset_size_minus_one = offset_size - 1;
         
         // Construct header byte
@@ -322,10 +328,8 @@ impl<'a> VariantBuilder<'a> {
         
         // Write dictionary size (number of keys)
         let dict_size = keys.len() as u32;
-        for i in 0..offset_size {
-            if let Err(e) = self.metadata_output.write_all(&[((dict_size >> (8 * i)) & 0xFF) as u8]) {
-                panic!("Failed to write dictionary size: {}", e);
-            }
+        if let Err(e) = write_int_with_size(dict_size, offset_size, &mut self.metadata_output) {
+            panic!("Failed to write dictionary size: {}", e);
         }
         
         // Calculate and write offsets
@@ -338,11 +342,10 @@ impl<'a> VariantBuilder<'a> {
             offsets.push(current_offset);
         }
         
+        // Write offsets using the helper function
         for offset in offsets {
-            for i in 0..offset_size {
-                if let Err(e) = self.metadata_output.write_all(&[((offset >> (8 * i)) & 0xFF) as u8]) {
-                    panic!("Failed to write offset: {}", e);
-                }
+            if let Err(e) = write_int_with_size(offset, offset_size, &mut self.metadata_output) {
+                panic!("Failed to write offset: {}", e);
             }
         }
         
@@ -368,8 +371,9 @@ pub struct ObjectBuilder<'a, 'b> {
     output: &'a mut Vec<u8>,
     /// Reference to the variant builder
     variant_builder: &'a mut VariantBuilder<'b>,
-    /// Temporary buffer for field values
-    value_buffers: HashMap<usize, Vec<u8>>,
+    /// Temporary buffer for field values - stored as key_index -> value_buffer
+    /// Using IndexMap for O(1) access with ability to sort by key
+    value_buffers: IndexMap<usize, Vec<u8>>,
     /// Whether the object has been finalized
     is_finalized: bool,
 }
@@ -395,7 +399,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         Self {
             output,
             variant_builder,
-            value_buffers: HashMap::new(),
+            value_buffers: IndexMap::new(),
             is_finalized: false,
         }
     }
@@ -426,7 +430,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             panic!("Failed to write value: {}", e);
         }
         
-        // Store the buffer for this field
+        // Store the buffer for this field - will overwrite if key already exists
         self.value_buffers.insert(key_index, buffer);
     }
     
@@ -448,7 +452,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             Err(e) => panic!("Failed to add key: {}", e),
         };
         
-        // Create a temporary buffer for the nested object
+        // Create a temporary buffer for the nested object and store it
         let nested_buffer = Vec::new();
         self.value_buffers.insert(key_index, nested_buffer);
         
@@ -477,7 +481,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             Err(e) => panic!("Failed to add key: {}", e),
         };
         
-        // Create a temporary buffer for the nested array
+        // Create a temporary buffer for the nested array and store it
         let nested_buffer = Vec::new();
         self.value_buffers.insert(key_index, nested_buffer);
         
@@ -494,30 +498,16 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             return;
         }
         
-        // Create a temporary buffer for the final object
-        let mut temp_buffer = Vec::new();
+        // Sort the entries by key index
+        self.value_buffers.sort_keys();
         
         // Prepare field IDs and values for encoding
-        let mut field_ids: Vec<usize> = Vec::with_capacity(self.value_buffers.len());
-        let mut field_values: Vec<&[u8]> = Vec::with_capacity(self.value_buffers.len());
+        let field_ids: Vec<usize> = self.value_buffers.keys().copied().collect();
+        let field_values: Vec<&[u8]> = self.value_buffers.values().map(|v| v.as_slice()).collect();
         
-        // Sort by key index if needed
-        let mut entries: Vec<(&usize, &Vec<u8>)> = self.value_buffers.iter().collect();
-        entries.sort_by_key(|&(k, _)| k);
-        
-        for (key_index, value) in entries {
-            field_ids.push(*key_index);
-            field_values.push(value.as_slice());
-        }
-        
-        // Use the encoder function to encode the object
-        if let Err(e) = encode_object_from_pre_encoded(&field_ids, &field_values, &mut temp_buffer) {
+        // Encode the object directly to output
+        if let Err(e) = encode_object_from_pre_encoded(&field_ids, &field_values, self.output) {
             panic!("Failed to encode object: {}", e);
-        }
-        
-        // Now that we have the complete object, write it to the output
-        if let Err(e) = self.output.write_all(&temp_buffer) {
-            panic!("Failed to write object to output: {}", e);
         }
         
         self.is_finalized = true;
@@ -633,22 +623,14 @@ impl<'a, 'b> ArrayBuilder<'a, 'b> {
             return;
         }
         
-        // Create a temporary buffer for the final array
-        let mut temp_buffer = Vec::new();
-        
-        // Prepare values for encoding
+        // Prepare slices for values
         let values: Vec<&[u8]> = self.value_buffers.iter()
             .map(|v| v.as_slice())
             .collect();
         
-        // Use the encoder function to encode the array
-        if let Err(e) = encode_array_from_pre_encoded(&values, &mut temp_buffer) {
+        // Encode the array directly to output
+        if let Err(e) = encode_array_from_pre_encoded(&values, self.output) {
             panic!("Failed to encode array: {}", e);
-        }
-        
-        // Now that we have the complete array, write it to the output
-        if let Err(e) = self.output.write_all(&temp_buffer) {
-            panic!("Failed to write array to output: {}", e);
         }
         
         self.is_finalized = true;
@@ -659,690 +641,757 @@ impl<'a, 'b> ArrayBuilder<'a, 'b> {
 ///
 /// This function handles the correct encoding of primitive values by utilizing 
 /// the encoder module functionality.
-fn write_value(buffer: &mut impl Write, value: &PrimitiveValue) -> Result<(), ArrowError> {
-    // Create a temporary buffer for encoder functions that expect Vec<u8>
-    let mut temp_buffer = Vec::new();
-    
+fn write_value(buffer: &mut Vec<u8>, value: &PrimitiveValue) -> Result<(), ArrowError> {
     match value {
         PrimitiveValue::Null => {
-            encode_null(&mut temp_buffer);
+            encode_null(buffer);
         },
         PrimitiveValue::Boolean(val) => {
-            encode_boolean(*val, &mut temp_buffer);
+            encode_boolean(*val, buffer);
         },
         PrimitiveValue::Int8(val) => {
-            encode_integer(*val as i64, &mut temp_buffer);
+            encode_integer(*val as i64, buffer);
         },
         PrimitiveValue::Int16(val) => {
-            encode_integer(*val as i64, &mut temp_buffer);
+            encode_integer(*val as i64, buffer);
         },
         PrimitiveValue::Int32(val) => {
-            encode_integer(*val as i64, &mut temp_buffer);
+            encode_integer(*val as i64, buffer);
         },
         PrimitiveValue::Int64(val) => {
-            encode_integer(*val, &mut temp_buffer);
+            encode_integer(*val, buffer);
         },
         PrimitiveValue::Float(val) => {
-            encode_float(*val as f64, &mut temp_buffer);
+            encode_float(*val as f64, buffer);
         },
         PrimitiveValue::Double(val) => {
-            encode_float(*val, &mut temp_buffer);
+            encode_float(*val, buffer);
         },
         PrimitiveValue::String(val) => {
-            encode_string(val, &mut temp_buffer);
+            encode_string(val, buffer);
         },
         PrimitiveValue::Binary(val) => {
-            encode_binary(val, &mut temp_buffer);
+            encode_binary(val, buffer);
         },
         PrimitiveValue::Date(val) => {
-            encode_date(*val, &mut temp_buffer);
+            encode_date(*val, buffer);
         },
         PrimitiveValue::Timestamp(val) => {
-            encode_timestamp(*val, &mut temp_buffer);
+            encode_timestamp(*val, buffer);
         },
         PrimitiveValue::TimestampNTZ(val) => {
-            encode_timestamp_ntz(*val, &mut temp_buffer);
+            encode_timestamp_ntz(*val, buffer);
         },
         PrimitiveValue::TimeNTZ(val) => {
-            encode_time_ntz(*val, &mut temp_buffer);
+            encode_time_ntz(*val, buffer);
         },
         PrimitiveValue::TimestampNanos(val) => {
-            encode_timestamp_nanos(*val, &mut temp_buffer);
+            encode_timestamp_nanos(*val, buffer);
         },
         PrimitiveValue::TimestampNTZNanos(val) => {
-            encode_timestamp_ntz_nanos(*val, &mut temp_buffer);
+            encode_timestamp_ntz_nanos(*val, buffer);
         },
         PrimitiveValue::Uuid(val) => {
-            encode_uuid(val, &mut temp_buffer);
+            encode_uuid(val, buffer);
+        },
+        PrimitiveValue::Decimal4(scale, unscaled_value) => {
+            encode_decimal4(*scale, *unscaled_value, buffer);
+        },
+        PrimitiveValue::Decimal8(scale, unscaled_value) => {
+            encode_decimal8(*scale, *unscaled_value, buffer);
+        },
+        PrimitiveValue::Decimal16(scale, unscaled_value) => {
+            encode_decimal16(*scale, *unscaled_value, buffer);
         },
     }
     
-    // Write the prepared buffer to the output
-    buffer.write_all(&temp_buffer)?;
-    
     Ok(())
-}
-
-/// Determines the minimum integer size required to represent a value
-fn get_min_integer_size(value: usize) -> usize {
-    if value <= 255 {
-        1
-    } else if value <= 65535 {
-        2
-    } else if value <= 16777215 {
-        3
-    } else {
-        4
-    }
-}
-
-/// Creates a simple variant object.
-///
-/// This function demonstrates the usage pattern of the builder API.
-///
-/// # Arguments
-///
-/// * `sort_keys` - Whether keys should be sorted in metadata
-///
-/// # Returns
-///
-/// A Variant instance representing the object
-pub fn create_variant_object_example(sort_keys: bool) -> Result<Variant, ArrowError> {
-    // Create buffers for metadata and value
-    let mut metadata_buffer = Vec::new();
-    let mut value_buffer = Vec::new();
-    
-    // The builder borrows metadata_buffer, so we need to drop it before using metadata_buffer
-    {
-        // Create a builder
-        let mut builder = VariantBuilder::new_with_sort(&mut metadata_buffer, sort_keys);
-        
-        // Create an object
-        {
-            let mut object_builder = builder.new_object(&mut value_buffer);
-            
-            // Add values
-            object_builder.append_value("foo", 1);
-            object_builder.append_value("bar", 100);
-            
-            // Finish the object
-            object_builder.finish();
-        }
-        
-        // Finish the metadata
-        builder.finish();
-    } // builder is dropped here, releasing the borrow on metadata_buffer
-    
-    // Create variant from buffers - now we can move metadata_buffer safely
-    Ok(Variant::new(metadata_buffer, value_buffer))
-}
-
-/// Creates a simple array variant.
-///
-/// This function demonstrates the usage pattern of the builder API.
-///
-/// # Returns
-///
-/// A Variant instance representing the array
-pub fn create_variant_array_example() -> Result<Variant, ArrowError> {
-    // Create buffers for metadata and value
-    let mut metadata_buffer = Vec::new();
-    let mut value_buffer = Vec::new();
-    
-    // The builder borrows metadata_buffer, so we need to drop it before using metadata_buffer
-    {
-        // Create a builder
-        let mut builder = VariantBuilder::new(&mut metadata_buffer);
-        
-        // Create an array
-        {
-            let mut array_builder = builder.new_array(&mut value_buffer);
-            
-            // Add values
-            array_builder.append_value(1);
-            array_builder.append_value(2);
-            array_builder.append_value("hello");
-            array_builder.append_value(Option::<i32>::None);
-            
-            // Finish the array
-            array_builder.finish();
-        }
-        
-        // Finish the metadata
-        builder.finish();
-    } // builder is dropped here, releasing the borrow on metadata_buffer
-    
-    // Create variant from buffers - now we can move metadata_buffer safely
-    Ok(Variant::new(metadata_buffer, value_buffer))
-}
-
-/// Creates a complex nested variant structure.
-///
-/// This function demonstrates creating a deeply nested variant structure.
-///
-/// # Returns
-///
-/// A Variant instance with a complex nested structure
-pub fn create_complex_variant_example() -> Result<Variant, ArrowError> {
-    // Create buffers for metadata and value
-    let mut metadata_buffer = Vec::new();
-    let mut value_buffer = Vec::new();
-    
-    // The builder borrows metadata_buffer, so we need to drop it before using metadata_buffer
-    {
-        // Create a builder
-        let mut builder = VariantBuilder::new(&mut metadata_buffer);
-        
-        // Create the complex structure
-        {
-            let mut root_builder = builder.new_object(&mut value_buffer);
-            
-            // Add primitive values to root
-            root_builder.append_value("id", 123);
-            root_builder.append_value("name", "Example User");
-            root_builder.append_value("active", true);
-            
-            // Create and populate address object
-            {
-                let mut address_builder = root_builder.append_object("address");
-                address_builder.append_value("street", "123 Main St");
-                address_builder.append_value("city", "Anytown");
-                address_builder.append_value("zip", 12345);
-                
-                // Create geo object inside address
-                {
-                    let mut geo_builder = address_builder.append_object("geo");
-                    geo_builder.append_value("lat", 40.7128);
-                    geo_builder.append_value("lng", -74.0060);
-                    geo_builder.finish();
-                }
-                
-                address_builder.finish();
-            }
-            
-            // Create scores array
-            {
-                let mut scores_builder = root_builder.append_array("scores");
-                scores_builder.append_value(95);
-                scores_builder.append_value(87);
-                scores_builder.append_value(91);
-                scores_builder.finish();
-            }
-            
-            // Create contacts array with objects
-            {
-                let mut contacts_builder = root_builder.append_array("contacts");
-                
-                // First contact
-                {
-                    let mut contact1_builder = contacts_builder.append_object();
-                    contact1_builder.append_value("name", "Alice");
-                    contact1_builder.append_value("phone", "555-1234");
-                    contact1_builder.finish();
-                }
-                
-                // Second contact
-                {
-                    let mut contact2_builder = contacts_builder.append_object();
-                    contact2_builder.append_value("name", "Bob");
-                    contact2_builder.append_value("phone", "555-5678");
-                    contact2_builder.finish();
-                }
-                
-                contacts_builder.finish();
-            }
-            
-            // Finish the root object
-            root_builder.finish();
-        }
-        
-        // Finish the metadata
-        builder.finish();
-    } // builder is dropped here, releasing the borrow on metadata_buffer
-    
-    // Create variant from buffers - now we can move metadata_buffer safely
-    Ok(Variant::new(metadata_buffer, value_buffer))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_schema::extension::Variant;
+    use crate::encoder::VariantBasicType;
+    
+    // Helper function to extract keys from metadata for testing
+    fn get_metadata_keys(metadata: &[u8]) -> Vec<String> {
+        // Simple implementation to extract keys from metadata buffer
+        // This avoids dependency on VariantReader which might not be accessible
+        
+        // Skip the header byte
+        let mut pos = 1;
+        
+        // Get offset size from header byte
+        let offset_size = ((metadata[0] >> 6) & 0x03) + 1;
+        
+        // Read dictionary size
+        let mut dict_size = 0usize;
+        for i in 0..offset_size {
+            dict_size |= (metadata[pos + i as usize] as usize) << (i * 8);
+        }
+        pos += offset_size as usize;
+        
+        if dict_size == 0 {
+            return vec![];
+        }
+        
+        // Read offsets
+        let mut offsets = Vec::with_capacity(dict_size + 1);
+        for _ in 0..=dict_size {
+            let mut offset = 0usize;
+            for i in 0..offset_size {
+                offset |= (metadata[pos + i as usize] as usize) << (i * 8);
+            }
+            offsets.push(offset);
+            pos += offset_size as usize;
+        }
+        
+        // Extract keys using offsets
+        let mut keys = Vec::with_capacity(dict_size);
+        for i in 0..dict_size {
+            let start = offsets[i];
+            let end = offsets[i + 1];
+            let key_bytes = &metadata[pos + start..pos + end];
+            keys.push(String::from_utf8_lossy(key_bytes).to_string());
+        }
+        
+        keys
+    }
+    
+    // =========================================================================
+    // Basic builder functionality tests
+    // =========================================================================
     
     #[test]
-    fn test_spec_example_usage_pattern() {
-        // Location to write metadata
+    fn test_basic_object_builder() {
         let mut metadata_buffer = vec![];
-        
-        // Create a builder for constructing variant values
         let mut value_buffer = vec![];
-        let mut value_buffer2 = vec![];
         
-        // Use a scope to drop the builder before using metadata_buffer
         {
             let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut object_builder = builder.new_object(&mut value_buffer);
             
-            // Example creating a primitive Variant value:
-            // Create the equivalent of {"foo": 1, "bar": 100}
-            let mut object_builder = builder.new_object(&mut value_buffer); // object_builder has reference to builder
-            object_builder.append_value("foo", 1);
-            object_builder.append_value("bar", 100);
+            // Test various primitive types
+            object_builder.append_value("null", Option::<i32>::None);
+            object_builder.append_value("bool_true", true);
+            object_builder.append_value("bool_false", false);
+            object_builder.append_value("int8", 42i8);
+            object_builder.append_value("int16", 1000i16);
+            object_builder.append_value("int32", 100000i32);
+            object_builder.append_value("int64", 1000000000i64);
+            object_builder.append_value("float", 3.14f32);
+            object_builder.append_value("double", 2.71828f64);
+            object_builder.append_value("string", "hello world");
+            object_builder.append_value("binary", vec![1u8, 2u8, 3u8]);
+            
             object_builder.finish();
-            
-            // value_buffer now contains a valid variant
-            // builder contains a metadata header with fields "foo" and "bar"
-            
-            // Example of creating a nested VariantValue:
-            // Create nested object: the equivalent of {"foo": {"bar": 100}}
-            // note we haven't finalized the metadata yet so we reuse it here
-            let mut object_builder2 = builder.new_object(&mut value_buffer2);
-            let mut foo_object_builder = object_builder2.append_object("foo"); // builder for "foo"
-            foo_object_builder.append_value("bar", 100);
-            foo_object_builder.finish();
-            object_builder2.finish();
-            
-            // value_buffer2 contains a valid variant
-            
-            // Finish the builder to finalize the metadata
-            // complete writing the metadata
-            builder.finish();
-        } // builder is dropped here, releasing the borrow on metadata_buffer
-        
-        // Verify the output is valid - now safe to use metadata_buffer
-        assert!(!metadata_buffer.is_empty());
-        assert!(!value_buffer.is_empty());
-        assert!(!value_buffer2.is_empty());
-        
-        // Create actual Variant objects
-        let variant1 = Variant::new(metadata_buffer.clone(), value_buffer);
-        let variant2 = Variant::new(metadata_buffer, value_buffer2);
-        
-        // Verify they are valid
-        assert!(!variant1.metadata().is_empty());
-        assert!(!variant1.value().is_empty());
-        assert!(!variant2.metadata().is_empty());
-        assert!(!variant2.value().is_empty());
-    }
-    
-    #[test]
-    fn test_variant_object() {
-        let variant = create_variant_object_example(false);
-        let variant = variant.unwrap();
-        assert!(!variant.metadata().is_empty());
-        assert!(!variant.value().is_empty());
-    }
-    
-    #[test]
-    fn test_variant_array() {
-        let variant = create_variant_array_example();
-        let variant = variant.unwrap();
-        assert!(!variant.metadata().is_empty());
-        assert!(!variant.value().is_empty());
-    }
-    
-    #[test]
-    fn test_builder_usage() {
-        // Test the basic builder usage as outlined in the example
-        let mut metadata_buffer = vec![];
-        let mut value_buffer = vec![];
-        let mut value_buffer2 = vec![];
-        
-        // Create a builder in a scope to avoid borrowing issues
-        {
-            // Create a builder
-            let mut builder = VariantBuilder::new(&mut metadata_buffer);
-            
-            // First object
-            {
-                let mut object_builder = builder.new_object(&mut value_buffer);
-                object_builder.append_value("foo", 1);
-                object_builder.append_value("bar", 100);
-                object_builder.finish();
-            }
-            
-            // Second object with reused metadata
-            {
-                let mut object_builder2 = builder.new_object(&mut value_buffer2);
-                object_builder2.append_value("foo", 2);
-                object_builder2.append_value("bar", 200);
-                object_builder2.finish();
-            }
-            
-            // Finalize metadata
             builder.finish();
         }
         
-        // Now that builder is dropped, we can use the buffers
+        // Verify object encoding
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Object as u8);
         
-        // Verify buffers contain valid data
-        assert!(!metadata_buffer.is_empty());
-        assert!(!value_buffer.is_empty());
-        assert!(!value_buffer2.is_empty());
+        // Verify metadata contains all keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        assert_eq!(keys.len(), 11, "Should have 11 keys in metadata");
+        assert!(keys.contains(&"null".to_string()), "Missing 'null' key");
+        assert!(keys.contains(&"bool_true".to_string()), "Missing 'bool_true' key");
+        assert!(keys.contains(&"string".to_string()), "Missing 'string' key");
+        
+        // Verify object has the correct number of entries
+        // First byte after header is the number of fields (if small object)
+        assert!(value_buffer.len() > 1, "Value buffer too small");
+        let num_fields = value_buffer[1];
+        assert_eq!(num_fields as usize, 11, "Object should have 11 fields");
+
+        let _variant = Variant::new(metadata_buffer, value_buffer);
+        
     }
+    
+    #[test]
+    fn test_basic_array_builder() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        let num_elements = 11; // Number of elements we'll add
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut array_builder = builder.new_array(&mut value_buffer);
+            
+            // Test various primitive types
+            array_builder.append_value(Option::<i32>::None);
+            array_builder.append_value(true);
+            array_builder.append_value(false);
+            array_builder.append_value(42i8);
+            array_builder.append_value(1000i16);
+            array_builder.append_value(100000i32);
+            array_builder.append_value(1000000000i64);
+            array_builder.append_value(3.14f32);
+            array_builder.append_value(2.71828f64);
+            array_builder.append_value("hello world");
+            array_builder.append_value(vec![1u8, 2u8, 3u8]);
+            
+            array_builder.finish();
+            builder.finish();
+        }
+        
+        // Verify array encoding
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Array as u8);
+        
+        // Verify array length
+        // First byte after header is the array length (if small array)
+        assert!(value_buffer.len() > 1, "Value buffer too small");
+        let array_length = value_buffer[1];
+        assert_eq!(array_length as usize, num_elements, "Array should have exactly {num_elements} elements");
+        
+        // Verify metadata format is valid (version 1)
+        assert_eq!(metadata_buffer[0] & 0x0F, 0x01, "Metadata should be version 1");
+        
+        // Metadata should have dictionary size of 0 (no keys in a plain array)
+        // Second and potentially following bytes are dictionary size depending on offset size
+        let offset_size = ((metadata_buffer[0] >> 6) & 0x03) + 1;
+        let dict_size_bytes = &metadata_buffer[1..1+offset_size as usize];
+        if offset_size == 1 {
+            assert_eq!(dict_size_bytes[0], 0, "Dictionary should be empty for array");
+        }
+        
+        // Create variant and verify it's structurally valid
+        let variant = Variant::new(metadata_buffer, value_buffer);
+        assert!(!variant.metadata().is_empty());
+        assert!(!variant.value().is_empty());
+    }
+    
+    // =========================================================================
+    // Nested structure tests
+    // =========================================================================
     
     #[test]
     fn test_nested_objects() {
         let mut metadata_buffer = vec![];
         let mut value_buffer = vec![];
         
-        // Create a builder in a scope to avoid borrowing issues
         {
-            // Create a builder
             let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut root = builder.new_object(&mut value_buffer);
             
-            // Create an object with a nested object
+            // Add primitive values
+            root.append_value("name", "Test User");
+            root.append_value("age", 30);
+            
+            // Add nested object
             {
-                let mut object_builder = builder.new_object(&mut value_buffer);
+                let mut address = root.append_object("address");
+                address.append_value("street", "123 Main St");
+                address.append_value("city", "Anytown");
+                address.append_value("zip", 12345);
                 
-                // Create a nested object
+                // Add deeply nested object
                 {
-                    let mut nested_builder = object_builder.append_object("nested");
-                    nested_builder.append_value("foo", 42);
-                    nested_builder.finish();
+                    let mut geo = address.append_object("geo");
+                    geo.append_value("lat", 40.7128);
+                    geo.append_value("lng", -74.0060);
+                    geo.finish();
                 }
                 
-                object_builder.finish();
+                address.finish();
             }
             
-            // Finalize metadata
+            root.finish();
             builder.finish();
         }
         
-        // Now that builder is dropped, we can use the buffers
+        // Verify metadata contains the correct keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        assert_eq!(keys.len(), 9, "Should have 9 keys in metadata");
         
-        // Verify buffers
-        assert!(!metadata_buffer.is_empty());
-        assert!(!value_buffer.is_empty());
-    }
-    
-    #[test]
-    fn test_complex_variant() {
-        let variant = create_complex_variant_example();
-        let variant = variant.unwrap();
+        // Check all required keys exist
+        let required_keys = [
+            "name", "age", "address", "street", "city", "zip", "geo", "lat", "lng"
+        ];
+        for key in required_keys.iter() {
+            assert!(keys.contains(&key.to_string()), "Missing '{key}' key");
+        }
+        
+        // Verify object structure - first byte should be object type
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Object as u8);
+        
+        // Create variant and verify it's valid
+        let variant = Variant::new(metadata_buffer, value_buffer);
         assert!(!variant.metadata().is_empty());
         assert!(!variant.value().is_empty());
     }
-
+    
     #[test]
-    fn test_objectbuilder() {
+    fn test_nested_arrays() {
         let mut metadata_buffer = vec![];
         let mut value_buffer = vec![];
         
-        // Create a scope for the builders
         {
             let mut builder = VariantBuilder::new(&mut metadata_buffer);
-            let mut object_builder = builder.new_object(&mut value_buffer);
+            let mut root = builder.new_object(&mut value_buffer);
             
-            // Add a string field
-            object_builder.append_value("name", "John");
-            
-            // Add a int32 field
-            object_builder.append_value("age", 30);
-            
-            object_builder.finish();
-            builder.finish();
-        } // builders are dropped here, releasing the borrow
-        
-        // Assert after the builders have been dropped
-        assert!(!metadata_buffer.is_empty());
-        assert!(!value_buffer.is_empty());
-    }
-
-    #[test]
-    fn test_arraybuilder() {
-        let mut metadata_buffer = vec![];
-        let mut value_buffer = vec![];
-        
-        // Create a scope for the builders
-        {
-            let mut builder = VariantBuilder::new(&mut metadata_buffer);
-            let mut array_builder = builder.new_array(&mut value_buffer);
-            
-            // Add elements
-            array_builder.append_value(1);
-            array_builder.append_value(2);
-            array_builder.append_value(3);
-            
-            array_builder.finish();
-            builder.finish();
-        } // builders are dropped here, releasing the borrow
-        
-        // Assert after the builders have been dropped
-        assert!(!metadata_buffer.is_empty());
-        assert!(!value_buffer.is_empty());
-    }
-
-    #[test]
-    fn test_encoder_integration() {
-        // Create primitive values
-        let null_value = PrimitiveValue::Null;
-        let bool_value = PrimitiveValue::Boolean(true);
-        let int8_value = PrimitiveValue::Int8(42);
-        let int32_value = PrimitiveValue::Int32(12345);
-        let float_value = PrimitiveValue::Float(3.14);
-        let string_value = PrimitiveValue::String("Hello, world!".to_string());
-        
-        // Create additional test values for newly implemented encoder functions
-        let binary_value = PrimitiveValue::Binary(vec![0x01, 0x02, 0x03, 0x04]);
-        let date_value = PrimitiveValue::Date(18262); // Example date
-        let timestamp_value = PrimitiveValue::Timestamp(1618243200000); // Example timestamp
-        let timestamp_ntz_value = PrimitiveValue::TimestampNTZ(1618243200000);
-        let time_ntz_value = PrimitiveValue::TimeNTZ(43200000); // 12:00:00
-        let timestamp_nanos_value = PrimitiveValue::TimestampNanos(1618243200000000000);
-        let timestamp_ntz_nanos_value = PrimitiveValue::TimestampNTZNanos(1618243200000000000);
-        let uuid_value = PrimitiveValue::Uuid([
-            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
-            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF
-        ]);
-        
-        // Create test vectors using write_value (which now uses encoder functions)
-        let mut null_buffer = Vec::new();
-        let mut bool_buffer = Vec::new();
-        let mut int8_buffer = Vec::new();
-        let mut int32_buffer = Vec::new();
-        let mut float_buffer = Vec::new();
-        let mut string_buffer = Vec::new();
-        let mut binary_buffer = Vec::new();
-        let mut date_buffer = Vec::new();
-        let mut timestamp_buffer = Vec::new();
-        let mut timestamp_ntz_buffer = Vec::new();
-        let mut time_ntz_buffer = Vec::new();
-        let mut timestamp_nanos_buffer = Vec::new();
-        let mut timestamp_ntz_nanos_buffer = Vec::new();
-        let mut uuid_buffer = Vec::new();
-        
-        // Encode basic values
-        write_value(&mut null_buffer, &null_value).unwrap();
-        write_value(&mut bool_buffer, &bool_value).unwrap();
-        write_value(&mut int8_buffer, &int8_value).unwrap();
-        write_value(&mut int32_buffer, &int32_value).unwrap();
-        write_value(&mut float_buffer, &float_value).unwrap();
-        write_value(&mut string_buffer, &string_value).unwrap();
-        
-        // Encode new types
-        write_value(&mut binary_buffer, &binary_value).unwrap();
-        write_value(&mut date_buffer, &date_value).unwrap();
-        write_value(&mut timestamp_buffer, &timestamp_value).unwrap();
-        write_value(&mut timestamp_ntz_buffer, &timestamp_ntz_value).unwrap();
-        write_value(&mut time_ntz_buffer, &time_ntz_value).unwrap();
-        write_value(&mut timestamp_nanos_buffer, &timestamp_nanos_value).unwrap();
-        write_value(&mut timestamp_ntz_nanos_buffer, &timestamp_ntz_nanos_value).unwrap();
-        write_value(&mut uuid_buffer, &uuid_value).unwrap();
-        
-        // Verify encoded values are valid by decoding them
-        let keys = Vec::<String>::new();
-        
-        // Test basic values
-        let decoded_null = crate::decoder::decode_value(&null_buffer, &keys).unwrap();
-        assert!(decoded_null.is_null());
-        
-        let decoded_bool = crate::decoder::decode_value(&bool_buffer, &keys).unwrap();
-        assert_eq!(decoded_bool, serde_json::json!(true));
-        
-        let decoded_int8 = crate::decoder::decode_value(&int8_buffer, &keys).unwrap();
-        assert_eq!(decoded_int8, serde_json::json!(42));
-        
-        let decoded_int32 = crate::decoder::decode_value(&int32_buffer, &keys).unwrap();
-        assert_eq!(decoded_int32, serde_json::json!(12345));
-        
-        let decoded_float = crate::decoder::decode_value(&float_buffer, &keys).unwrap();
-        // Use is_f64 since json values may have slight precision differences
-        assert!(decoded_float.is_f64());
-        assert!((decoded_float.as_f64().unwrap() - 3.14).abs() < 1e-6);
-        
-        let decoded_string = crate::decoder::decode_value(&string_buffer, &keys).unwrap();
-        assert_eq!(decoded_string, serde_json::json!("Hello, world!"));
-        
-        // Test binary value (decoded as a string in JSON format)
-        let decoded_binary = crate::decoder::decode_value(&binary_buffer, &keys).unwrap();
-        assert!(decoded_binary.is_string());
-
-        // Date and timestamp types are converted to strings in the decoder
-        let decoded_date = crate::decoder::decode_value(&date_buffer, &keys).unwrap();
-        assert!(decoded_date.is_string());
-        
-        let decoded_timestamp = crate::decoder::decode_value(&timestamp_buffer, &keys).unwrap();
-        assert!(decoded_timestamp.is_string());
-        
-        let decoded_timestamp_ntz = crate::decoder::decode_value(&timestamp_ntz_buffer, &keys).unwrap();
-        assert!(decoded_timestamp_ntz.is_string());
-        
-        let decoded_time_ntz = crate::decoder::decode_value(&time_ntz_buffer, &keys).unwrap();
-        assert!(decoded_time_ntz.is_string());
-        
-        let decoded_timestamp_nanos = crate::decoder::decode_value(&timestamp_nanos_buffer, &keys).unwrap();
-        assert!(decoded_timestamp_nanos.is_string());
-        
-        let decoded_timestamp_ntz_nanos = crate::decoder::decode_value(&timestamp_ntz_nanos_buffer, &keys).unwrap();
-        assert!(decoded_timestamp_ntz_nanos.is_string());
-        
-        let decoded_uuid = crate::decoder::decode_value(&uuid_buffer, &keys).unwrap();
-        assert!(decoded_uuid.is_string());
-    }
-
-    #[test]
-    fn test_valid_encoding_format() {
-        // Test that the builder creates correctly encoded objects and arrays
-        // according to the Variant encoding specification
-        
-        // Create an object
-        let mut metadata_buffer = vec![];
-        let mut value_buffer = vec![];
-        
-        // Create a builder in a scope to avoid borrowing issues
-        {
-            let mut builder = VariantBuilder::new(&mut metadata_buffer);
-            let mut object_builder = builder.new_object(&mut value_buffer);
-            
-            // Add some values including different types
-            object_builder.append_value("name", "Test User");
-            object_builder.append_value("age", 30);
-            object_builder.append_value("active", true);
-            
-            // Add a nested object
+            // Add array of primitives with expected length 3
             {
-                let mut nested_builder = object_builder.append_object("address");
-                nested_builder.append_value("city", "Testville");
-                nested_builder.append_value("zip", 12345);
-                nested_builder.finish();
+                let mut scores = root.append_array("scores");
+                scores.append_value(95);
+                scores.append_value(87);
+                scores.append_value(91);
+                scores.finish();
             }
             
-            // Finish the object
-            object_builder.finish();
+            // Add array of objects with expected length 2
+            {
+                let mut contacts = root.append_array("contacts");
+                
+                // First contact
+                {
+                    let mut contact = contacts.append_object();
+                    contact.append_value("name", "Alice");
+                    contact.append_value("phone", "555-1234");
+                    contact.finish();
+                }
+                
+                // Second contact
+                {
+                    let mut contact = contacts.append_object();
+                    contact.append_value("name", "Bob");
+                    contact.append_value("phone", "555-5678");
+                    contact.finish();
+                }
+                
+                contacts.finish();
+            }
+            
+            root.finish();
             builder.finish();
         }
         
-        // Now validate the object encoding
-        // First byte is the object header
-        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Object as u8);
+        // Verify metadata contains the expected keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        assert_eq!(keys.len(), 4, "Should have 4 keys in metadata");
         
-        // Create another test for arrays
-        let mut metadata_buffer2 = vec![];
-        let mut array_buffer = vec![];
-        
-        {
-            let mut builder = VariantBuilder::new(&mut metadata_buffer2);
-            let mut array_builder = builder.new_array(&mut array_buffer);
-            
-            // Add different types of values
-            array_builder.append_value(1);
-            array_builder.append_value(2);
-            array_builder.append_value("hello");
-            array_builder.append_value(true);
-            
-            // Add a nested object
-            {
-                let mut obj_builder = array_builder.append_object();
-                obj_builder.append_value("key", "value");
-                obj_builder.finish();
-            }
-            
-            // Finish the array
-            array_builder.finish();
-            builder.finish();
+        // Check required keys
+        let required_keys = ["scores", "contacts", "name", "phone"];
+        for key in required_keys.iter() {
+            assert!(keys.contains(&key.to_string()), "Missing '{key}' key");
         }
         
-        // Validate the array encoding
-        // First byte is the array header
-        assert_eq!(array_buffer[0] & 0x03, VariantBasicType::Array as u8);
-        
-        // Advanced validation: Create a round-trip test
-        // Create a Variant from the buffers
-        let variant_obj = Variant::new(metadata_buffer, value_buffer);
-        let variant_arr = Variant::new(metadata_buffer2, array_buffer);
-        
-        // These will panic if the encoding is invalid
-        assert!(!variant_obj.metadata().is_empty());
-        assert!(!variant_obj.value().is_empty());
-        assert!(!variant_arr.metadata().is_empty());
-        assert!(!variant_arr.value().is_empty());
-        
-        // If we have a decoder function, we could call it here to validate
-        // the full round-trip decoding
+        // Create variant
+        let variant = Variant::new(metadata_buffer, value_buffer);
+        assert!(!variant.metadata().is_empty());
+        assert!(!variant.value().is_empty());
     }
-
+    
+    // =========================================================================
+    // Advanced feature tests
+    // =========================================================================
+    
     #[test]
     fn test_metadata_reuse() {
-        // Create a shared metadata buffer
         let mut metadata_buffer = vec![];
         
-        // Create two value buffers
+        // Create multiple value buffers
+        let mut value_buffer1 = vec![];
+        let mut value_buffer2 = vec![];
+        let mut value_buffer3 = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            
+            // First object with all keys
+            {
+                let mut object = builder.new_object(&mut value_buffer1);
+                object.append_value("foo", 1);
+                object.append_value("bar", 100);
+                object.append_value("baz", "hello");
+                object.finish();
+            }
+            
+            // Second object with subset of keys
+            {
+                let mut object = builder.new_object(&mut value_buffer2);
+                object.append_value("foo", 2);
+                object.append_value("bar", 200);
+                // No "baz" key
+                object.finish();
+            }
+            
+            // Third object with different subset and order
+            {
+                let mut object = builder.new_object(&mut value_buffer3);
+                // Different order
+                object.append_value("baz", "world");
+                object.append_value("foo", 3);
+                // No "bar" key
+                object.finish();
+            }
+            
+            builder.finish();
+        }
+        
+        // Verify metadata has expected number of keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        assert_eq!(keys.len(), 3, "Should have 3 keys in metadata");
+        
+        // Create variants with same metadata
+        let variant1 = Variant::new(metadata_buffer.clone(), value_buffer1);
+        let variant2 = Variant::new(metadata_buffer.clone(), value_buffer2);
+        let variant3 = Variant::new(metadata_buffer, value_buffer3);
+        
+        // Verify shared metadata has identical bytes
+        assert_eq!(variant1.metadata(), variant2.metadata(), "Metadata should be exactly the same");
+        assert_eq!(variant2.metadata(), variant3.metadata(), "Metadata should be exactly the same");
+        
+        // Verify different values
+        assert_ne!(variant1.value(), variant2.value(), "Values should be different");
+        assert_ne!(variant2.value(), variant3.value(), "Values should be different");
+        assert_ne!(variant1.value(), variant3.value(), "Values should be different");
+    }
+    
+    #[test]
+    fn test_sorted_keys() {
+        // Test sorted keys vs unsorted
+        let mut sorted_metadata = vec![];
+        let mut unsorted_metadata = vec![];
         let mut value_buffer1 = vec![];
         let mut value_buffer2 = vec![];
         
-        // Use a scope to manage borrows
+        // Define keys in a non-alphabetical order
+        let keys = ["zoo", "apple", "banana"];
+        
+        // Build with sorted keys
         {
-            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut builder = VariantBuilder::new_with_sort(&mut sorted_metadata, true);
+            let mut object = builder.new_object(&mut value_buffer1);
             
-            // Create first object with keys "foo" and "bar"
-            {
-                let mut object_builder = builder.new_object(&mut value_buffer1);
-                object_builder.append_value("foo", 1);
-                object_builder.append_value("bar", 100);
-                object_builder.finish();
+            // Add keys in random order
+            for (i, key) in keys.iter().enumerate() {
+                object.append_value(key, (i + 1) as i32);
             }
             
-            // Create second object reusing the same metadata keys
-            {
-                let mut object_builder = builder.new_object(&mut value_buffer2);
-                object_builder.append_value("foo", 2);
-                object_builder.append_value("bar", 200);
-                object_builder.finish();
-            }
-            
-            // Finalize the metadata
+            object.finish();
             builder.finish();
         }
         
-        // Create two variant objects with the same metadata
-        let variant1 = Variant::new(metadata_buffer.clone(), value_buffer1);
-        let variant2 = Variant::new(metadata_buffer, value_buffer2);
+        // Build with unsorted keys
+        {
+            let mut builder = VariantBuilder::new_with_sort(&mut unsorted_metadata, false);
+            let mut object = builder.new_object(&mut value_buffer2);
+            
+            // Add keys in same order
+            for (i, key) in keys.iter().enumerate() {
+                object.append_value(key, (i + 1) as i32);
+            }
+            
+            object.finish();
+            builder.finish();
+        }
         
-        // Validate the variants have valid data
-        assert!(!variant1.metadata().is_empty());
-        assert!(!variant1.value().is_empty());
-        assert!(!variant2.metadata().is_empty());
-        assert!(!variant2.value().is_empty());
-
-        assert_eq!(variant1.metadata(), variant2.metadata());
+        // Verify sort flag in metadata header (bit 4)
+        assert_eq!(sorted_metadata[0] & 0x10, 0x10, "Sorted flag should be set");
+        assert_eq!(unsorted_metadata[0] & 0x10, 0, "Sorted flag should not be set");
+        
+        // Verify actual sorting of keys
+        let sorted_keys = get_metadata_keys(&sorted_metadata);
+        let unsorted_keys = get_metadata_keys(&unsorted_metadata);
+        
+        // Verify number of keys
+        assert_eq!(sorted_keys.len(), 3, "Should have 3 keys");
+        assert_eq!(unsorted_keys.len(), 3, "Should have 3 keys");
+        
+        // Verify sorted keys are in alphabetical order
+        let mut expected_sorted = keys.to_vec();
+        expected_sorted.sort();
+        
+        // Convert to Vec to make comparison easier
+        let sorted_keys_vec: Vec<_> = sorted_keys.iter().collect();
+        
+        // Verify first key is alphabetically first
+        assert_eq!(sorted_keys_vec[0], "apple", "First key should be 'apple' in sorted metadata");
+        
+       }
+    
+    // =========================================================================
+    // Encoding validation tests
+    // =========================================================================
+    
+    #[test]
+    fn test_object_encoding() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut object = builder.new_object(&mut value_buffer);
+            
+            // Add a few values
+            object.append_value("name", "Test User");
+            object.append_value("age", 30);
+            object.append_value("active", true);
+            
+            object.finish();
+            builder.finish();
+        }
+        
+        // Validate object encoding format
+        // First byte should have Object type in lower 2 bits
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Object as u8);
+        
+        // Check field ID and offset sizes from header
+        let is_large = (value_buffer[0] & 0x40) != 0;
+        let field_id_size = ((value_buffer[0] >> 4) & 0x03) + 1;
+        let field_offset_size = ((value_buffer[0] >> 2) & 0x03) + 1;
+        
+        // Verify correct sizes based on our data
+        assert!(!is_large, "Should not need large format for 3 fields");
+        // Validate number of fields
+        let num_fields = value_buffer[1];
+        assert_eq!(num_fields, 3, "Should have 3 fields");
+        
+        // Verify metadata contains the correct keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        assert_eq!(keys.len(), 3, "Should have 3 keys in metadata");
+        
+        // Check all keys exist
+        assert!(keys.contains(&"name".to_string()));
+        assert!(keys.contains(&"age".to_string()));
+        assert!(keys.contains(&"active".to_string()));
+    }
+    
+    #[test]
+    fn test_array_encoding() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        let expected_len = 4; // We'll add 4 elements
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut array = builder.new_array(&mut value_buffer);
+            
+            // Add a few values
+            array.append_value(1);
+            array.append_value(2);
+            array.append_value("hello");
+            array.append_value(true);
+            
+            array.finish();
+            builder.finish();
+        }
+        
+        // Validate array encoding format
+        // First byte should have Array type in lower 2 bits
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Array as u8);
+        
+        // Check if large format and offset size from header
+        let is_large = (value_buffer[0] & 0x10) != 0;
+        let offset_size = ((value_buffer[0] >> 2) & 0x03) + 1;
+        
+        // Verify correct sizes based on our data
+        assert!(!is_large, "Should not need large format for 4 elements");
+        
+        // Validate array length
+        let array_length = value_buffer[1];
+        assert_eq!(array_length, expected_len, "Array should have {expected_len} elements");
+        
+        // Verify offsets section exists
+        // The offsets start after the header (1 byte) and length (1 byte if small)
+        // and there should be n+1 offsets where n is the array length
+        let offsets_section_size = (expected_len as usize + 1) * (offset_size as usize);
+        assert!(value_buffer.len() > 2 + offsets_section_size, 
+                "Value buffer should contain offsets section of size {offsets_section_size}");
+    }
+    
+    #[test]
+    fn test_metadata_encoding() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new_with_sort(&mut metadata_buffer, true);
+            let mut object = builder.new_object(&mut value_buffer);
+            
+            // Add keys in non-alphabetical order
+            object.append_value("zzz", 3);
+            object.append_value("aaa", 1);
+            object.append_value("mmm", 2);
+            
+            object.finish();
+            builder.finish();
+        }
+        
+        // Validate metadata encoding
+        // First byte should have metadata version and sorted flag
+        assert_eq!(metadata_buffer[0] & 0x0F, 0x01, "Metadata should be version 1");
+        assert_eq!(metadata_buffer[0] & 0x10, 0x10, "Sorted flag should be set");
+        
+        // Get offset size from header
+        let offset_size = ((metadata_buffer[0] >> 6) & 0x03) + 1;
+        
+        // Read dictionary size based on offset size
+        let mut dict_size = 0usize;
+        for i in 0..offset_size {
+            dict_size |= (metadata_buffer[1 + i as usize] as usize) << (i * 8);
+        }
+        
+        assert_eq!(dict_size, 3, "Dictionary should have 3 entries");
+        
+        // Verify key ordering by reading keys
+        let keys = get_metadata_keys(&metadata_buffer);
+        
+        // Convert to Vec to make validation easier
+        let keys_vec: Vec<_> = keys.iter().collect();
+        
+        // Verify keys are in alphabetical order
+        assert_eq!(keys_vec[0], "aaa", "First key should be 'aaa'");
+        assert_eq!(keys_vec[1], "mmm", "Second key should be 'mmm'");
+        assert_eq!(keys_vec[2], "zzz", "Third key should be 'zzz'");
+    }
+    
+    #[test]
+    fn test_primitive_type_encoding() {
+        // Test encoding of each primitive type
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut object = builder.new_object(&mut value_buffer);
+            
+            // Add one of each primitive type
+            object.append_value("null", Option::<i32>::None);
+            object.append_value("bool_true", true);
+            object.append_value("bool_false", false);
+            object.append_value("int8", 42i8);
+            object.append_value("int16", 1000i16);
+            object.append_value("int32", 100000i32);
+            object.append_value("int64", 1000000000i64);
+            object.append_value("float", 3.14f32);
+            object.append_value("double", 2.71828f64);
+            object.append_value("string_short", "abc"); // Short string
+            object.append_value("string_long", "a".repeat(64)); // Long string
+            object.append_value("binary", vec![1u8, 2u8, 3u8]);
+            
+            object.finish();
+            builder.finish();
+        }
+        
+        // Verify object encoding
+        assert_eq!(value_buffer[0] & 0x03, VariantBasicType::Object as u8);
+        
+        // Verify number of fields
+        let num_fields = value_buffer[1];
+        assert_eq!(num_fields, 12, "Object should have 12 fields");
+        
+        // Create variant
+        let variant = Variant::new(metadata_buffer, value_buffer);
+        assert!(!variant.metadata().is_empty());
+        assert!(!variant.value().is_empty());
+    }
+    
+    // =========================================================================
+    // Error handling and edge cases
+    // =========================================================================
+    
+    #[test]
+    #[should_panic(expected = "Cannot create a new object after the builder has been finalized")]
+    fn test_error_after_finalize() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        let mut builder = VariantBuilder::new(&mut metadata_buffer);
+        
+        // Finalize the builder
+        builder.finish();
+        
+        // This should panic - creating object after finalize
+        let mut _object = builder.new_object(&mut value_buffer);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Cannot append to a finalized object")]
+    fn test_error_append_after_finish() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        let mut builder = VariantBuilder::new(&mut metadata_buffer);
+        let mut object = builder.new_object(&mut value_buffer);
+        
+        // Finish the object
+        object.finish();
+        
+        // This should panic - appending after finish
+        object.append_value("test", 1);
+    }
+    
+    #[test]
+    fn test_empty_object_and_array() {
+        // Test empty object
+        let mut metadata_buffer = vec![];
+        let mut obj_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut object = builder.new_object(&mut obj_buffer);
+            // Don't add any fields
+            object.finish();
+            builder.finish();
+        }
+        
+        let obj_variant = Variant::new(metadata_buffer.clone(), obj_buffer);
+        assert!(!obj_variant.metadata().is_empty());
+        assert!(!obj_variant.value().is_empty());
+        
+        // Check object has 0 fields
+        assert_eq!(obj_variant.value()[1], 0, "Empty object should have 0 fields");
+        
+        // Test empty array
+        let mut arr_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut array = builder.new_array(&mut arr_buffer);
+            // Don't add any elements
+            array.finish();
+            builder.finish();
+        }
+        
+        let arr_variant = Variant::new(metadata_buffer, arr_buffer);
+        assert!(!arr_variant.metadata().is_empty());
+        assert!(!arr_variant.value().is_empty());
+        
+        // Check array has 0 elements
+        assert_eq!(arr_variant.value()[1], 0, "Empty array should have 0 elements");
+    }
+    
+    #[test]
+    fn test_decimal_values() {
+        let mut metadata_buffer = vec![];
+        let mut value_buffer = vec![];
+        
+        {
+            let mut builder = VariantBuilder::new(&mut metadata_buffer);
+            let mut object_builder = builder.new_object(&mut value_buffer);
+            
+            // Test using PrimitiveValue directly
+            object_builder.append_value("decimal4", PrimitiveValue::Decimal4(2, 12345));
+            object_builder.append_value("decimal8", PrimitiveValue::Decimal8(4, 9876543210));
+            object_builder.append_value("decimal16", PrimitiveValue::Decimal16(10, 1234567890123456789012345678901_i128));
+            
+            object_builder.finish();
+            builder.finish();
+        }
+        
+        // Verify object was created successfully
+        let variant = Variant::new(metadata_buffer, value_buffer);
+        assert!(!variant.metadata().is_empty());
+        assert!(!variant.value().is_empty());
+        
+        // Verify basics about the object
+        let object_byte = variant.value()[0];
+        assert_eq!(object_byte & 0x03, VariantBasicType::Object as u8);
+        
+        // Check number of fields is correct
+        assert_eq!(variant.value()[1], 3, "Should have 3 decimal fields");
     }
 } 

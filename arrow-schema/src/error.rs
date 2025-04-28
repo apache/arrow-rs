@@ -60,6 +60,8 @@ pub enum ArrowError {
     DictionaryKeyOverflowError,
     /// Error when the run end index in a REE array is bigger than the array length
     RunEndIndexOverflowError,
+    /// Error during Variant operations in `arrow-variant`.
+    VariantError(String),
 }
 
 impl ArrowError {
@@ -125,6 +127,9 @@ impl Display for ArrowError {
             }
             ArrowError::RunEndIndexOverflowError => {
                 write!(f, "Run end encoded array index overflow error")
+            }
+            ArrowError::VariantError(desc) => {
+                write!(f, "Variant error: {desc}")
             }
         }
     }

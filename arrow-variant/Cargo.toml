@@ -46,6 +46,7 @@ arrow-data = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
+indexmap = "2.0.0"
 
 [dev-dependencies]
 arrow-cast = { workspace = true } 

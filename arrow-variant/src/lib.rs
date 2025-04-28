@@ -66,27 +66,16 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! [format]: https://arrow.apache.org/docs/format/Variant.html
+
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
-/// Error types for variant operations
-/// Utilities for working with variant binary format
-pub mod variant_utils;
-/// Metadata utilities
-pub mod metadata;
 /// Builder API for creating variant values
 pub mod builder;
 /// Encoder module for converting values to Variant binary format
 pub mod encoder;
-/// Decoder module for converting Variant binary format to values
-pub mod decoder;
-
 
 // Re-export primary types
-pub use variant_utils::{create_variant_array, get_variant, validate_struct_array, create_empty_variant_array};
-pub use metadata::{create_metadata, parse_metadata};
-pub use builder::{VariantBuilder, PrimitiveValue, create_variant_object_example, create_variant_array_example, create_complex_variant_example};
+pub use builder::{VariantBuilder, PrimitiveValue};
 pub use encoder::{VariantBasicType, VariantPrimitiveType};

@@ -15,12 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Encoder module for converting JSON values to Variant binary format
+//! Core encoding primitives for the Variant binary format
 
-use serde_json::Value;
-use std::collections::HashMap;
 use arrow_schema::ArrowError;
 use std::io::Write;
+
+/// Maximum value that can be stored in a single byte (2^8 - 1)
+pub const MAX_1BYTE_VALUE: usize = 255;
+
+/// Maximum value that can be stored in two bytes (2^16 - 1)
+pub const MAX_2BYTE_VALUE: usize = 65535;
+
+/// Maximum value that can be stored in three bytes (2^24 - 1)
+pub const MAX_3BYTE_VALUE: usize = 16777215;
+
+/// Calculate the minimum number of bytes required to represent a value.
+///
+/// Returns a value between 1 and 4, representing the minimum number of
+/// bytes needed to store the given value.
+///
+/// # Arguments
+///
+/// * `value` - The value to determine the size for
+///
+/// # Returns
+///
+/// The number of bytes (1, 2, 3, or 4) needed to represent the value
+pub fn min_bytes_needed(value: usize) -> usize {
+    if value <= MAX_1BYTE_VALUE {
+        1
+    } else if value <= MAX_2BYTE_VALUE {
+        2
+    } else if value <= MAX_3BYTE_VALUE {
+        3
+    } else {
+        4
+    }
+}
 
 /// Variant basic types as defined in the Arrow Variant specification
 /// 
@@ -285,84 +316,114 @@ pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
     output.extend_from_slice(value);
 }
 
-/// Encodes an array value
-fn encode_array(array: &[Value], output: &mut Vec<u8>, key_mapping: &HashMap<String, usize>) -> Result<(), ArrowError> {
-    let len = array.len();
-    
-    // First pass to collect encoded values
-    let mut temp_outputs = Vec::with_capacity(len);
-    
-    for value in array {
-        let mut temp_output = Vec::new();
-        encode_value(value, &mut temp_output, key_mapping)?;
-        temp_outputs.push(temp_output);
+/// Encodes a decimal value with 32-bit precision (decimal4)
+///
+/// According to the Variant Binary Format specification, decimal values are encoded as:
+/// 1. A 1-byte scale value in range [0, 38]
+/// 2. Followed by the little-endian unscaled value
+///
+/// # Arguments
+///
+/// * `scale` - The scale of the decimal value (number of decimal places)
+/// * `unscaled_value` - The unscaled integer value
+/// * `output` - The destination to write to
+pub fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
+    if scale > 38 {
+        panic!("Decimal scale must be in range [0, 38], got {}", scale);
     }
     
-    // Convert to slices for encoding
-    let value_slices: Vec<&[u8]> = temp_outputs.iter()
-        .map(|v| v.as_slice())
-        .collect();
+    // Use primitive + decimal4 type
+    let header = primitive_header(VariantPrimitiveType::Decimal4 as u8);
+    output.push(header);
     
-    // Use the core encoding function
-    encode_array_from_pre_encoded(&value_slices, output)
+    // Write scale byte
+    output.push(scale);
+    
+    // Write unscaled value as little-endian
+    output.extend_from_slice(&unscaled_value.to_le_bytes());
 }
 
-/// Encodes an object value
-fn encode_object(obj: &serde_json::Map<String, Value>, output: &mut Vec<u8>, key_mapping: &HashMap<String, usize>) -> Result<(), ArrowError> {
-    // Collect and sort fields by key
-    let mut fields: Vec<_> = obj.iter().collect();
-    fields.sort_by(|a, b| a.0.cmp(b.0));
-    
-    // First pass to collect field IDs and encoded values
-    let mut field_ids = Vec::with_capacity(fields.len());
-    let mut temp_outputs = Vec::with_capacity(fields.len());
-    
-    for (key, value) in &fields {
-        let field_id = key_mapping.get(key.as_str())
-            .ok_or_else(|| ArrowError::SchemaError(format!("Key not found in mapping: {}", key)))?;
-        field_ids.push(*field_id);
-        
-        let mut temp_output = Vec::new();
-        encode_value(value, &mut temp_output, key_mapping)?;
-        temp_outputs.push(temp_output);
+/// Encodes a decimal value with 64-bit precision (decimal8)
+///
+/// According to the Variant Binary Format specification, decimal values are encoded as:
+/// 1. A 1-byte scale value in range [0, 38]
+/// 2. Followed by the little-endian unscaled value
+///
+/// # Arguments
+///
+/// * `scale` - The scale of the decimal value (number of decimal places)
+/// * `unscaled_value` - The unscaled integer value
+/// * `output` - The destination to write to
+pub fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
+    if scale > 38 {
+        panic!("Decimal scale must be in range [0, 38], got {}", scale);
     }
     
-    // Convert to slices for encoding
-    let value_slices: Vec<&[u8]> = temp_outputs.iter()
-        .map(|v| v.as_slice())
-        .collect();
+    // Use primitive + decimal8 type
+    let header = primitive_header(VariantPrimitiveType::Decimal8 as u8);
+    output.push(header);
     
-    // Use the core encoding function
-    encode_object_from_pre_encoded(&field_ids, &value_slices, output)
+    // Write scale byte
+    output.push(scale);
+    
+    // Write unscaled value as little-endian
+    output.extend_from_slice(&unscaled_value.to_le_bytes());
 }
 
-/// Encodes a JSON value to Variant binary format
-pub fn encode_value(value: &Value, output: &mut Vec<u8>, key_mapping: &HashMap<String, usize>) -> Result<(), ArrowError> {
-    match value {
-        Value::Null => encode_null(output),
-        Value::Bool(b) => encode_boolean(*b, output),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                encode_integer(i, output);
-            } else if let Some(f) = n.as_f64() {
-                encode_float(f, output);
-            } else {
-                return Err(ArrowError::SchemaError("Unsupported number format".to_string()));
-            }
+/// Encodes a decimal value with 128-bit precision (decimal16)
+///
+/// According to the Variant Binary Format specification, decimal values are encoded as:
+/// 1. A 1-byte scale value in range [0, 38]
+/// 2. Followed by the little-endian unscaled value
+///
+/// # Arguments
+///
+/// * `scale` - The scale of the decimal value (number of decimal places)
+/// * `unscaled_value` - The unscaled integer value
+/// * `output` - The destination to write to
+pub fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
+    if scale > 38 {
+        panic!("Decimal scale must be in range [0, 38], got {}", scale);
+    }
+    
+    // Use primitive + decimal16 type
+    let header = primitive_header(VariantPrimitiveType::Decimal16 as u8);
+    output.push(header);
+    
+    // Write scale byte
+    output.push(scale);
+    
+    // Write unscaled value as little-endian
+    output.extend_from_slice(&unscaled_value.to_le_bytes());
+}
+
+/// Writes an integer value using the specified number of bytes (1-4).
+///
+/// This is a helper function to write integers with variable byte length,
+/// used for offsets, field IDs, and other values in the variant format.
+///
+/// # Arguments
+///
+/// * `value` - The integer value to write
+/// * `num_bytes` - The number of bytes to use (1, 2, 3, or 4)
+/// * `output` - The destination to write to
+///
+/// # Returns
+///
+/// An arrow error if writing fails
+pub fn write_int_with_size(value: u32, num_bytes: usize, output: &mut impl Write) -> Result<(), ArrowError> {
+    match num_bytes {
+        1 => output.write_all(&[value as u8])?,
+        2 => output.write_all(&(value as u16).to_le_bytes())?,
+        3 => {
+            output.write_all(&[value as u8])?;
+            output.write_all(&[(value >> 8) as u8])?;
+            output.write_all(&[(value >> 16) as u8])?;
         },
-        Value::String(s) => encode_string(s, output),
-        Value::Array(a) => encode_array(a, output, key_mapping)?,
-        Value::Object(o) => encode_object(o, output, key_mapping)?,
+        4 => output.write_all(&value.to_le_bytes())?,
+        _ => return Err(ArrowError::VariantError(format!("Invalid byte size: {}", num_bytes))),
     }
-    
     Ok(())
-}
-
-/// Encodes a JSON value to a complete Variant binary value
-pub fn encode_json(json: &Value, key_mapping: &HashMap<String, usize>) -> Result<Vec<u8>, ArrowError> {
-    let mut output = Vec::new();
-    encode_value(json, &mut output, key_mapping)?;
-    Ok(output)
 }
 
 /// Encodes a pre-encoded array to the Variant binary format
@@ -381,7 +442,7 @@ pub fn encode_array_from_pre_encoded(
     let len = values.len();
     
     // Determine if we need large size encoding
-    let is_large = len > 255;
+    let is_large = len > MAX_1BYTE_VALUE;
     
     // Calculate total value size to determine offset_size
     let mut data_size = 0;
@@ -390,13 +451,10 @@ pub fn encode_array_from_pre_encoded(
     }
     
     // Determine minimum offset size
-    let offset_size = if data_size <= 255 { 1 } 
-                      else if data_size <= 65535 { 2 }
-                      else if data_size <= 16777215 { 3 }
-                      else { 4 };
+    let offset_size = min_bytes_needed(data_size);
     
     // Write array header with correct flags
-    let header = array_header(is_large, offset_size);
+    let header = array_header(is_large, offset_size as u8);
     output.write_all(&[header])?;
     
     // Write length as 1 or 4 bytes
@@ -416,18 +474,9 @@ pub fn encode_array_from_pre_encoded(
         offsets.push(current_offset);
     }
     
+    // Write offsets using the helper function
     for offset in &offsets {
-        match offset_size {
-            1 => output.write_all(&[*offset as u8])?,
-            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*offset & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
+        write_int_with_size(*offset, offset_size, output)?;
     }
     
     // Write values
@@ -456,7 +505,7 @@ pub fn encode_object_from_pre_encoded(
     let len = field_ids.len();
     
     // Determine if we need large size encoding
-    let is_large = len > 255;
+    let is_large = len > MAX_1BYTE_VALUE;
     
     // Calculate total value size to determine offset_size
     let mut data_size = 0;
@@ -466,18 +515,15 @@ pub fn encode_object_from_pre_encoded(
     
     // Determine minimum sizes needed
     let id_size = if field_ids.is_empty() { 1 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &255 { 1 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &65535 { 2 }
-                  else if field_ids.iter().max().unwrap_or(&0) <= &16777215 { 3 }
-                  else { 4 };
+                  else {
+                      let max_id = field_ids.iter().max().unwrap_or(&0);
+                      min_bytes_needed(*max_id)
+                  };
                   
-    let offset_size = if data_size <= 255 { 1 }
-                      else if data_size <= 65535 { 2 }
-                      else if data_size <= 16777215 { 3 }
-                      else { 4 };
+    let offset_size = min_bytes_needed(data_size);
     
     // Write object header with correct flags
-    let header = object_header(is_large, id_size, offset_size);
+    let header = object_header(is_large, id_size as u8, offset_size as u8);
     output.write_all(&[header])?;
     
     // Write length as 1 or 4 bytes
@@ -487,19 +533,9 @@ pub fn encode_object_from_pre_encoded(
         output.write_all(&[len as u8])?;
     }
     
-    // Write field IDs
+    // Write field IDs using the helper function
     for id in field_ids {
-        match id_size {
-            1 => output.write_all(&[*id as u8])?,
-            2 => output.write_all(&(*id as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*id & 0xFF) as u8])?;
-                output.write_all(&[((*id >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*id >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*id as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
+        write_int_with_size(*id as u32, id_size, output)?;
     }
     
     // Calculate and write offsets
@@ -512,18 +548,9 @@ pub fn encode_object_from_pre_encoded(
         offsets.push(current_offset);
     }
     
+    // Write offsets using the helper function
     for offset in &offsets {
-        match offset_size {
-            1 => output.write_all(&[*offset as u8])?,
-            2 => output.write_all(&(*offset as u16).to_le_bytes())?,
-            3 => {
-                output.write_all(&[(*offset & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 8) & 0xFF) as u8])?;
-                output.write_all(&[((*offset >> 16) & 0xFF) as u8])?;
-            },
-            4 => output.write_all(&(*offset as u32).to_le_bytes())?,
-            _ => unreachable!(),
-        }
+        write_int_with_size(*offset, offset_size, output)?;
     }
     
     // Write values
@@ -537,21 +564,6 @@ pub fn encode_object_from_pre_encoded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    
-    fn setup_key_mapping() -> HashMap<String, usize> {
-        let mut mapping = HashMap::new();
-        mapping.insert("name".to_string(), 0);
-        mapping.insert("age".to_string(), 1);
-        mapping.insert("active".to_string(), 2);
-        mapping.insert("scores".to_string(), 3);
-        mapping.insert("address".to_string(), 4);
-        mapping.insert("street".to_string(), 5);
-        mapping.insert("city".to_string(), 6);
-        mapping.insert("zip".to_string(), 7);
-        mapping.insert("tags".to_string(), 8);
-        mapping
-    }
     
     #[test]
     fn test_encode_integers() {
@@ -619,116 +631,10 @@ mod tests {
     }
     
     #[test]
-    fn test_encode_array() -> Result<(), ArrowError> {
-        let key_mapping = setup_key_mapping();
-        let json = json!([1, "text", true, null]);
-        
-        let mut output = Vec::new();
-        encode_array(json.as_array().unwrap(), &mut output, &key_mapping)?;
-        
-        // Validate array header
-        assert_eq!(output[0], array_header(false, 1));
-        assert_eq!(output[1], 4); // 4 elements
-        
-        // Array should contain encoded versions of the 4 values
-        Ok(())
-    }
-    
-    #[test]
-    fn test_encode_object() -> Result<(), ArrowError> {
-        let key_mapping = setup_key_mapping();
-        let json = json!({
-            "name": "John",
-            "age": 30,
-            "active": true
-        });
-        
-        let mut output = Vec::new();
-        encode_object(json.as_object().unwrap(), &mut output, &key_mapping)?;
-        
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id = 2 < 255)
-        // - field_offset_size_minus_one = 0 (offset_size = 1, small offsets)
-        assert_eq!(output[0], 0b00000010); // Object header
-        
-        // Verify num_elements (1 byte)
-        assert_eq!(output[1], 3);
-        
-        // Verify field_ids (in lexicographical order: active, age, name)
-        assert_eq!(output[2], 2); // active
-        assert_eq!(output[3], 1); // age
-        assert_eq!(output[4], 0); // name
-        
-        // Test empty object
-        let empty_obj = json!({});
-        output.clear();
-        encode_object(empty_obj.as_object().unwrap(), &mut output, &key_mapping)?;
-        
-        // Verify header byte for empty object
-        assert_eq!(output[0], 0b00000010); // Object header with minimum sizes
-        assert_eq!(output[1], 0); // Zero elements
-        
-        // Test case 2: Object with large values requiring larger offsets
-        let obj = json!({
-            "name": "This is a very long string that will definitely require more than 255 bytes to encode. Let me add some more text to make sure it exceeds the limit. The string needs to be long enough to trigger the use of 2-byte offsets. Adding more content to ensure we go over the threshold. This is just padding text to make the string longer. Almost there, just a bit more to go. And finally, some more text to push us over the edge.",
-            "age": 30,
-            "active": true
-        });
-        
-        output.clear();
-        encode_object(obj.as_object().unwrap(), &mut output, &key_mapping)?;
-        
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id = 2 < 255)
-        // - field_offset_size_minus_one = 1 (offset_size = 2, large offsets)
-        assert_eq!(output[0], 0b00000110); // Object header with 2-byte offsets
-        
-        // Test case 3: Object with nested objects
-        let obj = json!({
-            "name": "John",
-            "address": {
-                "street": "123 Main St",
-                "city": "New York",
-                "zip": "10001"
-            },
-            "scores": [95, 87, 92]
-        });
-        
-        output.clear();
-        encode_object(obj.as_object().unwrap(), &mut output, &key_mapping)?;
-        
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id < 255)
-        // - field_offset_size_minus_one = 0 (offset_size = 1, determined by data size)
-        assert_eq!(output[0], 0b00000010); // Object header with 1-byte offsets
-        
-        // Verify num_elements (1 byte)
-        assert_eq!(output[1], 3);
-        
-        // Verify field_ids (in lexicographical order: address, name, scores)
-        assert_eq!(output[2], 4); // address
-        assert_eq!(output[3], 0); // name
-        assert_eq!(output[4], 3); // scores
-        
-        Ok(())
-    }
-    
-    #[test]
     fn test_encode_null() {
         let mut output = Vec::new();
         encode_null(&mut output);
         assert_eq!(output, vec![primitive_header(VariantPrimitiveType::Null as u8)]);
-        
-        // Test that the encoded value can be decoded correctly
-        let keys = Vec::<String>::new();
-        let result = crate::decoder::decode_value(&output, &keys).unwrap();
-        assert!(result.is_null());
     }
     
     #[test]
@@ -738,94 +644,60 @@ mod tests {
         encode_boolean(true, &mut output);
         assert_eq!(output, vec![primitive_header(VariantPrimitiveType::BooleanTrue as u8)]);
         
-        // Test that the encoded value can be decoded correctly
-        let keys = Vec::<String>::new();
-        let result = crate::decoder::decode_value(&output, &keys).unwrap();
-        assert_eq!(result, serde_json::json!(true));
-        
         // Test false
         output.clear();
         encode_boolean(false, &mut output);
         assert_eq!(output, vec![primitive_header(VariantPrimitiveType::BooleanFalse as u8)]);
-        
-        // Test that the encoded value can be decoded correctly
-        let result = crate::decoder::decode_value(&output, &keys).unwrap();
-        assert_eq!(result, serde_json::json!(false));
     }
-
+    
     #[test]
-    fn test_object_encoding() {
-        let key_mapping = setup_key_mapping();
-        let json = json!({
-            "name": "John",
-            "age": 30,
-            "active": true
-        });
-        
+    fn test_encode_decimal() {
+        // Test Decimal4
         let mut output = Vec::new();
-        encode_object(json.as_object().unwrap(), &mut output, &key_mapping).unwrap();
+        encode_decimal4(2, 12345, &mut output);
         
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id = 2 < 255)
-        // - field_offset_size_minus_one = 0 (offset_size = 1, small offsets)
-        assert_eq!(output[0], 0b00000010); // Object header
+        // Verify header
+        assert_eq!(output[0], primitive_header(VariantPrimitiveType::Decimal4 as u8));
+        // Verify scale
+        assert_eq!(output[1], 2);
+        // Verify unscaled value
+        let unscaled_bytes = &output[2..6];
+        let unscaled_value = i32::from_le_bytes([unscaled_bytes[0], unscaled_bytes[1], unscaled_bytes[2], unscaled_bytes[3]]);
+        assert_eq!(unscaled_value, 12345);
         
-        // Verify num_elements (1 byte)
-        assert_eq!(output[1], 3);
-        
-        // Verify field_ids (in lexicographical order: active, age, name)
-        assert_eq!(output[2], 2); // active
-        assert_eq!(output[3], 1); // age
-        assert_eq!(output[4], 0); // name
-        
-        // Test case 2: Object with large values requiring larger offsets
-        let obj = json!({
-            "name": "This is a very long string that will definitely require more than 255 bytes to encode. Let me add some more text to make sure it exceeds the limit. The string needs to be long enough to trigger the use of 2-byte offsets. Adding more content to ensure we go over the threshold. This is just padding text to make the string longer. Almost there, just a bit more to go. And finally, some more text to push us over the edge.",
-            "age": 30,
-            "active": true
-        });
-        
+        // Test Decimal8
         output.clear();
-        encode_object(obj.as_object().unwrap(), &mut output, &key_mapping).unwrap();
+        encode_decimal8(6, 9876543210, &mut output);
         
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id = 2 < 255)
-        // - field_offset_size_minus_one = 1 (offset_size = 2, large offsets)
-        assert_eq!(output[0], 0b00000110); // Object header with 2-byte offsets
+        // Verify header
+        assert_eq!(output[0], primitive_header(VariantPrimitiveType::Decimal8 as u8));
+        // Verify scale
+        assert_eq!(output[1], 6);
+        // Verify unscaled value
+        let unscaled_bytes = &output[2..10];
+        let unscaled_value = i64::from_le_bytes([
+            unscaled_bytes[0], unscaled_bytes[1], unscaled_bytes[2], unscaled_bytes[3], 
+            unscaled_bytes[4], unscaled_bytes[5], unscaled_bytes[6], unscaled_bytes[7]
+        ]);
+        assert_eq!(unscaled_value, 9876543210);
         
-        
-        // Test case 3: Object with nested objects
-        let obj = json!({
-            "name": "John",
-            "address": {
-                "street": "123 Main St",
-                "city": "New York",
-                "zip": "10001"
-            },
-            "scores": [95, 87, 92]
-        });
-        
+        // Test Decimal16
         output.clear();
-        encode_object(obj.as_object().unwrap(), &mut output, &key_mapping).unwrap();
+        let large_value = 1234567890123456789012345678901234_i128;
+        encode_decimal16(10, large_value, &mut output);
         
-        // Verify header byte
-        // - basic_type = 2 (Object)
-        // - is_large = 0 (3 elements < 255)
-        // - field_id_size_minus_one = 0 (max field_id < 255)
-        // - field_offset_size_minus_one = 0 (offset_size = 1, determined by data size)
-        assert_eq!(output[0], 0b00000010); // Object header with 1-byte offsets
-        
-        // Verify num_elements (1 byte)
-        assert_eq!(output[1], 3);
-        
-        // Verify field_ids (in lexicographical order: address, name, scores)
-        assert_eq!(output[2], 4); // address
-        assert_eq!(output[3], 0); // name
-        assert_eq!(output[4], 3); // scores
-        
+        // Verify header
+        assert_eq!(output[0], primitive_header(VariantPrimitiveType::Decimal16 as u8));
+        // Verify scale
+        assert_eq!(output[1], 10);
+        // Verify unscaled value
+        let unscaled_bytes = &output[2..18];
+        let unscaled_value = i128::from_le_bytes([
+            unscaled_bytes[0], unscaled_bytes[1], unscaled_bytes[2], unscaled_bytes[3], 
+            unscaled_bytes[4], unscaled_bytes[5], unscaled_bytes[6], unscaled_bytes[7],
+            unscaled_bytes[8], unscaled_bytes[9], unscaled_bytes[10], unscaled_bytes[11],
+            unscaled_bytes[12], unscaled_bytes[13], unscaled_bytes[14], unscaled_bytes[15]
+        ]);
+        assert_eq!(unscaled_value, large_value);
     }
 } 
