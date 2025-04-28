@@ -142,23 +142,13 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
-        let mut encryption_algorithm = None;
-        if let Some(file_encryptor) = self.object_writer.file_encryptor.clone() {
-            let properties = file_encryptor.properties();
-            if !properties.encrypt_footer() {
-                let supply_aad_prefix = properties
-                    .aad_prefix()
-                    .map(|_| !properties.store_aad_prefix());
-                encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
-                    aad_prefix: if properties.store_aad_prefix() {
-                        properties.aad_prefix().cloned()
-                    } else {
-                        None
-                    },
-                    aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
-                    supply_aad_prefix,
-                }));
-            }
+        #[cfg(not(feature = "encryption"))]
+        let encryption_algorithm = None;
+
+        #[cfg(feature = "encryption")]
+        let encryption_algorithm = match &self.object_writer.file_encryptor {
+            Some(file_encryptor) => file_encryptor.get_footer_encryptor_for_plaintext()?,
+            _ => None,
         };
 
         let mut file_metadata = FileMetaData {
