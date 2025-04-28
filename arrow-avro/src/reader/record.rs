@@ -37,6 +37,7 @@ pub struct RecordDecoder {
 }
 
 impl RecordDecoder {
+    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`]
     pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
