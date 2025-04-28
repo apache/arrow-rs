@@ -293,10 +293,8 @@ fn build_primitive_reader(
             Some(DataType::Dictionary(_, _)) => {
                 make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
             }
-            _ => {
-                make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?
-            }
-        }
+            _ => make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?,
+        },
     };
     Ok(Some(reader))
 }
