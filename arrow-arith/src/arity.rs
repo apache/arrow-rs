@@ -21,7 +21,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
@@ -125,12 +125,8 @@ where
     let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
     let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` is an iterator with a known size from a PrimitiveArray
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    let buffer: Vec<_> = values.collect();
     Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
@@ -251,14 +247,16 @@ where
 ///
 /// Return an error if the arrays have different lengths or
 /// the operation is under erroneous
-pub fn try_binary<A: ArrayAccessor, B: ArrayAccessor, F, O>(
-    a: A,
-    b: B,
+pub fn try_binary<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
     op: F,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
+    F: Fn(A::Native, B::Native) -> Result<O::Native, ArrowError>,
 {
     if a.len() != b.len() {
         return Err(ArrowError::ComputeError(
@@ -271,7 +269,7 @@ where
     let len = a.len();
 
     if a.null_count() == 0 && b.null_count() == 0 {
-        try_binary_no_nulls(len, a, b, op)
+        try_binary_no_nulls(a, b, op)
     } else {
         let nulls =
             NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref()).unwrap();
@@ -369,23 +367,25 @@ fn create_union_null_buffer(
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
 #[inline(never)]
-fn try_binary_no_nulls<A: ArrayAccessor, B: ArrayAccessor, F, O>(
-    len: usize,
-    a: A,
-    b: B,
+fn try_binary_no_nulls<A, B, F, O>(
+    a: &PrimitiveArray<A>,
+    b: &PrimitiveArray<B>,
     op: F,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
+    A: ArrowPrimitiveType,
+    B: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
-    F: Fn(A::Item, B::Item) -> Result<O::Native, ArrowError>,
+    B: ArrowPrimitiveType,
+    F: Fn(A::Native, B::Native) -> Result<O::Native, ArrowError>,
 {
-    let mut buffer = MutableBuffer::new(len * O::Native::get_byte_width());
-    for idx in 0..len {
-        unsafe {
-            buffer.push_unchecked(op(a.value_unchecked(idx), b.value_unchecked(idx))?);
-        };
-    }
-    Ok(PrimitiveArray::new(buffer.into(), None))
+    let new_values = a
+        .values()
+        .into_iter()
+        .zip(b.values().into_iter())
+        .map(|(l, r)| op(*l, *r))
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+    Ok(PrimitiveArray::new(new_values.into(), None))
 }
 
 /// This intentional inline(never) attribute helps LLVM optimize the loop.
