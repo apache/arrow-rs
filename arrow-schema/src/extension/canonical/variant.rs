@@ -28,7 +28,7 @@ use crate::{extension::ExtensionType, ArrowError, DataType};
 /// The storage type of this extension is **Struct containing two binary fields**:
 /// - metadata: Binary field containing the variant metadata
 /// - value: Binary field containing the serialized variant data
-/// 
+///
 /// A Variant is a flexible structure that can store **Primitives, Arrays, or Objects**.
 ///
 /// Both metadata and value fields are required.
@@ -101,22 +101,26 @@ impl ExtensionType for Variant {
                         "Variant struct must have exactly two fields".to_owned(),
                     ));
                 }
-                
-                let metadata_field = fields.iter()
-                    .find(|f| f.name() == "metadata")
-                    .ok_or_else(|| ArrowError::InvalidArgumentError(
-                        "Variant struct must have a field named 'metadata'".to_owned(),
-                    ))?;
 
-                let value_field = fields.iter()
-                    .find(|f| f.name() == "value")
-                    .ok_or_else(|| ArrowError::InvalidArgumentError(
+                let metadata_field =
+                    fields
+                        .iter()
+                        .find(|f| f.name() == "metadata")
+                        .ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(
+                                "Variant struct must have a field named 'metadata'".to_owned(),
+                            )
+                        })?;
+
+                let value_field = fields.iter().find(|f| f.name() == "value").ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
                         "Variant struct must have a field named 'value'".to_owned(),
-                    ))?;
+                    )
+                })?;
 
                 match (metadata_field.data_type(), value_field.data_type()) {
-                    (DataType::Binary, DataType::Binary) |
-                    (DataType::LargeBinary, DataType::LargeBinary) => {
+                    (DataType::Binary, DataType::Binary)
+                    | (DataType::LargeBinary, DataType::LargeBinary) => {
                         if metadata_field.is_nullable() || value_field.is_nullable() {
                             return Err(ArrowError::InvalidArgumentError(
                                 "Variant struct fields must not be nullable".to_owned(),
@@ -149,24 +153,27 @@ mod tests {
     use crate::extension::CanonicalExtensionType;
     use crate::{
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
-        Field, DataType,
+        DataType, Field,
     };
 
     use super::*;
 
     #[test]
     fn valid() -> Result<(), ArrowError> {
-        let struct_type = DataType::Struct(vec![
-            Field::new("metadata", DataType::Binary, false),
-            Field::new("value", DataType::Binary, false)
-        ].into());
-        
+        let struct_type = DataType::Struct(
+            vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]
+            .into(),
+        );
+
         let mut field = Field::new("", struct_type, false);
         let variant = Variant::new(Vec::new(), Vec::new());
-        
+
         field.try_with_extension_type(variant.clone())?;
         field.try_extension_type::<Variant>()?;
-        
+
         #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
@@ -179,11 +186,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Field extension type name missing")]
     fn missing_name() {
-        let struct_type = DataType::Struct(vec![
-            Field::new("metadata", DataType::Binary, false),
-            Field::new("value", DataType::Binary, false)
-        ].into());
-        
+        let struct_type = DataType::Struct(
+            vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]
+            .into(),
+        );
+
         let field = Field::new("", struct_type, false).with_metadata(
             [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())]
                 .into_iter()
@@ -201,15 +211,21 @@ mod tests {
     #[test]
     #[should_panic(expected = "Variant extension type expects an empty string as metadata")]
     fn invalid_metadata() {
-        let struct_type = DataType::Struct(vec![
-            Field::new("metadata", DataType::Binary, false),
-            Field::new("value", DataType::Binary, false)
-        ].into());
-        
+        let struct_type = DataType::Struct(
+            vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]
+            .into(),
+        );
+
         let field = Field::new("", struct_type, false).with_metadata(
             [
                 (EXTENSION_TYPE_NAME_KEY.to_owned(), Variant::NAME.to_owned()),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), "non-empty".to_owned()),
+                (
+                    EXTENSION_TYPE_METADATA_KEY.to_owned(),
+                    "non-empty".to_owned(),
+                ),
             ]
             .into_iter()
             .collect(),
@@ -221,14 +237,20 @@ mod tests {
     fn variant_supports_valid_data_types() {
         // Test valid struct types
         let valid_types = [
-            DataType::Struct(vec![
-                Field::new("metadata", DataType::Binary, false),
-                Field::new("value", DataType::Binary, false)
-            ].into()),
-            DataType::Struct(vec![
-                Field::new("metadata", DataType::LargeBinary, false),
-                Field::new("value", DataType::LargeBinary, false)
-            ].into())
+            DataType::Struct(
+                vec![
+                    Field::new("metadata", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, false),
+                ]
+                .into(),
+            ),
+            DataType::Struct(
+                vec![
+                    Field::new("metadata", DataType::LargeBinary, false),
+                    Field::new("value", DataType::LargeBinary, false),
+                ]
+                .into(),
+            ),
         ];
 
         for data_type in valid_types {
@@ -240,14 +262,20 @@ mod tests {
         let invalid_types = [
             DataType::Utf8,
             DataType::Struct(vec![Field::new("single", DataType::Binary, false)].into()),
-            DataType::Struct(vec![
-                Field::new("wrong1", DataType::Binary, false),
-                Field::new("wrong2", DataType::Binary, false)
-            ].into()),
-            DataType::Struct(vec![
-                Field::new("metadata", DataType::Binary, true), // nullable
-                Field::new("value", DataType::Binary, false)
-            ].into())
+            DataType::Struct(
+                vec![
+                    Field::new("wrong1", DataType::Binary, false),
+                    Field::new("wrong2", DataType::Binary, false),
+                ]
+                .into(),
+            ),
+            DataType::Struct(
+                vec![
+                    Field::new("metadata", DataType::Binary, true), // nullable
+                    Field::new("value", DataType::Binary, false),
+                ]
+                .into(),
+            ),
         ];
 
         for data_type in invalid_types {

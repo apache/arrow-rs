@@ -31,42 +31,41 @@
 //! // Create a builder for variant values
 //! let mut metadata_buffer = vec![];
 //! let mut builder = VariantBuilder::new(&mut metadata_buffer);
-//! 
+//!
 //! // Create an object
 //! let mut value_buffer = vec![];
 //! let mut object_builder = builder.new_object(&mut value_buffer);
 //! object_builder.append_value("foo", 1);
 //! object_builder.append_value("bar", 100);
 //! object_builder.finish();
-//! 
+//!
 //! // value_buffer now contains a valid variant value
 //! // builder contains metadata with fields "foo" and "bar"
-//! 
+//!
 //! // Create another object reusing the same metadata
 //! let mut value_buffer2 = vec![];
 //! let mut object_builder2 = builder.new_object(&mut value_buffer2);
 //! object_builder2.append_value("foo", 2);
 //! object_builder2.append_value("bar", 200);
 //! object_builder2.finish();
-//! 
+//!
 //! // Create a nested object: the equivalent of {"foo": {"bar": 100}}
 //! let mut value_buffer3 = vec![];
 //! let mut object_builder3 = builder.new_object(&mut value_buffer3);
-//! 
+//!
 //! // Create a nested object under the "foo" field
 //! let mut foo_builder = object_builder3.append_object("foo");
 //! foo_builder.append_value("bar", 100);
 //! foo_builder.finish();
-//! 
+//!
 //! // Finish the root object builder
 //! object_builder3.finish();
-//! 
+//!
 //! // Finalize the metadata
 //! builder.finish();
 //! # Ok(())
 //! # }
 //! ```
-
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
@@ -77,5 +76,5 @@ pub mod builder;
 pub mod encoder;
 
 // Re-export primary types
-pub use builder::{VariantBuilder, PrimitiveValue};
+pub use builder::{PrimitiveValue, VariantBuilder};
 pub use encoder::{VariantBasicType, VariantPrimitiveType};
