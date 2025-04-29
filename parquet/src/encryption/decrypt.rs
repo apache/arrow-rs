@@ -17,18 +17,20 @@
 
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, NONCE_LEN, TAG_LEN, SIZE_LEN};
+use crate::encryption::ciphers::{
+    BlockDecryptor, RingGcmBlockDecryptor, NONCE_LEN, SIZE_LEN, TAG_LEN,
+};
 use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use crate::format::FileMetaData as TFileMetaData;
+use crate::thrift::TSerializable;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
-use crate::thrift::TSerializable;
-use crate::format::{FileMetaData as TFileMetaData};
 
 /// Trait for retrieving an encryption key using the key's metadata
 ///
@@ -574,11 +576,7 @@ impl FileDecryptor {
         // let aad = self.file_aad();
         let footer_decryptor = self.get_footer_decryptor()?;
 
-        let computed_tag = footer_decryptor.compute_tag(
-            nonce,
-            aad.as_ref(),
-            &mut plaintext,
-        )?;
+        let computed_tag = footer_decryptor.compute_tag(nonce, aad.as_ref(), &mut plaintext)?;
 
         if computed_tag != tag {
             return Err(general_err!(

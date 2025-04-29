@@ -67,14 +67,10 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
     }
 
     fn compute_tag(&self, nonce: &[u8], aad: &[u8], plaintext: &mut [u8]) -> Result<Vec<u8>> {
-        let nonce = ring::aead::Nonce::try_assume_unique_for_key(
-            &nonce,
-        )?;
-        let tag = self.key.seal_in_place_separate_tag(
-            nonce,
-            Aad::from(aad),
-            plaintext,
-        )?;
+        let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce)?;
+        let tag = self
+            .key
+            .seal_in_place_separate_tag(nonce, Aad::from(aad), plaintext)?;
         Ok(tag.as_ref().to_vec())
     }
 }
