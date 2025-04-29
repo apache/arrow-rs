@@ -22,7 +22,7 @@ use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
@@ -132,12 +132,11 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
 
         let nulls = match has_nulls {
             true => {
-                let mut builder = NullBufferBuilder::new(indices.len());
-                for (a, b) in indices {
-                    let v = arrays[*a].is_valid(*b);
-                    builder.append(v)
-                }
-                builder.finish()
+                let nulls = BooleanBuffer::collect_bool(indices.len(), |i| {
+                    let (a, b) = indices[i];
+                    arrays[a].is_valid(b)
+                });
+                Some(nulls.into())
             }
             false => None,
         };
@@ -153,11 +152,10 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let mut values = Vec::with_capacity(indices.len());
-    for (a, b) in indices {
-        let v = interleaved.arrays[*a].value(*b);
-        values.push(v)
-    }
+    let values = indices
+        .iter()
+        .map(|(a, b)| interleaved.arrays[*a].value(*b))
+        .collect::<Vec<_>>();
 
     let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
     Ok(Arc::new(array.with_data_type(data_type.clone())))
@@ -170,23 +168,23 @@ fn interleave_bytes<T: ByteArrayType>(
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
     let mut capacity = 0;
-    let mut offsets = BufferBuilder::<T::Offset>::new(indices.len() + 1);
-    offsets.append(T::Offset::from_usize(0).unwrap());
-    for (a, b) in indices {
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(T::Offset::from_usize(0).unwrap());
+    offsets.extend(indices.iter().map(|(a, b)| {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        offsets.append(T::Offset::from_usize(capacity).expect("overflow"));
-    }
+        T::Offset::from_usize(capacity).expect("overflow")
+    }));
 
-    let mut values = MutableBuffer::new(capacity);
+    let mut values = Vec::with_capacity(capacity);
     for (a, b) in indices {
         values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
 
     // Safety: safe by construction
     let array = unsafe {
-        let offsets = OffsetBuffer::new_unchecked(offsets.finish().into());
+        let offsets = OffsetBuffer::new_unchecked(offsets.into());
         GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))

@@ -109,7 +109,6 @@ use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
-#[cfg(feature = "encryption")]
 use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
@@ -1104,9 +1103,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn column_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.column_index_offset?).ok()?;
-        let length = usize::try_from(self.column_index_length?).ok()?;
+    pub(crate) fn column_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.column_index_offset?).ok()?;
+        let length = u64::try_from(self.column_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 
@@ -1121,9 +1120,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn offset_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.offset_index_offset?).ok()?;
-        let length = usize::try_from(self.offset_index_length?).ok()?;
+    pub(crate) fn offset_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.offset_index_offset?).ok()?;
+        let length = u64::try_from(self.offset_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 
@@ -1261,7 +1260,7 @@ impl ColumnChunkMetaData {
             offset_index_length: self.offset_index_length,
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
-            crypto_metadata: None,
+            crypto_metadata: self.column_crypto_metadata_thrift(),
             encrypted_column_metadata: None,
         }
     }
@@ -1317,6 +1316,18 @@ impl ColumnChunkMetaData {
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
         ColumnChunkMetaDataBuilder::from(self)
+    }
+
+    #[cfg(feature = "encryption")]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        self.column_crypto_metadata
+            .as_ref()
+            .map(column_crypto_metadata::to_thrift)
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        None
     }
 }
 
@@ -1516,6 +1527,13 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional repetition level histogram
     pub fn set_definition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
         self.0.definition_level_histogram = value;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryption metadata for an encrypted column
+    pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
+        self.0.column_crypto_metadata = value;
         self
     }
 

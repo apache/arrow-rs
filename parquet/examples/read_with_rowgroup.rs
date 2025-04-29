@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     let mut file = File::open(&path).await.unwrap();
 
     // The metadata could be cached in other places, this example only shows how to read
-    let metadata = file.get_metadata().await?;
+    let metadata = file.get_metadata(None).await?;
 
     for rg in metadata.row_groups() {
         let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
@@ -166,9 +166,7 @@ impl InMemoryRowGroup {
         for (leaf_idx, meta) in self.metadata.columns().iter().enumerate() {
             if self.mask.leaf_included(leaf_idx) {
                 let (start, len) = meta.byte_range();
-                let data = reader
-                    .get_bytes(start as usize..(start + len) as usize)
-                    .await?;
+                let data = reader.get_bytes(start..(start + len)).await?;
 
                 vs[leaf_idx] = Some(Arc::new(ColumnChunkData {
                     offset: start as usize,

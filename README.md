@@ -63,14 +63,29 @@ is described in the [contributing] guide.
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Mar 2025         | `54.2.0` | Minor, NO breaking API changes          |
-| Apr 2025         | `55.0.0` | Major, potentially breaking API changes |
-| May 2025         | `55.1.0` | Minor, NO breaking API changes          |
+| Approximate Date | Version    | Notes                                   |
+| ---------------- | ---------- | --------------------------------------- |
+| Apr 2025         | [`55.0.0`] | Major, potentially breaking API changes |
+| May 2025         | [`55.1.0`] | Minor, NO breaking API changes          |
+| June 2025        | [`55.2.0`] | Minor, NO breaking API changes          |
+| July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
 
+[`55.0.0`]: https://github.com/apache/arrow-rs/issues/7084
+[`55.1.0`]: https://github.com/apache/arrow-rs/issues/7393
+[`55.2.0`]: https://github.com/apache/arrow-rs/issues/7394
+[`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
+
+### Rust Version Compatibility Policy
+
+arrow-rs, parquet and object_store are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on a need by basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
+
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+E.g.
+
+in Apr 2025 we will release version 55.0.0 which might have a version bump. But the Rust version selected in this case will be at most version 1.81.
 
 ### Guidelines for `panic` vs `Result`
 
