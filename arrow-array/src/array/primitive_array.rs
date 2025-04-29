@@ -828,12 +828,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let nulls = self.nulls().cloned();
         let values = self.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+        let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 

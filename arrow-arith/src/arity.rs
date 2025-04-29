@@ -20,8 +20,6 @@
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::ArrowNativeType;
-use arrow_buffer::MutableBuffer;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
