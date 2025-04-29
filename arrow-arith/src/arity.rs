@@ -122,7 +122,7 @@ where
 
     let nulls = NullBuffer::union(a.logical_nulls().as_ref(), b.logical_nulls().as_ref());
 
-    let values = a.values().iter().zip(b.values()).map(|(l, r)| op(*l, *r));
+    let values = a.values().into_iter().zip(b.values()).map(|(l, r)| op(*l, *r));
 
     let buffer: Vec<_> = values.collect();
     Ok(PrimitiveArray::new(buffer.into(), nulls))
