@@ -139,8 +139,8 @@ pub async fn read_plaintext_footer_file_without_decryption_properties_async() {
         Some(Err(ParquetError::ArrowError(s))) => {
             assert!(s.contains("protocol error"));
         }
-        _ => {
-            panic!("Expected ArrowError::ParquetError");
+        e => {
+            panic!("Expected ArrowError::ParquetError. Got {e:?}");
         }
     };
 }

@@ -750,6 +750,7 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
             .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
+        // todo: add cache???
 
         SerializedPageReader::new(reader, column_chunk_metadata, total_rows, page_locations)?
             .add_crypto_context(
