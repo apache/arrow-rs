@@ -26,8 +26,13 @@ pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 /// <https://avro.apache.org/docs/1.11.1/specification/#names>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+/// A type name in an Avro schema
+///
+/// This represents the different ways a type can be referenced in an Avro schema.
 pub enum TypeName<'a> {
+    /// A primitive type like null, boolean, int, etc.
     Primitive(PrimitiveType),
+    /// A reference to another named type
     Ref(&'a str),
 }
 
@@ -37,13 +42,21 @@ pub enum TypeName<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PrimitiveType {
+    /// null: no value
     Null,
+    /// boolean: a binary value
     Boolean,
+    /// int: 32-bit signed integer
     Int,
+    /// long: 64-bit signed integer
     Long,
+    /// float: single precision (32-bit) IEEE 754 floating-point number
     Float,
+    /// double: double precision (64-bit) IEEE 754 floating-point number
     Double,
+    /// bytes: sequence of 8-bit unsigned bytes
     Bytes,
+    /// string: Unicode character sequence
     String,
 }
 
@@ -78,22 +91,31 @@ impl Attributes<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Type<'a> {
+    /// The type of this Avro data structure
     #[serde(borrow)]
     pub r#type: TypeName<'a>,
+    /// Additional attributes associated with this type
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
 
 /// An Avro schema
+///
+/// This represents the different shapes of Avro schemas as defined in the specification.
+/// See <https://avro.apache.org/docs/1.11.1/specification/#schemas> for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Schema<'a> {
+    /// A direct type name (primitive or reference)
     #[serde(borrow)]
     TypeName(TypeName<'a>),
+    /// A union of multiple schemas (e.g., ["null", "string"])
     #[serde(borrow)]
     Union(Vec<Schema<'a>>),
+    /// A complex type such as record, array, map, etc.
     #[serde(borrow)]
     Complex(ComplexType<'a>),
+    /// A type with attributes
     #[serde(borrow)]
     Type(Type<'a>),
 }
@@ -104,14 +126,19 @@ pub enum Schema<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ComplexType<'a> {
+    /// Record type: a sequence of fields with names and types
     #[serde(borrow)]
     Record(Record<'a>),
+    /// Enum type: a set of named values
     #[serde(borrow)]
     Enum(Enum<'a>),
+    /// Array type: a sequence of values of the same type
     #[serde(borrow)]
     Array(Array<'a>),
+    /// Map type: a mapping from strings to values of the same type
     #[serde(borrow)]
     Map(Map<'a>),
+    /// Fixed type: a fixed-size byte array
     #[serde(borrow)]
     Fixed(Fixed<'a>),
 }
@@ -121,16 +148,22 @@ pub enum ComplexType<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#schema-record>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record<'a> {
+    /// Name of the record
     #[serde(borrow)]
     pub name: &'a str,
+    /// Optional namespace for the record, provides a way to organize names
     #[serde(borrow, default)]
     pub namespace: Option<&'a str>,
+    /// Optional documentation string for the record
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
+    /// Alternative names for this record
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
+    /// The fields contained in this record
     #[serde(borrow)]
     pub fields: Vec<Field<'a>>,
+    /// Additional attributes for this record
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
@@ -138,12 +171,16 @@ pub struct Record<'a> {
 /// A field within a [`Record`]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field<'a> {
+    /// Name of the field within the record
     #[serde(borrow)]
     pub name: &'a str,
+    /// Optional documentation for this field
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
+    /// The field's type definition
     #[serde(borrow)]
     pub r#type: Schema<'a>,
+    /// Optional default value for this field
     #[serde(borrow, default)]
     pub default: Option<&'a str>,
 }
@@ -153,18 +190,25 @@ pub struct Field<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#enums>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enum<'a> {
+    /// Name of the enum
     #[serde(borrow)]
     pub name: &'a str,
+    /// Optional namespace for the enum, provides organizational structure
     #[serde(borrow, default)]
     pub namespace: Option<&'a str>,
+    /// Optional documentation string describing the enum
     #[serde(borrow, default)]
     pub doc: Option<&'a str>,
+    /// Alternative names for this enum
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
+    /// The symbols (values) that this enum can have
     #[serde(borrow)]
     pub symbols: Vec<&'a str>,
+    /// Optional default value for this enum
     #[serde(borrow, default)]
     pub default: Option<&'a str>,
+    /// Additional attributes for this enum
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
@@ -174,8 +218,10 @@ pub struct Enum<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#arrays>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Array<'a> {
+    /// The schema for items in this array
     #[serde(borrow)]
     pub items: Box<Schema<'a>>,
+    /// Additional attributes for this array
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
@@ -185,8 +231,10 @@ pub struct Array<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#maps>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Map<'a> {
+    /// The schema for values in this map
     #[serde(borrow)]
     pub values: Box<Schema<'a>>,
+    /// Additional attributes for this map
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
@@ -196,13 +244,18 @@ pub struct Map<'a> {
 /// <https://avro.apache.org/docs/1.11.1/specification/#fixed>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fixed<'a> {
+    /// Name of the fixed type
     #[serde(borrow)]
     pub name: &'a str,
+    /// Optional namespace for the fixed type
     #[serde(borrow, default)]
     pub namespace: Option<&'a str>,
+    /// Alternative names for this fixed type
     #[serde(borrow, default)]
     pub aliases: Vec<&'a str>,
+    /// The number of bytes in this fixed type
     pub size: usize,
+    /// Additional attributes for this fixed type
     #[serde(flatten)]
     pub attributes: Attributes<'a>,
 }
