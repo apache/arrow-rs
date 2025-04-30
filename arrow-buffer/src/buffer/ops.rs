@@ -103,10 +103,12 @@ where
     F: FnMut(u64) -> u64,
 {
     // reserve capacity and set length so we can get a typed view of u64 chunks
-    let mut result =
-        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
+    let mut result = MutableBuffer::new(ceil(len_in_bits, 8));
 
     let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
+
+    // SAFETY: `MutableBuffer::set_len` is sound because it is initalized right after
+    unsafe { result.set_len(left_chunks.iter().len() * 8) };
 
     let result_chunks = result.typed_data_mut::<u64>().iter_mut();
 
