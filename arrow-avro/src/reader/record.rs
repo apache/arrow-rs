@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
@@ -27,6 +26,7 @@ use arrow_buffer::*;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
 };
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
@@ -343,7 +343,6 @@ impl Decoder {
     }
 }
 
-
 fn read_map_blocks(
     buf: &mut AvroCursor,
     decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
@@ -358,25 +357,32 @@ fn read_blockwise_items(
 ) -> Result<usize, ArrowError> {
     let mut total = 0usize;
     loop {
-        let blk = buf.get_long()?;
-        match blk.cmp(&0) {
+        // Read the block count
+        //  positive = that many items
+        //  negative = that many items + read block size
+        //  See: https://avro.apache.org/docs/1.11.1/specification/#maps
+        let block_count = buf.get_long()?;
+        match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
-                let cnt = (-blk) as usize;
+                // If block_count is negative, read the absolute value of count,
+                // then read the block size as a long and discard
+                let count = (-block_count) as usize;
                 if read_size_after_negative {
                     let _size_in_bytes = buf.get_long()?;
                 }
-                for _ in 0..cnt {
+                for _ in 0..count {
                     decode_fn(buf)?;
                 }
-                total += cnt;
+                total += count;
             }
             Ordering::Greater => {
-                let cnt = blk as usize;
-                for _i in 0..cnt {
+                // If block_count is positive, decode that many items
+                let count = block_count as usize;
+                for _i in 0..count {
                     decode_fn(buf)?;
                 }
-                total += cnt;
+                total += count;
             }
         }
     }
@@ -402,7 +408,6 @@ fn flush_primitive<T: ArrowPrimitiveType>(
 }
 
 const DEFAULT_CAPACITY: usize = 1024;
-
 
 #[cfg(test)]
 mod tests {
@@ -430,9 +435,8 @@ mod tests {
     }
 
     fn avro_from_codec(codec: Codec) -> AvroDataType {
-        AvroDataType::new(codec, None, Default::default())
+        AvroDataType::new(codec, Default::default(), None)
     }
-
 
     #[test]
     fn test_map_decoding_one_entry() {

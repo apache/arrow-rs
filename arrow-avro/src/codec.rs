@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef, TimeUnit};
+use arrow_schema::{
+    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef, TimeUnit,
+};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,20 +45,19 @@ pub struct AvroDataType {
 }
 
 impl AvroDataType {
-
-    /// Create a new AvroDataType with the given parts.
+    /// Create a new [`AvroDataType`] with the given parts.
     pub fn new(
         codec: Codec,
-        nullability: Option<Nullability>,
         metadata: HashMap<String, String>,
+        nullability: Option<Nullability>,
     ) -> Self {
         AvroDataType {
             codec,
-            nullability,
             metadata,
+            nullability,
         }
     }
-    
+
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
         let d = self.codec.data_type();
@@ -174,6 +175,7 @@ pub enum Codec {
     List(Arc<AvroDataType>),
     /// Represents Avro record type, maps to Arrow's Struct data type
     Struct(Arc<[AvroField]>),
+    /// Represents Avro map type, maps to Arrow's Map data type
     Map(Arc<AvroDataType>),
     /// Represents Avro duration logical type, maps to Arrow's Interval(IntervalUnit::MonthDayNano) data type
     Interval,
@@ -207,7 +209,7 @@ impl Codec {
             Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
             Self::Map(value_type) => {
                 let val_dt = value_type.codec.data_type();
-                let val_field = Field::new("value", val_dt, true)
+                let val_field = Field::new("value", val_dt, value_type.nullability.is_some())
                     .with_metadata(value_type.metadata.clone());
                 DataType::Map(
                     Arc::new(Field::new(
