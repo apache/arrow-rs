@@ -395,7 +395,7 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
     Ok(())
 }
 
-pub(crate) fn sign_and_write_object<T: TSerializable, W: Write>(
+pub(crate) fn write_signed_plaintext_object<T: TSerializable, W: Write>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
@@ -413,11 +413,11 @@ pub(crate) fn sign_and_write_object<T: TSerializable, W: Write>(
         .try_into()
         .map_err(|err| general_err!("Plaintext data too long. {:?}", err))?;
 
-    // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
-    let nonce = buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN].to_vec();
-    let tag = buffer[(ciphertext_length - TAG_LEN as u32) as usize..].to_vec();
-    sink.write_all(&nonce)?;
-    sink.write_all(&tag)?;
+    // Format of encrypted buffer is: [ciphertext size, nonce, ciphertext, authentication tag]
+    let nonce = &buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN];
+    let tag = &buffer[(buffer.len() - TAG_LEN)..];
+    sink.write_all(nonce)?;
+    sink.write_all(tag)?;
 
     Ok(())
 }
