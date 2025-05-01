@@ -1029,6 +1029,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let nulls = left.logical_nulls();
         let buffer: Vec<_> = (0..left.len())
+            // SAFETY: i is within bounds of the array
             .map(|i| op(unsafe { left.value_unchecked(i) }))
             .collect();
 
