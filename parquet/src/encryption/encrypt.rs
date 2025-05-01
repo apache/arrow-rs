@@ -409,13 +409,9 @@ pub(crate) fn write_signed_plaintext_object<T: TSerializable, W: Write>(
     sink.write_all(&buffer)?;
     buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
 
-    let ciphertext_length : u32 = buffer.len()
-        .try_into()
-        .map_err(|err| general_err!("Plaintext data too long. {:?}", err))?;
-
     // Format of encrypted buffer is: [ciphertext size, nonce, ciphertext, authentication tag]
     let nonce = &buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN];
-    let tag = &buffer[(buffer.len() - TAG_LEN)..];
+    let tag = &buffer[buffer.len() - TAG_LEN..];
     sink.write_all(nonce)?;
     sink.write_all(tag)?;
 

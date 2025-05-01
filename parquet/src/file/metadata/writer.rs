@@ -17,7 +17,7 @@
 
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    encrypt::{encrypt_object, encrypt_object_to_vec, sign_and_write_object, FileEncryptor},
+    encrypt::{encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor},
     modules::{create_footer_aad, create_module_aad, ModuleType},
 };
 #[cfg(feature = "encryption")]
@@ -516,7 +516,7 @@ impl MetadataObjectWriter {
             Some(file_encryptor) if file_metadata.encryption_algorithm.is_some() => {
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                sign_and_write_object(file_metadata, &mut encryptor, &mut sink, &aad)
+                write_signed_plaintext_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
             _ => Self::write_object(file_metadata, &mut sink),
         }
