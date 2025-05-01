@@ -352,7 +352,7 @@ impl FileDecryptionProperties {
         self.aad_prefix.as_ref()
     }
 
-    /// Returns true if footer signature verification is enabled.
+    /// Returns true if footer signature verification is enabled for files with plaintext footers.
     pub fn check_plaintext_footer_integrity(&self) -> bool {
         self.footer_signature_verification
     }
@@ -507,7 +507,7 @@ impl DecryptionPropertiesBuilder {
         Ok(self)
     }
 
-    /// Specify if footer signature verification should be disabled.
+    /// Disable verification of footer tags for files that use plaintext footers.
     /// Signature verification is enabled by default.
     pub fn disable_footer_signature_verification(mut self) -> Self {
         self.footer_signature_verification = false;
