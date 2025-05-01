@@ -658,32 +658,30 @@ where
         row_group
             .fetch(&mut self.input, &projection, Some(&selection))
             .await?;
-        
 
-        let total_rows = selection
-            .as_ref()
-            .map(|s| s.total_rows())
-            .unwrap_or(row_group.row_count);
-        
-        let selection =  match selection { 
-            Some(RowSelection::Ranges(selectors)) => {
-              if total_rows / selectors.len() > 200 {
-                Some(RowSelection::Ranges(selectors))
-              } else {
-                  let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
 
-                  for selector in selectors.iter() {
-                      if selector.skip {
-                          builder.append_n(selector.row_count, false);
-                      } else {
-                          builder.append_n(selector.row_count, true);
-                      }
-                  }
-                  Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
-              }
-            }
-            _ => None,
-        };
+
+        // let total_rows = selection.total_rows();
+        // 
+        // let selection =  match selection { 
+        //     RowSelection::Ranges(selectors) => {
+        //       if total_rows / selectors.len() > 200 {
+        //         Some(RowSelection::Ranges(selectors))
+        //       } else {
+        //           let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
+        // 
+        //           for selector in selectors.iter() {
+        //               if selector.skip {
+        //                   builder.append_n(selector.row_count, false);
+        //               } else {
+        //                   builder.append_n(selector.row_count, true);
+        //               }
+        //           }
+        //           Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
+        //       }
+        //     }
+        //     _ => None,
+        // };
         
 
       
@@ -691,7 +689,7 @@ where
         let reader = FilteredParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            selection,
+            Some(selection),
             filter_readers,
             self.filter.take(),
         );

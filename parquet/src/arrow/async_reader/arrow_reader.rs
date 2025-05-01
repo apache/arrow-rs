@@ -41,7 +41,7 @@ pub struct FilteredParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     predicate_readers: Vec<Box<dyn ArrayReader>>,
     schema: SchemaRef,
-    selection: VecDeque<RowSelector>,
+    selection: Option<RowSelection>,
     row_filter: Option<RowFilter>,
 }
 
@@ -64,12 +64,21 @@ fn read_selection(
 /// Take the next selection from the selection queue, and return the selection
 /// whose selected row count is to_select or less (if input selection is exhausted).
 fn take_next_selection(
-    selection: &mut VecDeque<RowSelector>,
+    selection: &mut Option<RowSelection>,
     to_select: usize,
 ) -> Option<RowSelection> {
     let mut current_selected = 0;
     let mut rt = Vec::new();
-    while let Some(front) = selection.pop_front() {
+    
+    let mut queue: VecDeque<RowSelector> = match selection.take() {
+        Some(RowSelection::Ranges(selectors)) => selectors.into(),
+        Some(RowSelection::BitMap(_)) => {
+            unimplemented!("BitMap variant is not yet supported")
+        }
+        None => return None,
+    };
+    
+    while let Some(front) = queue.pop_front() {
         if front.skip {
             rt.push(front);
             continue;
@@ -82,11 +91,22 @@ fn take_next_selection(
             let select = to_select - current_selected;
             let remaining = front.row_count - select;
             rt.push(RowSelector::select(select));
-            selection.push_front(RowSelector::select(remaining));
-
+            queue.push_front(RowSelector::select(remaining));
+            *selection = if queue.is_empty() {
+                None
+            } else {
+                Some(queue.into_iter().collect())
+            };
             return Some(rt.into());
         }
     }
+    
+    *selection = if queue.is_empty() {
+        None
+    } else {
+        Some(queue.into_iter().collect())
+    };
+    
     if !rt.is_empty() {
         return Some(rt.into());
     }
@@ -97,7 +117,7 @@ impl FilteredParquetRecordBatchReader {
     pub(crate) fn new(
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
-        selection: RowSelection,
+        selection: Option<RowSelection>,
         filter_readers: Vec<Box<dyn ArrayReader>>,
         row_filter: Option<RowFilter>,
     ) -> Self {
@@ -111,7 +131,7 @@ impl FilteredParquetRecordBatchReader {
             array_reader,
             predicate_readers: filter_readers,
             schema: Arc::new(schema),
-            selection: selection.into(),
+            selection,
             row_filter,
         }
     }
@@ -186,6 +206,8 @@ impl Iterator for FilteredParquetRecordBatchReader {
                 Ok(selection) => selection,
                 Err(e) => return Some(Err(e)),
             };
+            
+            // println!("Filtered selection: {:?}", filtered_selection);
 
             for selector in filtered_selection.iter() {
                 if selector.skip {
