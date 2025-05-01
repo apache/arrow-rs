@@ -28,8 +28,9 @@ use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
+use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
-use crate::format::{AesGcmV1, ColumnCryptoMetaData, EncryptionAlgorithm};
+use crate::format::{AesGcmV1, ColumnCryptoMetaData};
 use crate::format::{ColumnChunk, ColumnIndex, FileMetaData, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
@@ -144,15 +145,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
-        #[cfg(not(feature = "encryption"))]
-        let encryption_algorithm = None;
-
-        #[cfg(feature = "encryption")]
-        let encryption_algorithm = match &self.object_writer.file_encryptor {
-            Some(file_encryptor) => file_encryptor.get_footer_encryptor_for_plaintext()?,
-            _ => None,
-        };
-
         let mut file_metadata = FileMetaData {
             num_rows,
             row_groups,
@@ -161,7 +153,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
             column_orders,
-            encryption_algorithm,
+            encryption_algorithm: self.object_writer.get_footer_encryption_algorithm(),
             footer_signing_key_metadata: None,
         };
 
@@ -486,6 +478,10 @@ impl MetadataObjectWriter {
     pub fn get_file_magic(&self) -> &[u8; 4] {
         get_file_magic()
     }
+
+    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
+        None
+    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
@@ -506,7 +502,7 @@ impl MetadataObjectWriter {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
                 // First write FileCryptoMetadata
-                let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
+                let crypto_metadata = self.file_crypto_metadata()?;
                 let mut protocol = TCompactOutputProtocol::new(&mut sink);
                 crypto_metadata.write_to_out_protocol(&mut protocol)?;
 
@@ -639,25 +635,31 @@ impl MetadataObjectWriter {
         }
     }
 
-    fn file_crypto_metadata(
-        file_encryptor: &FileEncryptor,
-    ) -> Result<crate::format::FileCryptoMetaData> {
-        let properties = file_encryptor.properties();
-        let supply_aad_prefix = properties
-            .aad_prefix()
-            .map(|_| !properties.store_aad_prefix());
-        let encryption_algorithm = AesGcmV1 {
-            aad_prefix: if properties.store_aad_prefix() {
-                properties.aad_prefix().cloned()
-            } else {
-                None
-            },
-            aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
-            supply_aad_prefix,
-        };
+    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
+        let file_encryptor = self.file_encryptor.as_ref().unwrap();
+        if !file_encryptor.properties().encrypt_footer() {
+            let supply_aad_prefix = file_encryptor
+                .properties()
+                .aad_prefix()
+                .map(|_| !file_encryptor.properties().store_aad_prefix());
+            let encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
+                aad_prefix: if file_encryptor.properties().store_aad_prefix() {
+                    file_encryptor.properties().aad_prefix().cloned()
+                } else {
+                    None
+                },
+                aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
+                supply_aad_prefix,
+            }));
+            return encryption_algorithm;
+        }
+        None
+    }
 
+    fn file_crypto_metadata(&self) -> Result<crate::format::FileCryptoMetaData> {
+        let properties = self.file_encryptor.as_ref().unwrap().properties();
         Ok(crate::format::FileCryptoMetaData {
-            encryption_algorithm: EncryptionAlgorithm::AESGCMV1(encryption_algorithm),
+            encryption_algorithm: self.get_footer_encryption_algorithm().unwrap(),
             key_metadata: properties.footer_key_metadata().cloned(),
         })
     }

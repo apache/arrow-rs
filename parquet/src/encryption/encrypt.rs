@@ -22,7 +22,6 @@ use crate::encryption::ciphers::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
-use crate::format::{AesGcmV1, EncryptionAlgorithm};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -362,27 +361,6 @@ impl FileEncryptor {
             None => Err(general_err!("Column '{}' is not encrypted", column_path)),
             Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
         }
-    }
-
-    /// Get encryption algorithm for the plaintext footer
-    pub(crate) fn get_footer_encryptor_for_plaintext(&self) -> Result<Option<EncryptionAlgorithm>> {
-        if !self.properties.encrypt_footer() {
-            let supply_aad_prefix = self
-                .properties
-                .aad_prefix()
-                .map(|_| !self.properties.store_aad_prefix());
-            let encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
-                aad_prefix: if self.properties.store_aad_prefix() {
-                    self.properties.aad_prefix().cloned()
-                } else {
-                    None
-                },
-                aad_file_unique: Some(self.aad_file_unique().clone()),
-                supply_aad_prefix,
-            }));
-            return Ok(encryption_algorithm);
-        }
-        Ok(None)
     }
 }
 
