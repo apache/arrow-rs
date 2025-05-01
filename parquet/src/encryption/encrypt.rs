@@ -17,16 +17,18 @@
 
 //! Configuration and utilities for Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor, NONCE_LEN, SIZE_LEN, TAG_LEN};
+use crate::encryption::ciphers::{
+    BlockEncryptor, RingGcmBlockEncryptor, NONCE_LEN, SIZE_LEN, TAG_LEN,
+};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
+use crate::format::{AesGcmV1, EncryptionAlgorithm};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use thrift::protocol::TCompactOutputProtocol;
-use crate::format::{AesGcmV1, EncryptionAlgorithm};
 
 #[derive(Debug, Clone, PartialEq)]
 struct EncryptionKey {
@@ -361,11 +363,12 @@ impl FileEncryptor {
             Some(column_key) => Ok(Box::new(RingGcmBlockEncryptor::new(column_key.key())?)),
         }
     }
-    
+
     /// Get encryption algorithm for the plaintext footer
     pub(crate) fn get_footer_encryptor_for_plaintext(&self) -> Result<Option<EncryptionAlgorithm>> {
         if !self.properties.encrypt_footer() {
-            let supply_aad_prefix = self.properties
+            let supply_aad_prefix = self
+                .properties
                 .aad_prefix()
                 .map(|_| !self.properties.store_aad_prefix());
             let encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {

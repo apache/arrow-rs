@@ -17,7 +17,9 @@
 
 #[cfg(feature = "encryption")]
 use crate::encryption::{
-    encrypt::{encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor},
+    encrypt::{
+        encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor,
+    },
     modules::{create_footer_aad, create_module_aad, ModuleType},
 };
 #[cfg(feature = "encryption")]
