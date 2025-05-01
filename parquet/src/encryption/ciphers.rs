@@ -30,7 +30,7 @@ pub(crate) const SIZE_LEN: usize = 4;
 pub(crate) trait BlockDecryptor: Debug + Send + Sync {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 
-    fn compute_tag(&self, nonce: &[u8], aad: &[u8], ciphertext: &mut [u8]) -> Result<Vec<u8>>;
+    fn compute_plaintext_footer_tag(&self, aad: &[u8], plaintext_footer: &mut [u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -66,11 +66,14 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
         Ok(result)
     }
 
-    fn compute_tag(&self, nonce: &[u8], aad: &[u8], plaintext: &mut [u8]) -> Result<Vec<u8>> {
+    fn compute_plaintext_footer_tag(&self, aad: &[u8], plaintext_footer: &mut [u8]) -> Result<Vec<u8>> {
+        // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
+        let nonce = &plaintext_footer[plaintext_footer.len() - NONCE_LEN - TAG_LEN..plaintext_footer.len() - TAG_LEN];
         let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce)?;
+        let plaintext_end = plaintext_footer.len() - NONCE_LEN - TAG_LEN;
         let tag = self
             .key
-            .seal_in_place_separate_tag(nonce, Aad::from(aad), plaintext)?;
+            .seal_in_place_separate_tag(nonce, Aad::from(aad), &mut plaintext_footer[..plaintext_end])?;
         Ok(tag.as_ref().to_vec())
     }
 }

@@ -18,19 +18,16 @@
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
 use crate::encryption::ciphers::{
-    BlockDecryptor, RingGcmBlockDecryptor, NONCE_LEN, SIZE_LEN, TAG_LEN,
+    BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN,
 };
 use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
-use crate::format::FileMetaData as TFileMetaData;
-use crate::thrift::TSerializable;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
-use thrift::protocol::TCompactOutputProtocol;
 
 /// Trait for retrieving an encryption key using the key's metadata
 ///
@@ -561,22 +558,13 @@ impl FileDecryptor {
     }
 
     /// Verify the signature of the footer
-    pub(crate) fn verify_signature(&self, file_metadata: &TFileMetaData, buf: &[u8]) -> Result<()> {
-        let mut plaintext: Vec<u8> = vec![];
-        {
-            let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut plaintext);
-            file_metadata.write_to_out_protocol(&mut unencrypted_protocol)?;
-        }
-
-        // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
-        let nonce = &buf[SIZE_LEN..SIZE_LEN + NONCE_LEN];
-        let tag = &buf[buf.len() - TAG_LEN..];
-
+    pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &mut [u8]) -> Result<()> {
+        // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
+        let tag = plaintext_footer[plaintext_footer.len() - TAG_LEN..].to_vec();
         let aad = create_footer_aad(self.file_aad())?;
-        // let aad = self.file_aad();
         let footer_decryptor = self.get_footer_decryptor()?;
 
-        let computed_tag = footer_decryptor.compute_tag(nonce, aad.as_ref(), &mut plaintext)?;
+        let computed_tag = footer_decryptor.compute_plaintext_footer_tag(&aad, plaintext_footer)?;
 
         if computed_tag != tag {
             return Err(general_err!(

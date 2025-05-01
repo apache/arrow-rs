@@ -975,10 +975,11 @@ impl ParquetMetaDataReader {
                 file_decryption_properties,
             )?);
             if file_decryption_properties.check_plaintext_footer_integrity() {
+                let mut cpy_buf = buf.to_vec();
                 file_decryptor
                     .clone()
                     .unwrap()
-                    .verify_signature(&t_file_metadata, buf.as_ref())?;
+                    .verify_plaintext_footer_signature(cpy_buf.as_mut())?;
             }
         }
 
