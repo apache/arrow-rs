@@ -17,9 +17,7 @@
 
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
-use crate::encryption::ciphers::{
-    BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN,
-};
+use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
 use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
@@ -558,7 +556,10 @@ impl FileDecryptor {
     }
 
     /// Verify the signature of the footer
-    pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &mut [u8]) -> Result<()> {
+    pub(crate) fn verify_plaintext_footer_signature(
+        &self,
+        plaintext_footer: &mut [u8],
+    ) -> Result<()> {
         // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
         let tag = plaintext_footer[plaintext_footer.len() - TAG_LEN..].to_vec();
         let aad = create_footer_aad(self.file_aad())?;
