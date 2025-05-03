@@ -27,7 +27,7 @@ use crate::arrow::array_reader::{
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
-use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::arrow::schema::{parquet_to_arrow_field, ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};

@@ -413,6 +413,16 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ))
                 }
+                (LogicalType::Variant { .. }, PhysicalType::BYTE_ARRAY) => {
+                }
+                (LogicalType::Variant { .. }, _) => {
+                    return Err(general_err!(
+                        "{:?} can only be applied to a BYTE_ARRAY type for field '{}'",
+                        logical_type,
+                        self.name
+                    ));
+                }
+                
                 (a, b) => {
                     return Err(general_err!(
                         "Cannot annotate {:?} from {} for field '{}'",
@@ -1737,6 +1747,22 @@ mod tests {
                 "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
+
+        // TODO Test that Variant cannot be applied to primitive types
+        // result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+        //     .with_repetition(Repetition::REQUIRED)
+        //     .with_logical_type(Some(LogicalType::Variant { 
+        //         metadata: vec![1, 2, 3], 
+        //         value: vec![0] 
+        //     }))
+        //     .build();
+        // assert!(result.is_err());
+        // if let Err(e) = result {
+        //     assert_eq!(
+        //         format!("{e}"),
+        //         "Parquet error: Variant { metadata: [1, 2, 3], value: [0] } cannot be applied to a primitive type for field 'foo'"
+        //     );
+        // }
     }
 
     #[test]
@@ -1773,6 +1799,45 @@ mod tests {
         assert_eq!(tp.get_fields().len(), 2);
         assert_eq!(tp.get_fields()[0].name(), "f1");
         assert_eq!(tp.get_fields()[1].name(), "f2");
+
+
+        // Test Variant
+        let metadata = Type::primitive_type_builder("metadata", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .build()
+            .unwrap();
+        
+        let value = Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .build()
+            .unwrap();
+        
+        let fields = vec![Arc::new(metadata), Arc::new(value)];
+        let result = Type::group_type_builder("variant")
+            .with_repetition(Repetition::OPTIONAL) // The whole variant is optional 
+            .with_logical_type(Some(LogicalType::Variant { 
+                specification_version: Some(0),
+            }))
+            .with_fields(fields)
+            .with_id(Some(2))
+            .build();
+        assert!(result.is_ok());
+
+        let tp = result.unwrap();
+        let basic_info = tp.get_basic_info();
+        assert!(tp.is_group());
+        assert!(!tp.is_primitive());
+        assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
+        assert_eq!(
+            basic_info.logical_type(), 
+            Some(LogicalType::Variant {
+                specification_version: Some(0),
+            })
+        );
+        assert_eq!(basic_info.id(), 2);
+        assert_eq!(tp.get_fields().len(), 2);
+        assert_eq!(tp.get_fields()[0].name(), "metadata");
+        assert_eq!(tp.get_fields()[1].name(), "value");
     }
 
     #[test]
@@ -1855,13 +1920,31 @@ mod tests {
             .build()?;
         fields.push(Arc::new(bag));
 
+        // Add a Variant type
+        let metadata = Type::primitive_type_builder("metadata", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .build()?;
+        
+        let value = Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .build()?;
+        
+        let variant = Type::group_type_builder("variant")
+            .with_repetition(Repetition::OPTIONAL)
+            .with_logical_type(Some(LogicalType::Variant { 
+                specification_version: Some(0),
+            }))
+            .with_fields(vec![Arc::new(metadata), Arc::new(value)])
+            .build()?;
+        fields.push(Arc::new(variant));
+
         let schema = Type::group_type_builder("schema")
             .with_repetition(Repetition::REPEATED)
             .with_fields(fields)
             .build()?;
         let descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let nleaves = 6;
+        let nleaves = 8;
         assert_eq!(descr.num_columns(), nleaves);
 
         //                             mdef mrep
@@ -1872,9 +1955,13 @@ mod tests {
         //   repeated group records    2    1
         //     required int64 item1    2    1
         //     optional boolean item2  3    1
-        //     repeated int32 item3    3    2
-        let ex_max_def_levels = [0, 1, 1, 2, 3, 3];
-        let ex_max_rep_levels = [0, 0, 1, 1, 1, 2];
+        //     repeated int32 item3    3    2   
+        // optional group variant      1    0
+        //   required byte_array metadata 1    0
+        //   required byte_array value    1    0
+
+        let ex_max_def_levels = [0, 1, 1, 2, 3, 3, 1, 1];
+        let ex_max_rep_levels = [0, 0, 1, 1, 1, 2, 0, 0];
 
         for i in 0..nleaves {
             let col = descr.column(i);
@@ -1888,11 +1975,16 @@ mod tests {
         assert_eq!(descr.column(3).path().string(), "bag.records.item1");
         assert_eq!(descr.column(4).path().string(), "bag.records.item2");
         assert_eq!(descr.column(5).path().string(), "bag.records.item3");
+        assert_eq!(descr.column(6).path().string(), "variant.metadata");
+        assert_eq!(descr.column(7).path().string(), "variant.value");
 
         assert_eq!(descr.get_column_root(0).name(), "a");
         assert_eq!(descr.get_column_root(3).name(), "bag");
         assert_eq!(descr.get_column_root(4).name(), "bag");
         assert_eq!(descr.get_column_root(5).name(), "bag");
+        assert_eq!(descr.get_column_root(6).name(), "variant");
+        assert_eq!(descr.get_column_root(7).name(), "variant");
+
 
         Ok(())
     }
@@ -2338,6 +2430,22 @@ mod tests {
         let mut thrift_schema = to_thrift(&expected_schema).unwrap();
         thrift_schema[0].repetition_type = Some(Repetition::REQUIRED.into());
 
+        let result_schema = from_thrift(&thrift_schema).unwrap();
+        assert_eq!(result_schema, Arc::new(expected_schema));
+    }
+
+    #[test]
+    fn test_schema_type_thrift_conversion_variant() {
+        let message_type = "
+    message variant_test {
+      OPTIONAL group variant_field (VARIANT) {
+        REQUIRED BYTE_ARRAY metadata;
+        REQUIRED BYTE_ARRAY value;
+      }
+    }
+    ";
+        let expected_schema = parse_message_type(message_type).unwrap();
+        let thrift_schema = to_thrift(&expected_schema).unwrap();
         let result_schema = from_thrift(&thrift_schema).unwrap();
         assert_eq!(result_schema, Arc::new(expected_schema));
     }

@@ -1835,6 +1835,69 @@ impl crate::thrift::TSerializable for BsonType {
 }
 
 //
+// VariantType
+//
+
+/// Embedded Variant logical type annotation
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct VariantType {
+  pub specification_version: Option<i8>,
+}
+
+impl VariantType {
+  pub fn new<F1>(specification_version: F1) -> VariantType where F1: Into<Option<i8>> {
+    VariantType {
+      specification_version: specification_version.into(),
+    }
+  }
+  pub fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<VariantType> {
+    i_prot.read_struct_begin()?;
+    let mut f_1: Option<i8> = None;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      let field_id = field_id(&field_ident)?;
+      match field_id {
+        1 => {
+          let val = i_prot.read_i8()?;
+          f_1 = Some(val);
+        },
+        _ => {
+          i_prot.skip(field_ident.field_type)?;
+        },
+      };
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = VariantType {
+      specification_version: f_1,
+    };
+    Ok(ret)
+  }
+  pub fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("VariantType");
+    o_prot.write_struct_begin(&struct_ident)?;
+    if let Some(fld_var) = self.specification_version {
+      o_prot.write_field_begin(&TFieldIdentifier::new("specification_version", TType::I08, 1))?;
+      o_prot.write_i8(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+impl Default for VariantType {
+  fn default() -> Self {
+    VariantType{
+      specification_version: Some(0),
+    }
+  }
+}
+
+//
 // LogicalType
 //
 
@@ -1854,6 +1917,7 @@ pub enum LogicalType {
   BSON(BsonType),
   UUID(UUIDType),
   FLOAT16(Float16Type),
+  VARIANT(VariantType),
 }
 
 impl crate::thrift::TSerializable for LogicalType {
@@ -1966,6 +2030,13 @@ impl crate::thrift::TSerializable for LogicalType {
           }
           received_field_count += 1;
         },
+        16 => {
+          let val = VariantType::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(LogicalType::VARIANT(val));
+          }
+          received_field_count += 1;
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
           received_field_count += 1;
@@ -2070,6 +2141,11 @@ impl crate::thrift::TSerializable for LogicalType {
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
+      LogicalType::VARIANT(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("VARIANT", TType::Struct, 16))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      }
     }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
@@ -5478,4 +5554,3 @@ impl crate::thrift::TSerializable for FileCryptoMetaData {
     o_prot.write_struct_end()
   }
 }
-
