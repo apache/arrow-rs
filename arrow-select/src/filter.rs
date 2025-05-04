@@ -554,34 +554,33 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
-    let buffer = match &predicate.strategy {
+    match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
-            buffer
+            buffer.into()
         }
         IterationStrategy::Slices(slices) => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
                 buffer.extend_from_slice(&values[*start..*end]);
             }
-            buffer
+            buffer.into()
         }
         IterationStrategy::IndexIterator => {
             let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
-            iter.collect()
+            // SAFETY: IndexIterator is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
-            iter.collect()
+            iter.collect::<Vec<_>>().into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
-    };
-
-    buffer.into()
+    }
 }
 
 /// `filter` implementation for primitive arrays
