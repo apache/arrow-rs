@@ -93,6 +93,28 @@ impl StructArray {
 
     /// Create a new [`StructArray`] from the provided parts, returning an error on failure
     ///
+    /// The length will be inferred from the length of the child arrays.  Returns an error if
+    /// there are no child arrays.  Consider using [`Self::try_new_with_length`] if the length
+    /// is known to avoid this.
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    ///
+    /// * `fields.len() == 0`
+    /// * Any reason that [`Self::try_new_with_length`] would error
+    pub fn try_new(
+        fields: Fields,
+        arrays: Vec<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty to create a struct array with no fields so that the length can be set correctly".to_string()))?;
+
+        Self::try_new_with_length(fields, arrays, nulls, len)
+    }
+
+    /// Create a new [`StructArray`] from the provided parts, returning an error on failure
+    ///
     /// # Errors
     ///
     /// Errors if
@@ -102,10 +124,11 @@ impl StructArray {
     /// * `arrays[i].len() != arrays[j].len()`
     /// * `arrays[i].len() != nulls.len()`
     /// * `!fields[i].is_nullable() && !nulls.contains(arrays[i].nulls())`
-    pub fn try_new(
+    pub fn try_new_with_length(
         fields: Fields,
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
+        len: usize,
     ) -> Result<Self, ArrowError> {
         if fields.len() != arrays.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -114,7 +137,6 @@ impl StructArray {
                 arrays.len()
             )));
         }
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
 
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
@@ -181,6 +203,10 @@ impl StructArray {
 
     /// Create a new [`StructArray`] from the provided parts without validation
     ///
+    /// The length will be inferred from the length of the child arrays.  Panics if there are no
+    /// child arrays.  Consider using [`Self::new_unchecked_with_length`] if the length is known
+    /// to avoid this.
+    ///
     /// # Safety
     ///
     /// Safe if [`Self::new`] would not panic with the given arguments
@@ -193,7 +219,32 @@ impl StructArray {
             return Self::new(fields, arrays, nulls);
         }
 
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
+        let len = arrays.first().map(|x| x.len()).expect(
+            "cannot use StructArray::new_unchecked if there are no fields, length is unknown",
+        );
+        Self {
+            len,
+            data_type: DataType::Struct(fields),
+            nulls,
+            fields: arrays,
+        }
+    }
+
+    /// Create a new [`StructArray`] from the provided parts without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::new`] would not panic with the given arguments
+    pub unsafe fn new_unchecked_with_length(
+        fields: Fields,
+        arrays: Vec<ArrayRef>,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::try_new_with_length(fields, arrays, nulls, len).unwrap();
+        }
+
         Self {
             len,
             data_type: DataType::Struct(fields),
@@ -817,9 +868,38 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "use StructArray::try_new_with_length")]
     fn test_struct_array_from_empty() {
-        let sa = StructArray::from(vec![]);
-        assert!(sa.is_empty())
+        // This can't work because we don't know how many rows the array should have.  Previously we inferred 0 but
+        // that often led to bugs.
+        let _ = StructArray::from(vec![]);
+    }
+
+    #[test]
+    fn test_empty_struct_array() {
+        assert!(StructArray::try_new(Fields::empty(), vec![], None).is_err());
+
+        let arr = StructArray::new_empty_fields(10, None);
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 0);
+        assert_eq!(arr.num_columns(), 0);
+
+        let arr2 = StructArray::try_new_with_length(Fields::empty(), vec![], None, 10).unwrap();
+        assert_eq!(arr2.len(), 10);
+
+        let arr = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 10);
+        assert_eq!(arr.num_columns(), 0);
+
+        let arr2 = StructArray::try_new_with_length(
+            Fields::empty(),
+            vec![],
+            Some(NullBuffer::new_null(10)),
+            10,
+        )
+        .unwrap();
+        assert_eq!(arr2.len(), 10);
     }
 
     #[test]
