@@ -1917,12 +1917,11 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_in_dict() {
-        fn test_fixed_size_binary_in_dict_inner<K, T>()
+        fn test_fixed_size_binary_in_dict_inner<K>()
         where
             K: ArrowDictionaryKeyType,
-            K::Native: FromPrimitive + ToPrimitive + From<T>,
-            T: TryFrom<u8>,
-            <T as TryFrom<u8>>::Error: std::fmt::Debug,
+            K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
+            <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
         {
             let field = Field::new(
                 "a",
@@ -1935,9 +1934,9 @@ mod tests {
             let schema = Schema::new(vec![field]);
 
             let keys: Vec<K::Native> = vec![
-                K::Native::try_from(TryInto::<T>::try_into(0u8).unwrap()).unwrap(),
-                K::Native::try_from(TryInto::<T>::try_into(0u8).unwrap()).unwrap(),
-                K::Native::try_from(TryInto::<T>::try_into(1u8).unwrap()).unwrap(),
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(1u8).unwrap(),
             ];
             let keys = PrimitiveArray::<K>::from_iter_values(keys);
             let values = FixedSizeBinaryArray::try_from_iter(
@@ -1950,14 +1949,14 @@ mod tests {
             roundtrip(batch, None);
         }
 
-        test_fixed_size_binary_in_dict_inner::<UInt8Type, u8>();
-        test_fixed_size_binary_in_dict_inner::<UInt16Type, u8>();
-        test_fixed_size_binary_in_dict_inner::<UInt32Type, u8>();
-        test_fixed_size_binary_in_dict_inner::<UInt16Type, u8>();
-        test_fixed_size_binary_in_dict_inner::<Int8Type, i8>();
-        test_fixed_size_binary_in_dict_inner::<Int16Type, i8>();
-        test_fixed_size_binary_in_dict_inner::<Int32Type, i8>();
-        test_fixed_size_binary_in_dict_inner::<Int64Type, i8>();
+        test_fixed_size_binary_in_dict_inner::<UInt8Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt32Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int8Type>();
+        test_fixed_size_binary_in_dict_inner::<Int16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int32Type>();
+        test_fixed_size_binary_in_dict_inner::<Int64Type>();
     }
 
     #[test]
