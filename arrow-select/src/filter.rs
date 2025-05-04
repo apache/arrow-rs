@@ -654,7 +654,7 @@ where
         (start, end, len)
     }
 
-    fn set_capacity_idx(&mut self, iter: impl Iterator<Item = usize>) {
+    fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
             let start = self.src_offsets[idx].as_usize();
             let end = self.src_offsets[idx + 1].as_usize();
@@ -676,7 +676,7 @@ where
         }
     }
 
-    fn set_capacity_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
+    fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
         self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
             // These can only fail if `array` contains invalid data
@@ -712,19 +712,19 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            filter.set_capacity_slices(SlicesIterator::new(&predicate.filter), predicate.count);
+            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
         IterationStrategy::Slices(slices) => {
-            filter.set_capacity_slices(slices.iter().cloned(), predicate.count);
+            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
             filter.extend_slices(slices.iter().cloned())
         }
         IterationStrategy::IndexIterator => {
-            filter.set_capacity_idx(IndexIterator::new(&predicate.filter, predicate.count));
+            filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => {
-            filter.set_capacity_idx(indices.iter().cloned());
+            filter.extend_offsets_idx(indices.iter().cloned());
             filter.extend_idx(indices.iter().cloned())
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
