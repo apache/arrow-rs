@@ -615,25 +615,6 @@ struct FilterBytes<'a, OffsetSize> {
     cur_offset: OffsetSize,
 }
 
-/// abc
-pub trait PushUnchecked<T> {
-    /// Will push an item and not check if there is enough capacity
-    ///
-    /// # Safety
-    /// Caller must ensure the array has enough capacity to hold `T`.
-    unsafe fn push_unchecked(&mut self, value: T);
-}
-
-impl<T> PushUnchecked<T> for Vec<T> {
-    #[inline]
-    unsafe fn push_unchecked(&mut self, value: T) {
-        debug_assert!(self.capacity() > self.len());
-        let end = self.as_mut_ptr().add(self.len());
-        std::ptr::write(end, value);
-        self.set_len(self.len() + 1);
-    }
-}
-
 impl<'a, OffsetSize> FilterBytes<'a, OffsetSize>
 where
     OffsetSize: OffsetSizeTrait,
