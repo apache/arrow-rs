@@ -615,6 +615,25 @@ struct FilterBytes<'a, OffsetSize> {
     cur_offset: OffsetSize,
 }
 
+/// abc
+pub trait PushUnchecked<T> {
+    /// Will push an item and not check if there is enough capacity
+    ///
+    /// # Safety
+    /// Caller must ensure the array has enough capacity to hold `T`.
+    unsafe fn push_unchecked(&mut self, value: T);
+}
+
+impl<T> PushUnchecked<T> for Vec<T> {
+    #[inline]
+    unsafe fn push_unchecked(&mut self, value: T) {
+        debug_assert!(self.capacity() > self.len());
+        let end = self.as_mut_ptr().add(self.len());
+        std::ptr::write(end, value);
+        self.set_len(self.len() + 1);
+    }
+}
+
 impl<'a, OffsetSize> FilterBytes<'a, OffsetSize>
 where
     OffsetSize: OffsetSizeTrait,
@@ -655,48 +674,43 @@ where
     }
 
     fn set_capacity_idx(&mut self, iter: impl Iterator<Item = usize>) {
-        let mut capacity = 0;
-        for idx in iter {
-            let start = self.src_offsets[idx].as_usize();
-            let end = self.src_offsets[idx + 1].as_usize();
-            capacity += end - start;
-        }
-        self.dst_values.reserve_exact(capacity);
-    }
-
-    /// Extends the in-progress array by the indexes in the provided iterator
-    fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
             let start = self.src_offsets[idx].as_usize();
             let end = self.src_offsets[idx + 1].as_usize();
             let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
             self.cur_offset += len;
-            self.dst_values
-                .extend_from_slice(&self.src_values[start..end]);
+
             self.cur_offset
         }));
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
     }
 
-    fn set_capacity_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
-        let mut capacity = 0;
-        for (start, end) in iter {
-            let value_start = self.get_value_offset(start);
-            let value_end = self.get_value_offset(end);
-            capacity += value_end - value_start;
+    /// Extends the in-progress array by the indexes in the provided iterator
+    fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        for idx in iter {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            self.dst_values
+                .extend_from_slice(&self.src_values[start..end]);
         }
-        self.dst_values.reserve_exact(capacity);
     }
 
-    /// Extends the in-progress array by the ranges in the provided iterator
-    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+    fn set_capacity_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
+        self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
             // These can only fail if `array` contains invalid data
             for idx in start..end {
                 let (_, _, len) = self.get_value_range(idx);
                 self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset); // push_unchecked?
+                self.dst_offsets.push(self.cur_offset);
             }
+        }
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+    }
 
+    /// Extends the in-progress array by the ranges in the provided iterator
+    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+        for (start, end) in iter {
             let value_start = self.get_value_offset(start);
             let value_end = self.get_value_offset(end);
             self.dst_values
@@ -717,11 +731,11 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            filter.set_capacity_slices(SlicesIterator::new(&predicate.filter));
+            filter.set_capacity_slices(SlicesIterator::new(&predicate.filter), predicate.count);
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
         IterationStrategy::Slices(slices) => {
-            filter.set_capacity_slices(slices.iter().cloned());
+            filter.set_capacity_slices(slices.iter().cloned(), predicate.count);
             filter.extend_slices(slices.iter().cloned())
         }
         IterationStrategy::IndexIterator => {
@@ -729,8 +743,7 @@ where
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => {
-            filter.set_capacity_idx(IndexIterator::new(&predicate.filter, predicate.count));
-
+            filter.set_capacity_idx(indices.iter().cloned());
             filter.extend_idx(indices.iter().cloned())
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
