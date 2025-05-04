@@ -556,14 +556,14 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
 
     let buffer = match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
             buffer
         }
         IterationStrategy::Slices(slices) => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
                 buffer.extend_from_slice(&values[*start..*end]);
             }
@@ -572,13 +572,11 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
         IterationStrategy::IndexIterator => {
             let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
-            // SAFETY: IndexIterator is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
+            iter.collect()
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
-            // SAFETY: `Vec::iter` is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
+            iter.collect()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
@@ -656,6 +654,16 @@ where
         (start, end, len)
     }
 
+    fn set_capacity_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        let mut capacity = 0;
+        for idx in iter {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            capacity += end - start;
+        }
+        self.dst_values.reserve_exact(capacity);
+    }
+
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
         self.dst_offsets.extend(iter.map(|idx| {
@@ -667,6 +675,16 @@ where
                 .extend_from_slice(&self.src_values[start..end]);
             self.cur_offset
         }));
+    }
+
+    fn set_capacity_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+        let mut capacity = 0;
+        for (start, end) in iter {
+            let value_start = self.get_value_offset(start);
+            let value_end = self.get_value_offset(end);
+            capacity += value_end - value_start;
+        }
+        self.dst_values.reserve_exact(capacity);
     }
 
     /// Extends the in-progress array by the ranges in the provided iterator
@@ -699,13 +717,22 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
+            filter.set_capacity_slices(SlicesIterator::new(&predicate.filter));
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
-        IterationStrategy::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
+        IterationStrategy::Slices(slices) => {
+            filter.set_capacity_slices(slices.iter().cloned());
+            filter.extend_slices(slices.iter().cloned())
+        }
         IterationStrategy::IndexIterator => {
+            filter.set_capacity_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
-        IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
+        IterationStrategy::Indices(indices) => {
+            filter.set_capacity_idx(IndexIterator::new(&predicate.filter, predicate.count));
+
+            filter.extend_idx(indices.iter().cloned())
+        }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
