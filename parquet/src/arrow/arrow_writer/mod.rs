@@ -1336,6 +1336,7 @@ mod tests {
     use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
     use half::f16;
+    use num::{FromPrimitive, ToPrimitive};
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -1916,25 +1917,47 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_in_dict() {
-        let field = Field::new(
-            "a",
-            DataType::Dictionary(
-                Box::new(DataType::UInt8),
-                Box::new(DataType::FixedSizeBinary(4)),
-            ),
-            false,
-        );
+        fn test_fixed_size_binary_in_dict_inner<K, T>()
+        where
+            K: ArrowDictionaryKeyType,
+            K::Native: FromPrimitive + ToPrimitive + From<T>,
+            T: TryFrom<u8>,
+            <T as TryFrom<u8>>::Error: std::fmt::Debug,
+        {
+            let field = Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(K::DATA_TYPE),
+                    Box::new(DataType::FixedSizeBinary(4)),
+                ),
+                false,
+            );
+            let schema = Schema::new(vec![field]);
 
-        let schema = Schema::new(vec![field]);
+            let keys: Vec<K::Native> = vec![
+                K::Native::try_from(TryInto::<T>::try_into(0u8).unwrap()).unwrap(),
+                K::Native::try_from(TryInto::<T>::try_into(0u8).unwrap()).unwrap(),
+                K::Native::try_from(TryInto::<T>::try_into(1u8).unwrap()).unwrap(),
+            ];
+            let keys = PrimitiveArray::<K>::from_iter_values(keys);
+            let values = FixedSizeBinaryArray::try_from_iter(
+                vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
+            )
+            .unwrap();
 
-        let keys = UInt8Array::from_iter_values([0, 0, 1]);
-        let values = FixedSizeBinaryArray::try_from_iter(
-            vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
-        )
-        .unwrap();
-        let data = UInt8DictionaryArray::new(keys, Arc::new(values));
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-        roundtrip(batch, None);
+            let data = DictionaryArray::<K>::new(keys, Arc::new(values));
+            let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+            roundtrip(batch, None);
+        }
+
+        test_fixed_size_binary_in_dict_inner::<UInt8Type, u8>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type, u8>();
+        test_fixed_size_binary_in_dict_inner::<UInt32Type, u8>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type, u8>();
+        test_fixed_size_binary_in_dict_inner::<Int8Type, i8>();
+        test_fixed_size_binary_in_dict_inner::<Int16Type, i8>();
+        test_fixed_size_binary_in_dict_inner::<Int32Type, i8>();
+        test_fixed_size_binary_in_dict_inner::<Int64Type, i8>();
     }
 
     #[test]
