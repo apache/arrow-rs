@@ -2292,6 +2292,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "arrow")]
+    #[allow(deprecated)]
     fn test_byte_stream_split_extended_roundtrip() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",

@@ -20,6 +20,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::errors::Result;
 use std::fs::File;
 
+#[allow(deprecated)]
 fn main() -> Result<()> {
     // Create parquet file that will be read.
     let testdata = arrow::util::test_util::parquet_test_data();

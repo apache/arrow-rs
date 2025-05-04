@@ -18,12 +18,14 @@
 use arrow::ipc;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+#[allow(deprecated)]
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_testing::read_gzip_json;
 use std::fs::File;
 use std::io::Seek;
 
 #[test]
+#[allow(deprecated)]
 fn write_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
@@ -45,6 +47,7 @@ fn write_0_1_4() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn write_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
@@ -56,6 +59,7 @@ fn write_0_1_7() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn write_1_0_0_littleendian() {
     let testdata = arrow_test_data();
     let version = "1.0.0-littleendian";
@@ -91,6 +95,7 @@ fn write_1_0_0_littleendian() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn write_2_0_0_compression() {
     let testdata = arrow_test_data();
     let version = "2.0.0-compression";

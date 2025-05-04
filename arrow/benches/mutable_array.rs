@@ -23,9 +23,11 @@ use rand::Rng;
 
 extern crate arrow;
 
+#[allow(deprecated)]
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::create_string_array};
 
+#[allow(deprecated)]
 fn create_slices(size: usize) -> Vec<(usize, usize)> {
     let rng = &mut seedable_rng();
 

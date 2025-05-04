@@ -20,6 +20,7 @@
 
 use arrow::error::ArrowError;
 use arrow::ipc::reader::{FileReader, StreamDecoder, StreamReader};
+#[allow(deprecated)]
 use arrow::util::test_util::arrow_test_data;
 use arrow_buffer::Buffer;
 use arrow_integration_testing::read_gzip_json;
@@ -27,6 +28,7 @@ use std::fs::File;
 use std::io::Read;
 
 #[test]
+#[allow(deprecated)]
 fn read_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
@@ -48,6 +50,7 @@ fn read_0_1_4() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn read_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
@@ -59,6 +62,7 @@ fn read_0_1_7() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn read_1_0_0_bigendian() {
     let testdata = arrow_test_data();
     let paths = [
@@ -90,6 +94,7 @@ fn read_1_0_0_bigendian() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn read_1_0_0_littleendian() {
     let testdata = arrow_test_data();
     let version = "1.0.0-littleendian";
@@ -125,6 +130,7 @@ fn read_1_0_0_littleendian() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn read_2_0_0_compression() {
     let testdata = arrow_test_data();
     let version = "2.0.0-compression";
