@@ -31,7 +31,9 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -85,6 +87,7 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
 }
 
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
+    value_type: &DataType,
     arrays: &[&dyn Array],
 ) -> Result<ArrayRef, ArrowError> {
     let mut output_len = 0;
@@ -93,11 +96,31 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .map(|x| x.as_dictionary::<K>())
         .inspect(|d| output_len += d.len())
         .collect();
-
     if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
+    macro_rules! primitive_dict_helper {
+        ($t:ty) => {
+            merge_concat_primitive_dictionaries::<K, $t>(&dictionaries, output_len)
+        };
+    }
+
+    downcast_primitive! {
+        value_type => (primitive_dict_helper),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+            merge_concat_byte_dictionaries(&dictionaries, output_len)
+        },
+        other => Err(ArrowError::NotYetImplemented(format!(
+            "interleave does not yet support merging dictionaries with value type {other:?}"
+        )))
+    }
+}
+
+fn merge_concat_byte_dictionaries<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    output_len: usize,
+) -> Result<ArrayRef, ArrowError> {
     let merged = merge_dictionary_values(&dictionaries, None)?;
 
     // Recompute keys
@@ -114,7 +137,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
 
     let nulls = has_nulls.then(|| {
         let mut nulls = BooleanBufferBuilder::new(output_len);
-        for d in &dictionaries {
+        for d in dictionaries {
             match d.nulls() {
                 Some(n) => nulls.append_buffer(n.inner()),
                 None => nulls.append_n(d.len(), true),
@@ -129,6 +152,19 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
 
     let array = unsafe { DictionaryArray::new_unchecked(keys, merged.values) };
     Ok(Arc::new(array))
+}
+
+fn merge_concat_primitive_dictionaries<K: ArrowDictionaryKeyType, V: ArrowPrimitiveType>(
+    dictionaries: &[&DictionaryArray<K>],
+    output_len: usize,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = PrimitiveDictionaryBuilder::<K, V>::with_capacity(output_len, 0);
+    for dict in dictionaries {
+        for value in dict.downcast_dict::<PrimitiveArray<V>>().unwrap() {
+            builder.append_option(value);
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_lists<OffsetSize: OffsetSizeTrait>(
@@ -293,8 +329,8 @@ where
 }
 
 macro_rules! dict_helper {
-    ($t:ty, $arrays:expr) => {
-        return Ok(Arc::new(concat_dictionaries::<$t>($arrays)?) as _)
+    ($t:ty, $value_type:expr, $arrays:expr) => {
+        return Ok(concat_dictionaries::<$t>($value_type.as_ref(), $arrays)?)
     };
 }
 
@@ -362,9 +398,9 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
     downcast_primitive! {
         d => (primitive_concat, arrays),
         DataType::Boolean => concat_boolean(arrays),
-        DataType::Dictionary(k, _) => {
+        DataType::Dictionary(k, v) => {
             downcast_integer! {
-                k.as_ref() => (dict_helper, arrays),
+                k.as_ref() => (dict_helper, v, arrays),
                 _ => unreachable!("illegal dictionary key type {k}")
             }
         }
@@ -1008,6 +1044,42 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_concat_dictionary_overflows() {
+        // each array has length equal to the full dictionary key space
+        let len: usize = usize::try_from(i8::MAX).unwrap();
+
+        let a = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(Int8Array::from_value(0, len)),
+        );
+        let b = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(Int8Array::from_value(1, len)),
+        );
+
+        // Case 1: with a single input array, should _never_ overflow
+        let values = concat(&[&a]).unwrap();
+        let v = values.as_dictionary::<Int8Type>();
+        let vc = v.downcast_dict::<Int8Array>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &vec![0; len]);
+
+        // Case 2: two arrays
+        // Should still not overflow, there are only two values
+        let values = concat(&[&a, &b]).unwrap();
+        let v = values.as_dictionary::<Int8Type>();
+        let vc = v.downcast_dict::<Int8Array>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(
+            &collected,
+            &vec![0; len]
+                .into_iter()
+                .chain(vec![1; len])
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
