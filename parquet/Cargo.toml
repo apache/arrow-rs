@@ -217,6 +217,11 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_clickbench"
+required-features = ["arrow", "async"]
+harness = false
+
+[[bench]]
 name = "compression"
 required-features = ["experimental", "default"]
 harness = false
