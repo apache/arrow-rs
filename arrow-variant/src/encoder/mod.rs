@@ -60,7 +60,7 @@ pub(crate) fn min_bytes_needed(value: usize) -> usize {
 }
 
 /// Variant basic types as defined in the Arrow Variant specification
-/// 
+///
 /// See the official specification: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 ///
 /// Basic Type	ID	Description
@@ -81,7 +81,7 @@ pub enum VariantBasicType {
 }
 
 /// Variant primitive types as defined in the Arrow Variant specification
-/// 
+///
 /// See the official specification: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 ///
 /// Equivalence Class	Variant Physical Type	Type ID	Equivalent Parquet Type	Binary format
@@ -158,53 +158,53 @@ pub trait Encoder {
     fn type_id(&self) -> u8;
 
     /// Encode a simple value into variant binary format
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `value` - The byte slice containing the raw value data
     /// * `output` - The output buffer to write the encoded value
     fn encode_simple(&self, value: &[u8], output: &mut Vec<u8>) {
         // Write the header byte for the type
         output.push(primitive_header(self.type_id()));
-        
+
         // Write the value bytes if any
         if !value.is_empty() {
             output.extend_from_slice(value);
         }
     }
-    
+
     /// Encode a value that needs a prefix and suffix (for decimal types)
-    /// 
+    ///
     /// This is a more efficient version that avoids intermediate allocations
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `prefix` - A prefix to add before the value (e.g., scale for decimal)
     /// * `value` - The byte slice containing the raw value data
     /// * `output` - The output buffer to write the encoded value
     fn encode_with_prefix(&self, prefix: &[u8], value: &[u8], output: &mut Vec<u8>) {
         // Write the header
         output.push(primitive_header(self.type_id()));
-        
+
         // Write prefix + value directly to output (no temporary buffer)
         output.extend_from_slice(prefix);
         output.extend_from_slice(value);
     }
-    
+
     /// Encode a length-prefixed value (for string and binary types)
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `len` - The length to encode as a prefix
     /// * `value` - The byte slice containing the raw value data
     /// * `output` - The output buffer to write the encoded value
     fn encode_length_prefixed(&self, len: u32, value: &[u8], output: &mut Vec<u8>) {
         // Write the header
         output.push(primitive_header(self.type_id()));
-        
+
         // Write the length as 4-byte little-endian
         output.extend_from_slice(&len.to_le_bytes());
-        
+
         // Write the value bytes
         output.extend_from_slice(value);
     }
@@ -326,7 +326,11 @@ pub(crate) fn encode_date(value: i32, output: &mut Vec<u8>) {
 }
 
 /// General function for encoding timestamp-like values with a specified type
-pub(crate) fn encode_timestamp_with_type(value: i64, type_id: VariantPrimitiveType, output: &mut Vec<u8>) {
+pub(crate) fn encode_timestamp_with_type(
+    value: i64,
+    type_id: VariantPrimitiveType,
+    output: &mut Vec<u8>,
+) {
     type_id.encode_simple(&value.to_le_bytes(), output);
 }
 
@@ -360,15 +364,18 @@ pub(crate) fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
     VariantPrimitiveType::Uuid.encode_simple(value, output);
 }
 
-/// Generic decimal encoding function 
+/// Generic decimal encoding function
 fn encode_decimal_generic<T: AsRef<[u8]>>(
-    scale: u8, 
-    unscaled_value: T, 
+    scale: u8,
+    unscaled_value: T,
     type_id: VariantPrimitiveType,
-    output: &mut Vec<u8>
+    output: &mut Vec<u8>,
 ) {
     if scale > MAX_DECIMAL_SCALE {
-        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
+        panic!(
+            "Decimal scale must be in range [0, {}], got {}",
+            MAX_DECIMAL_SCALE, scale
+        );
     }
 
     type_id.encode_with_prefix(&[scale], unscaled_value.as_ref(), output);
@@ -386,7 +393,12 @@ fn encode_decimal_generic<T: AsRef<[u8]>>(
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub(crate) fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
-    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal4, output);
+    encode_decimal_generic(
+        scale,
+        &unscaled_value.to_le_bytes(),
+        VariantPrimitiveType::Decimal4,
+        output,
+    );
 }
 
 /// Encodes a decimal value with 64-bit precision (decimal8)
@@ -401,7 +413,12 @@ pub(crate) fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub(crate) fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
-    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal8, output);
+    encode_decimal_generic(
+        scale,
+        &unscaled_value.to_le_bytes(),
+        VariantPrimitiveType::Decimal8,
+        output,
+    );
 }
 
 /// Encodes a decimal value with 128-bit precision (decimal16)
@@ -416,7 +433,12 @@ pub(crate) fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub(crate) fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
-    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal16, output);
+    encode_decimal_generic(
+        scale,
+        &unscaled_value.to_le_bytes(),
+        VariantPrimitiveType::Decimal16,
+        output,
+    );
 }
 
 /// Writes an integer value using the specified number of bytes (1-4).
@@ -781,5 +803,145 @@ mod tests {
             unscaled_bytes[15],
         ]);
         assert_eq!(unscaled_value, large_value);
+    }
+
+    #[test]
+    fn test_encode_date() {
+        let mut output = Vec::new();
+        let date_value = 18524; // Example date (days since epoch)
+        encode_date(date_value, &mut output);
+
+        // Verify header
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::Date as u8)
+        );
+
+        // Verify value
+        let date_bytes = &output[1..5];
+        let encoded_date =
+            i32::from_le_bytes([date_bytes[0], date_bytes[1], date_bytes[2], date_bytes[3]]);
+        assert_eq!(encoded_date, date_value);
+    }
+
+    #[test]
+    fn test_encode_timestamp() {
+        // Test regular timestamp
+        let mut output = Vec::new();
+        let ts_value = 1625097600000; // Example timestamp (milliseconds since epoch)
+        encode_timestamp(ts_value, &mut output);
+
+        // Verify header
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::Timestamp as u8)
+        );
+
+        // Verify value
+        let ts_bytes = &output[1..9];
+        let encoded_ts = i64::from_le_bytes([
+            ts_bytes[0],
+            ts_bytes[1],
+            ts_bytes[2],
+            ts_bytes[3],
+            ts_bytes[4],
+            ts_bytes[5],
+            ts_bytes[6],
+            ts_bytes[7],
+        ]);
+        assert_eq!(encoded_ts, ts_value);
+
+        // Test timestamp without timezone
+        output.clear();
+        encode_timestamp_ntz(ts_value, &mut output);
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::TimestampNTZ as u8)
+        );
+
+        // Test timestamp with nanosecond precision
+        output.clear();
+        let ts_nanos = 1625097600000000000; // Example timestamp (nanoseconds)
+        encode_timestamp_nanos(ts_nanos, &mut output);
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::TimestampNanos as u8)
+        );
+
+        // Test timestamp without timezone with nanosecond precision
+        output.clear();
+        encode_timestamp_ntz_nanos(ts_nanos, &mut output);
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::TimestampNTZNanos as u8)
+        );
+    }
+
+    #[test]
+    fn test_encode_time_ntz() {
+        let mut output = Vec::new();
+        let time_value = 43200000; // Example time (milliseconds, 12:00:00)
+        encode_time_ntz(time_value, &mut output);
+
+        // Verify header
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::TimeNTZ as u8)
+        );
+
+        // Verify value
+        let time_bytes = &output[1..9];
+        let encoded_time = i64::from_le_bytes([
+            time_bytes[0],
+            time_bytes[1],
+            time_bytes[2],
+            time_bytes[3],
+            time_bytes[4],
+            time_bytes[5],
+            time_bytes[6],
+            time_bytes[7],
+        ]);
+        assert_eq!(encoded_time, time_value);
+    }
+
+    #[test]
+    fn test_encode_binary() {
+        let mut output = Vec::new();
+        let binary_data = vec![0x01, 0x02, 0x03, 0x04, 0x05];
+        encode_binary(&binary_data, &mut output);
+
+        // Verify header
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::Binary as u8)
+        );
+
+        // Verify length
+        let len_bytes = &output[1..5];
+        let encoded_len =
+            u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+        assert_eq!(encoded_len, binary_data.len() as u32);
+
+        // Verify binary data
+        assert_eq!(&output[5..], &binary_data);
+    }
+
+    #[test]
+    fn test_encode_uuid() {
+        let mut output = Vec::new();
+        let uuid_bytes = [
+            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB,
+            0xCD, 0xEF,
+        ];
+        encode_uuid(&uuid_bytes, &mut output);
+
+        // Verify header
+        assert_eq!(
+            output[0],
+            primitive_header(VariantPrimitiveType::Uuid as u8)
+        );
+
+        // Verify UUID bytes
+        assert_eq!(&output[1..], &uuid_bytes);
     }
 }
