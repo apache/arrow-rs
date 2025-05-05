@@ -458,7 +458,22 @@ pub enum UnionMode {
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
+        match &self {
+            DataType::Struct(fields) => {
+                write!(f, "Struct(")?;
+                if !fields.is_empty() {
+                    let fields_str = fields
+                        .iter()
+                        .map(|f| format!("{} {}", f.name(), f.data_type()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, "{}", fields_str)?;
+                }
+                write!(f, ")")?;
+                Ok(())
+            }
+            _ => write!(f, "{self:?}"),
+        }
     }
 }
 
