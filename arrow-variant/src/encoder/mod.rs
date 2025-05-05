@@ -448,7 +448,7 @@ pub(crate) fn write_int_with_size(
         }
         4 => output.write_all(&value.to_le_bytes())?,
         _ => {
-            return Err(ArrowError::VariantError(format!(
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "Invalid byte size: {}",
                 num_bytes
             )))

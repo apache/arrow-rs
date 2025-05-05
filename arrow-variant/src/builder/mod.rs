@@ -281,7 +281,7 @@ impl<'a> VariantBuilder<'a> {
     /// The index of the key in the dictionary
     pub(crate) fn add_key(&mut self, key: &str) -> Result<usize, ArrowError> {
         if self.is_finalized {
-            return Err(ArrowError::VariantError(
+            return Err(ArrowError::SchemaError(
                 "Cannot add keys after metadata has been finalized".to_string(),
             ));
         }
