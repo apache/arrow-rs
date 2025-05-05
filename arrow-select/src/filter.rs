@@ -662,11 +662,12 @@ where
 
             self.cur_offset
         }));
-        self.dst_values.reserve_exact(self.cur_offset.as_usize());
     }
 
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
         for idx in iter {
             let start = self.src_offsets[idx].as_usize();
             let end = self.src_offsets[idx + 1].as_usize();
@@ -685,11 +686,12 @@ where
                 self.dst_offsets.push(self.cur_offset);
             }
         }
-        self.dst_values.reserve_exact(self.cur_offset.as_usize());
     }
 
     /// Extends the in-progress array by the ranges in the provided iterator
     fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
         for (start, end) in iter {
             let value_start = self.get_value_offset(start);
             let value_end = self.get_value_offset(end);
