@@ -565,7 +565,7 @@ impl FileDecryptor {
         let aad = create_footer_aad(self.file_aad())?;
         let footer_decryptor = self.get_footer_decryptor()?;
 
-        let computed_tag = footer_decryptor.compute_plaintext_footer_tag(&aad, plaintext_footer)?;
+        let computed_tag = footer_decryptor.compute_plaintext_tag(&aad, plaintext_footer)?;
 
         if computed_tag != tag {
             return Err(general_err!(

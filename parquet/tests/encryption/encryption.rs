@@ -43,11 +43,30 @@ use std::sync::Arc;
 fn test_non_uniform_encryption_plaintext_footer() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
-    let file = File::open(path.clone()).unwrap();
+    let file = File::open(path).unwrap();
 
     // There is always a footer key even with a plaintext footer,
     // but this is used for signing the footer.
     let footer_key = "0123456789012345".as_bytes(); // 128bit/16
+    let column_1_key = "1234567890123450".as_bytes();
+    let column_2_key = "1234567890123451".as_bytes();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+        .with_column_key("double_field", column_1_key.to_vec())
+        .with_column_key("float_field", column_2_key.to_vec())
+        .build()
+        .unwrap();
+
+    verify_encryption_test_file_read(file, decryption_properties);
+}
+
+#[test]
+fn test_plaintext_footer_signature_verification() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path.clone()).unwrap();
+
+    let footer_key = "0000000000000000".as_bytes(); // 128bit/16
     let column_1_key = "1234567890123450".as_bytes();
     let column_2_key = "1234567890123451".as_bytes();
 
@@ -68,7 +87,15 @@ fn test_non_uniform_encryption_plaintext_footer() {
         .build()
         .unwrap();
 
-    verify_encryption_test_file_read(file, decryption_properties);
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let result = ArrowReaderMetadata::load(&file, options.clone());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    // verify_encryption_test_file_read(file, decryption_properties);
 }
 
 #[test]

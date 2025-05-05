@@ -962,24 +962,19 @@ impl ParquetMetaDataReader {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
         if let (Some(algo), Some(file_decryption_properties)) = (
-            t_file_metadata.encryption_algorithm.clone(),
+            t_file_metadata.encryption_algorithm,
             file_decryption_properties,
         ) {
             // File has a plaintext footer but encryption algorithm is set
-            file_decryptor = Some(get_file_decryptor(
+            let file_decryptor_value = get_file_decryptor(
                 algo,
-                t_file_metadata
-                    .footer_signing_key_metadata
-                    .clone()
-                    .as_deref(),
+                t_file_metadata.footer_signing_key_metadata.as_deref(),
                 file_decryption_properties,
-            )?);
-            if file_decryption_properties.check_plaintext_footer_integrity() {
-                file_decryptor
-                    .clone()
-                    .unwrap()
-                    .verify_plaintext_footer_signature(buf.to_vec().as_mut())?;
+            )?;
+            if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
+                file_decryptor_value.verify_plaintext_footer_signature(buf.to_vec().as_mut())?;
             }
+            file_decryptor = Some(file_decryptor_value);
         }
 
         let mut row_groups = Vec::new();
