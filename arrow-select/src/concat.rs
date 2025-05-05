@@ -131,7 +131,7 @@ fn merge_concat_byte_dictionaries<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     output_len: usize,
 ) -> Result<ArrayRef, ArrowError> {
-    let merged = merge_dictionary_values(&dictionaries, None)?;
+    let merged = merge_dictionary_values(dictionaries, None)?;
 
     // Recompute keys
     let mut key_values = Vec::with_capacity(output_len);
@@ -279,7 +279,7 @@ fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, Arr
 
 macro_rules! dict_helper {
     ($t:ty, $value_type:expr, $arrays:expr) => {
-        return Ok(concat_dictionaries::<$t>($value_type.as_ref(), $arrays)?)
+        concat_dictionaries::<$t>($value_type.as_ref(), $arrays)
     };
 }
 

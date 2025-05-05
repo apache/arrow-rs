@@ -249,7 +249,7 @@ fn merge_interleave_byte_dictionaries<K: ArrowDictionaryKeyType>(
         })
         .collect();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(dictionaries, Some(&masks))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
