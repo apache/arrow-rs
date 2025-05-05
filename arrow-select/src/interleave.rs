@@ -223,7 +223,8 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         // to concatenating values
         _ if !is_overflow => interleave_fallback(arrays, indices),
         other => Err(ArrowError::NotYetImplemented(format!(
-            "interleave of dictionaries would overflow key type {key_type:?} with value type {other:?}",
+            "interleave of dictionaries would overflow key type {key_type:?} and \
+             value type {other:?} not yet supported for merging",
             key_type = K::DATA_TYPE,
         )))
     }
@@ -545,6 +546,33 @@ mod tests {
         let vc = v.downcast_dict::<Int8Array>().unwrap();
         let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
         assert_eq!(&collected, &[0, 0, 1]);
+    }
+
+    #[test]
+    fn test_unsupported_interleave_dictionary_overflow() {
+        // each array has length equal to the full dictionary key space
+        let len: usize = usize::try_from(i8::MAX).unwrap();
+
+        let a = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+        let b = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+
+        // Case 1: with a single input array, should _never_ overflow
+        interleave(&[&a], &[(0, 2), (0, 2)]).unwrap();
+
+        // Case 2: two arrays
+        // Will fail to merge values on unsupported datatype
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 1)]).unwrap_err();
+        assert_eq!(
+            values.to_string(),
+            "Not yet implemented: qinterleave of dictionaries would overflow key type Int8 and \
+             value type Null not yet supported for merging"
+        );
     }
 
     #[test]
