@@ -122,7 +122,8 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         // to concatenating values
         _ if !is_overflow => concat_fallback(arrays, Capacities::Array(output_len)),
         other => Err(ArrowError::NotYetImplemented(format!(
-            "concat of dictionaries would overflow key type {key_type:?} with value type {other:?}",
+            "concat of dictionaries would overflow key type {key_type:?} and \
+             value type {other:?} not yet supported for merging",
             key_type = K::DATA_TYPE,
         )))
     }
@@ -1090,6 +1091,33 @@ mod tests {
                 .into_iter()
                 .chain(vec![1; len])
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_unsupported_concat_dictionary_overflow() {
+        // each array has length equal to the full dictionary key space
+        let len: usize = usize::try_from(i8::MAX).unwrap();
+
+        let a = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+        let b = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+
+        // Case 1: with a single input array, should _never_ overflow
+        concat(&[&a]).unwrap();
+
+        // Case 2: two arrays
+        // Will fail to merge values on unsupported datatype
+        let values = concat(&[&a, &b]).unwrap_err();
+        assert_eq!(
+            values.to_string(),
+            "Not yet implemented: concat of dictionaries would overflow key type Int8 and \
+             value type Null not yet supported for merging"
         );
     }
 
