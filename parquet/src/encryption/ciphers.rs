@@ -30,11 +30,7 @@ pub(crate) const SIZE_LEN: usize = 4;
 pub(crate) trait BlockDecryptor: Debug + Send + Sync {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 
-    fn compute_plaintext_tag(
-        &self,
-        aad: &[u8],
-        plaintext: &mut [u8],
-    ) -> Result<Vec<u8>>;
+    fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &mut [u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -70,13 +66,8 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
         Ok(result)
     }
 
-    fn compute_plaintext_tag(
-        &self,
-        aad: &[u8],
-        plaintext: &mut [u8],
-    ) -> Result<Vec<u8>> {
-        let nonce = &plaintext
-            [plaintext.len() - NONCE_LEN - TAG_LEN..plaintext.len() - TAG_LEN];
+    fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &mut [u8]) -> Result<Vec<u8>> {
+        let nonce = &plaintext[plaintext.len() - NONCE_LEN - TAG_LEN..plaintext.len() - TAG_LEN];
         let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce)?;
         let plaintext_end = plaintext.len() - NONCE_LEN - TAG_LEN;
         let tag = self.key.seal_in_place_separate_tag(
