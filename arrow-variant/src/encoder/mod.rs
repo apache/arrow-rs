@@ -60,6 +60,8 @@ pub fn min_bytes_needed(value: usize) -> usize {
 }
 
 /// Variant basic types as defined in the Arrow Variant specification
+/// 
+/// See the official specification: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 ///
 /// Basic Type	ID	Description
 /// Primitive	0	One of the primitive types
@@ -78,6 +80,8 @@ pub enum VariantBasicType {
 }
 
 /// Variant primitive types as defined in the Arrow Variant specification
+/// 
+/// See the official specification: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 ///
 /// Equivalence Class	Variant Physical Type	Type ID	Equivalent Parquet Type	Binary format
 /// NullType	null	0	UNKNOWN	none

@@ -17,7 +17,7 @@
 
 //! Variant
 //!
-//! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#variant>
+//! Implements Arrow ExtensionType for Variant type.
 
 use crate::{extension::ExtensionType, ArrowError, DataType};
 
