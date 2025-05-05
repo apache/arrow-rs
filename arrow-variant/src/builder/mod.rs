@@ -23,7 +23,6 @@
 //! # Example
 //!
 //! ```
-//! use std::io::Cursor;
 //! use arrow_variant::builder::{VariantBuilder, PrimitiveValue};
 //!
 //! // Create a builder for variant values

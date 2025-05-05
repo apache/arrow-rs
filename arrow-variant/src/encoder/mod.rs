@@ -47,7 +47,7 @@ pub const MAX_DECIMAL_SCALE: u8 = 38;
 /// # Returns
 ///
 /// The number of bytes (1, 2, 3, or 4) needed to represent the value
-pub fn min_bytes_needed(value: usize) -> usize {
+pub(crate) fn min_bytes_needed(value: usize) -> usize {
     if value <= MAX_1BYTE_VALUE {
         1
     } else if value <= MAX_2BYTE_VALUE {
@@ -68,6 +68,7 @@ pub fn min_bytes_needed(value: usize) -> usize {
 /// Short string	1	A string with a length less than 64 bytes
 /// Object	2	A collection of (string-key, variant-value) pairs
 /// Array	3	An ordered sequence of variant values
+#[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {
     /// Primitive type (0)
     Primitive = 0,
@@ -105,6 +106,7 @@ pub enum VariantBasicType {
 /// Timestamp	timestamp with time zone	18	TIMESTAMP(isAdjustedToUTC=true, NANOS)	8-byte little-endian
 /// TimestampNTZ	timestamp without time zone	19	TIMESTAMP(isAdjustedToUTC=false, NANOS)	8-byte little-endian
 /// UUID	uuid	20	UUID	16-byte big-endian
+#[derive(Debug, Clone, Copy)]
 pub enum VariantPrimitiveType {
     /// Null type (0)
     Null = 0,
@@ -150,6 +152,71 @@ pub enum VariantPrimitiveType {
     Uuid = 20,
 }
 
+/// Trait for encoding primitive types in variant binary format
+pub trait Encoder {
+    /// Get the type ID for the header
+    fn type_id(&self) -> u8;
+
+    /// Encode a simple value into variant binary format
+    /// 
+    /// # Arguments
+    /// 
+    /// * `value` - The byte slice containing the raw value data
+    /// * `output` - The output buffer to write the encoded value
+    fn encode_simple(&self, value: &[u8], output: &mut Vec<u8>) {
+        // Write the header byte for the type
+        output.push(primitive_header(self.type_id()));
+        
+        // Write the value bytes if any
+        if !value.is_empty() {
+            output.extend_from_slice(value);
+        }
+    }
+    
+    /// Encode a value that needs a prefix and suffix (for decimal types)
+    /// 
+    /// This is a more efficient version that avoids intermediate allocations
+    /// 
+    /// # Arguments
+    /// 
+    /// * `prefix` - A prefix to add before the value (e.g., scale for decimal)
+    /// * `value` - The byte slice containing the raw value data
+    /// * `output` - The output buffer to write the encoded value
+    fn encode_with_prefix(&self, prefix: &[u8], value: &[u8], output: &mut Vec<u8>) {
+        // Write the header
+        output.push(primitive_header(self.type_id()));
+        
+        // Write prefix + value directly to output (no temporary buffer)
+        output.extend_from_slice(prefix);
+        output.extend_from_slice(value);
+    }
+    
+    /// Encode a length-prefixed value (for string and binary types)
+    /// 
+    /// # Arguments
+    /// 
+    /// * `len` - The length to encode as a prefix
+    /// * `value` - The byte slice containing the raw value data
+    /// * `output` - The output buffer to write the encoded value
+    fn encode_length_prefixed(&self, len: u32, value: &[u8], output: &mut Vec<u8>) {
+        // Write the header
+        output.push(primitive_header(self.type_id()));
+        
+        // Write the length as 4-byte little-endian
+        output.extend_from_slice(&len.to_le_bytes());
+        
+        // Write the value bytes
+        output.extend_from_slice(value);
+    }
+}
+
+impl Encoder for VariantPrimitiveType {
+    #[inline]
+    fn type_id(&self) -> u8 {
+        *self as u8
+    }
+}
+
 /// Creates a header byte for a primitive type value
 ///
 /// The header byte contains:
@@ -175,7 +242,7 @@ fn short_str_header(size: u8) -> u8 {
 /// - is_large (1 bit) at position 6
 /// - field_id_size_minus_one (2 bits) at positions 4-5
 /// - field_offset_size_minus_one (2 bits) at positions 2-3
-pub fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
+pub(crate) fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
     ((is_large as u8) << 6)
         | ((id_size - 1) << 4)
         | ((offset_size - 1) << 2)
@@ -188,53 +255,49 @@ pub fn object_header(is_large: bool, id_size: u8, offset_size: u8) -> u8 {
 /// - Basic type (2 bits) in the lower bits
 /// - is_large (1 bit) at position 4
 /// - field_offset_size_minus_one (2 bits) at positions 2-3
-pub fn array_header(is_large: bool, offset_size: u8) -> u8 {
+pub(crate) fn array_header(is_large: bool, offset_size: u8) -> u8 {
     ((is_large as u8) << 4) | ((offset_size - 1) << 2) | VariantBasicType::Array as u8
 }
 
 /// Encodes a null value
-pub fn encode_null(output: &mut Vec<u8>) {
-    output.push(primitive_header(VariantPrimitiveType::Null as u8));
+pub(crate) fn encode_null(output: &mut Vec<u8>) {
+    VariantPrimitiveType::Null.encode_simple(&[], output);
 }
 
 /// Encodes a boolean value
-pub fn encode_boolean(value: bool, output: &mut Vec<u8>) {
-    if value {
-        output.push(primitive_header(VariantPrimitiveType::BooleanTrue as u8));
+pub(crate) fn encode_boolean(value: bool, output: &mut Vec<u8>) {
+    let type_id = if value {
+        VariantPrimitiveType::BooleanTrue
     } else {
-        output.push(primitive_header(VariantPrimitiveType::BooleanFalse as u8));
-    }
+        VariantPrimitiveType::BooleanFalse
+    };
+    type_id.encode_simple(&[], output);
 }
 
 /// Encodes an integer value, choosing the smallest sufficient type
-pub fn encode_integer(value: i64, output: &mut Vec<u8>) {
+pub(crate) fn encode_integer(value: i64, output: &mut Vec<u8>) {
     if value >= i8::MIN.into() && value <= i8::MAX.into() {
         // Int8
-        output.push(primitive_header(VariantPrimitiveType::Int8 as u8));
-        output.push(value as u8);
+        VariantPrimitiveType::Int8.encode_simple(&[value as u8], output);
     } else if value >= i16::MIN.into() && value <= i16::MAX.into() {
         // Int16
-        output.push(primitive_header(VariantPrimitiveType::Int16 as u8));
-        output.extend_from_slice(&(value as i16).to_le_bytes());
+        VariantPrimitiveType::Int16.encode_simple(&(value as i16).to_le_bytes(), output);
     } else if value >= i32::MIN.into() && value <= i32::MAX.into() {
         // Int32
-        output.push(primitive_header(VariantPrimitiveType::Int32 as u8));
-        output.extend_from_slice(&(value as i32).to_le_bytes());
+        VariantPrimitiveType::Int32.encode_simple(&(value as i32).to_le_bytes(), output);
     } else {
         // Int64
-        output.push(primitive_header(VariantPrimitiveType::Int64 as u8));
-        output.extend_from_slice(&value.to_le_bytes());
+        VariantPrimitiveType::Int64.encode_simple(&value.to_le_bytes(), output);
     }
 }
 
 /// Encodes a float value
-pub fn encode_float(value: f64, output: &mut Vec<u8>) {
-    output.push(primitive_header(VariantPrimitiveType::Double as u8));
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_float(value: f64, output: &mut Vec<u8>) {
+    VariantPrimitiveType::Double.encode_simple(&value.to_le_bytes(), output);
 }
 
 /// Encodes a string value
-pub fn encode_string(value: &str, output: &mut Vec<u8>) {
+pub(crate) fn encode_string(value: &str, output: &mut Vec<u8>) {
     let bytes = value.as_bytes();
     let len = bytes.len();
 
@@ -244,84 +307,71 @@ pub fn encode_string(value: &str, output: &mut Vec<u8>) {
         output.push(header);
         output.extend_from_slice(bytes);
     } else {
-        // Long string format (using primitive string type)
-        let header = primitive_header(VariantPrimitiveType::String as u8);
-        output.push(header);
-
-        // Write length as 4-byte little-endian
-        output.extend_from_slice(&(len as u32).to_le_bytes());
-
-        // Write string bytes
-        output.extend_from_slice(bytes);
+        // Long string format (using primitive string type with length prefix)
+        // Directly encode to output without intermediate buffer
+        VariantPrimitiveType::String.encode_length_prefixed(len as u32, bytes, output);
     }
 }
 
 /// Encodes a binary value
-pub fn encode_binary(value: &[u8], output: &mut Vec<u8>) {
-    // Use primitive + binary type
-    let header = primitive_header(VariantPrimitiveType::Binary as u8);
-    output.push(header);
-
-    // Write length followed by bytes
-    let len = value.len() as u32;
-    output.extend_from_slice(&len.to_le_bytes());
-    output.extend_from_slice(value);
+pub(crate) fn encode_binary(value: &[u8], output: &mut Vec<u8>) {
+    // Use primitive + binary type with length prefix
+    // Directly encode to output without intermediate buffer
+    VariantPrimitiveType::Binary.encode_length_prefixed(value.len() as u32, value, output);
 }
 
 /// Encodes a date value (days since epoch)
-pub fn encode_date(value: i32, output: &mut Vec<u8>) {
-    // Use primitive + date type
-    let header = primitive_header(VariantPrimitiveType::Date as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_date(value: i32, output: &mut Vec<u8>) {
+    VariantPrimitiveType::Date.encode_simple(&value.to_le_bytes(), output);
+}
+
+/// General function for encoding timestamp-like values with a specified type
+pub(crate) fn encode_timestamp_with_type(value: i64, type_id: VariantPrimitiveType, output: &mut Vec<u8>) {
+    type_id.encode_simple(&value.to_le_bytes(), output);
 }
 
 /// Encodes a timestamp value (milliseconds since epoch)
-pub fn encode_timestamp(value: i64, output: &mut Vec<u8>) {
-    // Use primitive + timestamp type
-    let header = primitive_header(VariantPrimitiveType::Timestamp as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_timestamp(value: i64, output: &mut Vec<u8>) {
+    encode_timestamp_with_type(value, VariantPrimitiveType::Timestamp, output);
 }
 
 /// Encodes a timestamp without timezone value (milliseconds since epoch)
-pub fn encode_timestamp_ntz(value: i64, output: &mut Vec<u8>) {
-    // Use primitive + timestamp_ntz type
-    let header = primitive_header(VariantPrimitiveType::TimestampNTZ as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_timestamp_ntz(value: i64, output: &mut Vec<u8>) {
+    encode_timestamp_with_type(value, VariantPrimitiveType::TimestampNTZ, output);
 }
 
 /// Encodes a time without timezone value (milliseconds)
-pub fn encode_time_ntz(value: i64, output: &mut Vec<u8>) {
-    // Use primitive + time_ntz type
-    let header = primitive_header(VariantPrimitiveType::TimeNTZ as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_time_ntz(value: i64, output: &mut Vec<u8>) {
+    encode_timestamp_with_type(value, VariantPrimitiveType::TimeNTZ, output);
 }
 
 /// Encodes a timestamp with nanosecond precision
-pub fn encode_timestamp_nanos(value: i64, output: &mut Vec<u8>) {
-    // Use primitive + timestamp_nanos type
-    let header = primitive_header(VariantPrimitiveType::TimestampNanos as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_timestamp_nanos(value: i64, output: &mut Vec<u8>) {
+    encode_timestamp_with_type(value, VariantPrimitiveType::TimestampNanos, output);
 }
 
 /// Encodes a timestamp without timezone with nanosecond precision
-pub fn encode_timestamp_ntz_nanos(value: i64, output: &mut Vec<u8>) {
-    // Use primitive + timestamp_ntz_nanos type
-    let header = primitive_header(VariantPrimitiveType::TimestampNTZNanos as u8);
-    output.push(header);
-    output.extend_from_slice(&value.to_le_bytes());
+pub(crate) fn encode_timestamp_ntz_nanos(value: i64, output: &mut Vec<u8>) {
+    encode_timestamp_with_type(value, VariantPrimitiveType::TimestampNTZNanos, output);
 }
 
 /// Encodes a UUID value
-pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
-    // Use primitive + uuid type
-    let header = primitive_header(VariantPrimitiveType::Uuid as u8);
-    output.push(header);
-    output.extend_from_slice(value);
+pub(crate) fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
+    VariantPrimitiveType::Uuid.encode_simple(value, output);
+}
+
+/// Generic decimal encoding function 
+fn encode_decimal_generic<T: AsRef<[u8]>>(
+    scale: u8, 
+    unscaled_value: T, 
+    type_id: VariantPrimitiveType,
+    output: &mut Vec<u8>
+) {
+    if scale > MAX_DECIMAL_SCALE {
+        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
+    }
+
+    type_id.encode_with_prefix(&[scale], unscaled_value.as_ref(), output);
 }
 
 /// Encodes a decimal value with 32-bit precision (decimal4)
@@ -335,20 +385,8 @@ pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
 /// * `scale` - The scale of the decimal value (number of decimal places)
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
-pub fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
-    if scale > MAX_DECIMAL_SCALE {
-        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
-    }
-
-    // Use primitive + decimal4 type
-    let header = primitive_header(VariantPrimitiveType::Decimal4 as u8);
-    output.push(header);
-
-    // Write scale byte
-    output.push(scale);
-
-    // Write unscaled value as little-endian
-    output.extend_from_slice(&unscaled_value.to_le_bytes());
+pub(crate) fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
+    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal4, output);
 }
 
 /// Encodes a decimal value with 64-bit precision (decimal8)
@@ -362,20 +400,8 @@ pub fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
 /// * `scale` - The scale of the decimal value (number of decimal places)
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
-pub fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
-    if scale > MAX_DECIMAL_SCALE {
-        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
-    }
-
-    // Use primitive + decimal8 type
-    let header = primitive_header(VariantPrimitiveType::Decimal8 as u8);
-    output.push(header);
-
-    // Write scale byte
-    output.push(scale);
-
-    // Write unscaled value as little-endian
-    output.extend_from_slice(&unscaled_value.to_le_bytes());
+pub(crate) fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
+    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal8, output);
 }
 
 /// Encodes a decimal value with 128-bit precision (decimal16)
@@ -389,20 +415,8 @@ pub fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
 /// * `scale` - The scale of the decimal value (number of decimal places)
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
-pub fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
-    if scale > MAX_DECIMAL_SCALE {
-        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
-    }
-
-    // Use primitive + decimal16 type
-    let header = primitive_header(VariantPrimitiveType::Decimal16 as u8);
-    output.push(header);
-
-    // Write scale byte
-    output.push(scale);
-
-    // Write unscaled value as little-endian
-    output.extend_from_slice(&unscaled_value.to_le_bytes());
+pub(crate) fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
+    encode_decimal_generic(scale, &unscaled_value.to_le_bytes(), VariantPrimitiveType::Decimal16, output);
 }
 
 /// Writes an integer value using the specified number of bytes (1-4).
@@ -419,7 +433,7 @@ pub fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
 /// # Returns
 ///
 /// An arrow error if writing fails
-pub fn write_int_with_size(
+pub(crate) fn write_int_with_size(
     value: u32,
     num_bytes: usize,
     output: &mut impl Write,
@@ -452,7 +466,7 @@ pub fn write_int_with_size(
 ///
 /// * `values` - A slice of byte slices containing pre-encoded variant values
 /// * `output` - The destination to write the encoded array
-pub fn encode_array_from_pre_encoded(
+pub(crate) fn encode_array_from_pre_encoded(
     values: &[&[u8]],
     output: &mut impl Write,
 ) -> Result<(), ArrowError> {
@@ -514,7 +528,7 @@ pub fn encode_array_from_pre_encoded(
 /// * `field_ids` - A slice of field IDs corresponding to keys in the dictionary
 /// * `field_values` - A slice of byte slices containing pre-encoded variant values
 /// * `output` - The destination to write the encoded object
-pub fn encode_object_from_pre_encoded(
+pub(crate) fn encode_object_from_pre_encoded(
     field_ids: &[usize],
     field_values: &[&[u8]],
     output: &mut impl Write,
