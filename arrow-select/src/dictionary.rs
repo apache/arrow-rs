@@ -101,6 +101,17 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
     }
 }
 
+/// Whether selection kernels should attempt to merge dictionary values
+pub enum ShouldMergeValues {
+    /// Concatenation of the dictionary values will lead to overflowing
+    /// the key space; it's necessary to attempt to merge
+    ConcatWillOverflow,
+    /// The heuristic suggests that merging will be beneficial
+    Yes,
+    /// The heuristic suggests that merging is not necessary
+    No,
+}
+
 /// A type-erased function that compares two array for pointer equality
 type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
@@ -112,7 +123,7 @@ type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     dictionaries: &[&DictionaryArray<K>],
     len: usize,
-) -> bool {
+) -> ShouldMergeValues {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
     let ptr_eq: PtrEq = match first_values.data_type() {
@@ -136,7 +147,15 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
     let overflow = K::Native::from_usize(total_values).is_none();
     let values_exceed_length = total_values >= len;
 
-    !single_dictionary && (overflow || values_exceed_length)
+    if single_dictionary {
+        ShouldMergeValues::No
+    } else if overflow {
+        ShouldMergeValues::ConcatWillOverflow
+    } else if values_exceed_length {
+        ShouldMergeValues::Yes
+    } else {
+        ShouldMergeValues::No
+    }
 }
 
 /// Given an array of dictionaries and an optional key mask compute a values array
