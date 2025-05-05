@@ -636,13 +636,12 @@ impl MetadataObjectWriter {
     }
 
     fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
-        let file_encryptor = self.file_encryptor.as_ref().unwrap();
-        if !file_encryptor.properties().encrypt_footer() {
+        if let Some(file_encryptor) = &self.file_encryptor {
             let supply_aad_prefix = file_encryptor
                 .properties()
                 .aad_prefix()
                 .map(|_| !file_encryptor.properties().store_aad_prefix());
-            let encryption_algorithm = Some(EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
+            let encryption_algorithm = EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
                 aad_prefix: if file_encryptor.properties().store_aad_prefix() {
                     file_encryptor.properties().aad_prefix().cloned()
                 } else {
@@ -650,8 +649,8 @@ impl MetadataObjectWriter {
                 },
                 aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
                 supply_aad_prefix,
-            }));
-            return encryption_algorithm;
+            });
+            return Some(encryption_algorithm);
         }
         None
     }
