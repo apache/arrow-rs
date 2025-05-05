@@ -760,7 +760,7 @@ mod test {
                 ),
             ])),
             DataType::Struct(Fields::empty()),
-            // TODO support more structured types (List, LargeList, Struct, Union, Map, RunEndEncoded, etc)
+            // TODO support more structured types (List, LargeList, Union, Map, RunEndEncoded, etc)
         ]
     }
 
