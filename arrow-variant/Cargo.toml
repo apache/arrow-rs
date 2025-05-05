@@ -18,7 +18,7 @@
 [package]
 name = "arrow-variant"
 version = { workspace = true }
-description = "JSON to Arrow Variant conversion utilities"
+description = "Rust API for reading/writing Apache Parquet Variant values"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
