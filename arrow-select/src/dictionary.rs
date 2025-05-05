@@ -102,7 +102,7 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
 }
 
 /// A type-erased function that compares two array for pointer equality
-type PtrEq = dyn Fn(&dyn Array, &dyn Array) -> bool;
+type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
@@ -115,12 +115,12 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 ) -> bool {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
-    let ptr_eq: Box<PtrEq> = match first_values.data_type() {
-        Utf8 => Box::new(bytes_ptr_eq::<Utf8Type>),
-        LargeUtf8 => Box::new(bytes_ptr_eq::<LargeUtf8Type>),
-        Binary => Box::new(bytes_ptr_eq::<BinaryType>),
-        LargeBinary => Box::new(bytes_ptr_eq::<LargeBinaryType>),
-        _ => return false,
+    let ptr_eq: PtrEq = match first_values.data_type() {
+        Utf8 => bytes_ptr_eq::<Utf8Type>,
+        LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
+        Binary => bytes_ptr_eq::<BinaryType>,
+        LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
+        _ => |_, _| false,
     };
 
     let mut single_dictionary = true;
