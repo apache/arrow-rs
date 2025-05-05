@@ -29,6 +29,12 @@ pub const MAX_2BYTE_VALUE: usize = 65535;
 /// Maximum value that can be stored in three bytes (2^24 - 1)
 pub const MAX_3BYTE_VALUE: usize = 16777215;
 
+/// Maximum length of a short string in bytes (used in short string encoding)
+pub const MAX_SHORT_STRING_LENGTH: usize = 64;
+
+/// Maximum scale allowed for decimal values
+pub const MAX_DECIMAL_SCALE: u8 = 38;
+
 /// Calculate the minimum number of bytes required to represent a value.
 ///
 /// Returns a value between 1 and 4, representing the minimum number of
@@ -198,15 +204,15 @@ pub fn encode_boolean(value: bool, output: &mut Vec<u8>) {
 
 /// Encodes an integer value, choosing the smallest sufficient type
 pub fn encode_integer(value: i64, output: &mut Vec<u8>) {
-    if value >= -128 && value <= 127 {
+    if value >= i8::MIN.into() && value <= i8::MAX.into() {
         // Int8
         output.push(primitive_header(VariantPrimitiveType::Int8 as u8));
         output.push(value as u8);
-    } else if value >= -32768 && value <= 32767 {
+    } else if value >= i16::MIN.into() && value <= i16::MAX.into() {
         // Int16
         output.push(primitive_header(VariantPrimitiveType::Int16 as u8));
         output.extend_from_slice(&(value as i16).to_le_bytes());
-    } else if value >= -2147483648 && value <= 2147483647 {
+    } else if value >= i32::MIN.into() && value <= i32::MAX.into() {
         // Int32
         output.push(primitive_header(VariantPrimitiveType::Int32 as u8));
         output.extend_from_slice(&(value as i32).to_le_bytes());
@@ -228,7 +234,7 @@ pub fn encode_string(value: &str, output: &mut Vec<u8>) {
     let bytes = value.as_bytes();
     let len = bytes.len();
 
-    if len < 64 {
+    if len < MAX_SHORT_STRING_LENGTH {
         // Short string format - encode length in header
         let header = short_str_header(len as u8);
         output.push(header);
@@ -326,8 +332,8 @@ pub fn encode_uuid(value: &[u8; 16], output: &mut Vec<u8>) {
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
-    if scale > 38 {
-        panic!("Decimal scale must be in range [0, 38], got {}", scale);
+    if scale > MAX_DECIMAL_SCALE {
+        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
     }
 
     // Use primitive + decimal4 type
@@ -353,8 +359,8 @@ pub fn encode_decimal4(scale: u8, unscaled_value: i32, output: &mut Vec<u8>) {
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
-    if scale > 38 {
-        panic!("Decimal scale must be in range [0, 38], got {}", scale);
+    if scale > MAX_DECIMAL_SCALE {
+        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
     }
 
     // Use primitive + decimal8 type
@@ -380,8 +386,8 @@ pub fn encode_decimal8(scale: u8, unscaled_value: i64, output: &mut Vec<u8>) {
 /// * `unscaled_value` - The unscaled integer value
 /// * `output` - The destination to write to
 pub fn encode_decimal16(scale: u8, unscaled_value: i128, output: &mut Vec<u8>) {
-    if scale > 38 {
-        panic!("Decimal scale must be in range [0, 38], got {}", scale);
+    if scale > MAX_DECIMAL_SCALE {
+        panic!("Decimal scale must be in range [0, {}], got {}", MAX_DECIMAL_SCALE, scale);
     }
 
     // Use primitive + decimal16 type
