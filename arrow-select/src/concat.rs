@@ -30,7 +30,9 @@
 //! assert_eq!(arr.len(), 3);
 //! ```
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{
+    merge_dictionary_values, should_merge_dictionary_values, ShouldMergeValues,
+};
 use arrow_array::builder::{
     BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder,
 };
@@ -96,9 +98,14 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .map(|x| x.as_dictionary::<K>())
         .inspect(|d| output_len += d.len())
         .collect();
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
-        return concat_fallback(arrays, Capacities::Array(output_len));
-    }
+
+    let is_overflow = match should_merge_dictionary_values::<K>(&dictionaries, output_len) {
+        ShouldMergeValues::ConcatWillOverflow => true,
+        ShouldMergeValues::Yes => false,
+        ShouldMergeValues::No => {
+            return concat_fallback(arrays, Capacities::Array(output_len));
+        }
+    };
 
     macro_rules! primitive_dict_helper {
         ($t:ty) => {
@@ -111,8 +118,12 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
             merge_concat_byte_dictionaries(&dictionaries, output_len)
         },
+        // merge not yet implemented for this type and it's not going to overflow, so fall back
+        // to concatenating values
+        _ if !is_overflow => concat_fallback(arrays, Capacities::Array(output_len)),
         other => Err(ArrowError::NotYetImplemented(format!(
-            "interleave does not yet support merging dictionaries with value type {other:?}"
+            "concat of dictionaries would overflow key type {key_type:?} with value type {other:?}",
+            key_type = K::DATA_TYPE,
         )))
     }
 }

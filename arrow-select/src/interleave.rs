@@ -17,7 +17,9 @@
 
 //! Interleave elements from multiple arrays
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
+use crate::dictionary::{
+    merge_dictionary_values, should_merge_dictionary_values, ShouldMergeValues,
+};
 use arrow_array::builder::{
     BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder,
 };
@@ -198,9 +200,13 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
-    if !should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
-        return interleave_fallback(arrays, indices);
-    }
+    let is_overflow = match should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
+        ShouldMergeValues::ConcatWillOverflow => true,
+        ShouldMergeValues::Yes => false,
+        ShouldMergeValues::No => {
+            return interleave_fallback(arrays, indices);
+        }
+    };
 
     macro_rules! primitive_dict_helper {
         ($t:ty) => {
@@ -213,8 +219,12 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
             merge_interleave_byte_dictionaries(&dictionaries, indices)
         },
+        // merge not yet implemented for this type and it's not going to overflow, so fall back
+        // to concatenating values
+        _ if !is_overflow => interleave_fallback(arrays, indices),
         other => Err(ArrowError::NotYetImplemented(format!(
-            "interleave does not yet support merging dictionaries with value type {other:?}"
+            "interleave of dictionaries would overflow key type {key_type:?} with value type {other:?}",
+            key_type = K::DATA_TYPE,
         )))
     }
 }
