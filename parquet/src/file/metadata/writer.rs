@@ -153,9 +153,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
             column_orders,
-            encryption_algorithm: MetadataObjectWriter::get_footer_encryption_algorithm(
-                &self.object_writer,
-            ),
+            encryption_algorithm: self.object_writer.get_footer_encryption_algorithm(),
             footer_signing_key_metadata: None,
         };
 
@@ -481,9 +479,7 @@ impl MetadataObjectWriter {
         get_file_magic()
     }
 
-    fn get_footer_encryption_algorithm(
-        _object_writer: &MetadataObjectWriter,
-    ) -> Option<EncryptionAlgorithm> {
+    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
         None
     }
 }
@@ -506,7 +502,7 @@ impl MetadataObjectWriter {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
                 // First write FileCryptoMetadata
-                let crypto_metadata = Self::file_crypto_metadata(self)?;
+                let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
                 let mut protocol = TCompactOutputProtocol::new(&mut sink);
                 crypto_metadata.write_to_out_protocol(&mut protocol)?;
 
@@ -639,36 +635,36 @@ impl MetadataObjectWriter {
         }
     }
 
-    fn get_footer_encryption_algorithm(
-        object_writer: &MetadataObjectWriter,
-    ) -> Option<EncryptionAlgorithm> {
-        let file_encryptor = object_writer.file_encryptor.as_ref();
-        if let Some(file_encryptor) = file_encryptor {
-            let supply_aad_prefix = file_encryptor
-                .properties()
-                .aad_prefix()
-                .map(|_| !file_encryptor.properties().store_aad_prefix());
-            let encryption_algorithm = EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
-                aad_prefix: if file_encryptor.properties().store_aad_prefix() {
-                    file_encryptor.properties().aad_prefix().cloned()
-                } else {
-                    None
-                },
-                aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
-                supply_aad_prefix,
-            });
-            return Some(encryption_algorithm);
+    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
+        if let Some(file_encryptor) = &self.file_encryptor {
+            return Some(Self::encryption_algorithm_from_encryptor(file_encryptor));
         }
         None
     }
 
+    fn encryption_algorithm_from_encryptor(file_encryptor: &FileEncryptor) -> EncryptionAlgorithm {
+        let supply_aad_prefix = file_encryptor
+            .properties()
+            .aad_prefix()
+            .map(|_| !file_encryptor.properties().store_aad_prefix());
+        EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
+            aad_prefix: if file_encryptor.properties().store_aad_prefix() {
+                file_encryptor.properties().aad_prefix().cloned()
+            } else {
+                None
+            },
+            aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
+            supply_aad_prefix,
+        })
+    }
+
     fn file_crypto_metadata(
-        object_writer: &MetadataObjectWriter,
+        file_encryptor: &FileEncryptor,
     ) -> Result<crate::format::FileCryptoMetaData> {
-        let file_encryptor = object_writer.file_encryptor.as_ref().unwrap();
+        let properties = file_encryptor.properties();
         Ok(crate::format::FileCryptoMetaData {
-            encryption_algorithm: Self::get_footer_encryption_algorithm(object_writer).unwrap(),
-            key_metadata: file_encryptor.properties().footer_key_metadata().cloned(),
+            encryption_algorithm: Self::encryption_algorithm_from_encryptor(file_encryptor),
+            key_metadata: properties.footer_key_metadata().cloned(),
         })
     }
 
