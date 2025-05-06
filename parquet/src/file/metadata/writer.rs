@@ -647,12 +647,13 @@ impl MetadataObjectWriter {
             .properties()
             .aad_prefix()
             .map(|_| !file_encryptor.properties().store_aad_prefix());
+        let aad_prefix = if file_encryptor.properties().store_aad_prefix() {
+            file_encryptor.properties().aad_prefix().cloned()
+        } else {
+            None
+        };
         EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
-            aad_prefix: if file_encryptor.properties().store_aad_prefix() {
-                file_encryptor.properties().aad_prefix().cloned()
-            } else {
-                None
-            },
+            aad_prefix,
             aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
             supply_aad_prefix,
         })
