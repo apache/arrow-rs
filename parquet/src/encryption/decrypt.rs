@@ -556,12 +556,9 @@ impl FileDecryptor {
     }
 
     /// Verify the signature of the footer
-    pub(crate) fn verify_plaintext_footer_signature(
-        &self,
-        plaintext_footer: &mut [u8],
-    ) -> Result<()> {
+    pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &[u8]) -> Result<()> {
         // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
-        let tag = plaintext_footer[plaintext_footer.len() - TAG_LEN..].to_vec();
+        let tag = &plaintext_footer[plaintext_footer.len() - TAG_LEN..];
         let aad = create_footer_aad(self.file_aad())?;
         let footer_decryptor = self.get_footer_decryptor()?;
 

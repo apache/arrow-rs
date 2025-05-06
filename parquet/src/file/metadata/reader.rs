@@ -972,7 +972,7 @@ impl ParquetMetaDataReader {
                 file_decryption_properties,
             )?;
             if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
-                file_decryptor_value.verify_plaintext_footer_signature(buf.to_vec().as_mut())?;
+                file_decryptor_value.verify_plaintext_footer_signature(buf)?;
             }
             file_decryptor = Some(file_decryptor_value);
         }
