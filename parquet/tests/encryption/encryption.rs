@@ -95,7 +95,6 @@ fn test_plaintext_footer_signature_verification() {
         .unwrap_err()
         .to_string()
         .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
-    // verify_encryption_test_file_read(file, decryption_properties);
 }
 
 #[test]
