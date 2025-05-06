@@ -508,7 +508,7 @@ where
 
     let nulls: Option<Buffer> = (null_density != 0.).then(|| {
         (0..size)
-            .map(|_| rng.random_bool(1 - null_density as _))
+            .map(|_| rng.random_bool((1.0 - null_density) as _))
             .collect()
     });
 
