@@ -153,7 +153,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
             column_orders,
-            encryption_algorithm: self.object_writer.get_footer_encryption_algorithm(),
+            encryption_algorithm: MetadataObjectWriter::get_footer_encryption_algorithm(
+                &self.object_writer,
+            ),
             footer_signing_key_metadata: None,
         };
 
@@ -479,7 +481,9 @@ impl MetadataObjectWriter {
         get_file_magic()
     }
 
-    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
+    fn get_footer_encryption_algorithm(
+        _object_writer: &MetadataObjectWriter,
+    ) -> Option<EncryptionAlgorithm> {
         None
     }
 }
@@ -502,7 +506,7 @@ impl MetadataObjectWriter {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
                 // First write FileCryptoMetadata
-                let crypto_metadata = self.file_crypto_metadata()?;
+                let crypto_metadata = Self::file_crypto_metadata(self)?;
                 let mut protocol = TCompactOutputProtocol::new(&mut sink);
                 crypto_metadata.write_to_out_protocol(&mut protocol)?;
 
@@ -635,8 +639,11 @@ impl MetadataObjectWriter {
         }
     }
 
-    fn get_footer_encryption_algorithm(&self) -> Option<EncryptionAlgorithm> {
-        if let Some(file_encryptor) = &self.file_encryptor {
+    fn get_footer_encryption_algorithm(
+        object_writer: &MetadataObjectWriter,
+    ) -> Option<EncryptionAlgorithm> {
+        let file_encryptor = object_writer.file_encryptor.as_ref();
+        if let Some(file_encryptor) = file_encryptor {
             let supply_aad_prefix = file_encryptor
                 .properties()
                 .aad_prefix()
@@ -655,11 +662,13 @@ impl MetadataObjectWriter {
         None
     }
 
-    fn file_crypto_metadata(&self) -> Result<crate::format::FileCryptoMetaData> {
-        let properties = self.file_encryptor.as_ref().unwrap().properties();
+    fn file_crypto_metadata(
+        object_writer: &MetadataObjectWriter,
+    ) -> Result<crate::format::FileCryptoMetaData> {
+        let file_encryptor = object_writer.file_encryptor.as_ref().unwrap();
         Ok(crate::format::FileCryptoMetaData {
-            encryption_algorithm: self.get_footer_encryption_algorithm().unwrap(),
-            key_metadata: properties.footer_key_metadata().cloned(),
+            encryption_algorithm: Self::get_footer_encryption_algorithm(object_writer).unwrap(),
+            key_metadata: file_encryptor.properties().footer_key_metadata().cloned(),
         })
     }
 

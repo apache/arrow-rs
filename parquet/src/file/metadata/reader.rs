@@ -17,13 +17,14 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
+use bytes::Bytes;
+
 use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
     modules::create_footer_aad,
 };
-use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
