@@ -18,6 +18,7 @@
 use crate::arrow::ProjectionMask;
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::ArrowError;
+use std::fmt::{Debug, Formatter};
 
 /// A predicate operating on [`RecordBatch`]
 ///
@@ -108,9 +109,16 @@ where
 /// not contiguous.
 ///
 /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
+
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
     pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,
+}
+
+impl Debug for RowFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RowFilter {{ {} predicates: }}", self.predicates.len())
+    }
 }
 
 impl RowFilter {

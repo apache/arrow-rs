@@ -25,6 +25,7 @@ use arrow_select::filter::prep_null_mask_filter;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
@@ -110,6 +111,24 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
+}
+
+impl<T: Debug> Debug for ArrowReaderBuilder<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArrowReaderBuilder<T>")
+            .field("input", &self.input)
+            .field("metadata", &self.metadata)
+            .field("schema", &self.schema)
+            .field("fields", &self.fields)
+            .field("batch_size", &self.batch_size)
+            .field("row_groups", &self.row_groups)
+            .field("projection", &self.projection)
+            .field("filter", &self.filter)
+            .field("selection", &self.selection)
+            .field("limit", &self.limit)
+            .field("offset", &self.offset)
+            .finish()
+    }
 }
 
 impl<T> ArrowReaderBuilder<T> {
@@ -506,37 +525,47 @@ impl ArrowReaderMetadata {
         // parquet_to_arrow_field_levels is expected to throw an error if the schemas have
         // different lengths, but we check here to be safe.
         if inferred_len != supplied_len {
-            Err(arrow_err!(format!(
-                "incompatible arrow schema, expected {} columns received {}",
+            return Err(arrow_err!(format!(
+                "Incompatible supplied Arrow schema: expected {} columns received {}",
                 inferred_len, supplied_len
-            )))
-        } else {
-            let diff_fields: Vec<_> = supplied_schema
-                .fields()
-                .iter()
-                .zip(fields.iter())
-                .filter_map(|(field1, field2)| {
-                    if field1 != field2 {
-                        Some(field1.name().clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            )));
+        }
 
-            if !diff_fields.is_empty() {
-                Err(ParquetError::ArrowError(format!(
-                    "incompatible arrow schema, the following fields could not be cast: [{}]",
-                    diff_fields.join(", ")
-                )))
-            } else {
-                Ok(Self {
-                    metadata,
-                    schema: supplied_schema,
-                    fields: field_levels.levels.map(Arc::new),
-                })
+        let mut errors = Vec::new();
+
+        let field_iter = supplied_schema.fields().iter().zip(fields.iter());
+
+        for (field1, field2) in field_iter {
+            if field1.data_type() != field2.data_type() {
+                errors.push(format!(
+                    "data type mismatch for field {}: requested {:?} but found {:?}",
+                    field1.name(),
+                    field1.data_type(),
+                    field2.data_type()
+                ));
+            }
+            if field1.is_nullable() != field2.is_nullable() {
+                errors.push(format!(
+                    "nullability mismatch for field {}: expected {:?} but found {:?}",
+                    field1.name(),
+                    field1.is_nullable(),
+                    field2.is_nullable()
+                ));
             }
         }
+
+        if !errors.is_empty() {
+            let message = errors.join(", ");
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible supplied Arrow schema: {message}",
+            )));
+        }
+
+        Ok(Self {
+            metadata,
+            schema: supplied_schema,
+            fields: field_levels.levels.map(Arc::new),
+        })
     }
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
@@ -558,6 +587,12 @@ impl ArrowReaderMetadata {
 #[doc(hidden)]
 /// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
 pub struct SyncReader<T: ChunkReader>(T);
+
+impl<T: Debug + ChunkReader> Debug for SyncReader<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SyncReader").field(&self.0).finish()
+    }
+}
 
 /// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
 ///
@@ -3462,7 +3497,7 @@ mod tests {
                 Field::new("col2_valid", ArrowDataType::Int32, false),
                 Field::new("col3_invalid", ArrowDataType::Int32, false),
             ])),
-            "Arrow: incompatible arrow schema, the following fields could not be cast: [col1_invalid, col3_invalid]",
+            "Arrow: Incompatible supplied Arrow schema: data type mismatch for field col1_invalid: requested Int32 but found Int64, data type mismatch for field col3_invalid: requested Int32 but found Int64",
         );
     }
 
@@ -3500,8 +3535,63 @@ mod tests {
                     false,
                 ),
             ])),
-            "Arrow: incompatible arrow schema, the following fields could not be cast: [nested]",
+            "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
+            requested Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) \
+            but found Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])",
         );
+    }
+
+    /// Return parquet data with a single column of utf8 strings
+    fn utf8_parquet() -> Bytes {
+        let input = StringArray::from_iter_values(vec!["foo", "bar", "baz"]);
+        let batch = RecordBatch::try_from_iter(vec![("column1", Arc::new(input) as _)]).unwrap();
+        let props = None;
+        // write parquet file with non nullable strings
+        let mut parquet_data = vec![];
+        let mut writer = ArrowWriter::try_new(&mut parquet_data, batch.schema(), props).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(parquet_data)
+    }
+
+    #[test]
+    fn test_schema_error_bad_types() {
+        // verify incompatible schemas error on read
+        let parquet_data = utf8_parquet();
+
+        // Ask to read it back with an incompatible schema (int vs string)
+        let input_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            arrow::datatypes::DataType::Int32,
+            false,
+        )]));
+
+        // read it back out
+        let reader_options = ArrowReaderOptions::new().with_schema(input_schema.clone());
+        let err =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(parquet_data, reader_options)
+                .unwrap_err();
+        assert_eq!(err.to_string(), "Arrow: Incompatible supplied Arrow schema: data type mismatch for field column1: requested Int32 but found Utf8")
+    }
+
+    #[test]
+    fn test_schema_error_bad_nullability() {
+        // verify incompatible schemas error on read
+        let parquet_data = utf8_parquet();
+
+        // Ask to read it back with an incompatible schema (nullability mismatch)
+        let input_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+
+        // read it back out
+        let reader_options = ArrowReaderOptions::new().with_schema(input_schema.clone());
+        let err =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(parquet_data, reader_options)
+                .unwrap_err();
+        assert_eq!(err.to_string(), "Arrow: Incompatible supplied Arrow schema: nullability mismatch for field column1: expected true but found false")
     }
 
     #[test]
