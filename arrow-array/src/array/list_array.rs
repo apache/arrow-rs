@@ -42,16 +42,20 @@ pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     const IS_LARGE: bool;
     /// Prefix for the offset size
     const PREFIX: &'static str;
+    /// The max `usize` offset
+    const MAX_OFFSET: usize;
 }
 
 impl OffsetSizeTrait for i32 {
     const IS_LARGE: bool = false;
     const PREFIX: &'static str = "";
+    const MAX_OFFSET: usize = i32::MAX as usize;
 }
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
     const PREFIX: &'static str = "Large";
+    const MAX_OFFSET: usize = i64::MAX as usize;
 }
 
 /// An array of [variable length lists], similar to JSON arrays
