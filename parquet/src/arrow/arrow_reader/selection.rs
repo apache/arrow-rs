@@ -595,6 +595,45 @@ impl RowSelection {
     }
 }
 
+/// Convert a BooleanArray (no nulls) into a Vec<RowSelector>,
+/// alternating `select(run_len)` and `skip(run_len)`.
+fn selectors_from_bitmap(bitmap: &BooleanArray) -> Vec<RowSelector> {
+    let mut selectors = Vec::new();
+    let mut run_skip = !bitmap.value(0); // start by skipping if first bit is false
+    let mut run_len = 0;
+
+    for i in 0..bitmap.len() {
+        let bit = bitmap.value(i);
+        if bit == !run_skip {
+            // same as current run type (select vs skip)
+            run_len += 1;
+        } else {
+            // flush previous run
+            selectors.push(
+                if run_skip {
+                    RowSelector::skip(run_len)
+                } else {
+                    RowSelector::select(run_len)
+                }
+            );
+            // start new run
+            run_skip = !run_skip;
+            run_len = 1;
+        }
+    }
+    // flush final run
+    if run_len > 0 {
+        selectors.push(
+            if run_skip {
+                RowSelector::skip(run_len)
+            } else {
+                RowSelector::select(run_len)
+            }
+        );
+    }
+    selectors
+}
+
 impl From<Vec<RowSelector>> for RowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
         selectors.into_iter().collect()
@@ -641,10 +680,7 @@ impl From<RowSelection> for Vec<RowSelector> {
     fn from(r: RowSelection) -> Self {
         match r {
             RowSelection::Ranges(selectors) => selectors,
-            RowSelection::BitMap(bitmap) => {
-                // not implemented yet
-                unimplemented!("BitMap variant is not yet supported")
-            }
+            RowSelection::BitMap(bitmap) => selectors_from_bitmap(&bitmap),
         }
     }
 }
