@@ -242,7 +242,7 @@ impl RecordBatchReader for FilteredParquetRecordBatchReader {
 
 struct CachedPage {
     dict: Option<(usize, Page)>, // page offset -> page
-    data: Option<(usize, Page)>, // page offset -> page
+    data: VecDeque<(usize, Page)>, // page offset -> page, use 2 pages, because the batch size will exceed the page size sometimes
 }
 
 struct PredicatePageCacheInner {
@@ -252,43 +252,59 @@ struct PredicatePageCacheInner {
 impl PredicatePageCacheInner {
     pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
         self.pages.get(&col_id).and_then(|pages| {
-            pages
-                .dict
-                .iter()
-                .chain(pages.data.iter())
-                .find(|(page_offset, _)| *page_offset == offset)
-                .map(|(_, page)| page.clone())
+
+            if let Some((off, page)) = &pages.dict {
+                if *off == offset {
+                    return Some(page.clone());
+                }
+            }
+
+            pages.data.iter().find(|(off, _)| *off == offset).map(|(_, page)| page.clone())
         })
     }
 
     /// Insert a page into the cache.
     /// Inserting a page will override the existing page, if any.
-    /// This is because we only need to cache 2 pages per column, see below.
-    pub(crate) fn insert_page(&mut self, col_id: usize, offset: usize, page: Page) {
+    /// This is because we only need to cache 4 pages per column, see below.
+    /// Note: 1 page is dic page, another 3 are data pages.
+    /// Why do we need 3 data pages?
+    /// Because of the performance testing result, the batch size will across multi pages. It causes original page reader
+    /// cache page reader doesn't always hit the cache page. So here we keep 3 pages, and from the testing result it
+    /// shows that 3 pages are enough to cover the batch size when we're setting batch size to 8192. And the 3 data page size
+    /// is not too large, it only uses 3MB in memory, so we can keep 3 pages in the cache.
+    /// TODO, in future we may use adaptive cache size according the dynamic batch size.
+    pub(crate) fn insert_page(
+        &mut self,
+        col_id: usize,
+        offset: usize,
+        page: Page,
+    ) {
         let is_dict = page.page_type() == PageType::DICTIONARY_PAGE;
 
-        let cached_pages = self.pages.entry(col_id);
-        match cached_pages {
-            Entry::Occupied(mut entry) => {
+        match self.pages.entry(col_id) {
+            Entry::Occupied(mut occ) => {
+                let cp: &mut CachedPage = occ.get_mut();
                 if is_dict {
-                    entry.get_mut().dict = Some((offset, page));
+                    cp.dict = Some((offset, page));
                 } else {
-                    entry.get_mut().data = Some((offset, page));
+                    cp.data.push_back((offset, page));
+                    // Keep only 3 data pages in the cache
+                    if cp.data.len() > 3 {
+                        cp.data.pop_front();
+                    }
                 }
             }
-            Entry::Vacant(entry) => {
-                let cached_page = if is_dict {
-                    CachedPage {
-                        dict: Some((offset, page)),
-                        data: None,
-                    }
+
+            Entry::Vacant(vac) => {
+                let mut data = VecDeque::new();
+                let dict = if is_dict {
+                    Some((offset, page))
                 } else {
-                    CachedPage {
-                        dict: None,
-                        data: Some((offset, page)),
-                    }
+                    data.push_back((offset, page.clone()));
+                    None
                 };
-                entry.insert(cached_page);
+                let cp = CachedPage { dict, data };
+                vac.insert(cp);
             }
         }
     }
