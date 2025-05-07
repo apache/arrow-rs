@@ -179,47 +179,26 @@ impl Iterator for FilteredParquetRecordBatchReader {
         //    rather than concatenating multiple small batches.
 
         let mut selected = 0;
-
-        // Try to merge skip selectors, because from testing merge then to skip
-        // is faster than skipping each one.
-        let mut skip_accum = 0;
-
         while let Some(cur_selection) =
             take_next_selection(&mut self.selection, self.batch_size - selected)
         {
             let filtered_selection = match self.build_predicate_filter(cur_selection) {
                 Ok(selection) => selection,
-                Err(e) => {
-                    if skip_accum > 0 {
-                        self.array_reader.skip_records(skip_accum).ok()?;
-                    }
-                    return Some(Err(e));
-                }
+                Err(e) => return Some(Err(e)),
             };
 
             for selector in filtered_selection.iter() {
                 if selector.skip {
-                    skip_accum += selector.row_count;
+                    self.array_reader.skip_records(selector.row_count).ok()?;
                 } else {
-                    if skip_accum > 0 {
-                        self.array_reader.skip_records(skip_accum).ok()?;
-                        skip_accum = 0;
-                    }
                     self.array_reader.read_records(selector.row_count).ok()?;
                 }
             }
-
             selected += filtered_selection.row_count();
-
             if selected >= (self.batch_size / 4 * 3) {
                 break;
             }
         }
-
-        if skip_accum > 0 {
-            self.array_reader.skip_records(skip_accum).ok()?;
-        }
-
         if selected == 0 {
             return None;
         }
