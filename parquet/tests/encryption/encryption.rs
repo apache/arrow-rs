@@ -433,18 +433,23 @@ fn test_write_non_uniform_encryption() {
     read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
 }
 
-// todo: currently we raise if writing with plaintext footer, but we should support it
-// for uniform and non-uniform encryption (see https://github.com/apache/arrow-rs/issues/7320)
 #[test]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
 
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let wrong_footer_key = b"0000000000000000".to_vec(); // 128bit/16
     let column_1_key = b"1234567890123450".to_vec();
     let column_2_key = b"1234567890123451".to_vec();
 
     let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("double_field", column_1_key.clone())
+        .with_column_key("float_field", column_2_key.clone())
+        .build()
+        .unwrap();
+
+    let wrong_decryption_properties = FileDecryptionProperties::builder(wrong_footer_key)
         .with_column_key("double_field", column_1_key)
         .with_column_key("float_field", column_2_key)
         .build()
@@ -455,7 +460,53 @@ fn test_write_uniform_encryption_plaintext_footer() {
         .build()
         .unwrap();
 
-    read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
+    // Try writing plaintext footer and then reading it with the correct footer key
+    read_and_roundtrip_to_encrypted_file(
+        &path,
+        decryption_properties.clone(),
+        file_encryption_properties.clone(),
+    );
+
+    // Try writing plaintext footer and then reading it with the wrong footer key
+    let temp_file = tempfile::tempfile().unwrap();
+
+    // read example data
+    let file = File::open(path).unwrap();
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+
+    // write example data
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+    .unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+    writer.close().unwrap();
+
+    // Try reading plaintext footer and with the wrong footer key
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(wrong_decryption_properties);
+    let result = ArrowReaderMetadata::load(&temp_file, options.clone());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
 }
 
 #[test]
