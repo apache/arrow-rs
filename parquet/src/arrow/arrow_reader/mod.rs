@@ -317,10 +317,11 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Provide a schema to use when reading the Parquet file.
+    /// Provide a schema hint to use when reading the Parquet file.
     ///
-    /// If provided, this schema takes precedence over any schema defined in the
-    /// file's schema hint in the metadata (see the [`arrow`] documentation for more details).
+    /// If provided, this schema takes precedence over any arrow schema embedded
+    /// in the metadata (see the [`arrow`] documentation for more details).
+    ///
     /// If the provided schema is not compatible with the data stored in the
     /// parquet file schema, an error will be returned when constructing the
     /// builder.
