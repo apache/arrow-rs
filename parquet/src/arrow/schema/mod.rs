@@ -227,7 +227,9 @@ pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterP
 /// See the documentation on the [`arrow`] module for background 
 /// information on how Arrow schema is represented in Parquet.
 ///
-/// Example:
+/// [`arrow`]: crate::arrow
+///
+/// # Example:
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Field, Schema, DataType};
