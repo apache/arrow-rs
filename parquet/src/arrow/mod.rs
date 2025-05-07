@@ -32,9 +32,10 @@
 //!
 //! To recover the original Arrow types, the writers in this module add
 //! metadata in the [`ARROW_SCHEMA_META_KEY`] key to record the original Arrow
-//! schema. The readers look for this metadata to determine Arrow types, and if
-//! it is not present, use reasonable defaults. You can also control the type
-//! conversion process in more detail using:
+//! schema. The metadata follows the same convention as arrow-cpp based 
+//! implementations such as `pyarrow`. The reader looks for this metadata to 
+//! determine Arrow types, and if it is not present, use reasonable defaults. 
+//! You can also control the type conversion process in more detail using:
 //!
 //! * [`ArrowSchemaConverter`] control the conversion of Arrow types to Parquet
 //!   types.
@@ -204,7 +205,10 @@ pub use self::schema::{
     parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, ArrowSchemaConverter, FieldLevels,
 };
 
-/// Schema metadata key used to store serialized Arrow IPC schema
+/// Schema metadata key used to store serialized Arrow schema
+/// 
+/// The Arrow schema is encoded using the Arrow IPC format, and then base64
+/// encoded. This is the same format used by arrow-cpp systems, such as pyarrow.
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 
 /// The value of this metadata key, if present on [`Field::metadata`], will be used
