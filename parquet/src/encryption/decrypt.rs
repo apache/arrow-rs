@@ -17,8 +17,8 @@
 
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
+use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use std::borrow::Cow;
@@ -331,6 +331,7 @@ impl PartialEq for DecryptionKeys {
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl FileDecryptionProperties {
@@ -351,6 +352,11 @@ impl FileDecryptionProperties {
     /// AAD prefix string uniquely identifies the file and prevents file swapping
     pub fn aad_prefix(&self) -> Option<&Vec<u8>> {
         self.aad_prefix.as_ref()
+    }
+
+    /// Returns true if footer signature verification is enabled for files with plaintext footers.
+    pub fn check_plaintext_footer_integrity(&self) -> bool {
+        self.footer_signature_verification
     }
 
     /// Get the encryption key for decrypting a file's footer,
@@ -416,6 +422,7 @@ pub struct DecryptionPropertiesBuilder {
     footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl DecryptionPropertiesBuilder {
@@ -426,6 +433,7 @@ impl DecryptionPropertiesBuilder {
             footer_key,
             column_keys: HashMap::default(),
             aad_prefix: None,
+            footer_signature_verification: true,
         }
     }
 
@@ -438,6 +446,7 @@ impl DecryptionPropertiesBuilder {
         Ok(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
+            footer_signature_verification: self.footer_signature_verification,
         })
     }
 
@@ -470,6 +479,13 @@ impl DecryptionPropertiesBuilder {
         }
         Ok(self)
     }
+
+    /// Disable verification of footer tags for files that use plaintext footers.
+    /// Signature verification is enabled by default.
+    pub fn disable_footer_signature_verification(mut self) -> Self {
+        self.footer_signature_verification = false;
+        self
+    }
 }
 
 /// Builder for [`FileDecryptionProperties`] that uses a [`KeyRetriever`]
@@ -478,6 +494,7 @@ impl DecryptionPropertiesBuilder {
 pub struct DecryptionPropertiesBuilderWithRetriever {
     key_retriever: Arc<dyn KeyRetriever>,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl DecryptionPropertiesBuilderWithRetriever {
@@ -487,6 +504,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
         Self {
             key_retriever,
             aad_prefix: None,
+            footer_signature_verification: true,
         }
     }
 
@@ -496,6 +514,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
         Ok(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
+            footer_signature_verification: self.footer_signature_verification,
         })
     }
 
@@ -504,6 +523,13 @@ impl DecryptionPropertiesBuilderWithRetriever {
     /// prefix is not stored in the file metadata.
     pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
         self.aad_prefix = Some(value);
+        self
+    }
+
+    /// Disable verification of footer tags for files that use plaintext footers.
+    /// Signature verification is enabled by default.
+    pub fn disable_footer_signature_verification(mut self) -> Self {
+        self.footer_signature_verification = false;
         self
     }
 }
@@ -546,6 +572,25 @@ impl FileDecryptor {
 
     pub(crate) fn get_footer_decryptor(&self) -> Result<Arc<dyn BlockDecryptor>> {
         Ok(self.footer_decryptor.clone())
+    }
+
+    /// Verify the signature of the footer
+    pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &[u8]) -> Result<()> {
+        // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
+        let tag = &plaintext_footer[plaintext_footer.len() - TAG_LEN..];
+        let aad = create_footer_aad(self.file_aad())?;
+        let footer_decryptor = self.get_footer_decryptor()?;
+
+        let computed_tag = footer_decryptor.compute_plaintext_tag(&aad, plaintext_footer)?;
+
+        if computed_tag != tag {
+            return Err(general_err!(
+                "Footer signature verification failed. Computed: {:?}, Expected: {:?}",
+                computed_tag,
+                tag
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn get_column_data_decryptor(
