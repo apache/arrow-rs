@@ -30,17 +30,17 @@
 //! stored as a Parquet [`BYTE_ARRAY`] can be read as either an Arrow
 //! [`BinaryViewArray`] or [`BinaryArray`].
 //!
-//! To recover the original Arrow types, the writers in this module add
-//! metadata in the [`ARROW_SCHEMA_META_KEY`] key to record the original Arrow
-//! schema. The metadata follows the same convention as arrow-cpp based
-//! implementations such as `pyarrow`. The reader looks for this metadata to
-//! determine Arrow types, and if it is not present, use reasonable defaults.
+//! To recover the original Arrow types, the writers in this module add a "hint" to
+//! the metadata in the [`ARROW_SCHEMA_META_KEY`] key which records the original Arrow
+//! schema. The metadata hint follows the same convention as arrow-cpp based
+//! implementations such as `pyarrow`. The reader looks for the schema hint in the
+//! metadata to determine Arrow types, and if it is not present, use reasonable defaults.
 //! You can also control the type conversion process in more detail using:
 //!
 //! * [`ArrowSchemaConverter`] control the conversion of Arrow types to Parquet
 //!   types.
 //!
-//! * [`ArrowReaderOptions::with_schema`] to explicitly specify what Arrow types
+//! * [`ArrowReaderOptions::with_schema`] to explicitly specify your own Arrow schema hint
 //!   to use when reading Parquet, overriding any metadata that may be present.
 //!
 //! [`RecordBatch`]: arrow_array::RecordBatch

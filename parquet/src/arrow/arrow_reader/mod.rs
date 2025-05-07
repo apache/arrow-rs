@@ -319,8 +319,8 @@ impl ArrowReaderOptions {
 
     /// Provide a schema to use when reading the Parquet file.
     ///
-    /// If provided, this schema takes precedence over the schema defined in the
-    /// arrow file's metadata (see the [`arrow`] documentation for more details).
+    /// If provided, this schema takes precedence over any schema defined in the
+    /// file's schema hint in the metadata (see the [`arrow`] documentation for more details).
     /// If the provided schema is not compatible with the data stored in the
     /// parquet file schema, an error will be returned when constructing the
     /// builder.
@@ -335,8 +335,8 @@ impl ArrowReaderOptions {
     ///
     /// # Notes
     ///
-    /// The supplied schema must have the same number of columns as the parquet schema and
-    /// the column names need to be the same.
+    /// The provided schema must have the same number of columns as the parquet schema and
+    /// the column names must be the same.
     ///
     /// # Example
     /// ```
