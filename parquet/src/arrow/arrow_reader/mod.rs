@@ -286,7 +286,10 @@ impl<T> ArrowReaderBuilder<T> {
 pub struct ArrowReaderOptions {
     /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
-    /// If provided used as the schema for the file, otherwise the schema is read from the file
+    /// If provided used as the schema hint when determining the Arrow schema,
+    /// otherwise the schema hint is read from the [ARROW_SCHEMA_META_KEY]
+    ///
+    /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
@@ -316,10 +319,10 @@ impl ArrowReaderOptions {
 
     /// Provide a schema to use when reading the Parquet file.
     ///
-    /// If provided, this schema takes precedence over the schema defined in the 
-    /// arrow file's metadata (see the [`arrow`] documentation for more details). 
-    /// If the provided schema is not compatible with the data stored in the 
-    /// parquet file schema, an error will be returned when constructing the 
+    /// If provided, this schema takes precedence over the schema defined in the
+    /// arrow file's metadata (see the [`arrow`] documentation for more details).
+    /// If the provided schema is not compatible with the data stored in the
+    /// parquet file schema, an error will be returned when constructing the
     /// builder.
     ///
     /// This option is only required if you want to explicitly control the
