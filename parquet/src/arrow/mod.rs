@@ -38,7 +38,7 @@
 //! from the Parquet schema.
 //!
 //! In situations where the embedded Arrow schema is not compatible with the Parquet
-//! schema, the parquet schema takes precedence and no error is raised.
+//! schema, the Parquet schema takes precedence and no error is raised.
 //! See [#1663](https://github.com/apache/arrow-rs/issues/1663)
 //!
 //! You can also control the type conversion process in more detail using:
