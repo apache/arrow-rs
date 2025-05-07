@@ -316,10 +316,11 @@ impl ArrowReaderOptions {
 
     /// Provide a schema to use when reading the Parquet file.
     ///
-    /// If provided, this schema takes precedence over the schema inferred from
-    /// the file or the schema defined  in the file's metadata (see the [`arrow`]
-    /// documentation for more details). If the provided schema is not compatible
-    /// with the file's schema, an error will be returned when constructing the builder.
+    /// If provided, this schema takes precedence over the schema defined in the 
+    /// arrow file's metadata (see the [`arrow`] documentation for more details). 
+    /// If the provided schema is not compatible with the data stored in the 
+    /// parquet file schema, an error will be returned when constructing the 
+    /// builder.
     ///
     /// This option is only required if you want to explicitly control the
     /// conversion of Parquet types to Arrow types, such as casting a column to
