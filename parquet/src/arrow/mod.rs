@@ -34,10 +34,10 @@
 //! the metadata in the [`ARROW_SCHEMA_META_KEY`] key which records the original Arrow
 //! schema. The metadata hint follows the same convention as arrow-cpp based
 //! implementations such as `pyarrow`. The reader looks for the schema hint in the
-//! metadata to determine Arrow types, and if it is not present, infers the arrow schema
-//! from the parquet schema.
+//! metadata to determine Arrow types, and if it is not present, infers the Arrow schema
+//! from the Parquet schema.
 //!
-//! In situations where the embedded Arrow schema is not compatible with the parquet
+//! In situations where the embedded Arrow schema is not compatible with the Parquet
 //! schema, the parquet schema takes precedence and no error is raised.
 //! See [#1663](https://github.com/apache/arrow-rs/issues/1663)
 //!
