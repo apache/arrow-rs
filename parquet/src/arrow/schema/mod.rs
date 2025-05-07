@@ -223,8 +223,8 @@ pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterP
 }
 
 /// Converter for Arrow schema to Parquet schema
-/// 
-/// See the documentation on the [`arrow`] module for background 
+///
+/// See the documentation on the [`arrow`] module for background
 /// information on how Arrow schema is represented in Parquet.
 ///
 /// [`arrow`]: crate::arrow
