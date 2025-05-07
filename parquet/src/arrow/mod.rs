@@ -37,8 +37,9 @@
 //! metadata to determine Arrow types, and if it is not present, infers the arrow schema
 //! from the parquet schema.
 //!
-//! In situations where the embedded arrow schema is not compatible with the parquet
-//! schema, the parquet schema takes precedence - see [#1663](https://github.com/apache/arrow-rs/issues/1663)
+//! In situations where the embedded Arrow schema is not compatible with the parquet
+//! schema, the parquet schema takes precedence and no error is raised.
+//! See [#1663](https://github.com/apache/arrow-rs/issues/1663)
 //!
 //! You can also control the type conversion process in more detail using:
 //!
