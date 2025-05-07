@@ -109,7 +109,6 @@ where
 /// not contiguous.
 ///
 /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
-
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
     pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,
