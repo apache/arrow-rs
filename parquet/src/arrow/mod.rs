@@ -15,13 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! API for reading/writing
-//! Arrow [RecordBatch](arrow_array::RecordBatch)es and
-//! [Array](arrow_array::Array)s to/from Parquet Files.
+//! API for reading/writing Arrow [`RecordBatch`]es and [`Array`]s to/from
+//! Parquet Files.
 //!
-//! See the [crate-level documentation](crate) for more details.
+//! See the [crate-level documentation](crate) for more details on other APIs
 //!
-//! # Example of writing Arrow record batch to Parquet file
+//! # Schema Conversion
+//!
+//! These APIs ensure that data in Arrow [`RecordBatch`]es written to Parquet are
+//! read back as [`RecordBatch`]es with the exact same types and values.
+//!
+//! Parquet and Arrow have different type systems, and there is not
+//! always a one to one mapping between the systems. For example, data
+//! stored as a Parquet [`BYTE_ARRAY`] can be read as either an Arrow
+//! [`BinaryViewArray`] or [`BinaryArray`].
+//!
+//! To recover the original Arrow types, the writers in this module add
+//! metadata in the [`ARROW_SCHEMA_META_KEY`] key to record the original Arrow
+//! schema. The readers look for this metadata to determine Arrow types, and if
+//! it is not present, use reasonable defaults. You can also control the type
+//! conversion process in more detail using:
+//!
+//! * [`ArrowSchemaConverter`] control the conversion of Arrow types to Parquet
+//!   types.
+//!
+//! * [`ArrowReaderOptions::with_schema`] to explicitly specify what Arrow types
+//!   to use when reading Parquet, overriding any metadata that may be present.
+//!
+//! [`RecordBatch`]: arrow_array::RecordBatch
+//! [`Array`]: arrow_array::Array
+//! [`BYTE_ARRAY`]: crate::basic::Type::BYTE_ARRAY
+//! [`BinaryViewArray`]: arrow_array::BinaryViewArray
+//! [`BinaryArray`]: arrow_array::BinaryArray
+//! [`ArrowReaderOptions::with_schema`]: arrow_reader::ArrowReaderOptions::with_schema
+//!
+//! # Example: Writing Arrow `RecordBatch` to Parquet file
 //!
 //!```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
@@ -53,7 +81,7 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! # Example of reading parquet file into arrow record batch
+//! # Example: Reading Parquet file into Arrow `RecordBatch`
 //!
 //! ```rust
 //! # use std::fs::File;
@@ -93,10 +121,9 @@
 //! println!("Read {} records.", record_batch.num_rows());
 //! ```
 //!
-//! # Example of reading non-uniformly encrypted parquet file into arrow record batch
+//! # Example: Reading non-uniformly encrypted parquet file into arrow record batch
 //!
 //! Note: This requires the experimental `encryption` feature to be enabled at compile time.
-//!
 //!
 #![cfg_attr(feature = "encryption", doc = "```rust")]
 #![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
@@ -168,7 +195,6 @@ pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
-
 // continue to export deprecated methods until they are removed
 #[allow(deprecated)]
 pub use self::schema::arrow_to_parquet_schema;

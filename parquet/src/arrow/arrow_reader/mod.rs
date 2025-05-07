@@ -314,14 +314,19 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Provide a schema to use when reading the parquet file. If provided it
-    /// takes precedence over the schema inferred from the file or the schema defined
-    /// in the file's metadata. If the schema is not compatible with the file's
-    /// schema an error will be returned when constructing the builder.
+    /// Provide a schema to use when reading the Parquet file.
     ///
-    /// This option is only required if you want to cast columns to a different type.
-    /// For example, if you wanted to cast from an Int64 in the Parquet file to a Timestamp
-    /// in the Arrow schema.
+    /// If provided, this schema takes precedence over the schema inferred from
+    /// the file or the schema defined  in the file's metadata (see [`arrow`]
+    /// documentation for more details). If the provided schema is not compatible
+    /// with the file's schema, an error will be returned when constructing the builder.
+    ///
+    /// This option is only required if you want to explicitly control the
+    /// conversion of Parquet types to Arrow types, such as casting a column to
+    /// a different type. For example, if you wanted to read an Int64 in
+    /// a Parquet file to a [`TimestampMicrosecondArray`] in the Arrow schema.
+    ///
+    /// # Notes
     ///
     /// The supplied schema must have the same number of columns as the parquet schema and
     /// the column names need to be the same.
