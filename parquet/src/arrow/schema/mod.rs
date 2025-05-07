@@ -104,12 +104,12 @@ pub struct FieldLevels {
 /// Convert a parquet [`SchemaDescriptor`] to [`FieldLevels`]
 ///
 /// Columns not included within [`ProjectionMask`] will be ignored.
-/// 
+///
 /// The optional `hint` parameter is the desired Arrow schema. See the
 /// [`arrow`] module documentation for more information.
-/// 
+///
 /// [`arrow`]: crate::arrow
-/// 
+///
 /// # Notes:
 /// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
 /// will be used, otherwise the default arrow type for the given parquet column type will be used.
@@ -200,9 +200,9 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
 
 /// Mutates writer metadata by storing the encoded Arrow schema hint in
 /// [`ARROW_SCHEMA_META_KEY`].
-/// 
+///
 /// If there is an existing Arrow schema metadata, it is replaced.
-/// 
+///
 /// [`ARROW_SCHEMA_META_KEY`]: crate::arrow::ARROW_SCHEMA_META_KEY
 pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
     let encoded = encode_arrow_schema(schema);
