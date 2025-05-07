@@ -89,7 +89,7 @@ use std::sync::Arc;
 ///
 /// // Create decryption properties for reading an encrypted file.
 /// // Note that we don't need to specify which columns are encrypted,
-/// // this is determined by the file metadata and the required keys will be retrieved
+/// // this is determined by the file metadata, and the required keys will be retrieved
 /// // dynamically using our key retriever.
 /// let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
 ///     .build()?;
@@ -293,7 +293,7 @@ impl PartialEq for DecryptionKeys {
 /// `FileDecryptionProperties` hold keys and AAD data required to decrypt a Parquet file.
 ///
 /// When reading Arrow data, the `FileDecryptionProperties` should be included in the
-/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions)  using
+/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions) using
 /// [`with_file_decryption_properties`](crate::arrow::arrow_reader::ArrowReaderOptions::with_file_decryption_properties).
 ///
 /// # Examples
@@ -342,8 +342,10 @@ impl FileDecryptionProperties {
 
     /// Returns a new [`FileDecryptionProperties`] builder that uses a [`KeyRetriever`]
     /// to get decryption keys based on key metadata.
-    pub fn with_key_retriever(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilder {
-        DecryptionPropertiesBuilder::new_with_key_retriever(key_retriever)
+    pub fn with_key_retriever(
+        key_retriever: Arc<dyn KeyRetriever>,
+    ) -> DecryptionPropertiesBuilderWithRetriever {
+        DecryptionPropertiesBuilderWithRetriever::new(key_retriever)
     }
 
     /// AAD prefix string uniquely identifies the file and prevents file swapping
@@ -411,8 +413,7 @@ impl std::fmt::Debug for FileDecryptionProperties {
 ///
 /// See [`FileDecryptionProperties`] for example usage.
 pub struct DecryptionPropertiesBuilder {
-    footer_key: Option<Vec<u8>>,
-    key_retriever: Option<Arc<dyn KeyRetriever>>,
+    footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
 }
@@ -422,21 +423,7 @@ impl DecryptionPropertiesBuilder {
     /// decrypt footer metadata.
     pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
-            footer_key: Some(footer_key),
-            key_retriever: None,
-            column_keys: HashMap::default(),
-            aad_prefix: None,
-        }
-    }
-
-    /// Create a new [`DecryptionPropertiesBuilder`] by providing a [`KeyRetriever`] that
-    /// can be used to get decryption keys based on key metadata.
-    pub fn new_with_key_retriever(
-        key_retriever: Arc<dyn KeyRetriever>,
-    ) -> DecryptionPropertiesBuilder {
-        Self {
-            footer_key: None,
-            key_retriever: Some(key_retriever),
+            footer_key,
             column_keys: HashMap::default(),
             aad_prefix: None,
         }
@@ -444,23 +431,10 @@ impl DecryptionPropertiesBuilder {
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
     pub fn build(self) -> Result<FileDecryptionProperties> {
-        let keys = match (self.footer_key, self.key_retriever) {
-            (Some(footer_key), None) => DecryptionKeys::Explicit(ExplicitDecryptionKeys {
-                footer_key,
-                column_keys: self.column_keys,
-            }),
-            (None, Some(key_retriever)) => {
-                if !self.column_keys.is_empty() {
-                    return Err(general_err!(
-                        "Cannot specify column keys directly when using a key retriever"
-                    ));
-                }
-                DecryptionKeys::ViaRetriever(key_retriever)
-            }
-            _ => {
-                unreachable!()
-            }
-        };
+        let keys = DecryptionKeys::Explicit(ExplicitDecryptionKeys {
+            footer_key: self.footer_key,
+            column_keys: self.column_keys,
+        });
         Ok(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
@@ -495,6 +469,42 @@ impl DecryptionPropertiesBuilder {
             self.column_keys.insert(column_name.to_string(), key);
         }
         Ok(self)
+    }
+}
+
+/// Builder for [`FileDecryptionProperties`] that uses a [`KeyRetriever`]
+///
+/// See the [`KeyRetriever`] documentation for example usage.
+pub struct DecryptionPropertiesBuilderWithRetriever {
+    key_retriever: Arc<dyn KeyRetriever>,
+    aad_prefix: Option<Vec<u8>>,
+}
+
+impl DecryptionPropertiesBuilderWithRetriever {
+    /// Create a new [`DecryptionPropertiesBuilderWithRetriever`] by providing a [`KeyRetriever`] that
+    /// can be used to get decryption keys based on key metadata.
+    pub fn new(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilderWithRetriever {
+        Self {
+            key_retriever,
+            aad_prefix: None,
+        }
+    }
+
+    /// Finalize the builder and return created [`FileDecryptionProperties`]
+    pub fn build(self) -> Result<FileDecryptionProperties> {
+        let keys = DecryptionKeys::ViaRetriever(self.key_retriever);
+        Ok(FileDecryptionProperties {
+            keys,
+            aad_prefix: self.aad_prefix,
+        })
+    }
+
+    /// Specify the expected AAD prefix to be used for decryption.
+    /// This must be set if the file was written with an AAD prefix and the
+    /// prefix is not stored in the file metadata.
+    pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
+        self.aad_prefix = Some(value);
+        self
     }
 }
 
