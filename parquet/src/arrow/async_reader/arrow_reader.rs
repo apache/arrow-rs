@@ -250,6 +250,8 @@ impl Iterator for FilteredParquetRecordBatchReader {
 
             match sel {
                 RowSelection::Ranges(runs) => {
+                    let select_count = runs.len();
+
                     // Count skip/read rows
                     let mut range_skip_count = 0;
                     let mut range_read_count = 0;
@@ -263,7 +265,7 @@ impl Iterator for FilteredParquetRecordBatchReader {
                     }
 
                     // If the number of "skip" is too high, switch to Bitmap
-                    if range_skip_count as f32 / (range_skip_count + range_read_count) as f32 > 0.5 {
+                    if ((range_skip_count + range_read_count) as f32 / select_count as f32) < 10.0 {
                         // Too many skips, switch to bitmap
                         let bitmap = self.create_bitmap_from_ranges(&runs);
                         self.array_reader.read_records(bitmap.len()).ok()?;
