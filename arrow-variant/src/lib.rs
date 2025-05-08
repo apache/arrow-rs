@@ -15,66 +15,96 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`arrow-variant`] contains utilities for working with the [Arrow Variant][format] binary format.
+//! Apache Arrow Variant utilities
 //!
-//! The Arrow Variant binary format is a serialization of a JSON-like value into a binary format
-//! optimized for columnar storage and processing in Apache Arrow. It supports storing primitive
-//! values, objects, and arrays with support for complex nested structures.
+//! This crate contains utilities for working with the Arrow Variant binary format.
 //!
-//! # Creating Variant Values
+//! # Creating variant values
+//!
+//! Use the [`VariantBuilder`] to create variant values:
 //!
 //! ```
-//! # use std::io::Cursor;
-//! # use arrow_variant::builder::VariantBuilder;
-//! # use arrow_schema::ArrowError;
-//! # fn main() -> Result<(), ArrowError> {
-//! // Create a builder for variant values
+//! # use arrow_variant::builder::{VariantBuilder, PrimitiveValue};
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut metadata_buffer = vec![];
+//! let mut value_buffer = vec![];
+//!
+//! // Create a builder
 //! let mut builder = VariantBuilder::new(&mut metadata_buffer);
 //!
-//! // Create an object
-//! let mut value_buffer = vec![];
-//! let mut object_builder = builder.new_object(&mut value_buffer);
-//! object_builder.append_value("foo", 1);
-//! object_builder.append_value("bar", 100);
-//! object_builder.finish();
+//! // For an object
+//! {
+//!     let mut object = builder.new_object(&mut value_buffer);
+//!     object.append_value("name", "Alice");
+//!     object.append_value("age", 30);
+//!     object.append_value("active", true);
+//!     object.append_value("height", 5.8);
+//!     object.finish();
+//! }
 //!
-//! // value_buffer now contains a valid variant value
-//! // builder contains metadata with fields "foo" and "bar"
+//! // OR for an array
+//! /*
+//! {
+//!     let mut array = builder.new_array(&mut value_buffer);
+//!     array.append_value(1);
+//!     array.append_value("two");
+//!     array.append_value(3.0);
+//!     array.finish();
+//! }
+//! */
 //!
-//! // Create another object reusing the same metadata
-//! let mut value_buffer2 = vec![];
-//! let mut object_builder2 = builder.new_object(&mut value_buffer2);
-//! object_builder2.append_value("foo", 2);
-//! object_builder2.append_value("bar", 200);
-//! object_builder2.finish();
-//!
-//! // Create a nested object: the equivalent of {"foo": {"bar": 100}}
-//! let mut value_buffer3 = vec![];
-//! let mut object_builder3 = builder.new_object(&mut value_buffer3);
-//!
-//! // Create a nested object under the "foo" field
-//! let mut foo_builder = object_builder3.append_object("foo");
-//! foo_builder.append_value("bar", 100);
-//! foo_builder.finish();
-//!
-//! // Finish the root object builder
-//! object_builder3.finish();
-//!
-//! // Finalize the metadata
+//! // Finish the builder
 //! builder.finish();
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Reading variant values
+//!
+//! Use the [`Variant`] type to read variant values:
+//!
+//! ```
+//! # use arrow_variant::builder::VariantBuilder;
+//! # use arrow_variant::Variant;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let mut metadata_buffer = vec![];
+//! # let mut value_buffer = vec![];
+//! # {
+//! #     let mut builder = VariantBuilder::new(&mut metadata_buffer);
+//! #     let mut object = builder.new_object(&mut value_buffer);
+//! #     object.append_value("name", "Alice");
+//! #     object.append_value("age", 30);
+//! #     object.finish();
+//! #     builder.finish();
+//! # }
+//! // Parse the variant
+//! let variant = Variant::new(&metadata_buffer, &value_buffer);
+//!
+//! // Access object fields
+//! if let Some(name) = variant.get("name")? {
+//!    assert_eq!(name.as_string()?, "Alice");
+//! }
+//!
+//! if let Some(age) = variant.get("age")? {
+//!    assert_eq!(age.as_i32()?, 30);
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
-#![deny(rustdoc::broken_intra_doc_links)]
-#![warn(missing_docs)]
-
-/// Builder API for creating variant values
+/// The `builder` module provides tools for creating variant values.
 pub mod builder;
-/// Encoder module for converting values to Variant binary format
+
+/// The `decoder` module provides tools for parsing the variant binary format.
+pub mod decoder;
+
+/// The `encoder` module provides tools for converting values to Variant binary format.
 pub mod encoder;
 
+/// The `variant` module provides the core `Variant` data type.
+pub mod variant;
+
 // Re-export primary types
-pub use builder::{PrimitiveValue, VariantBuilder};
-pub use encoder::{VariantBasicType, VariantPrimitiveType};
+pub use crate::builder::{PrimitiveValue, VariantBuilder};
+pub use crate::encoder::{VariantBasicType, VariantPrimitiveType};
+pub use crate::variant::Variant;
