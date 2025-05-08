@@ -2438,6 +2438,11 @@ mod tests {
     }
 
     #[test]
+    fn duration_single_column() {
+        required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
+    }
+
+    #[test]
     fn date32_single_column() {
         required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
     }
