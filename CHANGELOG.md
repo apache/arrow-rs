@@ -29,29 +29,27 @@
 
 **Implemented enhancements:**
 
-- Add a way to get max `usize` from `OffsetSizeTrait` [\#7474](https://github.com/apache/arrow-rs/issues/7474)
+- Add a way to get max `usize` from `OffsetSizeTrait` [\#7474](https://github.com/apache/arrow-rs/issues/7474) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Deterministic metadata encoding [\#7448](https://github.com/apache/arrow-rs/issues/7448) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Parquet: Add ability to project rowid in parquet reader [\#7444](https://github.com/apache/arrow-rs/issues/7444)
-- Move parquet::file::metadata::reader::FooterTail to parquet::file::metadata so that it is public [\#7438](https://github.com/apache/arrow-rs/issues/7438)
-- Speedup take\_bytes by precalculating capacity [\#7432](https://github.com/apache/arrow-rs/issues/7432)
-- Improve performance of interleave\_primitive and interleave\_bytes [\#7421](https://github.com/apache/arrow-rs/issues/7421)
-- Implement `Eq` and `Default` for `ScalarBuffer` [\#7411](https://github.com/apache/arrow-rs/issues/7411)
+- Move parquet::file::metadata::reader::FooterTail to parquet::file::metadata so that it is public [\#7438](https://github.com/apache/arrow-rs/issues/7438) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Speedup take\_bytes by precalculating capacity [\#7432](https://github.com/apache/arrow-rs/issues/7432) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve performance of interleave\_primitive and interleave\_bytes [\#7421](https://github.com/apache/arrow-rs/issues/7421) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implement `Eq` and `Default` for `ScalarBuffer` [\#7411](https://github.com/apache/arrow-rs/issues/7411) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add decryption support for column index and offset index [\#7390](https://github.com/apache/arrow-rs/issues/7390) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Support writing encrypted Parquet files with plaintext footers [\#7320](https://github.com/apache/arrow-rs/issues/7320) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Support Parquet key management tools [\#7256](https://github.com/apache/arrow-rs/issues/7256)
-- Verify footer tags when reading encrypted Parquet files with plaintext footers [\#7255](https://github.com/apache/arrow-rs/issues/7255)
-- StructArray::try\_new behavior can be unexpected when there are no child arrays [\#7246](https://github.com/apache/arrow-rs/issues/7246)
-- Support `object_store` with wasm:  Default WASM32 HttpConnector [\#7227](https://github.com/apache/arrow-rs/issues/7227)
-- Release arrow-rs / parquet major version `55.0.0` \(Apr 2025\) [\#7084](https://github.com/apache/arrow-rs/issues/7084)
+- Support Parquet key management tools [\#7256](https://github.com/apache/arrow-rs/issues/7256) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Verify footer tags when reading encrypted Parquet files with plaintext footers [\#7255](https://github.com/apache/arrow-rs/issues/7255) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- StructArray::try\_new behavior can be unexpected when there are no child arrays [\#7246](https://github.com/apache/arrow-rs/issues/7246) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Reading empty DataPageV2 fails with `snappy: corrupt input (empty)` [\#7388](https://github.com/apache/arrow-rs/issues/7388)
+- Reading empty DataPageV2 fails with `snappy: corrupt input (empty)` [\#7388](https://github.com/apache/arrow-rs/issues/7388) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Closed issues:**
 
-- Refactor Parquet DecryptionPropertiesBuilder to fix use of unreachable [\#7476](https://github.com/apache/arrow-rs/issues/7476)
-- Implement `Eq` and `Default` for `OffsetBuffer` [\#7417](https://github.com/apache/arrow-rs/issues/7417)
+- Refactor Parquet DecryptionPropertiesBuilder to fix use of unreachable [\#7476](https://github.com/apache/arrow-rs/issues/7476) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Implement `Eq` and `Default` for `OffsetBuffer` [\#7417](https://github.com/apache/arrow-rs/issues/7417) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Merged pull requests:**
 
