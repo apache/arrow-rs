@@ -203,6 +203,10 @@ struct Args {
     /// Sets whether to coerce Arrow types to match Parquet specification
     #[clap(long)]
     coerce_types: Option<bool>,
+
+    /// Sets whether to use IEEE 754 total order for floating point columns
+    #[clap(long)]
+    total_order: Option<bool>,
 }
 
 fn main() {
@@ -269,6 +273,9 @@ fn main() {
     }
     if let Some(value) = args.coerce_types {
         writer_properties_builder = writer_properties_builder.set_coerce_types(value);
+    }
+    if let Some(value) = args.total_order {
+        writer_properties_builder = writer_properties_builder.set_ieee754_total_order(value);
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(

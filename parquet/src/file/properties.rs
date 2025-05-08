@@ -63,6 +63,8 @@ pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
 pub const DEFAULT_COERCE_TYPES: bool = false;
+/// Default values for [`WriterProperties::ieee754_total_order`]
+pub const DEFAULT_IEEE754_TOTAL_ORDER: bool = false;
 
 /// Parquet writer version.
 ///
@@ -171,6 +173,7 @@ pub struct WriterProperties {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    ieee754_total_order: bool,
     #[cfg(feature = "encryption")]
     pub(crate) file_encryption_properties: Option<FileEncryptionProperties>,
 }
@@ -296,6 +299,11 @@ impl WriterProperties {
         self.coerce_types
     }
 
+    /// Returns `true` if IEEE 754 total order should be used for floating point statistics.
+    pub fn ieee754_total_order(&self) -> bool {
+        self.ieee754_total_order
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     /// This is not configurable.
     #[inline]
@@ -402,6 +410,7 @@ pub struct WriterPropertiesBuilder {
     column_index_truncate_length: Option<usize>,
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
+    ieee754_total_order: bool,
     #[cfg(feature = "encryption")]
     file_encryption_properties: Option<FileEncryptionProperties>,
 }
@@ -426,6 +435,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
             statistics_truncate_length: DEFAULT_STATISTICS_TRUNCATE_LENGTH,
             coerce_types: DEFAULT_COERCE_TYPES,
+            ieee754_total_order: DEFAULT_IEEE754_TOTAL_ORDER,
             #[cfg(feature = "encryption")]
             file_encryption_properties: None,
         }
@@ -450,6 +460,7 @@ impl WriterPropertiesBuilder {
             column_index_truncate_length: self.column_index_truncate_length,
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
+            ieee754_total_order: self.ieee754_total_order,
             #[cfg(feature = "encryption")]
             file_encryption_properties: self.file_encryption_properties,
         }
@@ -822,6 +833,20 @@ impl WriterPropertiesBuilder {
     /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
     pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
         self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Should statistics for floating point types use IEEE 754 total order.
+    ///
+    /// Setting this to `true` will use the statistics ordering specified by
+    /// [PARQUET-2249]. This removes much of the ambiguity present in these
+    /// statistics when using the Parquet type defined sort ordering. In particular,
+    /// `NaN` (and `-NaN`) may now appear in min/max fields. Readers that have not
+    /// yet implemented this ordering should simply ignore the statistics.
+    ///
+    /// [PARQUET-2249]: https://github.com/apache/parquet-format/pull/221
+    pub fn set_ieee754_total_order(mut self, ieee754_total_order: bool) -> Self {
+        self.ieee754_total_order = ieee754_total_order;
         self
     }
 
