@@ -23,9 +23,16 @@ use std::io::Read;
 pub const CODEC_METADATA_KEY: &str = "avro.codec";
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+/// Supported compression codecs for Avro data
+///
+/// Avro supports multiple compression formats for data blocks.
+/// This enum represents the compression codecs available in this implementation.
 pub enum CompressionCodec {
+    /// Deflate compression (RFC 1951)
     Deflate,
+    /// Snappy compression
     Snappy,
+    /// ZStandard compression
     ZStandard,
 }
 
