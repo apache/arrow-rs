@@ -22,8 +22,8 @@
 [![crates.io](https://img.shields.io/crates/v/parquet-variant.svg)](https://crates.io/crates/parquet-variant)
 [![docs.rs](https://img.shields.io/docsrs/parquet-variant.svg)](https://docs.rs/parquet/latest/parquet-variant/)
 
-This crate contains an implementation of [Variant Binary Encoding], part of
-[Apache Parquet], which is part of the [Apache Arrow] project.
+This crate contains an implementation of [Variant Binary Encoding] from
+[Apache Parquet]. This software is developed as part of the [Apache Arrow] project.
 
 [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 [Apache Parquet]: https://parquet.apache.org/

@@ -19,7 +19,6 @@
 //!
 //! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 //! [Apache Parquet]: https://parquet.apache.org/
-//! [Apache Arrow]: https://arrow.apache.org/
 //!
 //! ## 🚧 Work In Progress
 //!
