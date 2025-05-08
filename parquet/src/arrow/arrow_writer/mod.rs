@@ -2438,11 +2438,6 @@ mod tests {
     }
 
     #[test]
-    fn duration_single_column() {
-        required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
     fn date32_single_column() {
         required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
     }
@@ -2476,25 +2471,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }
