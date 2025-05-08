@@ -83,13 +83,10 @@ fn take_next_selection(
     selection: &mut Option<RowSelection>,
     to_select: usize,
 ) -> Option<RowSelection> {
-    // 1) pull the current selection out exactly once
-    let current = match selection.take()? {
-        RowSelection::Ranges(r) => RowSelection::Ranges(r),
-        RowSelection::BitMap(bm)  => RowSelection::BitMap(bm),
-    };
+    // 1) clone 而不 take，让我们在任何情况下都能重建剩余 selection
+    let current = selection.as_ref()?.clone();
 
-    // 2) fast-path if it's a bitmap
+    // 2) bitmap 分支保持不变
     if let RowSelection::BitMap(mut bitmap) = current {
         let take = bitmap.len().min(to_select);
         let prefix = bitmap.slice(0, take);
@@ -103,7 +100,7 @@ fn take_next_selection(
         return Some(RowSelection::BitMap(prefix));
     }
 
-    // 3) otherwise it must be ranges
+    // 3) Ranges 分支
     let RowSelection::Ranges(runs) = current else { unreachable!() };
     let mut queue: VecDeque<RowSelector> = runs.into();
     let mut taken = Vec::new();
@@ -111,33 +108,38 @@ fn take_next_selection(
 
     while let Some(run) = queue.pop_front() {
         if run.skip {
-            taken.push(run);
+            // 只跳过也要加入 taken，保证真正调用 skip_records
+            taken.push(run.clone());
             continue;
         }
         let room = to_select.saturating_sub(count);
+        if room == 0 {
+            // 如果已满，就把当前 run 和剩余所有放回 queue
+            queue.push_front(run);
+            break;
+        }
         if run.row_count <= room {
             taken.push(run.clone());
             count += run.row_count;
         } else {
+            // 部分切分
             taken.push(RowSelector::select(room));
             queue.push_front(RowSelector::select(run.row_count - room));
             break;
         }
     }
 
+    // 4) 根据剩余 queue 更新 selection
     *selection = if queue.is_empty() {
         None
     } else {
         Some(RowSelection::Ranges(queue.into_iter().collect()))
     };
 
-    // if we only got skips, then there's nothing to return
-    if taken.iter().all(|s| s.skip) {
-        None
-    } else {
-        Some(RowSelection::Ranges(taken.into()))
-    }
+    // 5) 返回 taken，无论是否全 skip
+    Some(RowSelection::Ranges(taken.into()))
 }
+
 
 
 impl FilteredParquetRecordBatchReader {
@@ -167,6 +169,14 @@ impl FilteredParquetRecordBatchReader {
         self.row_filter.take()
     }
 
+    fn create_bitmap_from_ranges(&mut self, runs: &[RowSelector]) -> BooleanArray {
+        let mut bitmap_builder = BooleanBufferBuilder::new(runs.iter().map(|r| r.row_count).sum());
+        for run in runs.iter() {
+            bitmap_builder.append_n(run.row_count, !run.skip);
+        }
+        BooleanArray::new(bitmap_builder.finish(), None)
+    }
+
     /// Take a selection, and return the new selection where the rows are filtered by the predicate.
     fn build_predicate_filter(
         &mut self,
@@ -180,8 +190,6 @@ impl FilteredParquetRecordBatchReader {
                     filter.predicates.len(),
                     "predicate readers and predicates should have the same length"
                 );
-
-                let mut is_bitmap = matches!(selection, RowSelection::BitMap(_));
 
                 for (predicate, reader) in filter
                     .predicates
@@ -204,14 +212,9 @@ impl FilteredParquetRecordBatchReader {
                         0 => predicate_filter,
                         _ => prep_null_mask_filter(&predicate_filter),
                     };
-                    let raw = if is_bitmap {
-                        // 一直保持 bitmap 逻辑
-                        RowSelection::from_filters_as_bitmap(&[predicate_filter])
-                    } else {
-                        // ranges 逻辑：累积各段 select/skip
-                        RowSelection::from_filters(&[predicate_filter])
-                    };
 
+                    // ranges 逻辑：累积各段 select/skip
+                    let raw = RowSelection::from_filters(&[predicate_filter]);
                     selection = selection.and_then(&raw);
                 }
                 Ok(selection)
@@ -234,67 +237,97 @@ impl Iterator for FilteredParquetRecordBatchReader {
         // It boils down to leveraging array_reader's ability to collect large batches natively,
         //    rather than concatenating multiple small batches.
 
-        let mut selected = 0;
-        let mut final_bitmap_builder: Option<BooleanBufferBuilder> = None;
+        let mut rows_accum = 0;
+        // Build one combined mask over everything we read
+        let mut mask_builder = BooleanBufferBuilder::new(self.batch_size);
 
-        while let Some(cur_selection) =
-            take_next_selection(&mut self.selection, self.batch_size - selected)
-        {
-            let filtered_selection = match self.build_predicate_filter(cur_selection) {
-                Ok(selection) => selection,
+        // 1) Read/skip in small chunks until ~¾ of batch_size
+        while let Some(raw_sel) = take_next_selection(&mut self.selection, self.batch_size - rows_accum) {
+            let sel = match self.build_predicate_filter(raw_sel) {
+                Ok(s) => s,
                 Err(e) => return Some(Err(e)),
             };
 
-            match &filtered_selection {
-                RowSelection::Ranges(_) => {
-                    for selector in filtered_selection.iter() {
-                        if selector.skip {
-                            self.array_reader.skip_records(selector.row_count).ok()?;
+            match sel {
+                RowSelection::Ranges(runs) => {
+                    // Count skip/read rows
+                    let mut range_skip_count = 0;
+                    let mut range_read_count = 0;
+
+                    for run in runs.iter() {
+                        if run.skip {
+                            range_skip_count += run.row_count;
                         } else {
-                            self.array_reader.read_records(selector.row_count).ok()?;
+                            range_read_count += run.row_count;
                         }
                     }
-                    selected += filtered_selection.row_count();
-                }
-                RowSelection::BitMap(bitmap) => {
-                    let to_read = bitmap.len();
-                    self.array_reader.read_records(to_read).ok()?;
-                    selected += bitmap.true_count();
 
-                    let builder = final_bitmap_builder
-                        .get_or_insert_with(|| BooleanBufferBuilder::new(to_read));
-                    for value in bitmap.iter() {
-                        builder.append(value?);
+                    // If the number of "skip" is too high, switch to Bitmap
+                    if range_skip_count as f32 / (range_skip_count + range_read_count) as f32 > 0.5 {
+                        // Too many skips, switch to bitmap
+                        let bitmap = self.create_bitmap_from_ranges(&runs);
+                        self.array_reader.read_records(bitmap.len()).ok()?;
+                        mask_builder.append_buffer(bitmap.values());
+                        rows_accum += bitmap.true_count();
+                    } else {
+                        // Otherwise, use range
+                        for run in runs.iter() {
+                            if run.skip {
+                                self.array_reader.skip_records(run.row_count).ok()?;
+                            } else {
+                                self.array_reader.read_records(run.row_count).ok()?;
+                                mask_builder.append_n(run.row_count, true);
+                                rows_accum += run.row_count;
+                            }
+                        }
                     }
+                }
+
+                RowSelection::BitMap(bitmap) => {
+                    // read exactly bitmap.len() rows
+                    let n = bitmap.len();
+                    self.array_reader.read_records(n).ok()?;
+                    let raw = bitmap.values();
+                    mask_builder.append_buffer(raw);
+                    rows_accum += bitmap.true_count();
                 }
             }
 
-            if selected >= (self.batch_size / 4 * 3) {
+            if rows_accum >= (self.batch_size * 3 / 4) {
                 break;
             }
         }
 
-        if selected == 0 {
+        // 2) If we read nothing, we’re done
+        if rows_accum == 0 {
             return None;
         }
 
-        let array = self.array_reader.consume_batch().ok()?;
-        let array = if let Some(mut bitmap_builder) = final_bitmap_builder {
-            let bitmap = BooleanArray::new(bitmap_builder.finish(), None);
+        // 3) Consume all buffered rows in the reader
+        let array = match self.array_reader.consume_batch() {
+            Ok(a) => a,
+            Err(_) => return None,
+        };
+
+        // 4) If we ever appended any mask bits, build and apply it
+        let final_array = if mask_builder.is_empty() {
+            array
+        } else {
+            let bitmap = BooleanArray::new(mask_builder.finish(), None);
             filter(&array, &bitmap)
                 .map_err(|e| ParquetError::General(e.to_string()))
                 .ok()?
-        } else {
-            array
         };
 
-        let struct_array = array
+        // 5) Wrap into RecordBatch and return
+        let struct_arr = final_array
             .as_struct_opt()
-            .ok_or_else(|| general_err!("Struct array reader should return struct array"))
-            .ok()?;
-        Some(Ok(RecordBatch::from(struct_array.clone())))
+            .expect("StructArray expected");
+        Some(Ok(RecordBatch::from(struct_arr.clone())))
     }
 }
+
+
 
 impl RecordBatchReader for FilteredParquetRecordBatchReader {
     fn schema(&self) -> SchemaRef {

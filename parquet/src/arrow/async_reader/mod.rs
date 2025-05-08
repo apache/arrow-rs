@@ -602,7 +602,7 @@ where
         );
 
         let mut selection =
-            selection.unwrap_or_else(|| vec![RowSelector::select(row_group.row_count)].into()).trim();
+            selection.unwrap_or_else(|| vec![RowSelector::select(row_group.row_count)].into());
 
         let mut filter_readers = Vec::new();
         if let Some(filter) = self.filter.as_mut() {
@@ -661,27 +661,33 @@ where
 
 
 
-        let total_rows = selection.total_rows();
-
-        let selection =  match selection {
-            RowSelection::Ranges(selectors) => {
-              if total_rows / selectors.len() > 200 {
-                Some(RowSelection::Ranges(selectors))
-              } else {
-                  let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
-
-                  for selector in selectors.iter() {
-                      if selector.skip {
-                          builder.append_n(selector.row_count, false);
-                      } else {
-                          builder.append_n(selector.row_count, true);
-                      }
-                  }
-                  Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
-              }
-            }
-            _ => None,
-        };
+        // let total_rows = selection.total_rows();
+        //
+        // let selection =  match selection {
+        //     RowSelection::Ranges(selectors) => {
+        //       // if total_rows / selectors.len() > 200 {
+        //       //   Some(RowSelection::Ranges(selectors))
+        //       // } else {
+        //
+        //         println!("selectors len :  {:?}", selectors.len());
+        //         println!("total select rows :  {:?}", rows_after);
+        //         println!("total rows :  {:?}", row_group.row_count);
+        //         println!("total rows for selectors :  {:?}", rows_before);
+        //
+        //           let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
+        //
+        //           for selector in selectors.iter() {
+        //               if selector.skip {
+        //                   builder.append_n(selector.row_count, false);
+        //               } else {
+        //                   builder.append_n(selector.row_count, true);
+        //               }
+        //           }
+        //           Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
+        //       }
+        //     // }
+        //     _ => None,
+        // };
         
 
       
@@ -689,7 +695,7 @@ where
         let reader = FilteredParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            selection,
+            Some(selection),
             filter_readers,
             self.filter.take(),
         );
