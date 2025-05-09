@@ -52,7 +52,6 @@ fn read_selection(
 ) -> Result<ArrayRef, ParquetError> {
     match selection {
         RowSelection::Ranges(selectors) => {
-            // … your existing loop over selectors …
             for selector in selectors {
                 if selector.skip {
                     reader.skip_records(selector.row_count)?;
@@ -64,16 +63,13 @@ fn read_selection(
         },
 
         RowSelection::BitMap(bitmap) => {
-            // 1) 先一次性读入 bitmap.len() 条记录
             let to_read = bitmap.len();
             reader.read_records(to_read)?;
             let array = reader.consume_batch()?;
 
-            // 2) 直接对 StructArray 做 filter，得到新的 ArrayRef（也是 StructArray）
             let filtered_array = filter(&array, bitmap)
                 .map_err(|e| ParquetError::General(e.to_string()))?;
 
-            // 3) 返回 ArrayRef，后续你的 next() 里再拿它去 as_struct_opt()
             Ok(filtered_array)
         }
     }
@@ -83,10 +79,8 @@ fn take_next_selection(
     selection: &mut Option<RowSelection>,
     to_select: usize,
 ) -> Option<RowSelection> {
-    // 1) clone 而不 take，让我们在任何情况下都能重建剩余 selection
     let current = selection.as_ref()?.clone();
 
-    // 2) bitmap 分支保持不变
     if let RowSelection::BitMap(mut bitmap) = current {
         let take = bitmap.len().min(to_select);
         let prefix = bitmap.slice(0, take);
@@ -100,7 +94,6 @@ fn take_next_selection(
         return Some(RowSelection::BitMap(prefix));
     }
 
-    // 3) Ranges 分支
     let RowSelection::Ranges(runs) = current else { unreachable!() };
     let mut queue: VecDeque<RowSelector> = runs.into();
     let mut taken = Vec::new();
@@ -108,13 +101,11 @@ fn take_next_selection(
 
     while let Some(run) = queue.pop_front() {
         if run.skip {
-            // 只跳过也要加入 taken，保证真正调用 skip_records
             taken.push(run.clone());
             continue;
         }
         let room = to_select.saturating_sub(count);
         if room == 0 {
-            // 如果已满，就把当前 run 和剩余所有放回 queue
             queue.push_front(run);
             break;
         }
@@ -122,21 +113,18 @@ fn take_next_selection(
             taken.push(run.clone());
             count += run.row_count;
         } else {
-            // 部分切分
             taken.push(RowSelector::select(room));
             queue.push_front(RowSelector::select(run.row_count - room));
             break;
         }
     }
 
-    // 4) 根据剩余 queue 更新 selection
     *selection = if queue.is_empty() {
         None
     } else {
         Some(RowSelection::Ranges(queue.into_iter().collect()))
     };
 
-    // 5) 返回 taken，无论是否全 skip
     Some(RowSelection::Ranges(taken.into()))
 }
 
@@ -213,7 +201,6 @@ impl FilteredParquetRecordBatchReader {
                         _ => prep_null_mask_filter(&predicate_filter),
                     };
 
-                    // ranges 逻辑：累积各段 select/skip
                     let raw = RowSelection::from_filters(&[predicate_filter]);
                     selection = selection.and_then(&raw);
                 }
@@ -238,10 +225,10 @@ impl Iterator for FilteredParquetRecordBatchReader {
         //    rather than concatenating multiple small batches.
 
         let mut rows_accum = 0;
-        // Build one combined mask over everything we read
         let mut mask_builder = BooleanBufferBuilder::new(self.batch_size);
+        // Move acc_skip here so it persists across loop iterations
+        let mut acc_skip = 0;
 
-        // 1) Read/skip in small chunks until ~¾ of batch_size
         while let Some(raw_sel) = take_next_selection(&mut self.selection, self.batch_size - rows_accum) {
             let sel = match self.build_predicate_filter(raw_sel) {
                 Ok(s) => s,
@@ -250,47 +237,63 @@ impl Iterator for FilteredParquetRecordBatchReader {
 
             match sel {
                 RowSelection::Ranges(runs) => {
-                    let select_count = runs.len();
-
-                    // Count skip/read rows
-                    let mut range_skip_count = 0;
-                    let mut range_read_count = 0;
-
-                    for run in runs.iter() {
-                        if run.skip {
-                            range_skip_count += run.row_count;
-                        } else {
-                            range_read_count += run.row_count;
-                        }
+                    // First, compute total skip/read counts
+                    let mut total_skip = 0;
+                    let mut total_read = 0;
+                    for r in &runs {
+                        if r.skip { total_skip += r.row_count; }
+                        else       { total_read += r.row_count; }
                     }
 
-                    // If the number of "skip" is too high, switch to Bitmap
-                    if ((range_skip_count + range_read_count) as f32 / select_count as f32) < 10.0 {
-                        // Too many skips, switch to bitmap
+                    // If nothing to read, accumulate skip and continue
+                    if total_read == 0 {
+                        acc_skip += total_skip;
+                        continue;
+                    }
+
+                    //println!("select_count = {}, read_nums {}, total_skip{}, acc_skip {}", runs.len(), total_read, total_skip, acc_skip);
+
+                    // Before any read, flush accumulated skips
+                    if acc_skip > 0 {
+                        self.array_reader.skip_records(acc_skip).ok()?;
+                        acc_skip = 0;
+                    }
+
+                    let select_count = runs.len();
+                    let total = total_skip + total_read;
+                    if total < 10 * select_count {
+                        // Bitmap branch
                         let bitmap = self.create_bitmap_from_ranges(&runs);
                         self.array_reader.read_records(bitmap.len()).ok()?;
                         mask_builder.append_buffer(bitmap.values());
                         rows_accum += bitmap.true_count();
                     } else {
-                        // Otherwise, use range
-                        for run in runs.iter() {
-                            if run.skip {
-                                self.array_reader.skip_records(run.row_count).ok()?;
+                        // Range branch with internal skip coalescing
+                        for r in &runs {
+                            if r.skip {
+                                acc_skip += r.row_count;
                             } else {
-                                self.array_reader.read_records(run.row_count).ok()?;
-                                mask_builder.append_n(run.row_count, true);
-                                rows_accum += run.row_count;
+                                if acc_skip > 0 {
+                                    self.array_reader.skip_records(acc_skip).ok()?;
+                                    acc_skip = 0;
+                                }
+                                self.array_reader.read_records(r.row_count).ok()?;
+                                mask_builder.append_n(r.row_count, true);
+                                rows_accum += r.row_count;
                             }
                         }
                     }
                 }
 
                 RowSelection::BitMap(bitmap) => {
-                    // read exactly bitmap.len() rows
+                    // Flush any pending skips before bitmap
+                    if acc_skip > 0 {
+                        self.array_reader.skip_records(acc_skip).ok()?;
+                        acc_skip = 0;
+                    }
                     let n = bitmap.len();
                     self.array_reader.read_records(n).ok()?;
-                    let raw = bitmap.values();
-                    mask_builder.append_buffer(raw);
+                    mask_builder.append_buffer(bitmap.values());
                     rows_accum += bitmap.true_count();
                 }
             }
@@ -300,18 +303,21 @@ impl Iterator for FilteredParquetRecordBatchReader {
             }
         }
 
-        // 2) If we read nothing, we’re done
+        // At loop exit, flush any remaining skips before finishing batch
+        if acc_skip > 0 {
+            self.array_reader.skip_records(acc_skip).ok()?;
+            acc_skip = 0;
+        }
+
         if rows_accum == 0 {
             return None;
         }
 
-        // 3) Consume all buffered rows in the reader
         let array = match self.array_reader.consume_batch() {
             Ok(a) => a,
             Err(_) => return None,
         };
 
-        // 4) If we ever appended any mask bits, build and apply it
         let final_array = if mask_builder.is_empty() {
             array
         } else {
@@ -321,7 +327,6 @@ impl Iterator for FilteredParquetRecordBatchReader {
                 .ok()?
         };
 
-        // 5) Wrap into RecordBatch and return
         let struct_arr = final_array
             .as_struct_opt()
             .expect("StructArray expected");
