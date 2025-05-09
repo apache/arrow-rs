@@ -168,8 +168,8 @@ impl StructArray {
 
             if !f.is_nullable() {
                 if let Some(a) = a.logical_nulls() {
-                    if a.null_count() > 0
-                        && !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                        && a.null_count() > 0
                     {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Found unmasked nulls for non-nullable StructArray field {:?}",
@@ -941,6 +941,6 @@ mod tests {
         let arrays = vec![child];
         let nulls = None;
 
-        drop(StructArray::try_new(fields, arrays, nulls).expect("should not error"));
+        StructArray::try_new(fields, arrays, nulls).expect("should not error");
     }
 }
