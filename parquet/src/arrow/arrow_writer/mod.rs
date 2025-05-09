@@ -2519,25 +2519,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }

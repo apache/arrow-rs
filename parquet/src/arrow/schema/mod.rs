@@ -586,7 +586,10 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Duration(_) => Err(arrow_err!("Converting Duration to parquet not supported",)),
+        DataType::Duration(_) => Type::primitive_type_builder(name, PhysicalType::INT64)
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
