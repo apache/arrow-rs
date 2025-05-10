@@ -53,6 +53,7 @@ pub struct ArrowFile {
     // this is temporarily not being read from
     dictionaries: HashMap<i64, ArrowJsonDictionaryBatch>,
     arrow_json: Value,
+    json_schema: ArrowJsonSchema,
 }
 
 impl ArrowFile {
@@ -60,7 +61,12 @@ impl ArrowFile {
     pub fn read_batch(&self, batch_num: usize) -> Result<RecordBatch> {
         let b = self.arrow_json["batches"].get(batch_num).unwrap();
         let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-        record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
+        record_batch_from_json(
+            &self.schema,
+            &self.json_schema,
+            json_batch,
+            Some(&self.dictionaries),
+        )
     }
 
     /// Read all [RecordBatch]es from the file
@@ -71,7 +77,12 @@ impl ArrowFile {
             .iter()
             .map(|b| {
                 let json_batch: ArrowJsonBatch = serde_json::from_value(b.clone()).unwrap();
-                record_batch_from_json(&self.schema, json_batch, Some(&self.dictionaries))
+                record_batch_from_json(
+                    &self.schema,
+                    &self.json_schema,
+                    json_batch,
+                    Some(&self.dictionaries),
+                )
             })
             .collect()
     }
@@ -120,6 +131,8 @@ pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
     let reader = BufReader::new(json_file);
     let arrow_json: Value = serde_json::from_reader(reader).unwrap();
     let schema = schema_from_json(&arrow_json["schema"])?;
+    let json_schema: ArrowJsonSchema =
+        serde_json::from_value(arrow_json["schema"].clone()).unwrap();
     // read dictionaries
     let mut dictionaries = HashMap::new();
     if let Some(dicts) = arrow_json.get("dictionaries") {
@@ -137,6 +150,7 @@ pub fn open_json_file(json_name: &str) -> Result<ArrowFile> {
         schema,
         dictionaries,
         arrow_json,
+        json_schema,
     })
 }
 

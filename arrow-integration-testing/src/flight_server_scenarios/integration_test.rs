@@ -119,9 +119,7 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
-        #[allow(deprecated)]
-        let mut dictionary_tracker =
-            writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+        let mut dictionary_tracker = writer::DictionaryTracker::new(false);
         let data_gen = writer::IpcDataGenerator::default();
         let data = IpcMessage(
             data_gen
@@ -268,6 +266,7 @@ impl FlightService for FlightServiceImpl {
             if let Err(e) = save_uploaded_chunks(
                 uploaded_chunks,
                 schema_ref,
+                flight_data,
                 input_stream,
                 response_tx,
                 schema,
@@ -319,6 +318,7 @@ async fn record_batch_from_message(
     message: ipc::Message<'_>,
     data_body: &Buffer,
     schema_ref: SchemaRef,
+    ipc_schema: ipc::Schema<'_>,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, Status> {
     let ipc_batch = message
@@ -328,6 +328,7 @@ async fn record_batch_from_message(
     let arrow_batch_result = reader::read_record_batch(
         data_body,
         ipc_batch,
+        ipc_schema,
         schema_ref,
         dictionaries_by_id,
         None,
@@ -341,7 +342,7 @@ async fn record_batch_from_message(
 async fn dictionary_from_message(
     message: ipc::Message<'_>,
     data_body: &Buffer,
-    schema_ref: SchemaRef,
+    ipc_schema: ipc::Schema<'_>,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Result<(), Status> {
     let ipc_batch = message
@@ -351,7 +352,7 @@ async fn dictionary_from_message(
     let dictionary_batch_result = reader::read_dictionary(
         data_body,
         ipc_batch,
-        &schema_ref,
+        ipc_schema,
         dictionaries_by_id,
         &message.version(),
     );
@@ -362,6 +363,7 @@ async fn dictionary_from_message(
 async fn save_uploaded_chunks(
     uploaded_chunks: Arc<Mutex<HashMap<String, IntegrationDataset>>>,
     schema_ref: Arc<Schema>,
+    schema_flight_data: FlightData,
     mut input_stream: Streaming<FlightData>,
     mut response_tx: mpsc::Sender<Result<PutResult, Status>>,
     schema: Schema,
@@ -371,6 +373,11 @@ async fn save_uploaded_chunks(
     let mut uploaded_chunks = uploaded_chunks.lock().await;
 
     let mut dictionaries_by_id = HashMap::new();
+
+    let ipc_schema = arrow::ipc::root_as_message(&schema_flight_data.data_header[..])
+        .map_err(|e| Status::invalid_argument(format!("Could not parse message: {e:?}")))?
+        .header_as_schema()
+        .ok_or_else(|| Status::invalid_argument("Could not parse message header as schema"))?;
 
     while let Some(Ok(data)) = input_stream.next().await {
         let message = arrow::ipc::root_as_message(&data.data_header[..])
@@ -389,6 +396,7 @@ async fn save_uploaded_chunks(
                     message,
                     &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
+                    ipc_schema,
                     &dictionaries_by_id,
                 )
                 .await?;
@@ -399,7 +407,7 @@ async fn save_uploaded_chunks(
                 dictionary_from_message(
                     message,
                     &Buffer::from(data.data_body.as_ref()),
-                    schema_ref.clone(),
+                    ipc_schema,
                     &mut dictionaries_by_id,
                 )
                 .await?;

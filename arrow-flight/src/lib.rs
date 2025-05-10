@@ -149,9 +149,7 @@ pub struct IpcMessage(pub Bytes);
 
 fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
-    #[allow(deprecated)]
-    let mut dict_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
     data_gen.schema_to_bytes_with_dictionary_tracker(arrow_schema, &mut dict_tracker, options)
 }
 

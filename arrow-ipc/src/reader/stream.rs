@@ -35,6 +35,8 @@ use crate::{MessageHeader, CONTINUATION_MARKER};
 pub struct StreamDecoder {
     /// The schema of this decoder, if read
     schema: Option<SchemaRef>,
+    /// The ipc schema and its buffer
+    ipc_schema_message: Option<Arc<MessageBuffer>>,
     /// Lookup table for dictionaries by ID
     dictionaries: HashMap<i64, ArrayRef>,
     /// The decoder state
@@ -181,8 +183,8 @@ impl StreamDecoder {
                     }
                 }
                 DecoderState::Body { message } => {
-                    let message = message.as_ref();
-                    let body_length = message.bodyLength() as usize;
+                    let message_ref = message.as_ref();
+                    let body_length = message_ref.bodyLength() as usize;
 
                     let body = if self.buf.is_empty() && buffer.len() >= body_length {
                         let body = buffer.slice_with_length(0, body_length);
@@ -199,8 +201,8 @@ impl StreamDecoder {
                         std::mem::take(&mut self.buf).into()
                     };
 
-                    let version = message.version();
-                    match message.header_type() {
+                    let version = message_ref.version();
+                    match message_ref.header_type() {
                         MessageHeader::Schema => {
                             if self.schema.is_some() {
                                 return Err(ArrowError::IpcError(
@@ -208,19 +210,34 @@ impl StreamDecoder {
                                 ));
                             }
 
-                            let ipc_schema = message.header_as_schema().unwrap();
+                            // Get a reference to the schema from the message
+                            let ipc_schema = message_ref.header_as_schema().unwrap();
                             let schema = crate::convert::fb_to_schema(ipc_schema);
+
+                            // Store the schema and reset state
+                            self.ipc_schema_message = Some(Arc::new(message.clone()));
                             self.state = DecoderState::default();
                             self.schema = Some(Arc::new(schema));
                         }
                         MessageHeader::RecordBatch => {
-                            let batch = message.header_as_record_batch().unwrap();
+                            let batch = message_ref.header_as_record_batch().unwrap();
+                            let ipc_schema_message =
+                                self.ipc_schema_message.clone().ok_or_else(|| {
+                                    ArrowError::IpcError("Missing IPC schema".to_string())
+                                })?;
+                            let ipc_schema = ipc_schema_message
+                                .as_ref()
+                                .as_ref()
+                                .header_as_schema()
+                                .unwrap();
+
                             let schema = self.schema.clone().ok_or_else(|| {
                                 ArrowError::IpcError("Missing schema".to_string())
                             })?;
                             let batch = RecordBatchDecoder::try_new(
                                 &body,
                                 batch,
+                                ipc_schema,
                                 schema,
                                 &self.dictionaries,
                                 &version,
@@ -231,14 +248,21 @@ impl StreamDecoder {
                             return Ok(Some(batch));
                         }
                         MessageHeader::DictionaryBatch => {
-                            let dictionary = message.header_as_dictionary_batch().unwrap();
-                            let schema = self.schema.as_deref().ok_or_else(|| {
-                                ArrowError::IpcError("Missing schema".to_string())
-                            })?;
+                            let dictionary = message_ref.header_as_dictionary_batch().unwrap();
+                            let ipc_schema_message =
+                                self.ipc_schema_message.clone().ok_or_else(|| {
+                                    ArrowError::IpcError("Missing IPC schema".to_string())
+                                })?;
+                            let ipc_schema = ipc_schema_message
+                                .as_ref()
+                                .as_ref()
+                                .header_as_schema()
+                                .unwrap();
+
                             read_dictionary_impl(
                                 &body,
                                 dictionary,
-                                schema,
+                                ipc_schema,
                                 &mut self.dictionaries,
                                 &version,
                                 self.require_alignment,
@@ -332,12 +356,10 @@ mod tests {
             "test1",
             DataType::RunEndEncoded(
                 Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
-                #[allow(deprecated)]
                 Arc::new(Field::new_dict(
                     "values".to_string(),
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
-                    0,
                     false,
                 )),
             ),
@@ -362,8 +384,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
-                #[allow(deprecated)]
-                IpcWriteOptions::default().with_preserve_dict_id(false),
+                IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");
