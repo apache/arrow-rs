@@ -1073,8 +1073,8 @@ mod tests {
 
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(batch.is_err());
+        let err = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Int64 at column index 0");
     }
 
     #[test]
