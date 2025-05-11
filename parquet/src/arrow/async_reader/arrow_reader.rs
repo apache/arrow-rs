@@ -652,9 +652,13 @@ mod tests {
     fn test_predicate_page_cache_basic_operations() {
         use super::*;
 
-        let cache = PredicatePageCache::new(2);
+        // Mock PredicatePageCache with a capacity of 4
+        // One dictionary page and 3 data pages
+        let cache = PredicatePageCache::new(4);
         let page1 = Page::dummy_page(PageType::DATA_PAGE, 100);
         let page2 = Page::dummy_page(PageType::DICTIONARY_PAGE, 200);
+        let page3 = Page::dummy_page(PageType::DATA_PAGE, 100);
+        let page4 = Page::dummy_page(PageType::DATA_PAGE, 100);
 
         // Insert and retrieve a data page
         cache.get().insert_page(0, 1000, page1.clone());
@@ -668,26 +672,46 @@ mod tests {
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().page_type(), PageType::DICTIONARY_PAGE);
 
+        // Insert and retrieve a data page for same column
+        cache.get().insert_page(0, 3000, page3.clone());
+        let retrieved = cache.get().get_page(0, 3000);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().page_type(), PageType::DATA_PAGE);
+
+        // Insert and retrieve another data page for same column
+        cache.get().insert_page(0, 4000, page4.clone());
+        let retrieved = cache.get().get_page(0, 4000);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().page_type(), PageType::DATA_PAGE);
+
         // Both pages should still be accessible
         assert!(cache.get().get_page(0, 1000).is_some());
         assert!(cache.get().get_page(0, 2000).is_some());
+        assert!(cache.get().get_page(0, 3000).is_some());
+        assert!(cache.get().get_page(0, 4000).is_some());
     }
 
     #[test]
     fn test_predicate_page_cache_replacement() {
         use super::*;
 
-        let cache = PredicatePageCache::new(2);
+        let cache = PredicatePageCache::new(4);
         let data_page1 = Page::dummy_page(PageType::DATA_PAGE, 100);
         let data_page2 = Page::dummy_page(PageType::DATA_PAGE_V2, 200);
+        let data_page3 = Page::dummy_page(PageType::DATA_PAGE, 300);
+        let data_page4 = Page::dummy_page(PageType::DATA_PAGE, 300);
 
         // Insert first data page
         cache.get().insert_page(0, 1000, data_page1.clone());
         assert!(cache.get().get_page(0, 1000).is_some());
-
-        // Insert second data page - should replace first data page
         cache.get().insert_page(0, 2000, data_page2.clone());
         assert!(cache.get().get_page(0, 2000).is_some());
+        cache.get().insert_page(0, 3000, data_page3.clone());
+        assert!(cache.get().get_page(0, 3000).is_some());
+
+        // Insert the 4th data page - should replace the first data page
+        cache.get().insert_page(0, 4000, data_page4.clone());
+        assert!(cache.get().get_page(0, 4000).is_some());
         assert!(cache.get().get_page(0, 1000).is_none()); // First page should be gone
     }
 
