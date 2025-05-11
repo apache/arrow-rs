@@ -17,10 +17,14 @@
 
 //! Benchmark for evaluating row filters and projections using the [ClickBench] queries and data.
 //!
-//! While the actual ClickBench queries have some sort of aggregation or limit, this
-//! benchmark is only for the raw speed of applying filtering and projections.
+//! While the actual ClickBench queries often also include some sort of aggregation
+//! or limit, this benchmark measures the raw speed of applying filtering
+//! and projections, and optimize the performance of the `parquet` filter
+//! evaluation in real world scenarios.
 //!
-//! This benchmark uses the hits_0 file, which has 100,000 rows of the entire set
+//! This benchmark uses the hits_1.parquet file, is a 100,000 row samples of
+//! the entire 100M row dataset. It is reasonable in size and speed to run
+//! and seems to be a good representative of the entire dataset.
 //!
 //! See also `arrow_reader_row_filter` for more focused filter evaluation microbenchmarks
 //!
@@ -43,7 +47,6 @@ use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-/// Main benchmark entry point
 fn async_reader(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -73,37 +76,35 @@ fn sync_reader(c: &mut Criterion) {
 criterion_group!(benches, sync_reader, async_reader);
 criterion_main!(benches);
 
-/// Predicate invoked with an array,  returns a [`BooleanArray`] that indicates which
-/// rows should be returned
+/// Predicate Function.
+///
+/// Functions are invoked with the requested array and return a [`BooleanArray`]
+/// as described in [`ArrowPredicate::evaluate`].
 type ColumnPredicateFn =
     dyn FnMut(&ArrayRef) -> Result<BooleanArray, ArrowError> + Send + Sync + 'static;
 
-/// ClickBench query pattern
-///
-/// A `Query` represents patterns of filter and projection used in the
-/// [ClickBench queries] when run in [Apache DataFusion]. This benchmark is used
-/// to tune the performance of the `parquet` filter evaluation in real world
-/// scenarios.
+/// ClickBench query pattern: a particular set of filter and projections used in the
+/// [ClickBench queries] when run in [Apache DataFusion].
 ///
 /// [ClickBench queries]: https://github.com/apache/datafusion/blob/main/benchmarks/queries/clickbench/queries.sql
 /// [Apache DataFusion]: https://datafusion.apache.org/
 struct Query {
     /// Human identifiable name
     name: &'static str,
-    /// Which columns will be passed to the predicate functions.
+    /// Which columns will be passed to the predicate functions?
     ///
     /// Must be in the same order as the columns in the schema
     filter_columns: Vec<&'static str>,
-    /// Which columns will by projected (decoded after filter)
+    /// Which columns will be projected (decoded after applying filters)
     projection_columns: Vec<&'static str>,
     /// Predicates to apply
     predicates: Vec<ClickBenchPredicate>,
-    /// How many rows are expected to pass the predicate. This serves
+    /// How many rows are expected to pass the predicate? This serves
     /// as a sanity check that the benchmark is working correctly.
     expected_row_count: usize,
 }
 
-/// Table that describes all queries with filters in the ClickBench dataset
+/// Table that describes each relevant query pattern in the ClickBench queries
 fn all_queries() -> Vec<Query> {
     vec![
         // Q0: SELECT COUNT(*) FROM hits;
@@ -114,10 +115,10 @@ fn all_queries() -> Vec<Query> {
             filter_columns: vec!["AdvEngineID"],
             projection_columns: vec!["AdvEngineID"],
             predicates: vec![
-                // `AdvEngineID = 0`
-                ClickBenchPredicate::eq_literal::<Int16Type>(0, 0),
+                // `AdvEngineID <> 0`
+                ClickBenchPredicate::neq_literal::<Int16Type>(0, 0),
             ],
-            expected_row_count: 996688,
+            expected_row_count: 3312,
         },
         // no filters in Q2-Q9, Q7 is same filter and projection as Q1
         // Q2: SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
