@@ -24,7 +24,7 @@ use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader};
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
-use arrow_select::filter::{filter, filter_record_batch, prep_null_mask_filter};
+use arrow_select::filter::{filter, prep_null_mask_filter};
 
 use crate::basic::PageType;
 use crate::column::page::{Page, PageMetadata, PageReader};
@@ -81,7 +81,7 @@ fn take_next_selection(
 ) -> Option<RowSelection> {
     let current = selection.as_ref()?.clone();
 
-    if let RowSelection::BitMap(mut bitmap) = current {
+    if let RowSelection::BitMap(bitmap) = current {
         let take = bitmap.len().min(to_select);
         let prefix = bitmap.slice(0, take);
         let suffix_len = bitmap.len() - take;
@@ -103,7 +103,7 @@ fn take_next_selection(
 
     while let Some(run) = queue.pop_front() {
         if run.skip {
-            taken.push(run.clone());
+            taken.push(run);
             continue;
         }
         let room = to_select.saturating_sub(count);
@@ -112,7 +112,7 @@ fn take_next_selection(
             break;
         }
         if run.row_count <= room {
-            taken.push(run.clone());
+            taken.push(run);
             count += run.row_count;
         } else {
             taken.push(RowSelector::select(room));
@@ -127,7 +127,7 @@ fn take_next_selection(
         Some(RowSelection::Ranges(queue.into_iter().collect()))
     };
 
-    Some(RowSelection::Ranges(taken.into()))
+    Some(RowSelection::Ranges(taken))
 }
 
 impl FilteredParquetRecordBatchReader {
@@ -311,7 +311,6 @@ impl Iterator for FilteredParquetRecordBatchReader {
         // At loop exit, flush any remaining skips before finishing batch
         if acc_skip > 0 {
             self.array_reader.skip_records(acc_skip).ok()?;
-            acc_skip = 0;
         }
 
         if rows_accum == 0 {

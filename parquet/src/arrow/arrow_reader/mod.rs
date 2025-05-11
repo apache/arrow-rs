@@ -892,12 +892,10 @@ impl Iterator for ParquetRecordBatchReader {
                         Ok(filtered_batch) => Some(Ok(filtered_batch)),
                         Err(e) => Some(Err(e)),
                     }
+                } else if batch.num_rows() > 0 {
+                    Some(Ok(batch))
                 } else {
-                    if batch.num_rows() > 0 {
-                        Some(Ok(batch))
-                    } else {
-                        None
-                    }
+                    None
                 }
             }
         }

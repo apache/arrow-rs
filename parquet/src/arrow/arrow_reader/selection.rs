@@ -91,20 +91,13 @@ impl RowSelector {
 /// assert_eq!(actual, expected);
 /// ```
 ///
-/// A [`RowSelection`] maintains the following invariants:
-///
-/// * It contains no [`RowSelector`] of 0 rows
-/// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
-///
-/// [`PageIndex`]: crate::file::page_index::index::PageIndex
-// #[derive(Debug, Clone, Default, Eq, PartialEq)]
-// pub struct RowSelection {
-//     selectors: Vec<RowSelector>,
-// }
-
+/// [`RowSelection`] is an enum that can be either a list of [`RowSelector`]s
+/// or a [`BooleanArray`] bitmap
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowSelection {
+    /// A list of [`RowSelector`]s
     Ranges(Vec<RowSelector>),
+    /// A [`BooleanArray`] bitmap
     BitMap(BooleanArray),
 }
 
@@ -244,7 +237,7 @@ impl RowSelection {
 
                 ranges
             }
-            RowSelection::BitMap(bitmap) => {
+            RowSelection::BitMap(_) => {
                 // not implemented yet
                 unimplemented!("BitMap variant is not yet supported")
             }
@@ -466,7 +459,7 @@ impl RowSelection {
     }
 
     /// Trims this [`RowSelection`] removing any trailing skips
-    pub(crate) fn trim(mut self) -> Self {
+    pub(crate) fn trim(self) -> Self {
         match self {
             RowSelection::Ranges(mut selectors) => {
                 while selectors.last().map(|x| x.skip).unwrap_or(false) {
@@ -535,7 +528,7 @@ impl RowSelection {
     }
 
     /// Limit this [`RowSelection`] to only select `limit` rows
-    pub(crate) fn limit(mut self, mut limit: usize) -> Self {
+    pub(crate) fn limit(self, mut limit: usize) -> Self {
         match self {
             RowSelection::Ranges(mut selectors) => {
                 if limit == 0 {
@@ -567,13 +560,14 @@ impl RowSelection {
     pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
         match self {
             RowSelection::Ranges(selectors) => selectors.iter(),
-            RowSelection::BitMap(bitmap) => {
+            RowSelection::BitMap(_) => {
                 // not implemented yet
                 unimplemented!("BitMap variant is not yet supported")
             }
         }
     }
 
+    /// Returns the total number of rows in this [`RowSelection`]
     pub fn total_rows(&self) -> usize {
         match self {
             RowSelection::Ranges(selectors) => selectors.iter().map(|s| s.row_count).sum(),
@@ -581,10 +575,19 @@ impl RowSelection {
         }
     }
 
+    /// Returns the number of selectors in this [`RowSelection`]
     pub fn len(&self) -> usize {
         match self {
             RowSelection::Ranges(selectors) => selectors.len(),
             RowSelection::BitMap(bitmap) => bitmap.len(),
+        }
+    }
+    
+    /// Returns `true` if this [`RowSelection`] is empty
+    pub fn is_empty(&self) -> bool {
+        match self {
+            RowSelection::Ranges(selectors) => selectors.is_empty(),
+            RowSelection::BitMap(bitmap) => bitmap.is_empty(),
         }
     }
 
@@ -615,7 +618,7 @@ fn selectors_from_bitmap(bitmap: &BooleanArray) -> Vec<RowSelector> {
 
     for i in 0..bitmap.len() {
         let bit = bitmap.value(i);
-        if bit == !run_skip {
+        if bit != run_skip {
             // same as current run type (select vs skip)
             run_len += 1;
         } else {
@@ -696,7 +699,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
     fn from(r: RowSelection) -> Self {
         match r {
             RowSelection::Ranges(selectors) => selectors.into(),
-            RowSelection::BitMap(bitmap) => {
+            RowSelection::BitMap(_) => {
                 // not implemented yet
                 unimplemented!("BitMap variant is not yet supported")
             }
