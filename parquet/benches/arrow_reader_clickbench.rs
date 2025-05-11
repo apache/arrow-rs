@@ -114,10 +114,7 @@ fn all_queries() -> Vec<Query> {
             name: "Q1",
             filter_columns: vec!["AdvEngineID"],
             projection_columns: vec!["AdvEngineID"],
-            predicates: vec![
-                // `AdvEngineID <> 0`
-                ClickBenchPredicate::neq_literal::<Int16Type>(0, 0),
-            ],
+            predicates: vec![ClickBenchPredicate::neq_literal::<Int16Type>(0, 0)],
             expected_row_count: 3312,
         },
         // no filters in Q2-Q9, Q7 is same filter and projection as Q1
@@ -258,7 +255,6 @@ fn all_queries() -> Vec<Query> {
         // Q25: SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "SearchPhrase" LIMIT 10;
         // Same filters and projection as Q24
         // Q26: SELECT "SearchPhrase" FROM hits WHERE "SearchPhrase" <> '' ORDER BY "EventTime", "SearchPhrase" LIMIT 10;
-
         // Q27: SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
         Query {
             name: "Q27",
@@ -277,7 +273,6 @@ fn all_queries() -> Vec<Query> {
         },
         // No predicates in Q29
         // Q29: SELECT SUM("ResolutionWidth"), SUM("ResolutionWidth" + 1), SUM("ResolutionWidth" + 2), SUM("ResolutionWidth" + 3), SUM("ResolutionWidth" + 4), SUM("ResolutionWidth" + 5), SUM("ResolutionWidth" + 6), SUM("ResolutionWidth" + 7), SUM("ResolutionWidth" + 8), SUM("ResolutionWidth" + 9), SUM("ResolutionWidth" + 10), SUM("ResolutionWidth" + 11), SUM("ResolutionWidth" + 12), SUM("ResolutionWidth" + 13), SUM("ResolutionWidth" + 14), SUM("ResolutionWidth" + 15), SUM("ResolutionWidth" + 16), SUM("ResolutionWidth" + 17), SUM("ResolutionWidth" + 18), SUM("ResolutionWidth" + 19), SUM("ResolutionWidth" + 20), SUM("ResolutionWidth" + 21), SUM("ResolutionWidth" + 22), SUM("ResolutionWidth" + 23), SUM("ResolutionWidth" + 24), SUM("ResolutionWidth" + 25), SUM("ResolutionWidth" + 26), SUM("ResolutionWidth" + 27), SUM("ResolutionWidth" + 28), SUM("ResolutionWidth" + 29), SUM("ResolutionWidth" + 30), SUM("ResolutionWidth" + 31), SUM("ResolutionWidth" + 32), SUM("ResolutionWidth" + 33), SUM("ResolutionWidth" + 34), SUM("ResolutionWidth" + 35), SUM("ResolutionWidth" + 36), SUM("ResolutionWidth" + 37), SUM("ResolutionWidth" + 38), SUM("ResolutionWidth" + 39), SUM("ResolutionWidth" + 40), SUM("ResolutionWidth" + 41), SUM("ResolutionWidth" + 42), SUM("ResolutionWidth" + 43), SUM("ResolutionWidth" + 44), SUM("ResolutionWidth" + 45), SUM("ResolutionWidth" + 46), SUM("ResolutionWidth" + 47), SUM("ResolutionWidth" + 48), SUM("ResolutionWidth" + 49), SUM("ResolutionWidth" + 50), SUM("ResolutionWidth" + 51), SUM("ResolutionWidth" + 52), SUM("ResolutionWidth" + 53), SUM("ResolutionWidth" + 54), SUM("ResolutionWidth" + 55), SUM("ResolutionWidth" + 56), SUM("ResolutionWidth" + 57), SUM("ResolutionWidth" + 58), SUM("ResolutionWidth" + 59), SUM("ResolutionWidth" + 60), SUM("ResolutionWidth" + 61), SUM("ResolutionWidth" + 62), SUM("ResolutionWidth" + 63), SUM("ResolutionWidth" + 64), SUM("ResolutionWidth" + 65), SUM("ResolutionWidth" + 66), SUM("ResolutionWidth" + 67), SUM("ResolutionWidth" + 68), SUM("ResolutionWidth" + 69), SUM("ResolutionWidth" + 70), SUM("ResolutionWidth" + 71), SUM("ResolutionWidth" + 72), SUM("ResolutionWidth" + 73), SUM("ResolutionWidth" + 74), SUM("ResolutionWidth" + 75), SUM("ResolutionWidth" + 76), SUM("ResolutionWidth" + 77), SUM("ResolutionWidth" + 78), SUM("ResolutionWidth" + 79), SUM("ResolutionWidth" + 80), SUM("ResolutionWidth" + 81), SUM("ResolutionWidth" + 82), SUM("ResolutionWidth" + 83), SUM("ResolutionWidth" + 84), SUM("ResolutionWidth" + 85), SUM("ResolutionWidth" + 86), SUM("ResolutionWidth" + 87), SUM("ResolutionWidth" + 88), SUM("ResolutionWidth" + 89) FROM hits;
-
         // Q30: SELECT "SearchEngineID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "SearchEngineID", "ClientIP" ORDER BY c DESC LIMIT 10;
         Query {
             name: "Q30",
@@ -288,13 +283,11 @@ fn all_queries() -> Vec<Query> {
         },
         // Same filters and projection as Q30
         // Q31: SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits WHERE "SearchPhrase" <> '' GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
-
         // No predicates in Q32-Q35
         // Q32: SELECT "WatchID", "ClientIP", COUNT(*) AS c, SUM("IsRefresh"), AVG("ResolutionWidth") FROM hits GROUP BY "WatchID", "ClientIP" ORDER BY c DESC LIMIT 10;
         // Q33: SELECT "URL", COUNT(*) AS c FROM hits GROUP BY "URL" ORDER BY c DESC LIMIT 10;
         // Q34: SELECT 1, "URL", COUNT(*) AS c FROM hits GROUP BY 1, "URL" ORDER BY c DESC LIMIT 10;
         // Q35: SELECT "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3, COUNT(*) AS c FROM hits GROUP BY "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3 ORDER BY c DESC LIMIT 10;
-
         // Q36: SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "DontCountHits" = 0 AND "IsRefresh" = 0 AND "URL" <> '' GROUP BY "URL" ORDER BY PageViews DESC LIMIT 10;
         Query {
             name: "Q36",
@@ -464,7 +457,7 @@ fn all_queries() -> Vec<Query> {
     ]
 }
 
-/// Runs a provided function with the input column specified offset relative to
+/// Evaluate a predicate the input column specified offset relative to
 /// the provided filter column
 ///
 /// This provides a level of indirection needed because the columns passed to
@@ -472,17 +465,19 @@ fn all_queries() -> Vec<Query> {
 /// specified predicate columns
 struct ClickBenchPredicate {
     column_index: usize,
-    /// Function that makes the predicate function
+    /// Function that makes the actual [`ColumnPredicateFn`]
     ///
-    /// This is somewhat awkward because the ArrowPredicateFn don't implement
-    /// Clone, so it much be created each time
+    /// This is necessary (and awkward) because  `ArrowPredicateFn` does not
+    /// implement `Clone`, so it must be created for each reader instance.
     predicate_factory: Box<dyn Fn() -> Box<ColumnPredicateFn>>,
 }
 
 impl ClickBenchPredicate {
-    /// Create a new predicate that creates predicate functions using f
-    /// that are invoked with the column in column_index of the
-    /// original filter expressions
+    /// Create a new `ClickBenchPredicate`
+    ///
+    /// Parameters:
+    /// * `column_index`: the index of the column in the `filter_columns` list
+    /// * `f`: creates the actual predicate function
     fn new<F: Fn() -> Box<ColumnPredicateFn> + 'static>(
         column_index: usize,
         predicate_factory: F,
@@ -519,7 +514,7 @@ impl ClickBenchPredicate {
             let literal_1 = PrimitiveArray::<T>::new_scalar(literal_values.0);
             let literal_2 = PrimitiveArray::<T>::new_scalar(literal_values.1);
             Box::new(move |col| {
-                // use OR
+                // evaluate like (col = lit1) OR (col = lit2)
                 let match1 = eq(&col, &literal_1)?;
                 let match2 = eq(&col, &literal_2)?;
                 or(&match1, &match2)
@@ -546,7 +541,6 @@ impl ClickBenchPredicate {
     /// Create Predicate: col LIKE '%google%'
     fn like_google(column_index: usize) -> Self {
         Self::new(column_index, move || {
-            // "URL" LIKE '%google%'
             let google_url = StringViewArray::new_scalar("%google%");
             Box::new(move |col| like(col, &google_url))
         })
@@ -555,7 +549,6 @@ impl ClickBenchPredicate {
     /// Create Predicate: col NOT LIKE '%google%'
     fn nlike_google(column_index: usize) -> Self {
         Self::new(column_index, move || {
-            // "URL" NOT LIKE '%google%'
             let google_url = StringViewArray::new_scalar("%google%");
             Box::new(move |col| nlike(col, &google_url))
         })
@@ -565,7 +558,6 @@ impl ClickBenchPredicate {
     #[allow(non_snake_case)]
     fn like_Google(column_index: usize) -> Self {
         Self::new(column_index, move || {
-            // "Title" LIKE '%Google%'
             let google_url = StringViewArray::new_scalar("%Google%");
             Box::new(move |col| like(col, &google_url))
         })
@@ -581,8 +573,8 @@ impl Display for Query {
 /// FULL path to the ClickBench hits_1.parquet file
 static HITS_1_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Finds the paths to the ClickBench hits_1 file, or panics with a useful message
-/// explaining how to download them if they are not found.
+/// Finds the paths to the ClickBench file, or panics with a useful message
+/// explaining how to download if it is not found
 fn hits_1() -> &'static Path {
     HITS_1_PATH.get_or_init(|| {
 
@@ -622,24 +614,33 @@ fn find_file_if_exists(mut current_dir: PathBuf, file_name: &str) -> Option<Path
     None
 }
 
-/// For each column selected in filter mask, what was the corresponding
-/// index in the list of Query::filter_columns
+/// Represents a mapping from each column selected in the `ProjectionMask`
+/// created from `filter_columns`, to the corresponding index in the list of
+/// `filter_columns`?
 ///
-/// For example if the file schema has columns `[A, B, C]` and `filter_columns`
-/// is `[C, A]` then the ProjectionMask will be `false, true, true` and the
-/// FilterIndices will be `[2, 0]` because column `C` is offset 2 and column `A`
-/// is offset `0`
+/// # Example
+///
+/// If:
+/// * the file schema has columns `[A, B, C]`
+/// * `filter_columns` is `[C, A]`
+/// * ==> `ProjectionMask` will be `[true, false, true]` = `[A, C]`
+///
+/// `FilterIndices` will be `[1, 0]`, because column `C` (index 0 in
+/// filter_columns) is selected at index 1 of the `ProjectionMask` and column
+/// `A` (index 1 in `filter_columns`) is selected at index 0 of the
+/// `ProjectionMask`.
 struct FilterIndices {
-    /// index is offset in Query::filter_columns
-    /// value is offset in columns selected by filter ProjectionMask
+    /// * index is offset in Query::filter_columns
+    /// * value is offset in column selected by filter ProjectionMask
     inner: Vec<usize>,
 }
 
 impl FilterIndices {
-    /// Crate a new `FilterIndices` from a list of column indieces
+    /// Create a new `FilterIndices` from a list of column indices
     ///
-    /// schema_descriptor: The schema of the file
-    /// filter_schema_indices: a list of column indices in the schema
+    /// Parameters:
+    /// * `schema_descriptor`: The schema of the file
+    /// * `filter_schema_indices`: a list of column indices in the schema
     fn new(schema_descriptor: &SchemaDescriptor, filter_schema_indices: Vec<usize>) -> Self {
         for &filter_index in &filter_schema_indices {
             assert!(filter_index < schema_descriptor.num_columns());
@@ -664,12 +665,12 @@ impl FilterIndices {
         Self { inner }
     }
 
-    /// Return the the RecordBatch applied to the filter that corresponds to the
-    /// column name in the original filter_columns
-    fn map_column(&self, selection_index: usize) -> usize {
+    /// Given the index of a column in `filter_columns`, return the index of the
+    /// column in the columns selected from `ProjectionMask`
+    fn map_column(&self, filter_columns_index: usize) -> usize {
         // The selection index is the index in the filter mask
         // The inner index is the index in the filter columns
-        self.inner[selection_index]
+        self.inner[filter_columns_index]
     }
 }
 
@@ -679,16 +680,17 @@ struct ReadTest {
     name: &'static str,
     /// Metadata from Parquet file
     arrow_reader_metadata: ArrowReaderMetadata,
-    /// Which columns in the file should be projected (decoded after filter)
+    /// Which columns in the file should be projected (decoded after filter)?
     projection_mask: ProjectionMask,
-    /// Which columns in the file should be passed to the filter.
+    /// Which columns in the file should be passed to the filter?
     filter_mask: ProjectionMask,
-    /// Mapping from column selected in filter mask to Query::filter_columns
+    /// Mapping from column selected in filter mask to `Query::filter_columns`
     filter_indices: FilterIndices,
     /// Predicates to apply
     predicates: Vec<ClickBenchPredicate>,
-    /// How many rows are expected to pass the predicate. This serves
-    /// as a sanity check that the benchmark is working correctly.
+    /// How many rows are expected to pass the predicate?
+    ///
+    /// This value is a sanity check that the benchmark is working correctly.
     expected_row_count: usize,
 }
 
@@ -709,11 +711,6 @@ impl ReadTest {
             .schema_descr();
 
         // Determine the correct selection ("ProjectionMask")
-        // TODO file a ticket: ProjectionMask::columns selects all columns that *begin* with the
-        // TODO: name, so "URL" matches "URL" and "URLHash" and "URL2" etc. which is quite confusing
-        // Determine the correct selection ("ProjectionMask")
-        //ProjectionMask::columns(schema, projection_columns)
-
         let projection_mask = if projection_columns.iter().any(|&name| name == "*") {
             // * means all columns
             ProjectionMask::all()
@@ -739,8 +736,11 @@ impl ReadTest {
     }
 
     /// Run the filter and projection using the async `ParquetRecordBatchStream`
-    /// reader: open the file, apply the filter, and read the specified columns
-    /// until the row count limit is reached
+    /// reader:
+    ///
+    /// 1. open the file
+    /// 2. apply the filter
+    /// 3. read the projection_columns
     async fn run_async(&self) {
         let Ok(parquet_file) = tokio::fs::File::open(hits_1()).await else {
             panic!("Failed to open {:?}", hits_1());
@@ -794,13 +794,15 @@ impl ReadTest {
         self.check_row_count(row_count);
     }
 
-    // Return a RowFilter to apply to the reader. Since RowFilter does not implement
-    // Clone, we need to create it each time
+    /// Return a `RowFilter` to apply to the reader.
+    ///
+    /// Note that since `RowFilter` does not implement Clone, we need to create
+    /// the filter for each row
     fn row_filter(&self) -> RowFilter {
-        // The predicates are in terms the relative offsets of the filter mask
+        // Note: The predicates are in terms columns in the filter mask
         // but the record batch passed back has columns in the order of the file
         // schema
-        //let run_predicate_fns = (self.query.predicate)();
+
         // Convert the predicates to ArrowPredicateFn to conform to the RowFilter API
         let arrow_predicates: Vec<_> = self
             .predicates
@@ -811,10 +813,7 @@ impl ReadTest {
                 let mut predicate_fn = pred.predicate_fn();
                 Box::new(ArrowPredicateFn::new(
                     self.filter_mask.clone(),
-                    move |batch| {
-                        let col = batch.column(column_index);
-                        (predicate_fn)(col)
-                    },
+                    move |batch| (predicate_fn)(batch.column(column_index)),
                 )) as Box<dyn ArrowPredicate>
             })
             .collect();
@@ -832,9 +831,7 @@ impl ReadTest {
     }
 }
 
-/// Return a map from column name in self.filter_columns to the index in the filter mask
-///
-/// Return the indices of each element in column_names to the indicies in the schema
+/// Return a map from `column_names` in `filter_columns` to the index in the schema
 fn column_indices(schema: &SchemaDescriptor, column_names: &Vec<&str>) -> Vec<usize> {
     let fields = schema.root_schema().get_fields();
     let mut indicices = vec![];
@@ -865,13 +862,12 @@ fn load_metadata(path: &Path) -> ArrowReaderMetadata {
             // Read UTF8 fields as Utf8View
             //
             // The clickbench_partitioned dataset has textual fields listed as
-            // binary for some historical reason so translate Binary to Utf8View as
-            // well
+            // binary for some historical reason so translate Binary to Utf8View
             if matches!(f.data_type(), DataType::Utf8 | DataType::Binary) {
                 let new_field = f.as_ref().clone().with_data_type(DataType::Utf8View);
                 Arc::new(new_field)
             } else {
-                // otherwise just clone the field
+                // otherwise use the inferred field type
                 Arc::clone(f)
             }
         })
