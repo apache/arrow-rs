@@ -421,10 +421,9 @@ impl RowSelection {
     /// returned:  NNNNNNNNYYNYN
     pub fn intersection(&self, other: &Self) -> Self {
         match (self, other) {
-            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => RowSelection::Ranges(
-                intersect_row_selections(a, b)
-                    .selectors().to_vec(),
-            ),
+            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => {
+                RowSelection::Ranges(intersect_row_selections(a, b).selectors().to_vec())
+            }
             (RowSelection::BitMap(bit_map), RowSelection::BitMap(other_bit_map)) => {
                 let intersection_selectors = bit_map.values() & other_bit_map.values();
                 RowSelection::BitMap(BooleanArray::from(intersection_selectors))
@@ -442,10 +441,9 @@ impl RowSelection {
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
         match (self, other) {
-            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => RowSelection::Ranges(
-                union_row_selections(a, b)
-                    .selectors().to_vec(),
-            ),
+            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => {
+                RowSelection::Ranges(union_row_selections(a, b).selectors().to_vec())
+            }
             (RowSelection::BitMap(_), _) | (_, RowSelection::BitMap(_)) => {
                 unimplemented!("BitMap variant is not yet supported")
             }
