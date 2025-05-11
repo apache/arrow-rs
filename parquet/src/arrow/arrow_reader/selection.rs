@@ -57,7 +57,7 @@ impl RowSelector {
 /// This is applied prior to reading column data, and can therefore
 /// be used to skip IO to fetch data into memory
 ///
-/// A typical use-case would be using the [`PageIndex`] to filter out rows
+/// A typical use-case would be using the PageIndex to filter out rows
 /// that don't satisfy a predicate
 ///
 /// # Example
@@ -421,9 +421,13 @@ impl RowSelection {
     /// returned:  NNNNNNNNYYNYN
     pub fn intersection(&self, other: &Self) -> Self {
         match (self, other) {
-            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => {
-                RowSelection::Ranges(intersect_row_selections(a, b))
-            }
+            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => RowSelection::Ranges(
+                intersect_row_selections(a, b)
+                    .selectors()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
             (RowSelection::BitMap(bit_map), RowSelection::BitMap(other_bit_map)) => {
                 let intersection_selectors = bit_map.values() & other_bit_map.values();
                 RowSelection::BitMap(BooleanArray::from(intersection_selectors))
@@ -441,9 +445,13 @@ impl RowSelection {
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
         match (self, other) {
-            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => {
-                RowSelection::Ranges(union_row_selections(a, b))
-            }
+            (RowSelection::Ranges(a), RowSelection::Ranges(b)) => RowSelection::Ranges(
+                union_row_selections(a, b)
+                    .selectors()
+                    .iter()
+                    .cloned()
+                    .collect(),
+            ),
             (RowSelection::BitMap(_), _) | (_, RowSelection::BitMap(_)) => {
                 unimplemented!("BitMap variant is not yet supported")
             }
@@ -582,7 +590,7 @@ impl RowSelection {
             RowSelection::BitMap(bitmap) => bitmap.len(),
         }
     }
-    
+
     /// Returns `true` if this [`RowSelection`] is empty
     pub fn is_empty(&self) -> bool {
         match self {
@@ -609,7 +617,7 @@ impl RowSelection {
     }
 }
 
-/// Convert a BooleanArray (no nulls) into a Vec<RowSelector>,
+/// Convert a BooleanArray (no nulls) into a `Vec<RowSelector>`,
 /// alternating `select(run_len)` and `skip(run_len)`.
 fn selectors_from_bitmap(bitmap: &BooleanArray) -> Vec<RowSelector> {
     let mut selectors = Vec::new();
@@ -713,7 +721,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 /// other:     NYNNNNNNY
 ///
 /// returned:  NNNNNNNNYYNYN
-fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> Vec<RowSelector> {
+fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
@@ -775,7 +783,7 @@ fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> Vec<
 /// returned:  NYYYYYNNYYNYN
 ///
 /// This can be removed from here once RowSelection::union is in parquet::arrow
-fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> Vec<RowSelector> {
+fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
@@ -1216,7 +1224,7 @@ mod tests {
 
         let res = intersect_row_selections(&a, &b);
         assert_eq!(
-            res,
+            res.selectors(),
             vec![
                 RowSelector::select(5),
                 RowSelector::skip(4),
@@ -1233,7 +1241,10 @@ mod tests {
         ];
         let b = vec![RowSelector::select(36), RowSelector::skip(36)];
         let res = intersect_row_selections(&a, &b);
-        assert_eq!(res, vec![RowSelector::select(3), RowSelector::skip(69)]);
+        assert_eq!(
+            res.selectors(),
+            vec![RowSelector::select(3), RowSelector::skip(69)]
+        );
 
         // a size less than b size
         let a = vec![RowSelector::select(3), RowSelector::skip(7)];
@@ -1245,7 +1256,10 @@ mod tests {
             RowSelector::select(2),
         ];
         let res = intersect_row_selections(&a, &b);
-        assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8)]);
+        assert_eq!(
+            res.selectors(),
+            vec![RowSelector::select(2), RowSelector::skip(8)]
+        );
 
         let a = vec![RowSelector::select(3), RowSelector::skip(7)];
         let b = vec![
@@ -1256,7 +1270,10 @@ mod tests {
             RowSelector::select(2),
         ];
         let res = intersect_row_selections(&a, &b);
-        assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8)]);
+        assert_eq!(
+            res.selectors(),
+            vec![RowSelector::select(2), RowSelector::skip(8)]
+        );
     }
 
     #[test]
