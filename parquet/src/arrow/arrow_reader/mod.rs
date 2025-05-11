@@ -17,17 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, BooleanArray};
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
-use arrow_select::filter::prep_null_mask_filter;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
-use std::collections::VecDeque;
-use std::mem::take;
-use std::sync::Arc;
-use arrow_select::take::take_record_batch;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -39,11 +28,20 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, BooleanArray};
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_select::filter::prep_null_mask_filter;
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::mem::take;
+use std::sync::Arc;
 
 mod filter;
 mod selection;
 pub mod statistics;
-mod boolean_selector;
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
@@ -678,7 +676,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
                 let array_reader =
                     build_array_reader(self.fields.as_deref(), predicate.projection(), &reader)?;
-                
+
                 selection = Some(evaluate_predicate(
                     batch_size,
                     array_reader,
@@ -860,15 +858,14 @@ impl Iterator for ParquetRecordBatchReader {
                     )
                 });
 
-
-                let batch:RecordBatch = match struct_array {
+                let batch: RecordBatch = match struct_array {
                     Err(err) => return Some(Err(err)),
                     Ok(e) => e.into(),
                 };
 
                 if let Some(filter) = filter.as_mut() {
                     if batch.num_rows() == 0 {
-                        return None
+                        return None;
                     }
                     if filter.len() != batch.num_rows() {
                         return Some(Err(ArrowError::ComputeError(format!(
@@ -882,7 +879,6 @@ impl Iterator for ParquetRecordBatchReader {
                         Ok(filtered_batch) => Some(Ok(filtered_batch)),
                         Err(e) => Some(Err(e)),
                     }
-
                 } else {
                     if batch.num_rows() > 0 {
                         Some(Ok(batch))
@@ -890,7 +886,6 @@ impl Iterator for ParquetRecordBatchReader {
                         None
                     }
                 }
-
             }
         }
     }
@@ -1028,7 +1023,7 @@ pub(crate) fn evaluate_predicate(
                 filter.len()
             ));
         }
-        
+
         match filter.null_count() {
             0 => filters.push(filter),
             _ => filters.push(prep_null_mask_filter(&filter)),

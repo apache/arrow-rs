@@ -659,8 +659,6 @@ where
             .fetch(&mut self.input, &projection, Some(&selection))
             .await?;
 
-
-
         // let total_rows = selection.total_rows();
         //
         // let selection =  match selection {
@@ -688,9 +686,7 @@ where
         //     // }
         //     _ => None,
         // };
-        
 
-      
         let array_reader = build_array_reader(self.fields.as_deref(), &projection, &row_group)?;
         let reader = FilteredParquetRecordBatchReader::new(
             batch_size,

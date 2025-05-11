@@ -999,7 +999,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
             SerializedPageReaderState::Pages {
                 page_locations,
 
-                dictionary_page, .. } => {
+                dictionary_page,
+                ..
+            } => {
                 if dictionary_page.is_some() {
                     // If a dictionary page exists, consume it by taking it (sets to None)
                     dictionary_page.take();
@@ -1343,7 +1345,7 @@ mod tests {
         }
         assert_eq!(page_count, 2);
     }
-    
+
     #[test]
     fn test_file_reader_empty_compressed_datapage_v2() {
         // this file has a compressed datapage that un-compresses to 0 bytes
@@ -1535,7 +1537,7 @@ mod tests {
         }
         assert_eq!(page_count, 1);
     }
-    
+
     #[cfg(feature = "async")]
     fn get_serialized_page_reader<R: ChunkReader>(
         file_reader: &SerializedFileReader<R>,

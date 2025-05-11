@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::{collections::VecDeque, sync::Arc};
 
-use arrow_array::{ArrayRef, BooleanArray};
 use arrow_array::{cast::AsArray, Array, RecordBatch, RecordBatchReader};
+use arrow_array::{ArrayRef, BooleanArray};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::{ArrowError, DataType, Schema, SchemaRef};
 use arrow_select::filter::{filter, filter_record_batch, prep_null_mask_filter};
@@ -60,15 +60,15 @@ fn read_selection(
                 }
             }
             reader.consume_batch()
-        },
+        }
 
         RowSelection::BitMap(bitmap) => {
             let to_read = bitmap.len();
             reader.read_records(to_read)?;
             let array = reader.consume_batch()?;
 
-            let filtered_array = filter(&array, bitmap)
-                .map_err(|e| ParquetError::General(e.to_string()))?;
+            let filtered_array =
+                filter(&array, bitmap).map_err(|e| ParquetError::General(e.to_string()))?;
 
             Ok(filtered_array)
         }
@@ -94,7 +94,9 @@ fn take_next_selection(
         return Some(RowSelection::BitMap(prefix));
     }
 
-    let RowSelection::Ranges(runs) = current else { unreachable!() };
+    let RowSelection::Ranges(runs) = current else {
+        unreachable!()
+    };
     let mut queue: VecDeque<RowSelector> = runs.into();
     let mut taken = Vec::new();
     let mut count = 0;
@@ -127,8 +129,6 @@ fn take_next_selection(
 
     Some(RowSelection::Ranges(taken.into()))
 }
-
-
 
 impl FilteredParquetRecordBatchReader {
     pub(crate) fn new(
@@ -229,7 +229,9 @@ impl Iterator for FilteredParquetRecordBatchReader {
         // Move acc_skip here so it persists across loop iterations
         let mut acc_skip = 0;
 
-        while let Some(raw_sel) = take_next_selection(&mut self.selection, self.batch_size - rows_accum) {
+        while let Some(raw_sel) =
+            take_next_selection(&mut self.selection, self.batch_size - rows_accum)
+        {
             let sel = match self.build_predicate_filter(raw_sel) {
                 Ok(s) => s,
                 Err(e) => return Some(Err(e)),
@@ -241,8 +243,11 @@ impl Iterator for FilteredParquetRecordBatchReader {
                     let mut total_skip = 0;
                     let mut total_read = 0;
                     for r in &runs {
-                        if r.skip { total_skip += r.row_count; }
-                        else       { total_read += r.row_count; }
+                        if r.skip {
+                            total_skip += r.row_count;
+                        } else {
+                            total_read += r.row_count;
+                        }
                     }
 
                     // If nothing to read, accumulate skip and continue
@@ -327,14 +332,10 @@ impl Iterator for FilteredParquetRecordBatchReader {
                 .ok()?
         };
 
-        let struct_arr = final_array
-            .as_struct_opt()
-            .expect("StructArray expected");
+        let struct_arr = final_array.as_struct_opt().expect("StructArray expected");
         Some(Ok(RecordBatch::from(struct_arr.clone())))
     }
 }
-
-
 
 impl RecordBatchReader for FilteredParquetRecordBatchReader {
     fn schema(&self) -> SchemaRef {
@@ -343,7 +344,7 @@ impl RecordBatchReader for FilteredParquetRecordBatchReader {
 }
 
 struct CachedPage {
-    dict: Option<(usize, Page)>, // page offset -> page
+    dict: Option<(usize, Page)>,   // page offset -> page
     data: VecDeque<(usize, Page)>, // page offset -> page, use 2 pages, because the batch size will exceed the page size sometimes
 }
 
@@ -354,14 +355,17 @@ struct PredicatePageCacheInner {
 impl PredicatePageCacheInner {
     pub(crate) fn get_page(&self, col_id: usize, offset: usize) -> Option<Page> {
         self.pages.get(&col_id).and_then(|pages| {
-
             if let Some((off, page)) = &pages.dict {
                 if *off == offset {
                     return Some(page.clone());
                 }
             }
 
-            pages.data.iter().find(|(off, _)| *off == offset).map(|(_, page)| page.clone())
+            pages
+                .data
+                .iter()
+                .find(|(off, _)| *off == offset)
+                .map(|(_, page)| page.clone())
         })
     }
 
@@ -375,12 +379,7 @@ impl PredicatePageCacheInner {
     /// shows that 3 pages are enough to cover the batch size when we're setting batch size to 8192. And the 3 data page size
     /// is not too large, it only uses 3MB in memory, so we can keep 3 pages in the cache.
     /// TODO, in future we may use adaptive cache size according the dynamic batch size.
-    pub(crate) fn insert_page(
-        &mut self,
-        col_id: usize,
-        offset: usize,
-        page: Page,
-    ) {
+    pub(crate) fn insert_page(&mut self, col_id: usize, offset: usize, page: Page) {
         let is_dict = page.page_type() == PageType::DICTIONARY_PAGE;
 
         match self.pages.entry(col_id) {
@@ -588,17 +587,18 @@ mod tests {
 
     #[test]
     fn test_take_next_selection_exact_match() {
-        let mut queue = VecDeque::from(vec![
+        let selection_vec = vec![
             RowSelector::skip(5),
             RowSelector::select(3),
             RowSelector::skip(2),
             RowSelector::select(7),
-        ]);
+        ];
+        let mut selection = Some(RowSelection::Ranges(selection_vec));
 
         // Request exactly 10 rows (5 skip + 3 select + 2 skip)
-        let selection = take_next_selection(&mut queue, 3).unwrap();
+        let result = take_next_selection(&mut selection, 3).unwrap();
         assert_eq!(
-            selection,
+            result,
             vec![
                 RowSelector::skip(5),
                 RowSelector::select(3),
@@ -607,46 +607,46 @@ mod tests {
             .into()
         );
 
-        // Check remaining queue
-        assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].row_count, 7);
-        assert!(!queue[0].skip);
+        // Remaining: select(7)
+        assert_eq!(
+            selection,
+            Some(RowSelection::Ranges(vec![RowSelector::select(7)]))
+        );
     }
 
     #[test]
     fn test_take_next_selection_split_required() {
-        let mut queue = VecDeque::from(vec![RowSelector::select(10), RowSelector::select(10)]);
+        let mut selection = Some(RowSelection::Ranges(vec![
+            RowSelector::select(10),
+            RowSelector::select(10),
+        ]));
 
-        // Request 15 rows, which should split the first selector
-        let selection = take_next_selection(&mut queue, 15).unwrap();
-
+        // Request 15 rows: should take 10 + 5, leave 5
+        let result = take_next_selection(&mut selection, 15).unwrap();
         assert_eq!(
-            selection,
-            vec![RowSelector::select(10), RowSelector::select(5)].into()
+            result,
+            RowSelection::Ranges(vec![RowSelector::select(10), RowSelector::select(5),])
         );
 
-        // Check remaining queue - should have 5 rows from split and original 10
-        assert_eq!(queue.len(), 1);
-        assert!(!queue[0].skip);
-        assert_eq!(queue[0].row_count, 5);
+        // Remaining: select(5)
+        assert_eq!(
+            selection,
+            Some(RowSelection::Ranges(vec![RowSelector::select(5)]))
+        );
     }
 
     #[test]
     fn test_take_next_selection_empty_queue() {
-        let mut queue = VecDeque::new();
+        let mut selection = None;
 
-        // Should return None for empty queue
-        let selection = take_next_selection(&mut queue, 10);
-        assert!(selection.is_none());
+        // Empty selection
+        assert!(take_next_selection(&mut selection, 10).is_none());
 
-        // Test with queue that becomes empty
-        queue.push_back(RowSelector::select(5));
-        let selection = take_next_selection(&mut queue, 10).unwrap();
-        assert_eq!(selection, vec![RowSelector::select(5)].into());
-
-        // Queue should now be empty
-        let selection = take_next_selection(&mut queue, 10);
-        assert!(selection.is_none());
+        // One item, smaller than to_select
+        selection = Some(RowSelection::Ranges(vec![RowSelector::select(5)]));
+        let result = take_next_selection(&mut selection, 10).unwrap();
+        assert_eq!(result, RowSelection::Ranges(vec![RowSelector::select(5)]));
+        assert_eq!(selection, None);
     }
 
     #[test]
