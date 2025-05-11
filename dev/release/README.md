@@ -72,7 +72,7 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
-# commit the intial changes
+# commit the initial changes
 git commit -a -m 'Create changelog'
 
 # run automated script to copy labels to issues based on referenced PRs

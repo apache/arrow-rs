@@ -28,11 +28,26 @@
 #![warn(missing_docs)]
 #![allow(unused)] // Temporary
 
+/// Core functionality for reading Avro data into Arrow arrays
+///
+/// Implements the primary reader interface and record decoding logic.
 pub mod reader;
+
+/// Avro schema parsing and representation
+///
+/// Provides types for parsing and representing Avro schema definitions.
 mod schema;
 
+/// Compression codec implementations for Avro
+///
+/// Provides support for various compression algorithms used in Avro files,
+/// including Deflate, Snappy, and ZStandard.
 mod compression;
 
+/// Data type conversions between Avro and Arrow types
+///
+/// This module contains the necessary types and functions to convert between
+/// Avro data types and Arrow data types.
 mod codec;
 
 #[cfg(test)]

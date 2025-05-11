@@ -27,8 +27,8 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
-    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, LargeBinaryArray,
-    LargeStringArray, StringArray, StringViewArray,
+    Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
+    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
 };
 use arrow_schema::DataType;
 
@@ -84,6 +84,9 @@ macro_rules! downcast_op {
                 DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
                 DataType::LargeBinary => {
                     downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::FixedSizeBinary(_) => {
+                    downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
                 }
                 d => unreachable!("cannot downcast {} dictionary value to byte array", d),
             },

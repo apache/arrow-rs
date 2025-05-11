@@ -17,7 +17,7 @@
 
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use crate::{ArrowError, DataType, Field, IntervalUnit, TimeUnit};
+use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit};
 
 pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
     Parser::new(val).parse()
@@ -78,6 +78,11 @@ impl<'a> Parser<'a> {
             Token::List => self.parse_list(),
             Token::LargeList => self.parse_large_list(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
+            Token::Struct => self.parse_struct(),
+            Token::FieldName(word) => Err(make_error(
+                self.val,
+                &format!("unrecognized word: {}", word),
+            )),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -150,6 +155,10 @@ impl<'a> Parser<'a> {
     fn parse_double_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
         match self.next_token()? {
             Token::DoubleQuotedString(s) => Ok(s),
+            Token::FieldName(word) => Err(make_error(
+                self.val,
+                &format!("unrecognized word: {}", word),
+            )),
             tok => Err(make_error(
                 self.val,
                 &format!("finding double quoted string for {context}, got '{tok}'"),
@@ -290,6 +299,46 @@ impl<'a> Parser<'a> {
             Box::new(key_type),
             Box::new(value_type),
         ))
+    }
+    fn parse_struct(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let mut fields = Vec::new();
+        loop {
+            let field_name = match self.next_token()? {
+                // It's valid to have a name that is a type name
+                Token::SimpleType(data_type) => data_type.to_string(),
+                Token::FieldName(name) => name,
+                Token::RParen => {
+                    if fields.is_empty() {
+                        break;
+                    } else {
+                        return Err(make_error(
+                            self.val,
+                            "Unexpected token while parsing Struct fields. Expected a word for the name of Struct, but got trailing comma",
+                        ));
+                    }
+                }
+                tok => {
+                    return Err(make_error(
+                        self.val,
+                        &format!("Expected a word for the name of Struct, but got {tok}"),
+                    ))
+                }
+            };
+            let field_type = self.parse_next_type()?;
+            fields.push(Arc::new(Field::new(field_name, field_type, true)));
+            match self.next_token()? {
+                Token::Comma => continue,
+                Token::RParen => break,
+                tok => {
+                    return Err(make_error(
+                        self.val,
+                        &format!("Unexpected token while parsing Struct fields. Expected ',' or ')', but got '{tok}'"),
+                    ))
+                }
+            }
+        }
+        Ok(DataType::Struct(Fields::from(fields)))
     }
 
     /// return the next token, or an error if there are none left
@@ -479,12 +528,9 @@ impl<'a> Tokenizer<'a> {
             "Some" => Token::Some,
             "None" => Token::None,
 
-            _ => {
-                return Err(make_error(
-                    self.val,
-                    &format!("unrecognized word: {}", self.word),
-                ))
-            }
+            "Struct" => Token::Struct,
+            // If we don't recognize the word, treat it as a field name
+            word => Token::FieldName(word.to_string()),
         };
         Ok(token)
     }
@@ -546,6 +592,8 @@ enum Token {
     List,
     LargeList,
     FixedSizeList,
+    Struct,
+    FieldName(String),
 }
 
 impl Display for Token {
@@ -573,6 +621,8 @@ impl Display for Token {
             Token::Dictionary => write!(f, "Dictionary"),
             Token::Integer(v) => write!(f, "Integer({v})"),
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
+            Token::Struct => write!(f, "Struct"),
+            Token::FieldName(s) => write!(f, "FieldName({s})"),
         }
     }
 }
@@ -680,7 +730,37 @@ mod test {
                     DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
                 ),
             ),
-            // TODO support more structured types (List, LargeList, Struct, Union, Map, RunEndEncoded, etc)
+            DataType::Struct(Fields::from(vec![
+                Field::new("f1", DataType::Int64, true),
+                Field::new("f2", DataType::Float64, true),
+                Field::new(
+                    "f3",
+                    DataType::Timestamp(TimeUnit::Second, Some("+08:00".into())),
+                    true,
+                ),
+                Field::new(
+                    "f4",
+                    DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::FixedSizeBinary(23)),
+                    ),
+                    true,
+                ),
+            ])),
+            DataType::Struct(Fields::from(vec![
+                Field::new("Int64", DataType::Int64, true),
+                Field::new("Float64", DataType::Float64, true),
+            ])),
+            DataType::Struct(Fields::from(vec![
+                Field::new("f1", DataType::Int64, true),
+                Field::new(
+                    "nested_struct",
+                    DataType::Struct(Fields::from(vec![Field::new("n1", DataType::Int64, true)])),
+                    true,
+                ),
+            ])),
+            DataType::Struct(Fields::empty()),
+            // TODO support more structured types (List, LargeList, Union, Map, RunEndEncoded, etc)
         ]
     }
 
@@ -754,11 +834,13 @@ mod test {
             ("Decimal256(-3, 5)", "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted"),
             ("Decimal128(3, 500)", "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted"),
             ("Decimal256(3, 500)", "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted"),
-
+            ("Struct(f1, Int64)", "Error finding next type, got unexpected ','"),
+            ("Struct(f1 Int64,)", "Expected a word for the name of Struct, but got trailing comma"),
+            ("Struct(f1)", "Error finding next type, got unexpected ')'"),
         ];
 
         for (data_type_string, expected_message) in cases {
-            print!("Parsing '{data_type_string}', expecting '{expected_message}'");
+            println!("Parsing '{data_type_string}', expecting '{expected_message}'");
             match parse_data_type(data_type_string) {
                 Ok(d) => panic!("Expected error while parsing '{data_type_string}', but got '{d}'"),
                 Err(e) => {

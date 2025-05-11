@@ -51,10 +51,21 @@ impl AvroDataType {
         Field::new(name, d, self.nullability.is_some()).with_metadata(self.metadata.clone())
     }
 
+    /// Returns a reference to the codec used by this data type
+    ///
+    /// The codec determines how Avro data is encoded and mapped to Arrow data types.
+    /// This is useful when we need to inspect or use the specific encoding of a field.
     pub fn codec(&self) -> &Codec {
         &self.codec
     }
 
+    /// Returns the nullability status of this data type
+    ///
+    /// In Avro, nullability is represented through unions with null types.
+    /// The returned value indicates how nulls are encoded in the Avro format:
+    /// - `Some(Nullability::NullFirst)` - Nulls are encoded as the first union variant
+    /// - `Some(Nullability::NullSecond)` - Nulls are encoded as the second union variant
+    /// - `None` - The type is not nullable
     pub fn nullability(&self) -> Option<Nullability> {
         self.nullability
     }
@@ -78,6 +89,10 @@ impl AvroField {
         &self.data_type
     }
 
+    /// Returns the name of this Avro field
+    ///
+    /// This is the field name as defined in the Avro schema.
+    /// It's used to identify fields within a record structure.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -108,24 +123,46 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
 #[derive(Debug, Clone)]
 pub enum Codec {
+    /// Represents Avro null type, maps to Arrow's Null data type
     Null,
+    /// Represents Avro boolean type, maps to Arrow's Boolean data type
     Boolean,
+    /// Represents Avro int type, maps to Arrow's Int32 data type
     Int32,
+    /// Represents Avro long type, maps to Arrow's Int64 data type
     Int64,
+    /// Represents Avro float type, maps to Arrow's Float32 data type
     Float32,
+    /// Represents Avro double type, maps to Arrow's Float64 data type
     Float64,
+    /// Represents Avro bytes type, maps to Arrow's Binary data type
     Binary,
+    /// String data represented as UTF-8 encoded bytes, corresponding to Arrow's StringArray
     Utf8,
+    /// Represents Avro date logical type, maps to Arrow's Date32 data type
     Date32,
+    /// Represents Avro time-millis logical type, maps to Arrow's Time32(TimeUnit::Millisecond) data type
     TimeMillis,
+    /// Represents Avro time-micros logical type, maps to Arrow's Time64(TimeUnit::Microsecond) data type
     TimeMicros,
-    /// TimestampMillis(is_utc)
+    /// Represents Avro timestamp-millis or local-timestamp-millis logical type
+    ///
+    /// Maps to Arrow's Timestamp(TimeUnit::Millisecond) data type
+    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
     TimestampMillis(bool),
-    /// TimestampMicros(is_utc)
+    /// Represents Avro timestamp-micros or local-timestamp-micros logical type
+    ///
+    /// Maps to Arrow's Timestamp(TimeUnit::Microsecond) data type
+    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
     TimestampMicros(bool),
+    /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
+    /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
+    /// Represents Avro array type, maps to Arrow's List data type
     List(Arc<AvroDataType>),
+    /// Represents Avro record type, maps to Arrow's Struct data type
     Struct(Arc<[AvroField]>),
+    /// Represents Avro duration logical type, maps to Arrow's Interval(IntervalUnit::MonthDayNano) data type
     Interval,
 }
 
