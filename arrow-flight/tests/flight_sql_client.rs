@@ -116,6 +116,53 @@ pub async fn test_execute_ingest_error() {
     );
 }
 
+#[tokio::test]
+pub async fn test_execute_ingest_empty_stream() {
+    // Test for https://github.com/apache/arrow-rs/issues/7329
+
+    let test_server = FlightSqlServiceImpl::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let channel = fixture.channel().await;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+    let cmd = make_ingest_command();
+
+    // make sure there were no records ingested
+    let actual_rows = flight_sql_client
+        .execute_ingest(cmd, futures::stream::iter(vec![]).map(Ok))
+        .await
+        .expect("ingest should succeed");
+    assert_eq!(actual_rows, 0);
+
+    // make sure there were no batches sent to the server
+    let ingested_batches = test_server.ingested_batches.lock().await.clone();
+    assert_eq!(ingested_batches, vec![]);
+}
+
+#[tokio::test]
+pub async fn test_execute_ingest_first_item_error() {
+    // Test for https://github.com/apache/arrow-rs/issues/7329
+
+    let test_server = FlightSqlServiceImpl::new();
+    let fixture = TestFixture::new(test_server.service()).await;
+    let channel = fixture.channel().await;
+    let mut flight_sql_client = FlightSqlServiceClient::new(channel);
+    let cmd = make_ingest_command();
+
+    // send an error from the client
+    let batches = vec![Err(FlightError::NotYetImplemented(
+        "Client error message".to_string(),
+    ))];
+
+    // make sure the client error was returned
+    let err = flight_sql_client
+        .execute_ingest(cmd, futures::stream::iter(batches))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "External error: Not yet implemented: Client error message"
+    );
+}
 fn make_ingest_command() -> CommandStatementIngest {
     CommandStatementIngest {
         table_definition_options: Some(TableDefinitionOptions {

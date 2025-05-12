@@ -710,7 +710,19 @@ where
         // we wrap this stream in a `Peekable` one, which allows us to peek at
         // the first message without discarding it.
         let mut request = request.map(PeekableFlightDataStream::new);
-        let cmd = Pin::new(request.get_mut()).peek().await.unwrap().clone()?;
+        let mut stream = Pin::new(request.get_mut());
+
+        // If the stream is empty or the first item is an Err,
+        // return early with 0 records affected
+        let peeked_item = stream.peek().await.cloned();
+        let Some(cmd) = peeked_item else {
+            let result = DoPutUpdateResult { record_count: 0 };
+            let output = futures::stream::iter(vec![Ok(PutResult {
+                app_metadata: result.encode_to_vec().into(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
+        };
+        let cmd = cmd?;
 
         let message =
             Any::decode(&*cmd.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
