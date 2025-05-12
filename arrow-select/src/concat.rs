@@ -1348,16 +1348,13 @@ mod tests {
         let values1 = Int32Array::from(vec![10, 20]);
         let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
 
-        let run_ends2 = Int32Array::from(vec![2, 4]);
+        let run_ends2 = Int32Array::from(vec![1, 4]);
         let values2 = Int32Array::from(vec![30, 40]);
         let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
 
         // Concatenate the arrays - this should now work properly
         let result = concat(&[&array1, &array2]).unwrap();
-        let result_run_array = result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
 
         // Check that the result has the correct length
         assert_eq!(result_run_array.len(), 8); // 4 + 4
@@ -1365,7 +1362,7 @@ mod tests {
         // Check the run ends
         let run_ends = result_run_array.run_ends().values();
         assert_eq!(run_ends.len(), 4);
-        assert_eq!(&[2, 4, 6, 8], run_ends);
+        assert_eq!(&[2, 4, 5, 8], run_ends);
 
         // Check the values
         let values = result_run_array
@@ -1391,10 +1388,7 @@ mod tests {
 
         // Concatenate the two arrays
         let result = concat(&[&array1, &array2]).unwrap();
-        let result_run_array = result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
 
         // The result should have length 12 (7 + 5)
         assert_eq!(result_run_array.len(), 12);
@@ -1429,10 +1423,7 @@ mod tests {
 
         // Concatenate the two arrays
         let result = concat(&[&array1, &array2]).unwrap();
-        let result_run_array = result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
 
         // The result should have length 12 (7 + 5)
         assert_eq!(result_run_array.len(), 12);
@@ -1457,5 +1448,69 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
         assert_eq!(actual.null_count(), expected.null_count());
         assert_eq!(actual.values(), expected.values());
+    }
+
+    #[test]
+    fn test_concat_run_array_single() {
+        // Create a run array with run ends [2, 4] and values [10, 20]
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+
+        // Concatenate the single array
+        let result = concat(&[&array1]).unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
+
+        // The result should have length 4
+        assert_eq!(result_run_array.len(), 4);
+
+        // Check that the run ends are correct
+        let run_ends = result_run_array.run_ends().values();
+        assert_eq!(&[2, 4], run_ends);
+
+        // Check that the values are correct
+        assert_eq!(
+            &[10, 20],
+            result_run_array
+                .values()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_concat_run_array_with_3_arrays() {
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+        let run_ends2 = Int32Array::from(vec![1, 4]);
+        let values2 = Int32Array::from(vec![30, 40]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+        let run_ends3 = Int32Array::from(vec![1, 4]);
+        let values3 = Int32Array::from(vec![50, 60]);
+        let array3 = RunArray::try_new(&run_ends3, &values3).unwrap();
+
+        // Concatenate the arrays
+        let result = concat(&[&array1, &array2, &array3]).unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
+
+        // Check that the result has the correct length
+        assert_eq!(result_run_array.len(), 12); // 4 + 4 + 4
+
+        // Check the run ends
+        let run_ends = result_run_array.run_ends().values();
+        assert_eq!(run_ends.len(), 6);
+        assert_eq!(&[2, 4, 5, 8, 9, 12], run_ends);
+
+        // Check the values
+        let values = result_run_array
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(values.len(), 6);
+        assert_eq!(&[10, 20, 30, 40, 50, 60], values.values());
     }
 }
