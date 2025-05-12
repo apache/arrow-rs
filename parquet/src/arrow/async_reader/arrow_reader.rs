@@ -260,7 +260,10 @@ impl Iterator for FilteredParquetRecordBatchReader {
 
                     // Before any read, flush accumulated skips
                     if acc_skip > 0 {
-                        self.array_reader.skip_records(acc_skip).ok()?;
+                        match self.array_reader.skip_records(acc_skip) {
+                            Ok(_) => {}
+                            Err(e) => return Some(Err(e.into())),
+                        };
                         acc_skip = 0;
                     }
 
@@ -269,7 +272,10 @@ impl Iterator for FilteredParquetRecordBatchReader {
                     if total < 10 * select_count {
                         // Bitmap branch
                         let bitmap = self.create_bitmap_from_ranges(&runs);
-                        self.array_reader.read_records(bitmap.len()).ok()?;
+                        match self.array_reader.read_records(bitmap.len()) {
+                            Ok(_) => {}
+                            Err(e) => return Some(Err(e.into())),
+                        };
                         mask_builder.append_buffer(bitmap.values());
                         rows_accum += bitmap.true_count();
                     } else {
@@ -279,10 +285,16 @@ impl Iterator for FilteredParquetRecordBatchReader {
                                 acc_skip += r.row_count;
                             } else {
                                 if acc_skip > 0 {
-                                    self.array_reader.skip_records(acc_skip).ok()?;
+                                    match self.array_reader.skip_records(acc_skip) {
+                                        Ok(_) => {}
+                                        Err(e) => return Some(Err(e.into())),
+                                    };
                                     acc_skip = 0;
                                 }
-                                self.array_reader.read_records(r.row_count).ok()?;
+                                match self.array_reader.read_records(r.row_count) {
+                                    Ok(_) => {}
+                                    Err(e) => return Some(Err(e.into())),
+                                };
                                 mask_builder.append_n(r.row_count, true);
                                 rows_accum += r.row_count;
                             }
@@ -293,11 +305,17 @@ impl Iterator for FilteredParquetRecordBatchReader {
                 RowSelection::BitMap(bitmap) => {
                     // Flush any pending skips before bitmap
                     if acc_skip > 0 {
-                        self.array_reader.skip_records(acc_skip).ok()?;
+                        match self.array_reader.skip_records(acc_skip) {
+                            Ok(_) => {}
+                            Err(e) => return Some(Err(e.into())),
+                        };
                         acc_skip = 0;
                     }
                     let n = bitmap.len();
-                    self.array_reader.read_records(n).ok()?;
+                    match self.array_reader.read_records(n) {
+                        Ok(_) => {}
+                        Err(e) => return Some(Err(e.into())),
+                    };
                     mask_builder.append_buffer(bitmap.values());
                     rows_accum += bitmap.true_count();
                 }
@@ -310,7 +328,10 @@ impl Iterator for FilteredParquetRecordBatchReader {
 
         // At loop exit, flush any remaining skips before finishing batch
         if acc_skip > 0 {
-            self.array_reader.skip_records(acc_skip).ok()?;
+            match self.array_reader.skip_records(acc_skip) {
+                Ok(_) => {}
+                Err(e) => return Some(Err(e.into())),
+            };
         }
 
         if rows_accum == 0 {
