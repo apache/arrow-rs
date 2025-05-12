@@ -722,10 +722,9 @@ where
             })]);
             return Ok(Response::new(Box::pin(output)));
         };
-        let cmd = cmd?;
 
         let message =
-            Any::decode(&*cmd.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
+            Any::decode(&*cmd?.flight_descriptor.unwrap().cmd).map_err(decode_error_to_status)?;
         match Command::try_from(message).map_err(arrow_error_to_status)? {
             Command::CommandStatementUpdate(command) => {
                 let record_count = self.do_put_statement_update(command, request).await?;
