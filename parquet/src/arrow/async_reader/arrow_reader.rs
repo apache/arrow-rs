@@ -256,8 +256,6 @@ impl Iterator for FilteredParquetRecordBatchReader {
                         continue;
                     }
 
-                    //println!("select_count = {}, read_nums {}, total_skip{}, acc_skip {}", runs.len(), total_read, total_skip, acc_skip);
-
                     // Before any read, flush accumulated skips
                     if acc_skip > 0 {
                         match self.array_reader.skip_records(acc_skip) {
@@ -340,7 +338,7 @@ impl Iterator for FilteredParquetRecordBatchReader {
 
         let array = match self.array_reader.consume_batch() {
             Ok(a) => a,
-            Err(_) => return None,
+            Err(error) => return Some(Err(error.into())),
         };
 
         let final_array = if mask_builder.is_empty() {

@@ -659,34 +659,6 @@ where
             .fetch(&mut self.input, &projection, Some(&selection))
             .await?;
 
-        // let total_rows = selection.total_rows();
-        //
-        // let selection =  match selection {
-        //     RowSelection::Ranges(selectors) => {
-        //       // if total_rows / selectors.len() > 200 {
-        //       //   Some(RowSelection::Ranges(selectors))
-        //       // } else {
-        //
-        //         println!("selectors len :  {:?}", selectors.len());
-        //         println!("total select rows :  {:?}", rows_after);
-        //         println!("total rows :  {:?}", row_group.row_count);
-        //         println!("total rows for selectors :  {:?}", rows_before);
-        //
-        //           let mut builder = arrow_array::builder::BooleanBufferBuilder::new(rows_after);
-        //
-        //           for selector in selectors.iter() {
-        //               if selector.skip {
-        //                   builder.append_n(selector.row_count, false);
-        //               } else {
-        //                   builder.append_n(selector.row_count, true);
-        //               }
-        //           }
-        //           Some(RowSelection::BitMap( arrow_array::BooleanArray::from(builder.finish())))
-        //       }
-        //     // }
-        //     _ => None,
-        // };
-
         let array_reader = build_array_reader(self.fields.as_deref(), &projection, &row_group)?;
         let reader = FilteredParquetRecordBatchReader::new(
             batch_size,
