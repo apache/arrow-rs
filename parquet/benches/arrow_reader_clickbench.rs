@@ -834,15 +834,15 @@ impl ReadTest {
 /// Return a map from `column_names` in `filter_columns` to the index in the schema
 fn column_indices(schema: &SchemaDescriptor, column_names: &Vec<&str>) -> Vec<usize> {
     let fields = schema.root_schema().get_fields();
-    let mut indicices = vec![];
+    let mut indices = vec![];
     for &name in column_names {
         for (idx, field) in fields.iter().enumerate().take(schema.num_columns()) {
             if name == field.name() {
-                indicices.push(idx)
+                indices.push(idx)
             }
         }
     }
-    indicices
+    indices
 }
 
 /// Loads Parquet metadata from the given path, including page indexes
