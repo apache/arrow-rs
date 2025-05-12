@@ -411,7 +411,7 @@ impl WriterProperties {
 
     /// Return file encryption properties
     ///
-    /// For more details see [`WriterPropertiesBuilder::set_file_encryption_properties`]
+    /// For more details see [`WriterPropertiesBuilder::with_file_encryption_properties`]
     #[cfg(feature = "encryption")]
     pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
         self.file_encryption_properties.as_ref()
