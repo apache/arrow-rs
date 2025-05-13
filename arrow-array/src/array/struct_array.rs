@@ -168,7 +168,9 @@ impl StructArray {
 
             if !f.is_nullable() {
                 if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default() {
+                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                        && a.null_count() > 0
+                    {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Found unmasked nulls for non-nullable StructArray field {:?}",
                             f.name()
@@ -921,5 +923,24 @@ mod tests {
             ))),
         );
         assert_eq!(format!("{arr:?}"), "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
+    }
+
+    #[test]
+    fn test_struct_array_logical_nulls() {
+        // Field is non-nullable
+        let field = Field::new("a", DataType::Int32, false);
+        let values = vec![1, 2, 3];
+        // Create a NullBuffer with all bits set to valid (true)
+        let nulls = NullBuffer::from(vec![true, true, true]);
+        let array = Int32Array::new(values.into(), Some(nulls));
+        let child = Arc::new(array) as ArrayRef;
+        assert!(child.logical_nulls().is_some());
+        assert_eq!(child.logical_nulls().unwrap().null_count(), 0);
+
+        let fields = Fields::from(vec![field]);
+        let arrays = vec![child];
+        let nulls = None;
+
+        StructArray::try_new(fields, arrays, nulls).expect("should not error");
     }
 }
