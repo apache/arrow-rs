@@ -36,7 +36,14 @@ pub type FieldRef = Arc<Field>;
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
 /// A [`Schema`](super::Schema) is an ordered collection of
-/// [`Field`] objects.
+/// [`Field`] objects. Fields contain:
+/// * `name`: the name of the field
+/// * `data_type`: the type of the field
+/// * `nullable`: if the field is nullable
+/// * `metadata`: a map of key-value pairs containing additional custom meta data
+///
+/// Arrow Extension types, are encoded in `Field`s metadata. See
+/// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
@@ -129,7 +136,13 @@ impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
 
-    /// Creates a new field with the given name, type, and nullability
+    /// Creates a new field with the given name, data_type, and nullability
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{Field, DataType};
+    /// Field::new("field_ame", DataType::Int32, true);
+    /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         #[allow(deprecated)]
         Field {
@@ -321,6 +334,12 @@ impl Field {
         &self.name
     }
 
+    /// Set the name of this [`Field`]
+    #[inline]
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
+    }
+
     /// Set the name of the [`Field`] and returns self.
     ///
     /// ```
@@ -331,7 +350,7 @@ impl Field {
     /// assert_eq!(field.name(), "c2");
     /// ```
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.set_name(name);
         self
     }
 
@@ -339,6 +358,20 @@ impl Field {
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    /// Set [`DataType`] of the [`Field`]
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_data_type(DataType::Utf8);
+    ///
+    /// assert_eq!(field.data_type(), &DataType::Utf8);
+    /// ```
+    #[inline]
+    pub fn set_data_type(&mut self, data_type: DataType) {
+        self.data_type = data_type;
     }
 
     /// Set [`DataType`] of the [`Field`] and returns self.
@@ -351,7 +384,7 @@ impl Field {
     /// assert_eq!(field.data_type(), &DataType::Utf8);
     /// ```
     pub fn with_data_type(mut self, data_type: DataType) -> Self {
-        self.data_type = data_type;
+        self.set_data_type(data_type);
         self
     }
 
@@ -517,9 +550,25 @@ impl Field {
     }
 
     /// Indicates whether this [`Field`] supports null values.
+    ///
+    /// If true, the field *may* contain null values.
     #[inline]
     pub const fn is_nullable(&self) -> bool {
         self.nullable
+    }
+
+    /// Set the `nullable` of this [`Field`].
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_nullable(true);
+    ///
+    /// assert_eq!(field.is_nullable(), true);
+    /// ```
+    #[inline]
+    pub fn set_nullable(&mut self, nullable: bool) {
+        self.nullable = nullable;
     }
 
     /// Set `nullable` of the [`Field`] and returns self.
@@ -532,7 +581,7 @@ impl Field {
     /// assert_eq!(field.is_nullable(), true);
     /// ```
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.nullable = nullable;
+        self.set_nullable(nullable);
         self
     }
 
