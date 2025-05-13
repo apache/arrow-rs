@@ -18,15 +18,17 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, ArrayRef, BooleanArray};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
-use arrow_select::filter::prep_null_mask_filter;
+use arrow_select::filter::{filter, filter_record_batch, prep_null_mask_filter};
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::collections::VecDeque;
 use std::sync::Arc;
-
+use arrow::compute::and;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_select::concat::concat;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -1013,6 +1015,68 @@ pub(crate) fn evaluate_predicate(
         Some(selection) => selection.and_then(&raw),
         None => raw,
     })
+}
+
+fn evaluate_predicate_batch(
+    batch_size: usize,
+    mut filter_reader: ParquetRecordBatchReader,
+    mut predicates: Vec<Box<dyn ArrowPredicate>>,
+) -> Result<BooleanArray, ArrowError> {
+    let mut passing = Vec::with_capacity(batch_size);
+    let mut total_selected = 0;
+    let mut batches = Vec::new();
+    while total_selected < batch_size {
+        match filter_reader.next() {
+            Some(Ok(batch)) => {
+                // Apply predicates sequentially and combine with AND
+                let mut combined_mask: Option<BooleanArray> = None;
+
+                for predicate in predicates.iter_mut() {
+                    let mask = predicate.evaluate(batch.clone())?;
+                    if mask.len() != batch.num_rows() {
+                        return Err(ArrowError::ComputeError(format!(
+                            "Predicate returned {} rows, expected {}",
+                            mask.len(),
+                            batch.num_rows()
+                        )));
+                    }
+                    combined_mask = match combined_mask {
+                        Some(prev) => Some(and(&prev, &mask)?),
+                        None => Some(mask),
+                    };
+                }
+
+                if let Some(mask) = combined_mask {
+                    batches.push(filter_record_batch(
+                        &batch,
+                        &mask));
+                    total_selected += mask.true_count();
+                    passing.push(mask);
+                } else {
+                    let len = batch.num_rows();
+                    let buffer = BooleanBuffer::new_set(len);
+                    let mask = BooleanArray::new(buffer, None);
+                    total_selected += len;
+                    passing.push(mask);
+                }
+            }
+            Some(Err(e)) => return Err(e),
+            None => break,
+        }
+    }
+    let arrays: Vec<ArrayRef> = passing
+        .into_iter()
+        .map(|b| Arc::new(b) as ArrayRef)
+        .collect();
+
+    let combined = concat(&arrays).unwrap();
+    let boolean_combined = combined
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .unwrap()
+        .clone();
+
+    Ok(boolean_combined)
 }
 
 #[cfg(test)]
