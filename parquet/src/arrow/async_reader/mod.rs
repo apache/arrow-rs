@@ -40,8 +40,8 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
-    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
-    ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
+    ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
+    RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
 
@@ -61,6 +61,7 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
+use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
@@ -535,6 +536,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 }
 
+/// Returns a [`ReaderFactory`] and an optional [`ParquetRecordBatchReader`] for the next row group
+///
+/// Note: If all rows are filtered out in the row group (e.g by filters, limit or
+/// offset), returns `None` for the reader.
 type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
@@ -542,14 +547,18 @@ type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)
 struct ReaderFactory<T> {
     metadata: Arc<ParquetMetaData>,
 
+    /// Top level parquet schema
     fields: Option<Arc<ParquetField>>,
 
     input: T,
 
+    /// Optional filter
     filter: Option<RowFilter>,
 
+    /// Limit to apply to remaining row groups.  
     limit: Option<usize>,
 
+    /// Offset to apply to the next
     offset: Option<usize>,
 }
 
@@ -559,11 +568,13 @@ where
 {
     /// Reads the next row group with the provided `selection`, `projection` and `batch_size`
     ///
+    /// Updates the `limit` and `offset` of the reader factory
+    ///
     /// Note: this captures self so that the resulting future has a static lifetime
     async fn read_row_group(
         mut self,
         row_group_idx: usize,
-        mut selection: Option<RowSelection>,
+        selection: Option<RowSelection>,
         projection: ProjectionMask,
         batch_size: usize,
     ) -> ReadResult<T> {
@@ -586,49 +597,50 @@ where
             metadata: self.metadata.as_ref(),
         };
 
+        let filter = self.filter.as_mut();
+        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
+
         // Update selection based on any filters
-        if let Some(filter) = self.filter.as_mut() {
+        if let Some(filter) = filter {
             for predicate in filter.predicates.iter_mut() {
-                if !selects_any(selection.as_ref()) {
-                    return Ok((self, None));
+                if !plan_builder.selects_any() {
+                    return Ok((self, None)); // ruled out entire row group
                 }
 
-                let predicate_projection = predicate.projection();
+                // (pre) Fetch only the columns that are selected by the predicate
+                let selection = plan_builder.selection();
                 row_group
-                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
+                    .fetch(&mut self.input, predicate.projection(), selection)
                     .await?;
 
                 let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
+                    build_array_reader(self.fields.as_deref(), predicate.projection(), &row_group)?;
 
-                selection = Some(evaluate_predicate(
-                    batch_size,
-                    array_reader,
-                    selection,
-                    predicate.as_mut(),
-                )?);
+                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
         // Compute the number of rows in the selection before applying limit and offset
-        let rows_before = selection
-            .as_ref()
-            .map(|s| s.row_count())
+        let rows_before = plan_builder
+            .num_rows_selected()
             .unwrap_or(row_group.row_count);
 
         if rows_before == 0 {
-            return Ok((self, None));
+            return Ok((self, None)); // ruled out entire row group
         }
 
-        selection = apply_range(selection, row_group.row_count, self.offset, self.limit);
+        // Apply any limit and offset
+        let plan_builder = plan_builder
+            .limited(row_group.row_count)
+            .with_offset(self.offset)
+            .with_limit(self.limit)
+            .build_limited();
 
-        // Compute the number of rows in the selection after applying limit and offset
-        let rows_after = selection
-            .as_ref()
-            .map(|s| s.row_count())
+        let rows_after = plan_builder
+            .num_rows_selected()
             .unwrap_or(row_group.row_count);
 
-        // Update offset if necessary
+        // Update running offset and limit for after the current row group is read
         if let Some(offset) = &mut self.offset {
             // Reduction is either because of offset or limit, as limit is applied
             // after offset has been "exhausted" can just use saturating sub here
@@ -636,22 +648,21 @@ where
         }
 
         if rows_after == 0 {
-            return Ok((self, None));
+            return Ok((self, None)); // ruled out entire row group
         }
 
         if let Some(limit) = &mut self.limit {
             *limit -= rows_after;
         }
-
+        // fetch the pages needed for decoding
         row_group
-            .fetch(&mut self.input, &projection, selection.as_ref())
+            .fetch(&mut self.input, &projection, plan_builder.selection())
             .await?;
 
-        let reader = ParquetRecordBatchReader::new(
-            batch_size,
-            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
-            selection,
-        );
+        let plan = plan_builder.build();
+
+        let array_reader = build_array_reader(self.fields.as_deref(), &projection, &row_group)?;
+        let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
         Ok((self, Some(reader)))
     }
