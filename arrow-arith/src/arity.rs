@@ -130,7 +130,8 @@ where
         .zip(b.values())
         .map(|(l, r)| op(*l, *r));
 
-    let buffer: Vec<_> = values.collect();    Ok(PrimitiveArray::new(buffer.into(), nulls))
+    let buffer: Vec<_> = values.collect();
+    Ok(PrimitiveArray::new(buffer.into(), nulls))
 }
 
 /// Applies a binary and infallible function to values in two arrays, replacing

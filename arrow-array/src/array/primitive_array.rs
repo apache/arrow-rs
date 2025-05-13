@@ -828,7 +828,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     {
         let nulls = self.nulls().cloned();
         let values = self.values().into_iter().map(|v| op(*v));
-        let buffer:Vec<_> = values.collect();
+        let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
