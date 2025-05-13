@@ -586,6 +586,7 @@ where
             metadata: self.metadata.as_ref(),
         };
 
+        // Update selection based on any filters
         if let Some(filter) = self.filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
                 if !selects_any(selection.as_ref()) {
@@ -865,6 +866,7 @@ where
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup<'a> {
     offset_index: Option<&'a [OffsetIndexMetaData]>,
+    /// Column chunks for this row group
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
     row_group_idx: usize,
@@ -872,7 +874,11 @@ struct InMemoryRowGroup<'a> {
 }
 
 impl InMemoryRowGroup<'_> {
-    /// Fetches the necessary column data into memory
+    /// Fetches any additional column data specified in `projection` that is not already
+    /// present in `self.column_chunks`.
+    ///
+    /// If `selection` is provided, only the pages required for the selection
+    /// are fetched. Otherwise, all pages are fetched.
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,
         input: &mut T,
@@ -1017,15 +1023,18 @@ enum ColumnChunkData {
     Sparse {
         /// Length of the full column chunk
         length: usize,
-        /// Set of data pages included in this sparse chunk. Each element is a tuple
-        /// of (page offset, page data)
+        /// Subset of data pages included in this sparse chunk.
+        ///
+        /// Each element is a tuple of (page offset within file, page data).
+        /// Each entry is a complete page and the list is ordered by offset.
         data: Vec<(usize, Bytes)>,
     },
-    /// Full column chunk and its offset
+    /// Full column chunk and the offset within the original file
     Dense { offset: usize, data: Bytes },
 }
 
 impl ColumnChunkData {
+    /// Return the data for this column chunk at the given offset
     fn get(&self, start: u64) -> Result<Bytes> {
         match &self {
             ColumnChunkData::Sparse { data, .. } => data
@@ -1045,6 +1054,7 @@ impl ColumnChunkData {
 }
 
 impl Length for ColumnChunkData {
+    /// Return the total length of the full column chunk
     fn len(&self) -> u64 {
         match &self {
             ColumnChunkData::Sparse { length, .. } => *length as u64,
