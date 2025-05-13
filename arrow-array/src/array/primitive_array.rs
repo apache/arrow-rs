@@ -729,10 +729,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
-        unsafe {
-            let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            Self::new(val_buf.into(), None)
-        }
+        let val_buf: Vec<_> = vec![value; count];
+        Self::new(val_buf.into(), None)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -827,13 +825,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+        let values = self.values().into_iter().map(|v| op(*v));
+        let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
@@ -1035,13 +1028,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: FnMut(U::Item) -> T::Native,
     {
         let nulls = left.logical_nulls();
-        let buffer = unsafe {
+        let buffer: Vec<_> = (0..left.len())
             // SAFETY: i in range 0..left.len()
-            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
-            // SAFETY: upper bound is trusted because `iter` is over a range
-            Buffer::from_trusted_len_iter(iter)
-        };
-
+            .map(|i| op(unsafe { left.value_unchecked(i) }))
+            .collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 

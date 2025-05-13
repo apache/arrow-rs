@@ -120,7 +120,7 @@ use crate::schema::types::{
 };
 #[cfg(feature = "encryption")]
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-pub use reader::ParquetMetaDataReader;
+pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
@@ -1999,7 +1999,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2640;
+        let base_expected_size = 2648;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2029,7 +2029,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2816;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3144;
+        let bigger_expected_size = 3152;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

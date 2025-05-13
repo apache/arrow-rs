@@ -138,9 +138,12 @@ pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     metadata: &HashMap<String, String>,
 ) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
-    let custom_metadata = metadata
-        .iter()
-        .map(|(k, v)| {
+    let mut ordered_keys = metadata.keys().collect::<Vec<_>>();
+    ordered_keys.sort();
+    let custom_metadata = ordered_keys
+        .into_iter()
+        .map(|k| {
+            let v = metadata.get(k).unwrap();
             let fb_key_name = fbb.create_string(k);
             let fb_val_name = fbb.create_string(v);
 
