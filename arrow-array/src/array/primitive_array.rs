@@ -730,7 +730,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
         let val_buf: Vec<_> = vec![value; count];
-        Self::new(val_buf.into(), None)        }
+        Self::new(val_buf.into(), None)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
