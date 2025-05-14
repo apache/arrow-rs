@@ -40,7 +40,7 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
 use crate::arrow::arrow_reader::{
-    apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
+    apply_range, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
     ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
@@ -586,28 +586,33 @@ where
             metadata: self.metadata.as_ref(),
         };
 
-        if let Some(filter) = self.filter.as_mut() {
-            for predicate in filter.predicates.iter_mut() {
-                if !selects_any(selection.as_ref()) {
-                    return Ok((self, None));
-                }
 
-                let predicate_projection = predicate.projection();
-                row_group
-                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
-                    .await?;
+        let predicate_projection = self.filter
+            .as_mut()
+            .map(|filter| {
+                filter
+                    .predicates
+                    .iter_mut()
+                    .map(|p| p.projection().clone())
+                    .reduce(|mut acc, p| {
+                        acc.union(&p);
+                        acc
+                    })
+            })
+            .flatten();
 
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
+        let projection_to_cache = predicate_projection.as_ref().map(|p| {
+            let mut p = p.clone();
+            p.intersect(&projection);
+            p
+        });
 
-                selection = Some(evaluate_predicate(
-                    batch_size,
-                    array_reader,
-                    selection,
-                    predicate.as_mut(),
-                )?);
-            }
-        }
+        let project_exclude_filter = predicate_projection.as_ref().map(|p| {
+            let mut rest = projection.clone();
+            rest.subtract(p);
+            rest
+        }).or_else(|| Some(projection.clone()));
+
 
         // Compute the number of rows in the selection before applying limit and offset
         let rows_before = selection
@@ -642,13 +647,44 @@ where
             *limit -= rows_after;
         }
 
+        let mut filter_readers = vec![];
+
+        if let Some(filter) = self.filter.as_mut() {
+            for predicate in filter.predicates.iter_mut() {
+                if !selects_any(selection.as_ref()) {
+                    return Ok((self, None));
+                }
+
+                let predicate_projection = predicate.projection();
+
+                row_group
+                    .fetch(&mut self.input, predicate_projection, selection.as_ref())
+                    .await?;
+
+                let array_reader = build_array_reader(
+                    self.fields.as_deref(),
+                    predicate_projection,
+                    &row_group,
+                )?;
+
+                filter_readers.push(array_reader);
+            }
+        }
+
+        // let filter_reader = build_array_reader(self.fields.as_deref(), predicate_projection.as_ref().unwrap(), &row_group)?;
+
+
+        // Fetch the data pages for the row group which is the final project excluding the filter
         row_group
-            .fetch(&mut self.input, &projection, selection.as_ref())
+            .fetch(&mut self.input, &project_exclude_filter.as_ref().unwrap(), selection.as_ref())
             .await?;
 
         let reader = ParquetRecordBatchReader::new(
             batch_size,
-            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
+            build_array_reader(self.fields.as_deref(), project_exclude_filter.as_ref().unwrap(), &row_group)?,
+            filter_readers,
+            self.filter.take(),
+            projection_to_cache,
             selection,
         );
 
