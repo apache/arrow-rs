@@ -385,8 +385,11 @@ where
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
-                        let non_null_mask = vec![true; len];
-                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values, &non_null_mask)?;
+
+                        println!("keys: {:?}", keys);
+
+                        // let non_null_mask = vec![true; len];
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
                         *max_remaining_values -= len;
                         Ok(len)
                     }
@@ -446,8 +449,7 @@ where
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
-                        let non_null_mask = vec![true; len];
-                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values, &non_null_mask)?;
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
                         *max_remaining_values -= len;
                         Ok(vec![true; len])
                     }

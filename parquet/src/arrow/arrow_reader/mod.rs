@@ -2831,7 +2831,7 @@ mod tests {
         let error = record_batch_reader.next().unwrap().unwrap_err();
 
         assert!(
-            error.to_string().contains("invalid utf-8 sequence"),
+            error.to_string().contains("encountered non UTF-8 data"),
             "{}",
             error
         );

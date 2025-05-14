@@ -641,7 +641,7 @@ impl ByteArrayDecoderDictionary {
         }
 
         self.decoder.read_with_non_null_mask(len, |keys| {
-            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice(), non_null_mask.as_slice())
+            output.extend_from_dictionary_with_non_null_mask(keys, dict.offsets.as_slice(), dict.values.as_slice(), non_null_mask.as_slice())
         })
     }
 

@@ -112,13 +112,10 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     // spilling is already a degenerate case and so it is unclear if this is
                     // worth optimising for, e.g. by keeping a null mask around
 
-                    // TODO: fix this
-                    let non_null_mask = vec![true; keys.len()];
                     spilled.extend_from_dictionary(
                         keys.as_slice(),
                         dict_offsets,
                         dict_values,
-                        &non_null_mask,
                     )?;
                 }
 

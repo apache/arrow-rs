@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::max;
+// use arrow::compute::max;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use arrow_buffer::Buffer;
@@ -172,11 +172,12 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
+
                 let start = nulls.len();
                 let levels_read = decoder.read(nulls, num_levels)?;
 
                 let values_read = count_set_bits(nulls.as_slice(), start..start + levels_read);
-                Ok((values_read, levels_read, 0))
+                Ok((values_read, levels_read, start))
             }
             _ => unreachable!("inconsistent null mask"),
         }
@@ -218,11 +219,14 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
-                let values_read = count_set_bits(nulls.as_slice(), 0..num_levels);
+                println!("start_offset: {}", start_offset);
+                println!("num_levels: {}", num_levels);
+                println!("levels.len(): {}", nulls.len());
+                let values_read = count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
                 debug_assert_eq!(non_null_mask.len(), values_read);
 
                 let mut null_mask_iter = 0;
-                for i in 0..num_levels {
+                for i in start_offset..start_offset + num_levels {
                     if nulls.get_bit(i) {
                         debug_assert!(null_mask_iter < non_null_mask.len());
                         if !non_null_mask[null_mask_iter] {
@@ -232,7 +236,7 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                     }
                 }
 
-                let values_read = count_set_bits(nulls.as_slice(), 0..num_levels);
+                let values_read = count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
 
                 Ok((values_read, num_levels))
             }

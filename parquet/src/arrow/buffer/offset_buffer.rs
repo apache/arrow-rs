@@ -165,21 +165,21 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     /// `&dict_values[dict_offsets[key]..dict_offsets[key+1]]`
     ///
     /// Note: This will validate offsets are valid
-    pub fn extend_from_dictionary<K: ArrowNativeType, V: ArrowNativeType>(
+    pub fn extend_from_dictionary_with_non_null_mask<K: ArrowNativeType, V: ArrowNativeType>(
         &mut self,
         keys: &[K],
         dict_offsets: &[V],
         dict_values: &[u8],
         non_null_mask: &[bool],
     ) -> Result<Vec<bool>> {
-        // debug_assert_eq!(keys.len(), non_null_mask.len());
-
         let mut non_null_mask_partial = Vec::with_capacity(keys.len());
         let mut skipped = 0;
         for (i, key) in keys.iter().enumerate() {
             let index = key.as_usize();
             let offset_index = index - skipped;
 
+            println!("index: {index}, offset_index: {offset_index}");
+            println!("non_null_mask: {:?}", non_null_mask.len());
             debug_assert!(index < non_null_mask.len());
             if !non_null_mask[index] {
                 non_null_mask_partial.push(false);
@@ -202,6 +202,35 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             self.try_push(&dict_values[start_offset..end_offset], false)?;
         }
         Ok(non_null_mask_partial)
+    }
+
+    /// Extends this buffer with a list of keys
+    ///
+    /// For each value `key` in `keys` this will insert
+    /// `&dict_values[dict_offsets[key]..dict_offsets[key+1]]`
+    ///
+    /// Note: This will validate offsets are valid
+    pub fn extend_from_dictionary<K: ArrowNativeType, V: ArrowNativeType>(
+        &mut self,
+        keys: &[K],
+        dict_offsets: &[V],
+        dict_values: &[u8],
+    ) -> Result<()> {
+        for key in keys {
+            let index = key.as_usize();
+            if index + 1 >= dict_offsets.len() {
+                return Err(general_err!(
+                    "dictionary key beyond bounds of dictionary: 0..{}",
+                    dict_offsets.len().saturating_sub(1)
+                ));
+            }
+            let start_offset = dict_offsets[index].as_usize();
+            let end_offset = dict_offsets[index + 1].as_usize();
+
+            // Dictionary values are verified when decoding dictionary page
+            self.try_push(&dict_values[start_offset..end_offset], false)?;
+        }
+        Ok(())
     }
 
     /// Validates that `&self.values[start_offset..]` is a valid UTF-8 sequence
@@ -300,13 +329,11 @@ mod tests {
         let mut buffer = OffsetBuffer::<i64>::default();
         buffer.try_push("hello".as_bytes(), true).unwrap();
         buffer.try_push("bar".as_bytes(), true).unwrap();
-        let non_null_mask = vec![true; 4];
         buffer
             .extend_from_dictionary(
                 &[1, 3, 0, 2],
                 &[0, 2, 4, 5, 6],
                 "abcdef".as_bytes(),
-                &non_null_mask,
             )
             .unwrap();
 
