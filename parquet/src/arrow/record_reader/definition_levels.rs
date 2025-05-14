@@ -170,10 +170,77 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 assert_eq!(self.max_level, 1);
 
                 let start = nulls.len();
+                println!("nulls1: {:?}", nulls);
                 let levels_read = decoder.read(nulls, num_levels)?;
+                println!("nulls2: {:?}", nulls);
 
                 let values_read = count_set_bits(nulls.as_slice(), start..start + levels_read);
                 Ok((values_read, levels_read))
+            }
+            _ => unreachable!("inconsistent null mask"),
+        }
+    }
+
+    fn update_def_levels(
+        &mut self,
+        writer: &mut Self::Buffer,
+        num_levels: usize,
+        non_null_mask: Vec<bool>,
+    ) -> Result<(usize, usize)> {
+        match (&mut writer.inner, &mut self.decoder) {
+            (
+                BufferInner::Full {
+                    levels,
+                    nulls,
+                    max_level,
+                },
+                MaybePacked::Fallback(decoder),
+            ) => {
+                todo!("")
+                // assert_eq!(self.max_level, *max_level);
+
+                // let start = levels.len();
+                // let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
+
+                // nulls.reserve(levels_read);
+                // for i in &levels[start..] {
+                //     nulls.append(i == max_level);
+                // }
+
+                // Ok((values_read, levels_read))
+            }
+            (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
+                assert_eq!(self.max_level, 1);
+
+                let start = nulls.len();
+                // let levels_read = decoder.read(nulls, num_levels)?;
+                let values_read = count_set_bits(nulls.as_slice(), 0..num_levels);
+                debug_assert_eq!(non_null_mask.len(), values_read);
+
+                // println!("nulls3: {:?}", nulls);
+                // // let levels_read = decoder.read(nulls, num_levels)?;
+                // // println!("nulls4: {:?}", nulls);
+
+                // let values_read = count_set_bits(nulls.as_slice(), 0..num_levels);
+                // println!("values_read3: {:?}", values_read);
+                // debug_assert_eq!(non_null_mask.len(), values_read);
+                // println!("is_null_mask: {:?}", non_null_mask);
+
+                let mut null_mask_iter = 0;
+                for i in 0..num_levels {
+                    if nulls.get_bit(i) {
+                        debug_assert!(null_mask_iter < non_null_mask.len());
+                        if !non_null_mask[null_mask_iter] {
+                            nulls.set_bit(i, false);
+                        }
+                        null_mask_iter += 1;
+                    }
+                }
+
+                let values_read = count_set_bits(nulls.as_slice(), 0..num_levels);
+                println!("values_read4: {:?}", values_read);
+
+                Ok((values_read, num_levels))
             }
             _ => unreachable!("inconsistent null mask"),
         }

@@ -81,6 +81,13 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
         num_levels: usize,
     ) -> Result<(usize, usize)>;
 
+    fn update_def_levels(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_levels: usize,
+        is_null_mask: Vec<bool>,
+    ) -> Result<(usize, usize)>;
+
     /// Skips over `num_levels` definition levels
     ///
     /// Returns the number of values skipped, and the number of levels skipped
@@ -135,6 +142,11 @@ pub trait ColumnValueDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     ///
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize>;
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>>;
 
     /// Skips over `num_values` values
     ///
@@ -253,6 +265,15 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         Ok(read)
     }
 
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>> {
+        let len = self.read(out, num_values)?;
+        Ok(vec![true; len])
+    }
+
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         let encoding = self
             .current_encoding
@@ -338,7 +359,17 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
 
         let iter = out.iter().skip(start);
         let values_read = iter.filter(|x| **x == self.max_level).count();
+        println!("here");
         Ok((values_read, levels_read))
+    }
+
+    fn update_def_levels(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_levels: usize,
+        is_null_mask: Vec<bool>,
+    ) -> Result<(usize, usize)> {
+        todo!("")
     }
 
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {

@@ -1061,6 +1061,7 @@ mod tests {
         ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
         RowSelector,
     };
+    use crate::arrow::decoder::DefaultValueForInvalidUtf8;
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ColumnValueDecoderOptions, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
@@ -4478,8 +4479,9 @@ mod tests {
         // load metadata once
         let meta = ArrowReaderMetadata::load(
             &file,
-            ArrowReaderOptions::new()
-                .with_column_value_decoder_options(ColumnValueDecoderOptions::new(skip_validation)),
+            ArrowReaderOptions::new().with_column_value_decoder_options(
+                ColumnValueDecoderOptions::new(skip_validation, DefaultValueForInvalidUtf8::None),
+            ),
         )
         .unwrap();
         // create two readers, a and b, from the same underlying file

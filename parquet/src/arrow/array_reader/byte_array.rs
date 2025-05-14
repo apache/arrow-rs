@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
-use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
+use crate::arrow::decoder::{DefaultValueForInvalidUtf8, DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::arrow::ColumnValueDecoderOptions;
@@ -36,6 +36,7 @@ use arrow_buffer::i256;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
+use std::default;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
@@ -171,8 +172,10 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 /// A [`ColumnValueDecoder`] for variable length byte arrays
 struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
     dict: Option<OffsetBuffer<I>>,
+    non_null_mask: Option<Vec<bool>>,
     decoder: Option<ByteArrayDecoder>,
     validate_utf8: bool,
+    default_value: DefaultValueForInvalidUtf8,
 }
 
 impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
@@ -182,8 +185,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
         Self {
             dict: None,
+            non_null_mask: None,
             decoder: None,
             validate_utf8,
+            default_value: DefaultValueForInvalidUtf8::default(),
         }
     }
 
@@ -193,8 +198,10 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
 
         Self {
             dict: None,
+            non_null_mask: None,
             decoder: None,
             validate_utf8,
+            default_value: options.default_value,
         }
     }
 
@@ -221,9 +228,12 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             num_values as usize,
             Some(num_values as usize),
             self.validate_utf8,
+            self.default_value.clone(),
         );
-        decoder.read(&mut buffer, usize::MAX)?;
+        let non_null_mask = decoder.read(&mut buffer, usize::MAX)?;
+
         self.dict = Some(buffer);
+        self.non_null_mask = Some(non_null_mask);
         Ok(())
     }
 
@@ -240,6 +250,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             num_levels,
             num_values,
             self.validate_utf8,
+            self.default_value.clone(),
         )?);
         Ok(())
     }
@@ -250,7 +261,20 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             .as_mut()
             .ok_or_else(|| general_err!("no decoder set"))?;
 
-        decoder.read(out, num_values, self.dict.as_ref())
+        let non_null_mask = decoder.read(out, num_values, self.dict.as_ref(), self.non_null_mask.as_ref())?;
+        println!("non_null_mask14: {:?}", non_null_mask);
+        Ok(non_null_mask.len())
+    }
+
+    fn read_with_null_mask(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<Vec<bool>> {
+        let decoder = self
+        .decoder
+        .as_mut()
+        .ok_or_else(|| general_err!("no decoder set"))?;
+
+        let non_null_mask = decoder.read(out, num_values, self.dict.as_ref(), self.non_null_mask.as_ref())?;
+        println!("non_null_mask24: {:?}", non_null_mask);
+        Ok(non_null_mask)
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
@@ -278,6 +302,7 @@ impl ByteArrayDecoder {
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
+        default_value: DefaultValueForInvalidUtf8,
     ) -> Result<Self> {
         let decoder = match encoding {
             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
@@ -285,6 +310,7 @@ impl ByteArrayDecoder {
                 num_levels,
                 num_values,
                 validate_utf8,
+                default_value,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values),
@@ -312,17 +338,35 @@ impl ByteArrayDecoder {
         out: &mut OffsetBuffer<I>,
         len: usize,
         dict: Option<&OffsetBuffer<I>>,
-    ) -> Result<usize> {
+        non_null_mask: Option<&Vec<bool>>,
+    ) -> Result<Vec<bool>> {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
                 let dict =
                     dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
-                d.read(out, dict, len)
+                let non_null_mask = non_null_mask
+                    .ok_or_else(|| general_err!("missing non-null mask for column"))?;
+
+
+                println!("dict len: {:?}", dict.len());
+
+                // TODO:
+                d.read(out, dict, non_null_mask, len)
+                // println!("dic len: {}", len);
+                // // debug_assert_eq!(len, non_null_mask.len());
+                // Ok(non_null_mask.to_owned())
+
             }
-            ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
-            ByteArrayDecoder::DeltaByteArray(d) => d.read(out, len),
+            ByteArrayDecoder::DeltaLength(d) => {
+                let len = d.read(out, len)?;
+                Ok(vec![false; len])
+            }
+            ByteArrayDecoder::DeltaByteArray(d) => {
+                let len  = d.read(out, len)?;
+                Ok(vec![false; len])
+            }
         }
     }
 
@@ -351,6 +395,7 @@ pub struct ByteArrayDecoderPlain {
     buf: Bytes,
     offset: usize,
     validate_utf8: bool,
+    default_value: DefaultValueForInvalidUtf8,
 
     /// This is a maximum as the null count is not always known, e.g. value data from
     /// a v1 data page
@@ -363,12 +408,14 @@ impl ByteArrayDecoderPlain {
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
+        default_value: DefaultValueForInvalidUtf8,
     ) -> Self {
         Self {
             buf,
             validate_utf8,
             offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
+            default_value,
         }
     }
 
@@ -376,7 +423,7 @@ impl ByteArrayDecoderPlain {
         &mut self,
         output: &mut OffsetBuffer<I>,
         len: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<bool>> {
         let initial_values_length = output.values.len();
 
         let to_read = len.min(self.max_remaining_values);
@@ -384,7 +431,7 @@ impl ByteArrayDecoderPlain {
 
         let remaining_bytes = self.buf.len() - self.offset;
         if remaining_bytes == 0 {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
         let estimated_bytes = remaining_bytes
@@ -397,12 +444,14 @@ impl ByteArrayDecoderPlain {
         let mut read = 0;
 
         let buf = self.buf.as_ref();
+        let mut non_null_mask = vec![true; to_read];
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes);
+            println!("len: {}", len);
 
             let start_offset = self.offset + 4;
             let end_offset = start_offset + len as usize;
@@ -410,17 +459,27 @@ impl ByteArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
+            // let default_value = "default_value".as_bytes();
+            let is_null = output.try_push_v2(&buf[start_offset..end_offset], self.validate_utf8, &self.default_value)?;
+            println!("is_null: {}", is_null);
+
+            if is_null {
+                non_null_mask[read] = false;
+            }
 
             self.offset = end_offset;
             read += 1;
         }
+
+        println!("is_null_mask10: {:?}", non_null_mask);
+
         self.max_remaining_values -= to_read;
 
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;
         }
-        Ok(to_read)
+
+        Ok(non_null_mask)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -586,15 +645,22 @@ impl ByteArrayDecoderDictionary {
         &mut self,
         output: &mut OffsetBuffer<I>,
         dict: &OffsetBuffer<I>,
+        non_null_mask: &Vec<bool>,
         len: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<bool>> {
         // All data must be NULL
         if dict.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
-        self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
+        // println!("dict: {:?}", dict);
+        println!("len: {:?}", len);
+        println!("non_null_mask: {:?}", non_null_mask.len());
+
+        self.decoder.read_with_non_null_mask(len, |keys| {
+            println!("keys.len(): {}", keys.len());
+            println!("non_null_mask.len(): {}", non_null_mask.len());
+            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice(), non_null_mask.as_slice())
         })
     }
 

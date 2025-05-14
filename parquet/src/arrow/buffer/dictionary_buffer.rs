@@ -111,7 +111,15 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     // likely sub-optimal, as we would prefer zero length null "slots", but
                     // spilling is already a degenerate case and so it is unclear if this is
                     // worth optimising for, e.g. by keeping a null mask around
-                    spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
+
+                    // TODO: fix this
+                    let non_null_mask = vec![true; keys.len()];
+                    spilled.extend_from_dictionary(
+                        keys.as_slice(),
+                        dict_offsets,
+                        dict_values,
+                        &non_null_mask,
+                    )?;
                 }
 
                 *self = Self::Values { values: spilled };

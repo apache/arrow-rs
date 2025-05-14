@@ -212,6 +212,11 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         decoder.read(out, num_values, self.dict.as_ref())
     }
 
+    fn read_with_null_mask(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<Vec<bool>> {
+        let len = self.read(out, num_values)?;
+        Ok(vec![true; len])
+    }
+
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         let decoder = self
             .decoder

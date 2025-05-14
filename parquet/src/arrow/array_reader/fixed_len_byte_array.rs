@@ -444,6 +444,11 @@ impl ColumnValueDecoder for ValueDecoder {
         }
     }
 
+    fn read_with_null_mask(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<Vec<bool>> {
+        let len = self.read(out, num_values)?;
+        Ok(vec![true; len])
+    }
+
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {

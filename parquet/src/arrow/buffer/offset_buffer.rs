@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
+use crate::arrow::decoder::DefaultValueForInvalidUtf8;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use crate::util::utf8::check_valid_utf8;
@@ -81,6 +82,107 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         Ok(())
     }
 
+    pub fn try_push_v2(
+        &mut self,
+        data: &[u8],
+        validate_utf8: bool,
+        default_value: &DefaultValueForInvalidUtf8,
+    ) -> Result<bool> {
+        if validate_utf8 {
+            if let Some(&b) = data.first() {
+                println!("first byte: {}", b as i8);
+
+                // A valid code-point iff it does not start with 0b10xxxxxx
+                // Bit-magic taken from `std::str::is_char_boundary`
+                if (b as i8) < -0x40 {
+                    println!("not valid");
+
+                    match default_value {
+                        DefaultValueForInvalidUtf8::Default(value) => {
+                            if check_valid_utf8(value.as_bytes()).is_ok() {
+                                self.values.extend_from_slice(value.as_bytes());
+                            } else {
+                                return Err(ParquetError::General(
+                                    "encountered non UTF-8 data".to_string(),
+                                ));
+                            }
+
+                            // let index_offset = I::from_usize(self.values.len())
+                            // .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+
+                            // self.offsets.push(index_offset);
+                            return Ok(false);
+                        }
+                        DefaultValueForInvalidUtf8::Null => {
+                            let index_offset =
+                                I::from_usize(self.values.len()).ok_or_else(|| {
+                                    general_err!("index overflow decoding byte array")
+                                })?;
+
+                            self.offsets.push(index_offset);
+                            return Ok(true);
+                        }
+                        DefaultValueForInvalidUtf8::None => {
+                            return Err(ParquetError::General(
+                                "encountered non UTF-8 data".to_string(),
+                            ));
+                        }
+                    }
+
+                    // if let Some(default_value) = default_value {
+                    //     // let default_data = b"default_value";
+
+                    //     if check_valid_utf8(default_value).is_ok() {
+                    //         self.values.extend_from_slice(default_value);
+                    //     }
+
+                    //     let index_offset = I::from_usize(self.values.len())
+                    //         .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+
+                    //     self.offsets.push(index_offset);
+                    //     return Ok(())
+                    // } else {
+                    //     return Err(ParquetError::General(
+                    //         "encountered non UTF-8 data".to_string(),
+                    //     ));
+                    // }
+                }
+            }
+        }
+        println!("valid check again");
+
+        let mut is_null = false;
+        if check_valid_utf8(data).is_ok() {
+            self.values.extend_from_slice(data);
+        } else {
+            println!("not valid");
+
+            match default_value {
+                DefaultValueForInvalidUtf8::Default(value) => {
+                    if check_valid_utf8(value.as_bytes()).is_ok() {
+                        self.values.extend_from_slice(value.as_bytes());
+                    } else {
+                        return Err(ParquetError::General(
+                            "encountered non UTF-8 data".to_string(),
+                        ));
+                    }
+                }
+                DefaultValueForInvalidUtf8::Null => return Ok(true),
+                DefaultValueForInvalidUtf8::None => {
+                    return Err(ParquetError::General(
+                        "encountered non UTF-8 data".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let index_offset = I::from_usize(self.values.len())
+            .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+
+        self.offsets.push(index_offset);
+        Ok(is_null)
+    }
+
     /// Extends this buffer with a list of keys
     ///
     /// For each value `key` in `keys` this will insert
@@ -92,9 +194,25 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         keys: &[K],
         dict_offsets: &[V],
         dict_values: &[u8],
-    ) -> Result<()> {
-        for key in keys {
-            let index = key.as_usize();
+        non_null_mask: &[bool],
+    ) -> Result<Vec<bool>> {
+        // debug_assert_eq!(keys.len(), non_null_mask.len());
+
+        let mut non_null_mask_partial = Vec::with_capacity(keys.len());
+        let mut skipped = 0;
+        for (i, key) in keys.iter().enumerate() {
+            let index = key.as_usize() - skipped;
+
+            debug_assert!(index < non_null_mask.len());
+            if !non_null_mask[index] {
+                non_null_mask_partial.push(false);
+                skipped += 1;
+                continue;
+            }
+
+            non_null_mask_partial.push(true);
+
+            println!("i: {i}, index: {:?}", index);
             if index + 1 >= dict_offsets.len() {
                 return Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
@@ -107,7 +225,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             // Dictionary values are verified when decoding dictionary page
             self.try_push(&dict_values[start_offset..end_offset], false)?;
         }
-        Ok(())
+        Ok(non_null_mask_partial)
     }
 
     /// Validates that `&self.values[start_offset..]` is a valid UTF-8 sequence
@@ -146,6 +264,7 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
         levels_read: usize,
         valid_mask: &[u8],
     ) {
+        println!("offset: {:?}", self.offsets);
         assert_eq!(self.offsets.len(), read_offset + values_read + 1);
         self.offsets
             .resize(read_offset + levels_read + 1, I::default());
@@ -206,8 +325,14 @@ mod tests {
         let mut buffer = OffsetBuffer::<i64>::default();
         buffer.try_push("hello".as_bytes(), true).unwrap();
         buffer.try_push("bar".as_bytes(), true).unwrap();
+        let non_null_mask = vec![true; 4];
         buffer
-            .extend_from_dictionary(&[1, 3, 0, 2], &[0, 2, 4, 5, 6], "abcdef".as_bytes())
+            .extend_from_dictionary(
+                &[1, 3, 0, 2],
+                &[0, 2, 4, 5, 6],
+                "abcdef".as_bytes(),
+                &non_null_mask,
+            )
             .unwrap();
 
         let array = buffer.into_array(None, ArrowType::LargeUtf8);

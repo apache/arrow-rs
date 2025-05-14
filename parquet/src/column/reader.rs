@@ -210,6 +210,8 @@ where
         let mut total_levels_read = 0;
         let mut total_values_read = 0;
 
+        // let mut total_null_mask = Vec::new();
+
         while total_records_read < max_records && self.has_next()? {
             let remaining_records = max_records - total_records_read;
             let remaining_levels = self.num_buffered_values - self.num_decoded_values;
@@ -243,6 +245,8 @@ where
                 }
             };
 
+            println!("start read def level");
+
             let values_to_read = match self.def_level_decoder.as_mut() {
                 Some(reader) => {
                     let out = def_levels
@@ -250,6 +254,7 @@ where
                         .ok_or_else(|| general_err!("must specify definition levels"))?;
 
                     let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
+                    println!("values_read: {values_read}, levels_read: {levels_read}");
 
                     if levels_read != levels_to_read {
                         return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
@@ -260,13 +265,54 @@ where
                 None => levels_to_read,
             };
 
-            let values_read = self.values_decoder.read(values, values_to_read)?;
+            // let dl = def_levels
+            //             .as_ref()
+            //             .ok_or_else(|| general_err!("must specify definition levels"))?;
+
+            // dl.
+
+            println!("values_to_read: {values_to_read}");
+            let non_null_mask = self
+                .values_decoder
+                .read_with_null_mask(values, values_to_read)?;
+
+            let values_read = non_null_mask.len();
 
             if values_read != values_to_read {
                 return Err(general_err!(
-                    "insufficient values read from column - expected: {values_to_read}, got: {values_read}",
+                    "insufficient values read from column - expected: {values_to_read}, got: {}",
+                    values_read
                 ));
             }
+
+            debug_assert_eq!(non_null_mask.len(), values_read);
+            let values_to_read = non_null_mask.iter().filter(|&&x| x).count();
+
+            let values_read = match self.def_level_decoder.as_mut() {
+                Some(reader) => {
+                    let out = def_levels
+                        .as_mut()
+                        .ok_or_else(|| general_err!("must specify definition levels"))?;
+
+                    let (values_read, levels_read) =
+                        reader.update_def_levels(out, levels_to_read, non_null_mask)?;
+                    println!("values_read: {values_read}, levels_read: {levels_read}");
+
+                    if levels_read != levels_to_read {
+                        return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
+                    }
+
+                    values_read
+                }
+                None => levels_to_read,
+            };
+
+            debug_assert_eq!(values_read, values_to_read);
+
+            // total_null_mask.extend(is_null_mask);
+
+            println!("levels_to_read: {levels_to_read}");
+            println!("values_read: {values_read}");
 
             self.num_decoded_values += levels_to_read;
             total_records_read += records_read;
@@ -274,6 +320,7 @@ where
             total_values_read += values_read;
         }
 
+        // debug_assert_eq!(total_null_mask.len(), total_levels_read);
         Ok((total_records_read, total_values_read, total_levels_read))
     }
 

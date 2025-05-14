@@ -27,6 +27,7 @@ use bytes::Bytes;
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
 use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
+use crate::arrow::decoder::DefaultValueForInvalidUtf8;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::arrow::ColumnValueDecoderOptions;
@@ -213,6 +214,7 @@ struct DictionaryDecoder<K, V> {
     decoder: Option<MaybeDictionaryDecoder>,
 
     validate_utf8: bool,
+    default_value: DefaultValueForInvalidUtf8,
 
     value_type: ArrowType,
 
@@ -242,6 +244,7 @@ where
             validate_utf8,
             value_type,
             phantom: Default::default(),
+            default_value: DefaultValueForInvalidUtf8::None,
         }
     }
 
@@ -263,6 +266,7 @@ where
             validate_utf8,
             value_type,
             phantom: Default::default(),
+            default_value: options.default_value,
         }
     }
 
@@ -289,7 +293,8 @@ where
 
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::default();
-        let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
+        let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8, self.default_value.clone());
+        
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
@@ -320,6 +325,7 @@ where
                 num_levels,
                 num_values,
                 self.validate_utf8,
+                self.default_value.clone()
             )?),
         };
 
@@ -330,7 +336,8 @@ where
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => {
-                decoder.read(out.spill_values()?, num_values, None)
+                let is_null_mask = decoder.read(out.spill_values()?, num_values, None, None)?;
+                Ok(is_null_mask.len())
             }
             MaybeDictionaryDecoder::Dict {
                 decoder,
@@ -378,9 +385,71 @@ where
                         let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
-                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
+                        let non_null_mask = vec![true; len];
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values, &non_null_mask)?;
                         *max_remaining_values -= len;
                         Ok(len)
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_with_null_mask(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<Vec<bool>> {
+        match self.decoder.as_mut().expect("decoder set") {
+            MaybeDictionaryDecoder::Fallback(decoder) => {
+                decoder.read(out.spill_values()?, num_values, None, None)
+            }
+            MaybeDictionaryDecoder::Dict {
+                decoder,
+                max_remaining_values,
+            } => {
+                let len = num_values.min(*max_remaining_values);
+
+                let dict = self
+                    .dict
+                    .as_ref()
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
+                assert_eq!(dict.data_type(), &self.value_type);
+
+                if dict.is_empty() {
+                    return Ok(vec![]); // All data must be NULL
+                }
+
+                match out.as_keys(dict) {
+                    Some(keys) => {
+                        // Happy path - can just copy keys
+                        // Keys will be validated on conversion to arrow
+
+                        // TODO: Push vec into decoder (#5177)
+                        let start = keys.len();
+                        keys.resize(start + len, K::default());
+                        let len = decoder.get_batch(&mut keys[start..])?;
+                        keys.truncate(start + len);
+                        *max_remaining_values -= len;
+                        Ok(vec![true; len])
+                    }
+                    None => {
+                        // Sad path - need to recompute dictionary
+                        //
+                        // This either means we crossed into a new column chunk whilst
+                        // reading this batch, or encountered non-dictionary encoded data
+                        let values = out.spill_values()?;
+                        let mut keys = vec![K::default(); len];
+                        let len = decoder.get_batch(&mut keys)?;
+
+                        assert_eq!(dict.data_type(), &self.value_type);
+
+                        let data = dict.to_data();
+                        let dict_buffers = data.buffers();
+                        let dict_offsets = dict_buffers[0].typed_data::<V>();
+                        let dict_values = dict_buffers[1].as_slice();
+
+                        let non_null_mask = vec![true; len];
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values, &non_null_mask)?;
+                        *max_remaining_values -= len;
+                        Ok(vec![true; len])
                     }
                 }
             }

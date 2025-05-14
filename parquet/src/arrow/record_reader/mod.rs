@@ -244,17 +244,20 @@ where
                 &mut self.values,
             )?;
 
+        println!("values_read: {values_read}, levels_read: {levels_read}");
         if values_read < levels_read {
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
                 general_err!("Definition levels should exist when data is less than levels!")
             })?;
 
-            self.values.pad_nulls(
-                self.num_values,
-                values_read,
-                levels_read,
-                def_levels.nulls().as_slice(),
-            );
+            let null_slice = def_levels.nulls().as_slice();
+            println!("num values: {}", self.num_values);
+            println!("values_read: {values_read}");
+            println!("levels_read: {levels_read}");
+            println!("null_slice: {null_slice:?}");
+
+            self.values
+                .pad_nulls(self.num_values, values_read, levels_read, null_slice);
         }
 
         self.num_records += records_read;

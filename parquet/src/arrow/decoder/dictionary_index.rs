@@ -84,7 +84,44 @@ impl DictIndexDecoder {
             values_read += to_read;
             self.max_remaining_values -= to_read;
         }
+
         Ok(values_read)
+    }
+
+    pub fn read_with_non_null_mask<F: FnMut(&[i32]) -> Result<Vec<bool>>>(
+        &mut self,
+        len: usize,
+        mut f: F,
+    ) -> Result<Vec<bool>> {
+        let mut values_read = 0;
+        let mut values_read_non_null_mask = vec![];
+
+        while values_read != len && self.max_remaining_values != 0 {
+            if self.index_offset == self.index_buf_len {
+                // We've consumed the entire index buffer so we need to reload it before proceeding
+                let read = self.decoder.get_batch(self.index_buf.as_mut())?;
+                if read == 0 {
+                    break;
+                }
+                self.index_buf_len = read;
+                self.index_offset = 0;
+            }
+
+            let to_read = (len - values_read)
+                .min(self.index_buf_len - self.index_offset)
+                .min(self.max_remaining_values);
+
+            let to_read_non_null_mask =
+                f(&self.index_buf[self.index_offset..self.index_offset + to_read])?;
+            debug_assert_eq!(to_read_non_null_mask.len(), to_read);
+            values_read_non_null_mask.extend(to_read_non_null_mask);
+
+            self.index_offset += to_read;
+            values_read += to_read;
+            self.max_remaining_values -= to_read;
+        }
+
+        Ok(values_read_non_null_mask)
     }
 
     /// Skip up to `to_skip` values, returning the number of values skipped
