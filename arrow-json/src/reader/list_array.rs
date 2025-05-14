@@ -29,6 +29,7 @@ pub struct ListArrayDecoder<O> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
     phantom: PhantomData<O>,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
 }
 
@@ -37,6 +38,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         data_type: DataType,
         coerce_primitive: bool,
         strict_mode: bool,
+        ignore_type_conflicts: bool,
         is_nullable: bool,
         struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
@@ -49,6 +51,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             field.data_type().clone(),
             coerce_primitive,
             strict_mode,
+            ignore_type_conflicts,
             field.is_nullable(),
             struct_mode,
         )?;
@@ -57,6 +60,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             data_type,
             decoder,
             phantom: Default::default(),
+            ignore_type_conflicts,
             is_nullable,
         })
     }
@@ -80,6 +84,10 @@ impl<O: OffsetSizeTrait> ArrayDecoder for ListArrayDecoder<O> {
                     end_idx
                 }
                 (TapeElement::Null, Some(nulls)) => {
+                    nulls.append(false);
+                    *p + 1
+                }
+                (_, Some(nulls)) if self.ignore_type_conflicts => {
                     nulls.append(false);
                     *p + 1
                 }
