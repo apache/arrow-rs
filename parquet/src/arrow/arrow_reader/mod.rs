@@ -875,8 +875,15 @@ impl Iterator for ParquetRecordBatchReader {
 
         let mut current_selections: Vec<RowSelection> = vec![];
         while current_selected < self.batch_size {
-            let Some(selection) = self.selection.as_mut() else {
-                break;
+            let selection: &mut VecDeque<RowSelector> = match self.selection.as_mut() {
+                Some(s) => s,
+                None => {
+                    self.selection = Some(
+                        std::iter::once(RowSelector::select(self.batch_size))
+                            .collect::<VecDeque<_>>(),
+                    );
+                    self.selection.as_mut().unwrap()
+                }
             };
 
             let Some(mut raw_sel) = take_next_selection(selection, self.batch_size) else {
@@ -943,20 +950,10 @@ impl Iterator for ParquetRecordBatchReader {
                     continue;
                 }
 
-                let read = match self.array_reader.read_records(selector.row_count) {
+                match self.array_reader.read_records(selector.row_count) {
                     Ok(read) => read,
                     Err(e) => return Some(Err(e.into())),
                 };
-
-                if read != selector.row_count {
-                    return Some(Err(general_err!(
-                        "failed to read rows, expected {}, got {}",
-                        selector.row_count,
-                        read
-                    )
-                        .into()));
-                }
-
             }
         }
 
@@ -1052,52 +1049,7 @@ impl ParquetRecordBatchReader {
             selection: selection.map(|s| s.trim().into()),
         }
     }
-
-
-    /// Take a selection, and return the new selection where the rows are filtered by the predicate.
-    fn build_predicate_filter(
-        &mut self,
-        mut selection: RowSelection,
-    ) -> Result<RowSelection, ArrowError> {
-        match &mut self.row_filter {
-            None => Ok(selection),
-            Some(filter) => {
-                // debug_assert_eq!(
-                //     self.predicate_readers.len(),
-                //     filter.predicates.len(),
-                //     "predicate readers and predicates should have the same length"
-                // );
-
-                for (predicate, reader) in filter
-                    .predicates
-                    .iter_mut()
-                    .zip(self.filter_readers.iter_mut())
-                {
-                    let array = read_selection(reader.as_mut(), &selection)?;
-                    let batch = RecordBatch::from(array.as_struct_opt().ok_or_else(|| {
-                        general_err!("Struct array reader should return struct array")
-                    })?);
-                    let input_rows = batch.num_rows();
-                    let predicate_filter = predicate.evaluate(batch)?;
-                    if predicate_filter.len() != input_rows {
-                        return Err(ArrowError::ParquetError(format!(
-                            "ArrowPredicate predicate returned {} rows, expected {input_rows}",
-                            predicate_filter.len()
-                        )));
-                    }
-                    let predicate_filter = match predicate_filter.null_count() {
-                        0 => predicate_filter,
-                        _ => prep_null_mask_filter(&predicate_filter),
-                    };
-                    let raw = RowSelection::from_filters(&[predicate_filter]);
-                    selection = selection.and_then(&raw);
-                }
-                Ok(selection)
-            }
-        }
-    }
 }
-
 /// Returns `true` if `selection` is `None` or selects some rows
 pub(crate) fn selects_any(selection: Option<&RowSelection>) -> bool {
     selection.map(|x| x.selects_any()).unwrap_or(true)

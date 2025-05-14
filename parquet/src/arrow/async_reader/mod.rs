@@ -39,10 +39,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{build_array_reader, RowGroups};
-use crate::arrow::arrow_reader::{
-    apply_range, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
-    ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
-};
+use crate::arrow::arrow_reader::{apply_range, selects_any, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection, RowSelector};
 use crate::arrow::ProjectionMask;
 
 use crate::bloom_filter::{
@@ -613,6 +610,10 @@ where
             rest
         }).or_else(|| Some(projection.clone()));
 
+
+        if selection.is_none() {
+            selection =  Some(RowSelection::from(vec![RowSelector::select(row_group.row_count)]));
+        }
 
         // Compute the number of rows in the selection before applying limit and offset
         let rows_before = selection
