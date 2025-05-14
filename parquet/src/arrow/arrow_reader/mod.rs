@@ -704,7 +704,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             p
         });
 
-        let project_exclude_filter = predicate_projection.as_ref().map(|p| {
+        let project_exclude_filter = projection_to_cache.as_ref().map(|p| {
             let mut rest = projection.clone();
             rest.subtract(p);
             rest
@@ -968,7 +968,10 @@ impl Iterator for ParquetRecordBatchReader {
 
                 match struct_array {
                     Err(err) => Some(Err(err)),
-                    Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
+                    Ok(e) => {
+                        // println!("e.len() = {}", e.len());
+                        (e.len() > 0).then(|| Ok(RecordBatch::from(e)))
+                    },
                 }
             }
         }
