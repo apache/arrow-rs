@@ -273,7 +273,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
         .ok_or_else(|| general_err!("no decoder set"))?;
 
         let non_null_mask = decoder.read(out, num_values, self.dict.as_ref(), self.non_null_mask.as_ref())?;
-        println!("non_null_mask24: {:?}", non_null_mask);
+        // println!("non_null_mask24: {:?}", non_null_mask);
         Ok(non_null_mask)
     }
 
@@ -349,15 +349,7 @@ impl ByteArrayDecoder {
                 let non_null_mask = non_null_mask
                     .ok_or_else(|| general_err!("missing non-null mask for column"))?;
 
-
-                println!("dict len: {:?}", dict.len());
-
-                // TODO:
                 d.read(out, dict, non_null_mask, len)
-                // println!("dic len: {}", len);
-                // // debug_assert_eq!(len, non_null_mask.len());
-                // Ok(non_null_mask.to_owned())
-
             }
             ByteArrayDecoder::DeltaLength(d) => {
                 let len = d.read(out, len)?;
@@ -451,7 +443,6 @@ impl ByteArrayDecoderPlain {
             }
             let len_bytes: [u8; 4] = buf[self.offset..self.offset + 4].try_into().unwrap();
             let len = u32::from_le_bytes(len_bytes);
-            println!("len: {}", len);
 
             let start_offset = self.offset + 4;
             let end_offset = start_offset + len as usize;
@@ -459,9 +450,7 @@ impl ByteArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            // let default_value = "default_value".as_bytes();
             let is_null = output.try_push_v2(&buf[start_offset..end_offset], self.validate_utf8, &self.default_value)?;
-            println!("is_null: {}", is_null);
 
             if is_null {
                 non_null_mask[read] = false;
@@ -470,8 +459,6 @@ impl ByteArrayDecoderPlain {
             self.offset = end_offset;
             read += 1;
         }
-
-        println!("is_null_mask10: {:?}", non_null_mask);
 
         self.max_remaining_values -= to_read;
 
@@ -653,13 +640,7 @@ impl ByteArrayDecoderDictionary {
             return Ok(vec![]);
         }
 
-        // println!("dict: {:?}", dict);
-        println!("len: {:?}", len);
-        println!("non_null_mask: {:?}", non_null_mask.len());
-
         self.decoder.read_with_non_null_mask(len, |keys| {
-            println!("keys.len(): {}", keys.len());
-            println!("non_null_mask.len(): {}", non_null_mask.len());
             output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice(), non_null_mask.as_slice())
         })
     }

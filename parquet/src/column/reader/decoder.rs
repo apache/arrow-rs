@@ -79,12 +79,13 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
         &mut self,
         out: &mut Self::Buffer,
         num_levels: usize,
-    ) -> Result<(usize, usize)>;
+    ) -> Result<(usize, usize, usize)>;
 
     fn update_def_levels(
         &mut self,
         out: &mut Self::Buffer,
         num_levels: usize,
+        start_offset: usize,
         is_null_mask: Vec<bool>,
     ) -> Result<(usize, usize)>;
 
@@ -350,7 +351,7 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
         &mut self,
         out: &mut Self::Buffer,
         num_levels: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         // TODO: Push vec into decoder (#5177)
         let start = out.len();
         out.resize(start + num_levels, 0);
@@ -359,14 +360,14 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
 
         let iter = out.iter().skip(start);
         let values_read = iter.filter(|x| **x == self.max_level).count();
-        println!("here");
-        Ok((values_read, levels_read))
+        Ok((values_read, levels_read, 0))
     }
 
     fn update_def_levels(
         &mut self,
         out: &mut Self::Buffer,
         num_levels: usize,
+        start_offset: usize,
         is_null_mask: Vec<bool>,
     ) -> Result<(usize, usize)> {
         todo!("")
@@ -381,7 +382,7 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
 
             let to_read = remaining_levels.min(SKIP_BUFFER_SIZE);
             buf.resize(to_read, 0);
-            let (values_read, levels_read) = self.read_def_levels(&mut buf, to_read)?;
+            let (values_read, levels_read, _) = self.read_def_levels(&mut buf, to_read)?;
             if levels_read == 0 {
                 // Reached end of page
                 break;

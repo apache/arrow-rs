@@ -90,13 +90,9 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
     ) -> Result<bool> {
         if validate_utf8 {
             if let Some(&b) = data.first() {
-                println!("first byte: {}", b as i8);
-
                 // A valid code-point iff it does not start with 0b10xxxxxx
                 // Bit-magic taken from `std::str::is_char_boundary`
                 if (b as i8) < -0x40 {
-                    println!("not valid");
-
                     match default_value {
                         DefaultValueForInvalidUtf8::Default(value) => {
                             if check_valid_utf8(value.as_bytes()).is_ok() {
@@ -107,10 +103,12 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
                                 ));
                             }
 
-                            // let index_offset = I::from_usize(self.values.len())
-                            // .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+                            let index_offset =
+                                I::from_usize(self.values.len()).ok_or_else(|| {
+                                    general_err!("index overflow decoding byte array")
+                                })?;
 
-                            // self.offsets.push(index_offset);
+                            self.offsets.push(index_offset);
                             return Ok(false);
                         }
                         DefaultValueForInvalidUtf8::Null => {
@@ -128,35 +126,13 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
                             ));
                         }
                     }
-
-                    // if let Some(default_value) = default_value {
-                    //     // let default_data = b"default_value";
-
-                    //     if check_valid_utf8(default_value).is_ok() {
-                    //         self.values.extend_from_slice(default_value);
-                    //     }
-
-                    //     let index_offset = I::from_usize(self.values.len())
-                    //         .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
-
-                    //     self.offsets.push(index_offset);
-                    //     return Ok(())
-                    // } else {
-                    //     return Err(ParquetError::General(
-                    //         "encountered non UTF-8 data".to_string(),
-                    //     ));
-                    // }
                 }
             }
         }
-        println!("valid check again");
 
-        let mut is_null = false;
         if check_valid_utf8(data).is_ok() {
             self.values.extend_from_slice(data);
         } else {
-            println!("not valid");
-
             match default_value {
                 DefaultValueForInvalidUtf8::Default(value) => {
                     if check_valid_utf8(value.as_bytes()).is_ok() {
@@ -180,7 +156,7 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
 
         self.offsets.push(index_offset);
-        Ok(is_null)
+        Ok(false)
     }
 
     /// Extends this buffer with a list of keys
@@ -201,7 +177,8 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         let mut non_null_mask_partial = Vec::with_capacity(keys.len());
         let mut skipped = 0;
         for (i, key) in keys.iter().enumerate() {
-            let index = key.as_usize() - skipped;
+            let index = key.as_usize();
+            let offset_index = index - skipped;
 
             debug_assert!(index < non_null_mask.len());
             if !non_null_mask[index] {
@@ -212,15 +189,14 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
             non_null_mask_partial.push(true);
 
-            println!("i: {i}, index: {:?}", index);
-            if index + 1 >= dict_offsets.len() {
+            if offset_index + 1 >= dict_offsets.len() {
                 return Err(general_err!(
                     "dictionary key beyond bounds of dictionary: 0..{}",
                     dict_offsets.len().saturating_sub(1)
                 ));
             }
-            let start_offset = dict_offsets[index].as_usize();
-            let end_offset = dict_offsets[index + 1].as_usize();
+            let start_offset = dict_offsets[offset_index].as_usize();
+            let end_offset = dict_offsets[offset_index + 1].as_usize();
 
             // Dictionary values are verified when decoding dictionary page
             self.try_push(&dict_values[start_offset..end_offset], false)?;
@@ -264,7 +240,6 @@ impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
         levels_read: usize,
         valid_mask: &[u8],
     ) {
-        println!("offset: {:?}", self.offsets);
         assert_eq!(self.offsets.len(), read_offset + values_read + 1);
         self.offsets
             .resize(read_offset + levels_read + 1, I::default());
