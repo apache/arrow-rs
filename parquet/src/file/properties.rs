@@ -925,7 +925,7 @@ impl Default for EnabledStatistics {
 /// Controls the bloom filter to be computed by the writer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
-    /// False positive probability should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
+    /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_fpp`].
     ///
@@ -935,7 +935,7 @@ pub struct BloomFilterProperties {
     ///
     /// Setting to a very small number diminishes the value of the filter itself, as the bitset size is
     /// even larger than just storing the whole value. You are also expected to set `ndv` if it can
-    /// be known in advance to largely reduce space usage.
+    /// be known in advance to greatly reduce space usage.
     pub fpp: f64,
     /// Number of distinct values, should be non-negative to be meaningful. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
