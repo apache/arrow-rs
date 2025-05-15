@@ -899,6 +899,7 @@ impl Iterator for ParquetRecordBatchReader {
                         "predicate readers and predicates should have the same length"
                     );
 
+                    let mut final_select = raw_sel.clone();
                     for (predicate, reader) in filter
                         .predicates
                         .iter_mut()
@@ -921,9 +922,13 @@ impl Iterator for ParquetRecordBatchReader {
                             _ => prep_null_mask_filter(&predicate_filter),
                         };
                         let raw = RowSelection::from_filters(&[predicate_filter]);
-                        raw_sel = raw_sel.and_then(&raw);
+                        final_select = final_select.and_then(&raw);
+
+                        if !final_select.selects_any() {
+                            break
+                        }
                     }
-                    Ok(raw_sel)
+                    Ok(final_select)
                 }
             };
 
