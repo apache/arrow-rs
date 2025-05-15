@@ -702,15 +702,13 @@ mod lz4_hadoop_codec {
             input_len -= PREFIX_LEN;
 
             if input_len < expected_compressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "Not enough bytes for Hadoop frame",
                 ));
             }
 
             if output_len < expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "Not enough bytes to hold advertised output",
                 ));
             }
@@ -718,8 +716,7 @@ mod lz4_hadoop_codec {
                 lz4_flex::decompress_into(&input[..expected_compressed_size as usize], output)
                     .map_err(|e| ParquetError::External(Box::new(e)))?;
             if decompressed_size != expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "Unexpected decompressed size",
                 ));
             }
@@ -736,8 +733,7 @@ mod lz4_hadoop_codec {
         if input_len == 0 {
             Ok(read_bytes)
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
+            Err(io::Error::other(
                 "Not all input are consumed",
             ))
         }
