@@ -671,6 +671,7 @@ impl Field {
             ConvertedType::UINT_16 => Field::UShort(value as u16),
             ConvertedType::UINT_32 => Field::UInt(value as u32),
             ConvertedType::DATE => Field::Date(value),
+            ConvertedType::TIME_MILLIS => Field::TimestampMillis(value as i64),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i32(
                 value,
                 descr.type_precision(),
