@@ -353,11 +353,11 @@ impl ByteArrayDecoder {
             }
             ByteArrayDecoder::DeltaLength(d) => {
                 let len = d.read(out, len)?;
-                Ok(vec![false; len])
+                Ok(vec![true; len])
             }
             ByteArrayDecoder::DeltaByteArray(d) => {
                 let len  = d.read(out, len)?;
-                Ok(vec![false; len])
+                Ok(vec![true; len])
             }
         }
     }
@@ -451,7 +451,6 @@ impl ByteArrayDecoderPlain {
             }
 
             let is_null = output.try_push_v2(&buf[start_offset..end_offset], self.validate_utf8, &self.default_value)?;
-
             if is_null {
                 non_null_mask[read] = false;
             }

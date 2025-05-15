@@ -172,7 +172,6 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
-
                 let start = nulls.len();
                 let levels_read = decoder.read(nulls, num_levels)?;
 
@@ -219,10 +218,8 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
-                println!("start_offset: {}", start_offset);
-                println!("num_levels: {}", num_levels);
-                println!("levels.len(): {}", nulls.len());
-                let values_read = count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
+                let values_read =
+                    count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
                 debug_assert_eq!(non_null_mask.len(), values_read);
 
                 let mut null_mask_iter = 0;
@@ -236,7 +233,8 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                     }
                 }
 
-                let values_read = count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
+                let values_read =
+                    count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
 
                 Ok((values_read, num_levels))
             }

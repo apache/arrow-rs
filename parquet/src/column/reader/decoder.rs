@@ -360,7 +360,7 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
 
         let iter = out.iter().skip(start);
         let values_read = iter.filter(|x| **x == self.max_level).count();
-        Ok((values_read, levels_read, 0))
+        Ok((values_read, levels_read, start))
     }
 
     fn update_def_levels(
@@ -370,7 +370,12 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
         start_offset: usize,
         is_null_mask: Vec<bool>,
     ) -> Result<(usize, usize)> {
-        todo!("")
+        let levels_read = out.len() - start_offset;
+        debug_assert_eq!(levels_read, num_levels);
+
+        let iter = out.iter().skip(start_offset);
+        let values_read = iter.filter(|x| **x == self.max_level).count();
+        Ok((values_read, levels_read))
     }
 
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {

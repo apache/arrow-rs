@@ -130,24 +130,28 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             }
         }
 
-        if check_valid_utf8(data).is_ok() {
+        if !validate_utf8 {
             self.values.extend_from_slice(data);
         } else {
-            match default_value {
-                DefaultValueForInvalidUtf8::Default(value) => {
-                    if check_valid_utf8(value.as_bytes()).is_ok() {
-                        self.values.extend_from_slice(value.as_bytes());
-                    } else {
+            if check_valid_utf8(data).is_ok() {
+                self.values.extend_from_slice(data);
+            } else {
+                match default_value {
+                    DefaultValueForInvalidUtf8::Default(value) => {
+                        if check_valid_utf8(value.as_bytes()).is_ok() {
+                            self.values.extend_from_slice(value.as_bytes());
+                        } else {
+                            return Err(ParquetError::General(
+                                "encountered non UTF-8 data".to_string(),
+                            ));
+                        }
+                    }
+                    DefaultValueForInvalidUtf8::Null => return Ok(true),
+                    DefaultValueForInvalidUtf8::None => {
                         return Err(ParquetError::General(
                             "encountered non UTF-8 data".to_string(),
                         ));
                     }
-                }
-                DefaultValueForInvalidUtf8::Null => return Ok(true),
-                DefaultValueForInvalidUtf8::None => {
-                    return Err(ParquetError::General(
-                        "encountered non UTF-8 data".to_string(),
-                    ));
                 }
             }
         }
@@ -178,8 +182,6 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
             let index = key.as_usize();
             let offset_index = index - skipped;
 
-            println!("index: {index}, offset_index: {offset_index}");
-            println!("non_null_mask: {:?}", non_null_mask.len());
             debug_assert!(index < non_null_mask.len());
             if !non_null_mask[index] {
                 non_null_mask_partial.push(false);
@@ -330,11 +332,7 @@ mod tests {
         buffer.try_push("hello".as_bytes(), true).unwrap();
         buffer.try_push("bar".as_bytes(), true).unwrap();
         buffer
-            .extend_from_dictionary(
-                &[1, 3, 0, 2],
-                &[0, 2, 4, 5, 6],
-                "abcdef".as_bytes(),
-            )
+            .extend_from_dictionary(&[1, 3, 0, 2], &[0, 2, 4, 5, 6], "abcdef".as_bytes())
             .unwrap();
 
         let array = buffer.into_array(None, ArrowType::LargeUtf8);
