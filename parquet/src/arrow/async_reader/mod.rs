@@ -615,10 +615,12 @@ where
                     .fetch(&mut self.input, predicate.projection(), selection)
                     .await?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let array_reader =
+                    ArrayReaderBuilder::new(&row_group, plan_builder.cached_predicate_result())
+                        .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                plan_builder =
+                    plan_builder.with_predicate(array_reader, predicate.as_mut(), &projection)?;
             }
         }
 
@@ -663,7 +665,7 @@ where
 
         let plan = plan_builder.build();
 
-        let array_reader = ArrayReaderBuilder::new(&row_group)
+        let array_reader = ArrayReaderBuilder::new(&row_group, plan.cached_predicate_result())
             .build_array_reader(self.fields.as_deref(), &projection)?;
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
@@ -1138,6 +1140,16 @@ mod tests {
         requests: Arc<Mutex<Vec<Range<usize>>>>,
     }
 
+    impl TestReader {
+        fn new(data: Bytes) -> Self {
+            Self {
+                data,
+                metadata: Default::default(),
+                requests: Default::default(),
+            }
+        }
+    }
+
     impl AsyncFileReader for TestReader {
         fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
             let range = range.clone();
@@ -1569,6 +1581,68 @@ mod tests {
 
     #[tokio::test]
     async fn test_row_filter() {
+        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
+        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
+        let data = RecordBatch::try_from_iter([
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
+        writer.write(&data).unwrap();
+        writer.close().unwrap();
+
+        let data: Bytes = buf.into();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
+
+        let test = TestReader::new(data);
+        let requests = test.requests.clone();
+
+        let a_scalar = StringArray::from_iter_values(["b"]);
+        let a_filter = ArrowPredicateFn::new(
+            ProjectionMask::leaves(&parquet_schema, vec![0]),
+            move |batch| eq(batch.column(0), &Scalar::new(&a_scalar)),
+        );
+
+        let filter = RowFilter::new(vec![Box::new(a_filter)]);
+
+        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 1]);
+        let stream = ParquetRecordBatchStreamBuilder::new(test)
+            .await
+            .unwrap()
+            .with_projection(mask.clone())
+            .with_batch_size(1024)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let batch = &batches[0];
+        assert_eq!(batch.num_columns(), 2);
+
+        // Filter should have kept only rows with "b" in column 0
+        assert_eq!(
+            batch.column(0).as_ref(),
+            &StringArray::from_iter_values(["b", "b", "b"])
+        );
+        assert_eq!(
+            batch.column(1).as_ref(),
+            &StringArray::from_iter_values(["2", "3", "4"])
+        );
+
+        // Should only have made 2 requests
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_two_row_filters() {
         let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
         let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
         let c = Int32Array::from_iter(0..6);
