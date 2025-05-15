@@ -407,6 +407,26 @@ impl ProjectionMask {
             }
         }
     }
+
+    /// Subtract two projection masks
+    ///
+    /// Example:
+    /// ```text
+    /// mask1 = [true, false, true]
+    /// mask2 = [false, true, true]
+    /// subtract(mask1, mask2) = [true, false, false]
+    /// ```
+    pub fn subtract(&mut self, other: &Self) {
+        match (self.mask.as_ref(), other.mask.as_ref()) {
+            (None, _) => {}
+            (_, None) => {}
+            (Some(a), Some(b)) => {
+                debug_assert_eq!(a.len(), b.len());
+                let mask = a.iter().zip(b.iter()).map(|(&a, &b)| a && !b).collect();
+                self.mask = Some(mask);
+            }
+        }
+    }
 }
 
 /// Lookups up the parquet column by name
