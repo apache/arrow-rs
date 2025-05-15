@@ -565,6 +565,14 @@ impl ArrowReaderMetadata {
                     field2.is_nullable()
                 ));
             }
+            if field1.metadata() != field2.metadata() {
+                errors.push(format!(
+                    "metadata mismatch for field {}: expected {:?} but found {:?}",
+                    field1.name(),
+                    field1.metadata(),
+                    field2.metadata()
+                ));
+            }
         }
 
         if !errors.is_empty() {
