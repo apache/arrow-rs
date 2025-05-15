@@ -40,7 +40,7 @@ pub type FieldRef = Arc<Field>;
 /// * `name`: the name of the field
 /// * `data_type`: the type of the field
 /// * `nullable`: if the field is nullable
-/// * `metadata`: a map of key-value pairs containing additional custom meta data
+/// * `metadata`: a map of key-value pairs containing additional custom metadata
 ///
 /// Arrow Extension types, are encoded in `Field`s metadata. See
 /// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
@@ -136,12 +136,12 @@ impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
 
-    /// Creates a new field with the given name, data_type, and nullability
+    /// Creates a new field with the given name, data type, and nullability
     ///
     /// # Example
     /// ```
     /// # use arrow_schema::{Field, DataType};
-    /// Field::new("field_ame", DataType::Int32, true);
+    /// Field::new("field_name", DataType::Int32, true);
     /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         #[allow(deprecated)]
