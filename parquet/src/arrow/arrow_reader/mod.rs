@@ -792,6 +792,7 @@ pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
+    /// Row ranges to be selected from the data source
     selection: Option<VecDeque<RowSelector>>,
 }
 
