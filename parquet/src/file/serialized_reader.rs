@@ -288,7 +288,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
             metadata
                 .columns()
                 .iter()
-                .map(|col| Sbbf::read_from_column_chunk(col, chunk_reader.clone()))
+                .map(|col| Sbbf::read_from_column_chunk(col, &*chunk_reader))
                 .collect::<Result<Vec<_>>>()?
         } else {
             iter::repeat(None).take(metadata.columns().len()).collect()
@@ -352,7 +352,12 @@ pub(crate) fn read_encrypted_page_header<T: Read>(
     let data_decryptor = crypto_context.data_decryptor();
     let aad = crypto_context.create_page_header_aad()?;
 
-    let buf = read_and_decrypt(data_decryptor, input, aad.as_ref())?;
+    let buf = read_and_decrypt(data_decryptor, input, aad.as_ref()).map_err(|_| {
+        ParquetError::General(format!(
+            "Error decrypting column {}, decryptor may be wrong or missing",
+            crypto_context.column_ordinal
+        ))
+    })?;
 
     let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
     Ok(PageHeader::read_from_in_protocol(&mut prot)?)
@@ -571,22 +576,51 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     /// Creates a new serialized page reader from a chunk reader and metadata
     pub fn new(
         reader: Arc<R>,
-        meta: &ColumnChunkMetaData,
+        column_chunk_metadata: &ColumnChunkMetaData,
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
+        SerializedPageReader::new_with_properties(
+            reader,
+            column_chunk_metadata,
+            total_rows,
+            page_locations,
+            props,
+        )
     }
 
-    /// Adds cryptographical information to the reader.
+    /// Stub No-op implementation when encryption is disabled.
+    #[cfg(all(feature = "arrow", not(feature = "encryption")))]
+    pub(crate) fn add_crypto_context(
+        self,
+        _rg_idx: usize,
+        _column_idx: usize,
+        _parquet_meta_data: &ParquetMetaData,
+        _column_chunk_metadata: &ColumnChunkMetaData,
+    ) -> Result<SerializedPageReader<R>> {
+        Ok(self)
+    }
+
+    /// Adds any necessary crypto context to this page reader, if encryption is enabled.
     #[cfg(feature = "encryption")]
-    pub(crate) fn with_crypto_context(
+    pub(crate) fn add_crypto_context(
         mut self,
-        crypto_context: Option<Arc<CryptoContext>>,
-    ) -> Self {
-        self.crypto_context = crypto_context;
-        self
+        rg_idx: usize,
+        column_idx: usize,
+        parquet_meta_data: &ParquetMetaData,
+        column_chunk_metadata: &ColumnChunkMetaData,
+    ) -> Result<SerializedPageReader<R>> {
+        let Some(file_decryptor) = parquet_meta_data.file_decryptor() else {
+            return Ok(self);
+        };
+        let Some(crypto_metadata) = column_chunk_metadata.crypto_metadata() else {
+            return Ok(self);
+        };
+        let crypto_context =
+            CryptoContext::for_column(file_decryptor, crypto_metadata, rg_idx, column_idx)?;
+        self.crypto_context = Some(Arc::new(crypto_context));
+        Ok(self)
     }
 
     /// Creates a new serialized page with custom options.

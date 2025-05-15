@@ -201,26 +201,50 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
 
 #[derive(Debug, Clone)]
 pub struct ArrayData {
-    /// The data type for this array data
+    /// The data type
     data_type: DataType,
 
-    /// The number of elements in this array data
+    /// The number of elements
     len: usize,
 
-    /// The offset into this array data, in number of items
+    /// The offset in number of items (not bytes).
+    ///
+    /// The offset applies to [`Self::child_data`] and [`Self::buffers`]. It
+    /// does NOT apply to [`Self::nulls`].
     offset: usize,
 
-    /// The buffers for this array data. Note that depending on the array types, this
-    /// could hold different kinds of buffers (e.g., value buffer, value offset buffer)
-    /// at different positions.
+    /// The buffers that store the actual data for this array, as defined
+    /// in the [Arrow Spec].
+    ///
+    /// Depending on the array types, [`Self::buffers`] can hold different
+    /// kinds of buffers (e.g., value buffer, value offset buffer) at different
+    /// positions.
+    ///
+    /// The buffer may be larger than needed.  Some items at the beginning may be skipped if
+    /// there is an `offset`.  Some items at the end may be skipped if the buffer is longer than
+    /// we need to satisfy `len`.
+    ///
+    /// [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout)
     buffers: Vec<Buffer>,
 
-    /// The child(ren) of this array. Only non-empty for nested types, currently
-    /// `ListArray` and `StructArray`.
+    /// The child(ren) of this array.
+    ///
+    /// Only non-empty for nested types, such as `ListArray` and
+    /// `StructArray`.
+    ///
+    /// The first logical element in each child element begins at `offset`.
+    ///
+    /// If the child element also has an offset then these offsets are
+    /// cumulative.
     child_data: Vec<ArrayData>,
 
-    /// The null bitmap. A `None` value for this indicates all values are non-null in
-    /// this array.
+    /// The null bitmap.
+    ///
+    /// `None` indicates all values are non-null in this array.
+    ///
+    /// [`Self::offset]` does not apply to the null bitmap. While the
+    /// BooleanBuffer may be sliced (have its own offset) internally, this
+    /// `NullBuffer` always represents exactly `len` elements.
     nulls: Option<NullBuffer>,
 }
 
@@ -555,6 +579,7 @@ impl ArrayData {
     }
 
     /// Returns the `buffer` as a slice of type `T` starting at self.offset
+    ///
     /// # Panics
     /// This function panics if:
     /// * the buffer is not byte-aligned with type T, or
@@ -1016,7 +1041,7 @@ impl ArrayData {
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, list_size, list_size, self.data_type
+                        values_data.len, self.len, list_size, self.data_type
                     )));
                 }
 

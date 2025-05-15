@@ -620,7 +620,7 @@ fn parse_v1_level(
 mod tests {
     use super::*;
 
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;

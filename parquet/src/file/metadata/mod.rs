@@ -102,13 +102,14 @@ use crate::encryption::{
     modules::{create_module_aad, ModuleType},
 };
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "encryption")]
+use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::statistics::{self, Statistics};
-#[cfg(feature = "encryption")]
-use crate::format::ColumnCryptoMetaData;
+use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SizeStatistics, SortingColumn,
@@ -657,11 +658,14 @@ impl RowGroupMetaData {
                             d.path().string()
                         ));
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
                         let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(column_name.as_str())?
+                        decryptor.get_column_metadata_decryptor(
+                            column_name.as_str(),
+                            crypto_metadata.key_metadata.as_deref(),
+                        )?
                     }
-                    Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()?
                     }
                 };
@@ -675,10 +679,13 @@ impl RowGroupMetaData {
                 )?;
 
                 let buf = c.encrypted_column_metadata.clone().unwrap();
-                let decrypted_cc_buf =
-                    column_decryptor.decrypt(buf.as_slice(), column_aad.as_ref()).map_err(|_| {
-                        general_err!("Unable to decrypt column '{}', perhaps the column key is wrong or missing?",
-                            d.path().string())
+                let decrypted_cc_buf = column_decryptor
+                    .decrypt(buf.as_slice(), column_aad.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
+                            d.path().string()
+                        )
                     })?;
 
                 let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
@@ -854,6 +861,8 @@ pub struct ColumnChunkMetaData {
     unencoded_byte_array_data_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
+    #[cfg(feature = "encryption")]
+    column_crypto_metadata: Option<ColumnCryptoMetaData>,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1094,9 +1103,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn column_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.column_index_offset?).ok()?;
-        let length = usize::try_from(self.column_index_length?).ok()?;
+    pub(crate) fn column_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.column_index_offset?).ok()?;
+        let length = u64::try_from(self.column_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 
@@ -1111,9 +1120,9 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the range for the offset index if any
-    pub(crate) fn offset_index_range(&self) -> Option<Range<usize>> {
-        let offset = usize::try_from(self.offset_index_offset?).ok()?;
-        let length = usize::try_from(self.offset_index_length?).ok()?;
+    pub(crate) fn offset_index_range(&self) -> Option<Range<u64>> {
+        let offset = u64::try_from(self.offset_index_offset?).ok()?;
+        let length = u64::try_from(self.offset_index_length?).ok()?;
         Some(offset..(offset + length))
     }
 
@@ -1141,6 +1150,12 @@ impl ColumnChunkMetaData {
     /// This field may not be set by older writers.
     pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()
+    }
+
+    /// Returns the encryption metadata for this column chunk.
+    #[cfg(feature = "encryption")]
+    pub fn crypto_metadata(&self) -> Option<&ColumnCryptoMetaData> {
+        self.column_crypto_metadata.as_ref()
     }
 
     /// Method to convert from Thrift.
@@ -1197,6 +1212,13 @@ impl ColumnChunkMetaData {
         let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
         let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
+        #[cfg(feature = "encryption")]
+        let column_crypto_metadata = if let Some(crypto_metadata) = cc.crypto_metadata {
+            Some(column_crypto_metadata::try_from_thrift(&crypto_metadata)?)
+        } else {
+            None
+        };
+
         let result = ColumnChunkMetaData {
             column_descr,
             encodings,
@@ -1220,6 +1242,8 @@ impl ColumnChunkMetaData {
             unencoded_byte_array_data_bytes,
             repetition_level_histogram,
             definition_level_histogram,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata,
         };
         Ok(result)
     }
@@ -1236,7 +1260,7 @@ impl ColumnChunkMetaData {
             offset_index_length: self.offset_index_length,
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
-            crypto_metadata: None,
+            crypto_metadata: self.column_crypto_metadata_thrift(),
             encrypted_column_metadata: None,
         }
     }
@@ -1293,6 +1317,18 @@ impl ColumnChunkMetaData {
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
         ColumnChunkMetaDataBuilder::from(self)
     }
+
+    #[cfg(feature = "encryption")]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        self.column_crypto_metadata
+            .as_ref()
+            .map(column_crypto_metadata::to_thrift)
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
+        None
+    }
 }
 
 /// Builder for [`ColumnChunkMetaData`]
@@ -1343,6 +1379,8 @@ impl ColumnChunkMetaDataBuilder {
             unencoded_byte_array_data_bytes: None,
             repetition_level_histogram: None,
             definition_level_histogram: None,
+            #[cfg(feature = "encryption")]
+            column_crypto_metadata: None,
         })
     }
 
@@ -1489,6 +1527,13 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional repetition level histogram
     pub fn set_definition_level_histogram(mut self, value: Option<LevelHistogram>) -> Self {
         self.0.definition_level_histogram = value;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryption metadata for an encrypted column
+    pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
+        self.0.column_crypto_metadata = value;
         self
     }
 
@@ -1954,7 +1999,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2448;
+        let base_expected_size = 2640;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1984,7 +2029,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2816;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2952;
+        let bigger_expected_size = 3144;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

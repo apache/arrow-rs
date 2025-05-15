@@ -57,12 +57,10 @@ exclude = [
     # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
     # scratch this way, this is a stand-alone package that compiles independently of the others.
     "arrow-pyarrow-integration-testing",
-    # object_store is excluded because it follows a separate release cycle from the other arrow crates
-    "object_store"
 ]
 
 [workspace.package]
-version = "54.3.0"
+version = "55.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -76,23 +74,30 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.81"
 
 [workspace.dependencies]
-arrow = { version = "54.3.0", path = "./arrow", default-features = false }
-arrow-arith = { version = "54.3.0", path = "./arrow-arith" }
-arrow-array = { version = "54.3.0", path = "./arrow-array" }
-arrow-buffer = { version = "54.3.0", path = "./arrow-buffer" }
-arrow-cast = { version = "54.3.0", path = "./arrow-cast" }
-arrow-csv = { version = "54.3.0", path = "./arrow-csv" }
-arrow-data = { version = "54.3.0", path = "./arrow-data" }
-arrow-ipc = { version = "54.3.0", path = "./arrow-ipc" }
-arrow-json = { version = "54.3.0", path = "./arrow-json" }
-arrow-ord = { version = "54.3.0", path = "./arrow-ord" }
-arrow-row = { version = "54.3.0", path = "./arrow-row" }
-arrow-schema = { version = "54.3.0", path = "./arrow-schema" }
-arrow-select = { version = "54.3.0", path = "./arrow-select" }
-arrow-string = { version = "54.3.0", path = "./arrow-string" }
-parquet = { version = "54.3.0", path = "./parquet", default-features = false }
+arrow = { version = "55.0.0", path = "./arrow", default-features = false }
+arrow-arith = { version = "55.0.0", path = "./arrow-arith" }
+arrow-array = { version = "55.0.0", path = "./arrow-array" }
+arrow-buffer = { version = "55.0.0", path = "./arrow-buffer" }
+arrow-cast = { version = "55.0.0", path = "./arrow-cast" }
+arrow-csv = { version = "55.0.0", path = "./arrow-csv" }
+arrow-data = { version = "55.0.0", path = "./arrow-data" }
+arrow-ipc = { version = "55.0.0", path = "./arrow-ipc" }
+arrow-json = { version = "55.0.0", path = "./arrow-json" }
+arrow-ord = { version = "55.0.0", path = "./arrow-ord" }
+arrow-row = { version = "55.0.0", path = "./arrow-row" }
+arrow-schema = { version = "55.0.0", path = "./arrow-schema" }
+arrow-select = { version = "55.0.0", path = "./arrow-select" }
+arrow-string = { version = "55.0.0", path = "./arrow-string" }
+parquet = { version = "55.0.0", path = "./parquet", default-features = false }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
+
+# release inherited profile keeping debug information and symbols
+# for mem/cpu profiling
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
