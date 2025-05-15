@@ -109,6 +109,11 @@ impl StreamDecoder {
         self
     }
 
+    /// Return the schema if decoded, else None.
+    pub fn schema(&self) -> Option<SchemaRef> {
+        self.schema.as_ref().map(|schema| schema.clone())
+    }
+
     /// Try to read the next [`RecordBatch`] from the provided [`Buffer`]
     ///
     /// [`Buffer::advance`] will be called on `buffer` for any consumed bytes.
@@ -128,6 +133,9 @@ impl StreamDecoder {
     ///         while !x.is_empty() {
     ///             if let Some(x) = decoder.decode(&mut x)? {
     ///                 println!("{x:?}");
+    ///             }
+    ///             if let Some(schema) = decoder.schema() {
+    ///                 println!("Schema: {schema:?}");
     ///             }
     ///         }
     ///     }
@@ -321,6 +329,31 @@ mod tests {
         assert_eq!(output, input);
         assert_eq!(b.len(), 7); // 8 byte EOS truncated by 1 byte
         assert!(decoder.decode(&mut b).unwrap().is_none());
+
+        let err = decoder.finish().unwrap_err().to_string();
+        assert_eq!(err, "Ipc error: Unexpected End of Stream");
+    }
+
+    #[test]
+    fn test_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("int32", DataType::Int32, false),
+            Field::new("int64", DataType::Int64, false),
+        ]));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut s = StreamWriter::try_new(&mut buf, &schema).unwrap();
+        s.finish().unwrap();
+        drop(s);
+
+        let buffer = Buffer::from_vec(buf);
+
+        let mut b = buffer.slice_with_length(0, buffer.len() - 1);
+        let mut decoder = StreamDecoder::new();
+        let output = decoder.decode(&mut b).unwrap();
+        assert!(output.is_none());
+        let decoded_schema = decoder.schema().unwrap();
+        assert_eq!(schema, decoded_schema);
 
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Ipc error: Unexpected End of Stream");

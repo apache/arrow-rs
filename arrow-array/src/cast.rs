@@ -956,6 +956,14 @@ pub trait AsArray: private::Sealed {
         self.as_dictionary_opt().expect("dictionary array")
     }
 
+    /// Downcast this to a [`RunArray`] returning `None` if not possible
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>>;
+
+    /// Downcast this to a [`RunArray`] panicking if not possible
+    fn as_run<K: RunEndIndexType>(&self) -> &RunArray<K> {
+        self.as_run_opt().expect("run array")
+    }
+
     /// Downcasts this to a [`AnyDictionaryArray`] returning `None` if not possible
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray>;
 
@@ -1012,6 +1020,10 @@ impl AsArray for dyn Array + '_ {
     }
 
     fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
         self.as_any().downcast_ref()
     }
 
@@ -1076,6 +1088,14 @@ impl AsArray for ArrayRef {
 
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
         self.as_ref().as_any_dictionary_opt()
+    }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
+        self.as_ref().as_run_opt()
+    }
+
+    fn as_string_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericStringArray<O>> {
+        self.as_ref().as_string_opt()
     }
 }
 

@@ -305,7 +305,10 @@ impl<T> ArrowReaderBuilder<T> {
 pub struct ArrowReaderOptions {
     /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
-    /// If provided used as the schema for the file, otherwise the schema is read from the file
+    /// If provided used as the schema hint when determining the Arrow schema,
+    /// otherwise the schema hint is read from the [ARROW_SCHEMA_META_KEY]
+    ///
+    /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
     /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
     pub(crate) page_index: bool,
@@ -333,17 +336,27 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Provide a schema to use when reading the parquet file. If provided it
-    /// takes precedence over the schema inferred from the file or the schema defined
-    /// in the file's metadata. If the schema is not compatible with the file's
-    /// schema an error will be returned when constructing the builder.
+    /// Provide a schema hint to use when reading the Parquet file.
     ///
-    /// This option is only required if you want to cast columns to a different type.
-    /// For example, if you wanted to cast from an Int64 in the Parquet file to a Timestamp
-    /// in the Arrow schema.
+    /// If provided, this schema takes precedence over any arrow schema embedded
+    /// in the metadata (see the [`arrow`] documentation for more details).
     ///
-    /// The supplied schema must have the same number of columns as the parquet schema and
-    /// the column names need to be the same.
+    /// If the provided schema is not compatible with the data stored in the
+    /// parquet file schema, an error will be returned when constructing the
+    /// builder.
+    ///
+    /// This option is only required if you want to explicitly control the
+    /// conversion of Parquet types to Arrow types, such as casting a column to
+    /// a different type. For example, if you wanted to read an Int64 in
+    /// a Parquet file to a [`TimestampMicrosecondArray`] in the Arrow schema.
+    ///
+    /// [`arrow`]: crate::arrow
+    /// [`TimestampMicrosecondArray`]: arrow_array::TimestampMicrosecondArray
+    ///
+    /// # Notes
+    ///
+    /// The provided schema must have the same number of columns as the parquet schema and
+    /// the column names must be the same.
     ///
     /// # Example
     /// ```
@@ -814,6 +827,7 @@ pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
+    /// Row ranges to be selected from the data source
     selection: Option<VecDeque<RowSelector>>,
 }
 
