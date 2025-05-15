@@ -1055,6 +1055,10 @@ mod tests {
         let row = Field::convert_int32(&descr, 14611);
         assert_eq!(row, Field::Date(14611));
 
+        let descr = make_column_descr![PhysicalType::INT32, ConvertedType::TIME_MILLIS];
+        let row = Field::convert_int32(&descr, 14611);
+        assert_eq!(row, Field::TimestampMillis(14611));
+
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
         assert_eq!(row, Field::Decimal(Decimal::from_i32(444, 8, 2)));
