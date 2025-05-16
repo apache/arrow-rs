@@ -357,6 +357,34 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
+    /// Exact 32-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal32(u8, i8),
+    /// Exact 64-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal64(u8, i8),
     /// Exact 128-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
@@ -530,6 +558,8 @@ impl DataType {
                 | Float16
                 | Float32
                 | Float64
+                | Decimal32(_, _)
+                | Decimal64(_, _)
                 | Decimal128(_, _)
                 | Decimal256(_, _)
         )
@@ -689,6 +719,8 @@ impl DataType {
             DataType::Interval(IntervalUnit::YearMonth) => Some(4),
             DataType::Interval(IntervalUnit::DayTime) => Some(8),
             DataType::Interval(IntervalUnit::MonthDayNano) => Some(16),
+            DataType::Decimal32(_, _) => Some(4),
+            DataType::Decimal64(_, _) => Some(8),
             DataType::Decimal128(_, _) => Some(16),
             DataType::Decimal256(_, _) => Some(32),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => None,
@@ -739,6 +771,8 @@ impl DataType {
                 | DataType::Utf8
                 | DataType::LargeUtf8
                 | DataType::Utf8View
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
                 DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -814,6 +848,18 @@ impl DataType {
     }
 }
 
+/// The maximum precision for [DataType::Decimal32] values
+pub const DECIMAL32_MAX_PRECISION: u8 = 9;
+
+/// The maximum scale for [DataType::Decimal32] values
+pub const DECIMAL32_MAX_SCALE: i8 = 9;
+
+/// The maximum precision for [DataType::Decimal64] values
+pub const DECIMAL64_MAX_PRECISION: u8 = 18;
+
+/// The maximum scale for [DataType::Decimal64] values
+pub const DECIMAL64_MAX_SCALE: i8 = 18;
+
 /// The maximum precision for [DataType::Decimal128] values
 pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 
@@ -825,6 +871,12 @@ pub const DECIMAL256_MAX_PRECISION: u8 = 76;
 
 /// The maximum scale for [DataType::Decimal256] values
 pub const DECIMAL256_MAX_SCALE: i8 = 76;
+
+/// The default scale for [DataType::Decimal32] values
+pub const DECIMAL32_DEFAULT_SCALE: i8 = 2;
+
+/// The default scale for [DataType::Decimal64] values
+pub const DECIMAL64_DEFAULT_SCALE: i8 = 6;
 
 /// The default scale for [DataType::Decimal128] and [DataType::Decimal256]
 /// values
