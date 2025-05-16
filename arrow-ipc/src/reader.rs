@@ -490,13 +490,25 @@ impl<'a> RecordBatchDecoder<'a> {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
-            assert!(variadic_counts.is_empty());
+
             arrays.sort_by_key(|t| t.0);
-            RecordBatch::try_new_with_options(
-                Arc::new(schema.project(projection)?),
-                arrays.into_iter().map(|t| t.1).collect(),
-                &options,
-            )
+
+            let schema = Arc::new(schema.project(projection)?);
+            let columns = arrays.into_iter().map(|t| t.1).collect::<Vec<_>>();
+
+            if self.skip_validation.get() {
+                // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
+                unsafe {
+                    Ok(RecordBatch::new_unchecked(
+                        schema,
+                        columns,
+                        self.batch.length() as usize,
+                    ))
+                }
+            } else {
+                assert!(variadic_counts.is_empty());
+                RecordBatch::try_new_with_options(schema, columns, &options)
+            }
         } else {
             let mut children = vec![];
             // keep track of index as lists require more than one node
@@ -504,8 +516,20 @@ impl<'a> RecordBatchDecoder<'a> {
                 let child = self.create_array(field, &mut variadic_counts)?;
                 children.push(child);
             }
-            assert!(variadic_counts.is_empty());
-            RecordBatch::try_new_with_options(schema, children, &options)
+
+            if self.skip_validation.get() {
+                // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
+                unsafe {
+                    Ok(RecordBatch::new_unchecked(
+                        schema,
+                        children,
+                        self.batch.length() as usize,
+                    ))
+                }
+            } else {
+                assert!(variadic_counts.is_empty());
+                RecordBatch::try_new_with_options(schema, children, &options)
+            }
         }
     }
 
