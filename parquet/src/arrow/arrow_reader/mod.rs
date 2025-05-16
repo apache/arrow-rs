@@ -26,7 +26,7 @@ pub use selection::{RowSelection, RowSelector};
 use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
-use crate::arrow::array_reader::{build_array_reader, ArrayReader};
+pub(crate) use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
@@ -690,15 +690,16 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                // TODO move this into the read_plan
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate.projection(), &reader)?;
+                // TODO move this into the read_plan??
+                let array_reader = ArrayReaderBuilder::new(&reader)
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
-        let array_reader = build_array_reader(self.fields.as_deref(), &self.projection, &reader)?;
+        let array_reader = ArrayReaderBuilder::new(&reader)
+            .build_array_reader(self.fields.as_deref(), &self.projection)?;
         let read_plan = plan_builder
             .limited(reader.num_rows())
             .with_offset(self.offset)
@@ -897,8 +898,8 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         selection: Option<RowSelection>,
     ) -> Result<Self> {
-        let array_reader =
-            build_array_reader(levels.levels.as_ref(), &ProjectionMask::all(), row_groups)?;
+        let array_reader = ArrayReaderBuilder::new(row_groups)
+            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
