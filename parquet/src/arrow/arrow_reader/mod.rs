@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
-use crate::arrow::array_reader::{build_array_reader, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::column::page::{PageIterator, PageReader};
@@ -687,8 +687,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate.projection(), &reader)?;
+                let array_reader = ArrayReaderBuilder::new(&reader)
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 selection = Some(evaluate_predicate(
                     batch_size,
@@ -699,7 +699,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             }
         }
 
-        let array_reader = build_array_reader(self.fields.as_deref(), &self.projection, &reader)?;
+        let array_reader = ArrayReaderBuilder::new(&reader)
+            .build_array_reader(self.fields.as_deref(), &self.projection)?;
 
         // If selection is empty, truncate
         if !selects_any(selection.as_ref()) {
@@ -902,8 +903,8 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         selection: Option<RowSelection>,
     ) -> Result<Self> {
-        let array_reader =
-            build_array_reader(levels.levels.as_ref(), &ProjectionMask::all(), row_groups)?;
+        let array_reader = ArrayReaderBuilder::new(row_groups)
+            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         Ok(Self {
             batch_size,

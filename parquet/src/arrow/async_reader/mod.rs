@@ -38,7 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{build_array_reader, RowGroups};
+use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
 use crate::arrow::arrow_reader::{
     apply_range, evaluate_predicate, selects_any, ArrowReaderBuilder, ArrowReaderMetadata,
     ArrowReaderOptions, ParquetRecordBatchReader, RowFilter, RowSelection,
@@ -598,8 +598,8 @@ where
                     .fetch(&mut self.input, predicate_projection, selection.as_ref())
                     .await?;
 
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate_projection, &row_group)?;
+                let array_reader = ArrayReaderBuilder::new(&row_group)
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 selection = Some(evaluate_predicate(
                     batch_size,
@@ -647,11 +647,9 @@ where
             .fetch(&mut self.input, &projection, selection.as_ref())
             .await?;
 
-        let reader = ParquetRecordBatchReader::new(
-            batch_size,
-            build_array_reader(self.fields.as_deref(), &projection, &row_group)?,
-            selection,
-        );
+        let array_reader = ArrayReaderBuilder::new(&row_group)
+            .build_array_reader(self.fields.as_deref(), &projection)?;
+        let reader = ParquetRecordBatchReader::new(batch_size, array_reader, selection);
 
         Ok((self, Some(reader)))
     }
