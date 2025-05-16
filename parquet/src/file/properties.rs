@@ -227,31 +227,43 @@ impl WriterProperties {
     /// When writing a batch of data, this setting allows to split it internally into
     /// smaller batches so we can better estimate the size of a page currently being
     /// written.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_write_batch_size`]
     pub fn write_batch_size(&self) -> usize {
         self.write_batch_size
     }
 
     /// Returns maximum number of rows in a row group.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_max_row_group_size`]
     pub fn max_row_group_size(&self) -> usize {
         self.max_row_group_size
     }
 
     /// Returns bloom filter position.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_bloom_filter_position`]
     pub fn bloom_filter_position(&self) -> BloomFilterPosition {
         self.bloom_filter_position
     }
 
     /// Returns configured writer version.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_writer_version`]
     pub fn writer_version(&self) -> WriterVersion {
         self.writer_version
     }
 
     /// Returns `created_by` string.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_created_by`]
     pub fn created_by(&self) -> &str {
         &self.created_by
     }
 
     /// Returns `true` if offset index writing is disabled.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_offset_index_disabled`]
     pub fn offset_index_disabled(&self) -> bool {
         // If page statistics are to be collected, then do not disable the offset indexes.
         let default_page_stats_enabled =
@@ -268,11 +280,15 @@ impl WriterProperties {
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_key_value_metadata`]
     pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
         self.key_value_metadata.as_ref()
     }
 
     /// Returns sorting columns.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_sorting_columns`]
     pub fn sorting_columns(&self) -> Option<&Vec<SortingColumn>> {
         self.sorting_columns.as_ref()
     }
@@ -280,6 +296,8 @@ impl WriterProperties {
     /// Returns the maximum length of truncated min/max values in the column index.
     ///
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_column_index_truncate_length`]
     pub fn column_index_truncate_length(&self) -> Option<usize> {
         self.column_index_truncate_length
     }
@@ -287,16 +305,21 @@ impl WriterProperties {
     /// Returns the maximum length of truncated min/max values in statistics.
     ///
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_statistics_truncate_length`]
     pub fn statistics_truncate_length(&self) -> Option<usize> {
         self.statistics_truncate_length
     }
 
     /// Returns `true` if type coercion is enabled.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_coerce_types`]
     pub fn coerce_types(&self) -> bool {
         self.coerce_types
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
+    ///
     /// This is not configurable.
     #[inline]
     pub fn dictionary_data_page_encoding(&self) -> Encoding {
@@ -306,6 +329,7 @@ impl WriterProperties {
     }
 
     /// Returns encoding for dictionary page, when dictionary encoding is enabled.
+    ///
     /// This is not configurable.
     #[inline]
     pub fn dictionary_page_encoding(&self) -> Encoding {
@@ -315,6 +339,7 @@ impl WriterProperties {
     }
 
     /// Returns encoding for a column, if set.
+    ///
     /// In case when dictionary is enabled, returns fallback encoding.
     ///
     /// If encoding is not set, then column writer will choose the best encoding
@@ -327,6 +352,8 @@ impl WriterProperties {
     }
 
     /// Returns compression codec for a column.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_column_compression`]
     pub fn compression(&self, col: &ColumnPath) -> Compression {
         self.column_properties
             .get(col)
@@ -336,6 +363,8 @@ impl WriterProperties {
     }
 
     /// Returns `true` if dictionary encoding is enabled for a column.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_dictionary_enabled`]
     pub fn dictionary_enabled(&self, col: &ColumnPath) -> bool {
         self.column_properties
             .get(col)
@@ -345,6 +374,8 @@ impl WriterProperties {
     }
 
     /// Returns which statistics are written for a column.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_statistics_enabled`]
     pub fn statistics_enabled(&self, col: &ColumnPath) -> EnabledStatistics {
         self.column_properties
             .get(col)
@@ -354,7 +385,8 @@ impl WriterProperties {
     }
 
     /// Returns max size for statistics.
-    /// Only applicable if statistics are enabled.
+    ///
+    /// UNUSED
     #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
         #[allow(deprecated)]
@@ -368,6 +400,8 @@ impl WriterProperties {
     /// Returns the [`BloomFilterProperties`] for the given column
     ///
     /// Returns `None` if bloom filter is disabled
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_column_bloom_filter_enabled`]
     pub fn bloom_filter_properties(&self, col: &ColumnPath) -> Option<&BloomFilterProperties> {
         self.column_properties
             .get(col)
@@ -376,13 +410,15 @@ impl WriterProperties {
     }
 
     /// Return file encryption properties
+    ///
+    /// For more details see [`WriterPropertiesBuilder::with_file_encryption_properties`]
     #[cfg(feature = "encryption")]
     pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
         self.file_encryption_properties.as_ref()
     }
 }
 
-/// Builder for  [`WriterProperties`] parquet writer configuration.
+/// Builder for  [`WriterProperties`] Parquet writer configuration.
 ///
 /// See example on [`WriterProperties`]
 pub struct WriterPropertiesBuilder {
@@ -535,13 +571,17 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets where in the final file Bloom Filters are written (default `AfterRowGroup`)
+    /// Sets where in the final file Bloom Filters are written (defaults to  [`AfterRowGroup`])
+    ///
+    /// [`AfterRowGroup`]: BloomFilterPosition::AfterRowGroup
     pub fn set_bloom_filter_position(mut self, value: BloomFilterPosition) -> Self {
         self.bloom_filter_position = value;
         self
     }
 
     /// Sets "created by" property (defaults to `parquet-rs version <VERSION>`).
+    ///
+    /// This is a string that will be written into the file metadata
     pub fn set_created_by(mut self, value: String) -> Self {
         self.created_by = value;
         self
@@ -628,7 +668,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets if bloom filter is enabled by default for all columns (defaults to `false`).
+    /// Sets if bloom filter should be written for all columns (defaults to `false`).
     ///
     /// # Notes
     ///
@@ -712,7 +752,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets statistics level for a specific column.
+    /// Sets statistics level for a specific column
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
     pub fn set_column_statistics_enabled(
@@ -759,7 +799,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the max length of min/max value fields when writing the column
-    /// [`Index`] (defaults to `None`).
+    /// [`Index`] (defaults to `None` (no limit)).
     ///
     /// This can be used to prevent columns with very long values (hundreds of
     /// bytes long) from causing the parquet metadata to become huge.
@@ -783,7 +823,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the max length of min/max value fields in row group level
-    /// [`Statistics`] (defaults to `None`).
+    /// [`Statistics`] (defaults to `None` (no limit)).
     ///
     /// # Notes
     /// Row group level [`Statistics`] are written when [`Self::set_statistics_enabled`] is
@@ -825,7 +865,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets FileEncryptionProperties.
+    /// Sets FileEncryptionProperties (defaults to `None`)
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,
@@ -885,7 +925,7 @@ impl Default for EnabledStatistics {
 /// Controls the bloom filter to be computed by the writer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BloomFilterProperties {
-    /// False positive probability, should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
+    /// False positive probability. This should be always between 0 and 1 exclusive. Defaults to [`DEFAULT_BLOOM_FILTER_FPP`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_fpp`].
     ///
@@ -893,16 +933,16 @@ pub struct BloomFilterProperties {
     /// smaller the fpp, the more memory and disk space is required, thus setting it to a reasonable value
     /// e.g. 0.1, 0.05, or 0.001 is recommended.
     ///
-    /// Setting to very small number diminishes the value of the filter itself, as the bitset size is
+    /// Setting to a very small number diminishes the value of the filter itself, as the bitset size is
     /// even larger than just storing the whole value. You are also expected to set `ndv` if it can
-    /// be known in advance in order to largely reduce space usage.
+    /// be known in advance to greatly reduce space usage.
     pub fpp: f64,
     /// Number of distinct values, should be non-negative to be meaningful. Defaults to [`DEFAULT_BLOOM_FILTER_NDV`].
     ///
     /// You should set this value by calling [`WriterPropertiesBuilder::set_bloom_filter_ndv`].
     ///
     /// Usage of bloom filter is most beneficial for columns with large cardinality, so a good heuristic
-    /// is to set ndv to number of rows. However it can reduce disk size if you know in advance a smaller
+    /// is to set ndv to the number of rows. However, it can reduce disk size if you know in advance a smaller
     /// number of distinct values. For very small ndv value it is probably not worth it to use bloom filter
     /// anyway.
     ///
@@ -957,7 +997,7 @@ impl ColumnProperties {
         self.codec = Some(value);
     }
 
-    /// Sets whether or not dictionary encoding is enabled for this column.
+    /// Sets whether dictionary encoding is enabled for this column.
     fn set_dictionary_enabled(&mut self, enabled: bool) {
         self.dictionary_enabled = Some(enabled);
     }

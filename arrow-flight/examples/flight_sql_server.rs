@@ -112,6 +112,7 @@ static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.t
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
+    #[allow(clippy::result_large_err)]
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
