@@ -800,24 +800,33 @@ impl Iterator for ParquetRecordBatchReader {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.next_inner()
+            .map_err(|arrow_err| arrow_err.into())
+            .transpose()
+    }
+}
+
+impl ParquetRecordBatchReader {
+    /// Returns the next `RecordBatch` from the reader, or `None` if the reader
+    /// has reached the end of the file.
+    ///
+    /// Returns `Result<Option<..>>` rather than `Option<Result<..>>` to
+    /// simplify error handling with `?`
+    fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         match self.selection.as_mut() {
             Some(selection) => {
                 while read_records < self.batch_size && !selection.is_empty() {
                     let front = selection.pop_front().unwrap();
                     if front.skip {
-                        let skipped = match self.array_reader.skip_records(front.row_count) {
-                            Ok(skipped) => skipped,
-                            Err(e) => return Some(Err(e.into())),
-                        };
+                        let skipped = self.array_reader.skip_records(front.row_count)?;
 
                         if skipped != front.row_count {
-                            return Some(Err(general_err!(
+                            return Err(general_err!(
                                 "failed to skip rows, expected {}, got {}",
                                 front.row_count,
                                 skipped
-                            )
-                            .into()));
+                            ));
                         }
                         continue;
                     }
@@ -839,35 +848,27 @@ impl Iterator for ParquetRecordBatchReader {
                         }
                         _ => front.row_count,
                     };
-                    match self.array_reader.read_records(to_read) {
-                        Ok(0) => break,
-                        Ok(rec) => read_records += rec,
-                        Err(error) => return Some(Err(error.into())),
-                    }
+                    match self.array_reader.read_records(to_read)? {
+                        0 => break,
+                        rec => read_records += rec,
+                    };
                 }
             }
             None => {
-                if let Err(error) = self.array_reader.read_records(self.batch_size) {
-                    return Some(Err(error.into()));
-                }
+                self.array_reader.read_records(self.batch_size)?;
             }
         };
 
-        match self.array_reader.consume_batch() {
-            Err(error) => Some(Err(error.into())),
-            Ok(array) => {
-                let struct_array = array.as_struct_opt().ok_or_else(|| {
-                    ArrowError::ParquetError(
-                        "Struct array reader should return struct array".to_string(),
-                    )
-                });
+        let array = self.array_reader.consume_batch()?;
+        let struct_array = array.as_struct_opt().ok_or_else(|| {
+            ArrowError::ParquetError("Struct array reader should return struct array".to_string())
+        })?;
 
-                match struct_array {
-                    Err(err) => Some(Err(err)),
-                    Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
-                }
-            }
-        }
+        Ok(if struct_array.len() > 0 {
+            Some(RecordBatch::from(struct_array))
+        } else {
+            None
+        })
     }
 }
 
