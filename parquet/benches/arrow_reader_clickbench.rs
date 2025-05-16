@@ -711,7 +711,7 @@ impl ReadTest {
             .schema_descr();
 
         // Determine the correct selection ("ProjectionMask")
-        let projection_mask = if projection_columns.iter().any(|&name| name == "*") {
+        let projection_mask = if projection_columns.contains(&"*") {
             // * means all columns
             ProjectionMask::all()
         } else {
