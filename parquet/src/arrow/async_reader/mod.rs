@@ -1123,7 +1123,7 @@ mod tests {
         metadata: Option<Arc<ParquetMetaData>>,
         requests: Arc<Mutex<Vec<Range<usize>>>>,
     }
-    
+
     impl TestReader {
         fn new(data: Bytes) -> Self {
             Self {
@@ -1166,11 +1166,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let requests = async_reader.requests.clone();
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -1219,11 +1215,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let requests = async_reader.requests.clone();
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
@@ -1280,11 +1272,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
@@ -1349,11 +1337,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -1390,11 +1374,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
@@ -1468,11 +1448,7 @@ mod tests {
 
             let selection = RowSelection::from(selectors);
 
-            let async_reader = TestReader {
-                data: data.clone(),
-                metadata: Default::default(),
-                requests: Default::default(),
-            };
+            let async_reader = TestReader::new(data.clone());
 
             let options = ArrowReaderOptions::new().with_page_index(true);
             let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
@@ -1534,11 +1510,7 @@ mod tests {
 
         let selection = RowSelection::from(selectors);
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
@@ -1571,7 +1543,7 @@ mod tests {
             ("a", Arc::new(a) as ArrayRef),
             ("b", Arc::new(b) as ArrayRef),
         ])
-            .unwrap();
+        .unwrap();
 
         let mut buf = Vec::with_capacity(1024);
         let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
@@ -1648,11 +1620,7 @@ mod tests {
             .unwrap();
         let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
-        let test = TestReader {
-            data,
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let test = TestReader::new(data);
         let requests = test.requests.clone();
 
         let a_scalar = StringArray::from_iter_values(["b"]);
@@ -1725,11 +1693,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 2);
 
-        let test = TestReader {
-            data,
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let test = TestReader::new(data);
 
         let stream = ParquetRecordBatchStreamBuilder::new(test.clone())
             .await
@@ -1816,11 +1780,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let a_filter =
             ArrowPredicateFn::new(ProjectionMask::leaves(&parquet_schema, vec![1]), |batch| {
@@ -1884,11 +1844,7 @@ mod tests {
 
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let requests = async_reader.requests.clone();
         let (_, fields) = parquet_to_arrow_schema_and_fields(
@@ -1954,11 +1910,7 @@ mod tests {
         let path = format!("{testdata}/alltypes_plain.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -2097,11 +2049,7 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
         let data = Bytes::from(std::fs::read(path).unwrap());
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
         let builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
             .unwrap();
@@ -2124,11 +2072,7 @@ mod tests {
     }
 
     async fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let async_reader = TestReader {
-            data: data.clone(),
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let async_reader = TestReader::new(data.clone());
 
         let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -2267,11 +2211,7 @@ mod tests {
             .unwrap();
         let parquet_schema = metadata.file_metadata().schema_descr_ptr();
 
-        let test = TestReader {
-            data,
-            metadata: Default::default(),
-            requests: Default::default(),
-        };
+        let test = TestReader::new(data);
         let requests = test.requests.clone();
 
         let a_scalar = StringArray::from_iter_values(["b"]);
