@@ -251,10 +251,25 @@ pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionMask {
-    /// If present a leaf column should be included if the value at
+    /// If `Some`, a leaf column should be included if the value at
     /// the corresponding index is true
     ///
-    /// If `None`, include all columns
+    /// If `None`, all columns should be included
+    ///
+    /// # Examples
+    ///
+    /// Given the original parquet schema with leaf columns is `[a, b, c, d]`
+    ///
+    /// A mask of `[true, false, true, false]` will result in a schema 2
+    /// elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `c`    
+    ///
+    /// A mask of `None` will result in a schema 4 elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `b`
+    /// * `fields[2]`: `c`
+    /// * `fields[3]`: `d`
     mask: Option<Vec<bool>>,
 }
 
