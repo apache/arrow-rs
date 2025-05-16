@@ -671,6 +671,7 @@ impl Field {
             ConvertedType::UINT_16 => Field::UShort(value as u16),
             ConvertedType::UINT_32 => Field::UInt(value as u32),
             ConvertedType::DATE => Field::Date(value),
+            ConvertedType::TIME_MILLIS => Field::TimestampMillis(value as i64),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i32(
                 value,
                 descr.type_precision(),
@@ -1053,6 +1054,10 @@ mod tests {
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DATE];
         let row = Field::convert_int32(&descr, 14611);
         assert_eq!(row, Field::Date(14611));
+
+        let descr = make_column_descr![PhysicalType::INT32, ConvertedType::TIME_MILLIS];
+        let row = Field::convert_int32(&descr, 14611);
+        assert_eq!(row, Field::TimestampMillis(14611));
 
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
