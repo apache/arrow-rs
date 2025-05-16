@@ -42,14 +42,16 @@ mod null_array;
 mod primitive_array;
 mod struct_array;
 
+mod cached;
 #[cfg(test)]
 mod test_util;
 
-pub use builder::build_array_reader;
+pub(crate) use builder::ArrayReaderBuilder;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use byte_view_array::make_byte_view_array_reader;
+pub(crate) use cached::{CachedPredicateResult, CachedPredicateResultBuilder};
 #[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
@@ -111,7 +113,7 @@ pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
-    /// Returns a [`PageIterator`] for the column chunks with the given leaf column index
+    /// Returns a [`PageIterator`] for the column chunk with the given leaf column index
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 }
 
