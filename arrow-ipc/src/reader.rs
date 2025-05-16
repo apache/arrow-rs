@@ -497,6 +497,7 @@ impl<'a> RecordBatchDecoder<'a> {
             let columns = arrays.into_iter().map(|t| t.1).collect::<Vec<_>>();
 
             if self.skip_validation.get() {
+                // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
                 unsafe {
                     Ok(RecordBatch::new_unchecked(
                         schema,
