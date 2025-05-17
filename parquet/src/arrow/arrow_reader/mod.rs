@@ -17,16 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use arrow_array::cast::AsArray;
-use arrow_array::Array;
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
-use arrow_select::filter::prep_null_mask_filter;
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -38,8 +28,21 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, BooleanArray};
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_select::filter::filter;
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
+mod read_plan;
 mod selection;
 pub mod statistics;
 
@@ -679,38 +682,32 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         };
 
         let mut filter = self.filter;
-        let mut selection = self.selection;
+        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(self.selection);
 
+        // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
             for predicate in filter.predicates.iter_mut() {
-                if !selects_any(selection.as_ref()) {
+                // break early if we have ruled out all rows
+                if !plan_builder.selects_any() {
                     break;
                 }
 
                 let array_reader =
                     build_array_reader(self.fields.as_deref(), predicate.projection(), &reader)?;
 
-                selection = Some(evaluate_predicate(
-                    batch_size,
-                    array_reader,
-                    selection,
-                    predicate.as_mut(),
-                )?);
+                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
         let array_reader = build_array_reader(self.fields.as_deref(), &self.projection, &reader)?;
+        let read_plan = plan_builder
+            .limited(reader.num_rows())
+            .with_offset(self.offset)
+            .with_limit(self.limit)
+            .build_limited()
+            .build();
 
-        // If selection is empty, truncate
-        if !selects_any(selection.as_ref()) {
-            selection = Some(RowSelection::from(vec![]));
-        }
-
-        Ok(ParquetRecordBatchReader::new(
-            batch_size,
-            array_reader,
-            apply_range(selection, reader.num_rows(), self.offset, self.limit),
-        ))
+        Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
 }
 
@@ -789,11 +786,9 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 /// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
 /// read from a parquet data source
 pub struct ParquetRecordBatchReader {
-    batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
-    /// Row ranges to be selected from the data source
-    selection: Option<VecDeque<RowSelector>>,
+    read_plan: ReadPlan,
 }
 
 impl Iterator for ParquetRecordBatchReader {
@@ -806,6 +801,37 @@ impl Iterator for ParquetRecordBatchReader {
     }
 }
 
+/// Take the next selection from the selection queue, and return the selection
+/// whose selected row count is to_select or less (if input selection is exhausted).
+fn take_next_selection(
+    selection: &mut VecDeque<RowSelector>,
+    to_select: usize,
+) -> Option<RowSelection> {
+    let mut current_selected = 0;
+    let mut rt = Vec::new();
+    while let Some(front) = selection.pop_front() {
+        if front.skip {
+            rt.push(front);
+            continue;
+        }
+
+        if current_selected + front.row_count <= to_select {
+            rt.push(front);
+            current_selected += front.row_count;
+        } else {
+            let select = to_select - current_selected;
+            let remaining = front.row_count - select;
+            rt.push(RowSelector::select(select));
+            selection.push_front(RowSelector::select(remaining));
+            return Some(rt.into());
+        }
+    }
+    if !rt.is_empty() {
+        return Some(rt.into());
+    }
+    None
+}
+
 impl ParquetRecordBatchReader {
     /// Returns the next `RecordBatch` from the reader, or `None` if the reader
     /// has reached the end of the file.
@@ -814,58 +840,92 @@ impl ParquetRecordBatchReader {
     /// simplify error handling with `?`
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
-        match self.selection.as_mut() {
+        let batch_size = self.batch_size();
+
+        let mut mask_builder = BooleanBufferBuilder::new(batch_size);
+
+        match self.read_plan.selection_mut() {
             Some(selection) => {
-                while read_records < self.batch_size && !selection.is_empty() {
-                    let front = selection.pop_front().unwrap();
-                    if front.skip {
-                        let skipped = self.array_reader.skip_records(front.row_count)?;
-
-                        if skipped != front.row_count {
-                            return Err(general_err!(
-                                "failed to skip rows, expected {}, got {}",
-                                front.row_count,
-                                skipped
-                            ));
+                while let Some(cur_selection) =
+                    take_next_selection(selection, batch_size - read_records)
+                {
+                    let mut total_read = 0;
+                    let mut total_skip = 0;
+                    for r in cur_selection.iter() {
+                        if r.skip {
+                            total_skip += r.row_count;
+                        } else {
+                            total_read += r.row_count;
                         }
-                        continue;
                     }
+                    let select_count = cur_selection.iter().count();
+                    let total = total_skip + total_read;
 
-                    //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
-                    //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
-                    if front.row_count == 0 {
-                        continue;
-                    }
-
-                    // try to read record
-                    let need_read = self.batch_size - read_records;
-                    let to_read = match front.row_count.checked_sub(need_read) {
-                        Some(remaining) if remaining != 0 => {
-                            // if page row count less than batch_size we must set batch size to page row count.
-                            // add check avoid dead loop
-                            selection.push_front(RowSelector::select(remaining));
-                            need_read
+                    if total < 10 * select_count {
+                        let mut bitmap_builder = BooleanBufferBuilder::new(total);
+                        for select in cur_selection.iter() {
+                            bitmap_builder.append_n(select.row_count, !select.skip);
                         }
-                        _ => front.row_count,
-                    };
-                    match self.array_reader.read_records(to_read)? {
-                        0 => break,
-                        rec => read_records += rec,
-                    };
+                        let bitmap = BooleanArray::new(bitmap_builder.finish(), None);
+                        self.array_reader.read_records(bitmap.len())?;
+                        mask_builder.append_buffer(bitmap.values());
+                        read_records += bitmap.true_count();
+                    } else {
+                        for select in cur_selection.iter() {
+                            if select.skip {
+                                let skipped = self.array_reader.skip_records(select.row_count)?;
+
+                                if skipped != select.row_count {
+                                    return Err(general_err!(
+                                        "failed to skip rows, expected {}, got {}",
+                                        select.row_count,
+                                        skipped
+                                    ));
+                                }
+                                continue;
+                            } else {
+                                //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
+                                //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
+                                if select.row_count == 0 {
+                                    continue;
+                                }
+                                match self.array_reader.read_records(select.row_count)? {
+                                    0 => break,
+                                    rec => {
+                                        mask_builder.append_n(rec, true);
+                                        read_records += rec;
+                                    }
+                                };
+                            }
+                        }
+                    }
+                    if read_records >= (batch_size / 4 * 3) {
+                        break;
+                    }
                 }
             }
             None => {
-                self.array_reader.read_records(self.batch_size)?;
+                let rec = self.array_reader.read_records(self.batch_size())?;
+                mask_builder.append_n(rec, true);
             }
         };
 
         let array = self.array_reader.consume_batch()?;
-        let struct_array = array.as_struct_opt().ok_or_else(|| {
-            ArrowError::ParquetError("Struct array reader should return struct array".to_string())
-        })?;
+        if array.is_empty() {
+            return Ok(None);
+        }
 
-        Ok(if struct_array.len() > 0 {
-            Some(RecordBatch::from(struct_array))
+        let final_array = if mask_builder.is_empty() {
+            array
+        } else {
+            let bitmap = BooleanArray::new(mask_builder.finish(), None);
+            filter(&array, &bitmap)?
+        };
+
+        let struct_arr = final_array.as_struct_opt().expect("StructArray expected");
+
+        Ok(if struct_arr.len() > 0 {
+            Some(RecordBatch::from(struct_arr))
         } else {
             None
         })
@@ -905,116 +965,37 @@ impl ParquetRecordBatchReader {
         let array_reader =
             build_array_reader(levels.levels.as_ref(), &ProjectionMask::all(), row_groups)?;
 
+        let read_plan = ReadPlanBuilder::new(batch_size)
+            .with_selection(selection)
+            .build();
+
         Ok(Self {
-            batch_size,
             array_reader,
             schema: Arc::new(Schema::new(levels.fields.clone())),
-            selection: selection.map(|s| s.trim().into()),
+            read_plan,
         })
     }
 
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    pub(crate) fn new(
-        batch_size: usize,
-        array_reader: Box<dyn ArrayReader>,
-        selection: Option<RowSelection>,
-    ) -> Self {
+    pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
 
         Self {
-            batch_size,
             array_reader,
             schema: Arc::new(schema),
-            selection: selection.map(|s| s.trim().into()),
+            read_plan,
         }
     }
-}
 
-/// Returns `true` if `selection` is `None` or selects some rows
-pub(crate) fn selects_any(selection: Option<&RowSelection>) -> bool {
-    selection.map(|x| x.selects_any()).unwrap_or(true)
-}
-
-/// Applies an optional offset and limit to an optional [`RowSelection`]
-pub(crate) fn apply_range(
-    mut selection: Option<RowSelection>,
-    row_count: usize,
-    offset: Option<usize>,
-    limit: Option<usize>,
-) -> Option<RowSelection> {
-    // If an offset is defined, apply it to the `selection`
-    if let Some(offset) = offset {
-        selection = Some(match row_count.checked_sub(offset) {
-            None => RowSelection::from(vec![]),
-            Some(remaining) => selection
-                .map(|selection| selection.offset(offset))
-                .unwrap_or_else(|| {
-                    RowSelection::from(vec![
-                        RowSelector::skip(offset),
-                        RowSelector::select(remaining),
-                    ])
-                }),
-        });
+    #[inline(always)]
+    pub(crate) fn batch_size(&self) -> usize {
+        self.read_plan.batch_size()
     }
-
-    // If a limit is defined, apply it to the final `selection`
-    if let Some(limit) = limit {
-        selection = Some(
-            selection
-                .map(|selection| selection.limit(limit))
-                .unwrap_or_else(|| {
-                    RowSelection::from(vec![RowSelector::select(limit.min(row_count))])
-                }),
-        );
-    }
-    selection
-}
-
-/// Evaluates an [`ArrowPredicate`], returning a [`RowSelection`] indicating
-/// which rows to return.
-///
-/// `input_selection`: Optional pre-existing selection. If `Some`, then the
-/// final [`RowSelection`] will be the conjunction of it and the rows selected
-/// by `predicate`.
-///
-/// Note: A pre-existing selection may come from evaluating a previous predicate
-/// or if the [`ParquetRecordBatchReader`] specified an explicit
-/// [`RowSelection`] in addition to one or more predicates.
-pub(crate) fn evaluate_predicate(
-    batch_size: usize,
-    array_reader: Box<dyn ArrayReader>,
-    input_selection: Option<RowSelection>,
-    predicate: &mut dyn ArrowPredicate,
-) -> Result<RowSelection> {
-    let reader = ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
-    let mut filters = vec![];
-    for maybe_batch in reader {
-        let maybe_batch = maybe_batch?;
-        let input_rows = maybe_batch.num_rows();
-        let filter = predicate.evaluate(maybe_batch)?;
-        // Since user supplied predicate, check error here to catch bugs quickly
-        if filter.len() != input_rows {
-            return Err(arrow_err!(
-                "ArrowPredicate predicate returned {} rows, expected {input_rows}",
-                filter.len()
-            ));
-        }
-        match filter.null_count() {
-            0 => filters.push(filter),
-            _ => filters.push(prep_null_mask_filter(&filter)),
-        };
-    }
-
-    let raw = RowSelection::from_filters(&filters);
-    Ok(match input_selection {
-        Some(selection) => selection.and_then(&raw),
-        None => raw,
-    })
 }
 
 #[cfg(test)]
@@ -3993,7 +3974,7 @@ mod tests {
             .build()
             .unwrap();
         assert_ne!(1024, num_rows);
-        assert_eq!(reader.batch_size, num_rows as usize);
+        assert_eq!(reader.read_plan.batch_size(), num_rows as usize);
     }
 
     #[test]
