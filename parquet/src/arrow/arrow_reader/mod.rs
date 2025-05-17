@@ -17,14 +17,16 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
+use std::collections::VecDeque;
 use arrow_array::cast::AsArray;
-use arrow_array::Array;
+use arrow_array::{Array, BooleanArray};
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::sync::Arc;
-
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_select::filter::filter;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -799,6 +801,37 @@ impl Iterator for ParquetRecordBatchReader {
     }
 }
 
+/// Take the next selection from the selection queue, and return the selection
+/// whose selected row count is to_select or less (if input selection is exhausted).
+fn take_next_selection(
+    selection: &mut VecDeque<RowSelector>,
+    to_select: usize,
+) -> Option<RowSelection> {
+    let mut current_selected = 0;
+    let mut rt = Vec::new();
+    while let Some(front) = selection.pop_front() {
+        if front.skip {
+            rt.push(front);
+            continue;
+        }
+
+        if current_selected + front.row_count <= to_select {
+            rt.push(front);
+            current_selected += front.row_count;
+        } else {
+            let select = to_select - current_selected;
+            let remaining = front.row_count - select;
+            rt.push(RowSelector::select(select));
+            selection.push_front(RowSelector::select(remaining));
+            return Some(rt.into());
+        }
+    }
+    if !rt.is_empty() {
+        return Some(rt.into());
+    }
+    None
+}
+
 impl ParquetRecordBatchReader {
     /// Returns the next `RecordBatch` from the reader, or `None` if the reader
     /// has reached the end of the file.
@@ -808,58 +841,92 @@ impl ParquetRecordBatchReader {
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
+
+        let mut mask_builder = BooleanBufferBuilder::new(batch_size);
+
         match self.read_plan.selection_mut() {
             Some(selection) => {
-                while read_records < batch_size && !selection.is_empty() {
-                    let front = selection.pop_front().unwrap();
-                    if front.skip {
-                        let skipped = self.array_reader.skip_records(front.row_count)?;
+                while let Some(cur_selection) =
+                    take_next_selection(selection, batch_size - read_records)
+                {
+                    let mut total_read = 0;
+                    let mut total_skip = 0;
+                    for r in cur_selection.iter() {
+                        if r.skip {
+                            total_skip += r.row_count;
+                        } else {
+                            total_read += r.row_count;
+                        }
+                    }
+                    let select_count = cur_selection.iter().count();
+                    let total = total_skip + total_read;
 
-                        if skipped != front.row_count {
-                            return Err(general_err!(
+                    if total < 10 * select_count {
+                        let mut bitmap_builder = BooleanBufferBuilder::new(total);
+                        for select in cur_selection.iter() {
+                            bitmap_builder.append_n(select.row_count, !select.skip);
+                        }
+                        let bitmap = BooleanArray::new(bitmap_builder.finish(), None);
+                        self.array_reader.read_records(bitmap.len())?;
+                        mask_builder.append_buffer(bitmap.values());
+                        read_records += bitmap.true_count();
+                    } else {
+                        for select in cur_selection.iter() {
+                            if select.skip {
+                                let skipped = self.array_reader.skip_records(select.row_count)?;
+
+                                if skipped != select.row_count {
+                                    return Err(general_err!(
                                 "failed to skip rows, expected {}, got {}",
-                                front.row_count,
+                                select.row_count,
                                 skipped
                             ));
+                                }
+                                continue;
+                            } else {
+                                //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
+                                //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
+                                if select.row_count == 0 {
+                                    continue;
+                                }
+                                match self.array_reader.read_records(select.row_count)? {
+                                    0 => break,
+                                    rec => {
+                                        mask_builder.append_n(rec, true);
+                                        read_records += rec;
+                                    },
+                                };
+                            }
                         }
-                        continue;
                     }
-
-                    //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
-                    //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
-                    if front.row_count == 0 {
-                        continue;
+                    if read_records >= (batch_size / 4 * 3) {
+                        break;
                     }
-
-                    // try to read record
-                    let need_read = batch_size - read_records;
-                    let to_read = match front.row_count.checked_sub(need_read) {
-                        Some(remaining) if remaining != 0 => {
-                            // if page row count less than batch_size we must set batch size to page row count.
-                            // add check avoid dead loop
-                            selection.push_front(RowSelector::select(remaining));
-                            need_read
-                        }
-                        _ => front.row_count,
-                    };
-                    match self.array_reader.read_records(to_read)? {
-                        0 => break,
-                        rec => read_records += rec,
-                    };
                 }
             }
             None => {
-                self.array_reader.read_records(batch_size)?;
+                let rec = self.array_reader.read_records(self.batch_size())?;
+                mask_builder.append_n(rec, true);
             }
         };
 
         let array = self.array_reader.consume_batch()?;
-        let struct_array = array.as_struct_opt().ok_or_else(|| {
-            ArrowError::ParquetError("Struct array reader should return struct array".to_string())
-        })?;
+        if array.is_empty(){
+            return Ok(None);
+        }
 
-        Ok(if struct_array.len() > 0 {
-            Some(RecordBatch::from(struct_array))
+        let final_array = if mask_builder.is_empty() {
+            array
+        } else {
+            let bitmap = BooleanArray::new(mask_builder.finish(), None);
+            filter(&array, &bitmap)?
+        };
+
+        let struct_arr = final_array.as_struct_opt().expect("StructArray expected");
+
+
+        Ok(if struct_arr.len() > 0 {
+            Some(RecordBatch::from(struct_arr))
         } else {
             None
         })
