@@ -77,7 +77,7 @@ pub struct ArrowJsonSchema {
 }
 
 /// Fields are left as JSON `Value` as they vary by `DataType`
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArrowJsonField {
     /// The name of the field
     pub name: String,
@@ -134,7 +134,7 @@ impl From<&Field> for ArrowJsonField {
 }
 
 /// Represents a dictionary-encoded field in the Arrow JSON format
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArrowJsonFieldDictionary {
     /// A unique identifier for the dictionary
     pub id: i64,
@@ -147,7 +147,7 @@ pub struct ArrowJsonFieldDictionary {
 }
 
 /// Type of an index for a dictionary-encoded field in the Arrow JSON format
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DictionaryIndexType {
     /// The name of the dictionary index type
     pub name: String,
@@ -238,7 +238,9 @@ impl ArrowJson {
         let batches: Result<Vec<_>> = self
             .batches
             .iter()
-            .map(|col| record_batch_from_json(&schema, col.clone(), Some(&dictionaries)))
+            .map(|col| {
+                record_batch_from_json(&schema, &self.schema, col.clone(), Some(&dictionaries))
+            })
             .collect();
 
         batches
@@ -314,13 +316,19 @@ impl ArrowJsonField {
 /// Generates a [`RecordBatch`] from an Arrow JSON batch, given a schema
 pub fn record_batch_from_json(
     schema: &Schema,
+    json_schema: &ArrowJsonSchema,
     json_batch: ArrowJsonBatch,
     json_dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
 ) -> Result<RecordBatch> {
     let mut columns = vec![];
 
-    for (field, json_col) in schema.fields().iter().zip(json_batch.columns) {
-        let col = array_from_json(field, json_col, json_dictionaries)?;
+    for ((field, json_field), json_col) in schema
+        .fields()
+        .iter()
+        .zip(json_schema.fields.clone().into_iter())
+        .zip(json_batch.columns.into_iter())
+    {
+        let col = array_from_json(field, &json_field, json_col, json_dictionaries)?;
         columns.push(col);
     }
 
@@ -330,6 +338,7 @@ pub fn record_batch_from_json(
 /// Construct an Arrow array from a partially typed JSON column
 pub fn array_from_json(
     field: &Field,
+    json_field: &ArrowJsonField,
     json_col: ArrowJsonColumn,
     dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
 ) -> Result<ArrayRef> {
@@ -723,7 +732,12 @@ pub fn array_from_json(
         DataType::List(child_field) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let child_array = array_from_json(
+                child_field,
+                json_field.children.first().unwrap(),
+                children[0].clone(),
+                dictionaries,
+            )?;
             let offsets: Vec<i32> = json_col
                 .offset
                 .unwrap()
@@ -743,7 +757,12 @@ pub fn array_from_json(
         DataType::LargeList(child_field) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let child_array = array_from_json(
+                child_field,
+                json_field.children.first().unwrap(),
+                children[0].clone(),
+                dictionaries,
+            )?;
             let offsets: Vec<i64> = json_col
                 .offset
                 .unwrap()
@@ -766,7 +785,12 @@ pub fn array_from_json(
         }
         DataType::FixedSizeList(child_field, _) => {
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let child_array = array_from_json(
+                child_field,
+                json_field.children.first().unwrap(),
+                children[0].clone(),
+                dictionaries,
+            )?;
             let null_buf = create_null_buf(&json_col);
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
@@ -783,8 +807,12 @@ pub fn array_from_json(
                 .len(json_col.count)
                 .null_bit_buffer(Some(null_buf));
 
-            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
-                let array = array_from_json(field, col, dictionaries)?;
+            for ((field, json_field), col) in fields
+                .iter()
+                .zip(json_field.children.clone())
+                .zip(json_col.children.unwrap())
+            {
+                let array = array_from_json(field, &json_field, col, dictionaries)?;
                 array_data = array_data.add_child_data(array.into_data());
             }
 
@@ -792,10 +820,13 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
-            #[allow(deprecated)]
-            let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
-            })?;
+            let dict_id = json_field
+                .dictionary
+                .as_ref()
+                .ok_or_else(|| {
+                    ArrowError::JsonError(format!("Unable to find dictionary for field {field:?}"))
+                })?
+                .id;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
@@ -807,6 +838,7 @@ pub fn array_from_json(
             match dictionary {
                 Some(dictionary) => dictionary_array_from_json(
                     field,
+                    json_field,
                     json_col,
                     key_type,
                     value_type,
@@ -868,7 +900,12 @@ pub fn array_from_json(
         DataType::Map(child_field, _) => {
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
-            let child_array = array_from_json(child_field, children[0].clone(), dictionaries)?;
+            let child_array = array_from_json(
+                child_field,
+                json_field.children.first().unwrap(),
+                children[0].clone(),
+                dictionaries,
+            )?;
             let offsets: Vec<i32> = json_col
                 .offset
                 .unwrap()
@@ -900,8 +937,12 @@ pub fn array_from_json(
                 .map(|offsets| offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect());
 
             let mut children = Vec::with_capacity(fields.len());
-            for ((_, field), col) in fields.iter().zip(json_col.children.unwrap()) {
-                let array = array_from_json(field, col, dictionaries)?;
+            for (((_, field), col), json_field) in fields
+                .iter()
+                .zip(json_col.children.unwrap())
+                .zip(json_field.children.clone())
+            {
+                let array = array_from_json(field, &json_field, col, dictionaries)?;
                 children.push(array);
             }
 
@@ -918,6 +959,7 @@ pub fn array_from_json(
 /// Construct a [`DictionaryArray`] from a partially typed JSON column
 pub fn dictionary_array_from_json(
     field: &Field,
+    json_field: &ArrowJsonField,
     json_col: ArrowJsonColumn,
     dict_key: &DataType,
     dict_value: &DataType,
@@ -936,24 +978,39 @@ pub fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
-            #[allow(deprecated)]
             let key_field = Field::new_dict(
                 "key",
                 dict_key.clone(),
                 field.is_nullable(),
-                #[allow(deprecated)]
-                field
-                    .dict_id()
-                    .expect("Dictionary fields must have a dict_id value"),
                 field
                     .dict_is_ordered()
                     .expect("Dictionary fields must have a dict_is_ordered value"),
             );
-            let keys = array_from_json(&key_field, json_col, None)?;
+            let keys = array_from_json(
+                &key_field,
+                &ArrowJsonField {
+                    name: "key".to_string(),
+                    field_type: json_field.field_type.clone(),
+                    nullable: false,
+                    children: json_field.children[0].children.clone(),
+                    dictionary: None,
+                    metadata: json_field.metadata.clone(),
+                },
+                json_col,
+                None,
+            )?;
             // note: not enough info on nullability of dictionary
-            let value_field = Field::new("value", dict_value.clone(), true);
+            let value_field = Field::new("value", dict_value.clone(), json_field.nullable);
             let values = array_from_json(
                 &value_field,
+                &ArrowJsonField {
+                    name: "value".to_string(),
+                    field_type: json_field.field_type.clone(),
+                    nullable: json_field.nullable,
+                    children: json_field.children[1].children.clone(),
+                    dictionary: None,
+                    metadata: json_field.metadata.clone(),
+                },
                 dictionary.data.columns[0].clone(),
                 dictionaries,
             )?;

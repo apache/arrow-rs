@@ -18,6 +18,7 @@
 use crate::{data_type_from_json, data_type_to_json};
 use arrow::datatypes::{DataType, Field};
 use arrow::error::{ArrowError, Result};
+use arrow_ipc::writer::DictionaryTracker;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -218,7 +219,6 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 _ => data_type,
             };
 
-            let mut dict_id = 0;
             let mut dict_is_ordered = false;
 
             let data_type = match map.get("dictionary") {
@@ -228,14 +228,6 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                         _ => {
                             return Err(ArrowError::ParseError(
                                 "Field missing 'indexType' attribute".to_string(),
-                            ));
-                        }
-                    };
-                    dict_id = match dictionary.get("id") {
-                        Some(Value::Number(n)) => n.as_i64().unwrap(),
-                        _ => {
-                            return Err(ArrowError::ParseError(
-                                "Field missing 'id' attribute".to_string(),
                             ));
                         }
                     };
@@ -252,8 +244,7 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
                 _ => data_type,
             };
 
-            #[allow(deprecated)]
-            let mut field = Field::new_dict(name, data_type, nullable, dict_id, dict_is_ordered);
+            let mut field = Field::new_dict(name, data_type, nullable, dict_is_ordered);
             field.set_metadata(metadata);
             Ok(field)
         }
@@ -264,27 +255,28 @@ pub fn field_from_json(json: &serde_json::Value) -> Result<Field> {
 }
 
 /// Generate a JSON representation of the `Field`.
-pub fn field_to_json(field: &Field) -> serde_json::Value {
+pub fn field_to_json(dict_tracker: &mut DictionaryTracker, field: &Field) -> serde_json::Value {
     let children: Vec<serde_json::Value> = match field.data_type() {
-        DataType::Struct(fields) => fields.iter().map(|x| field_to_json(x.as_ref())).collect(),
+        DataType::Struct(fields) => fields
+            .iter()
+            .map(|x| field_to_json(dict_tracker, x.as_ref()))
+            .collect(),
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _)
-        | DataType::Map(field, _) => vec![field_to_json(field)],
+        | DataType::Map(field, _) => vec![field_to_json(dict_tracker, field)],
         _ => vec![],
     };
 
     match field.data_type() {
         DataType::Dictionary(ref index_type, ref value_type) => {
-            #[allow(deprecated)]
-            let dict_id = field.dict_id().unwrap();
             serde_json::json!({
                 "name": field.name(),
                 "nullable": field.is_nullable(),
                 "type": data_type_to_json(value_type),
                 "children": children,
                 "dictionary": {
-                    "id": dict_id,
+                    "id": dict_tracker.next_dict_id(),
                     "indexType": data_type_to_json(index_type),
                     "isOrdered": field.dict_is_ordered().unwrap(),
                 }
@@ -345,7 +337,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(value, field_to_json(&f));
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        assert_eq!(value, field_to_json(&mut dictionary_tracker, &f));
     }
 
     #[test]
@@ -398,7 +391,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(value, field_to_json(&f));
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        assert_eq!(value, field_to_json(&mut dictionary_tracker, &f));
     }
 
     #[test]
@@ -415,7 +409,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(value, field_to_json(&f));
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        assert_eq!(value, field_to_json(&mut dictionary_tracker, &f));
     }
     #[test]
     fn parse_struct_from_json() {
