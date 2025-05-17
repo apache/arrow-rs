@@ -17,16 +17,6 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use std::collections::VecDeque;
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, BooleanArray};
-use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
-pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
-use std::sync::Arc;
-use arrow_buffer::BooleanBufferBuilder;
-use arrow_select::filter::filter;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -38,6 +28,16 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, BooleanArray};
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_buffer::BooleanBufferBuilder;
+use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_select::filter::filter;
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
 
@@ -877,10 +877,10 @@ impl ParquetRecordBatchReader {
 
                                 if skipped != select.row_count {
                                     return Err(general_err!(
-                                "failed to skip rows, expected {}, got {}",
-                                select.row_count,
-                                skipped
-                            ));
+                                        "failed to skip rows, expected {}, got {}",
+                                        select.row_count,
+                                        skipped
+                                    ));
                                 }
                                 continue;
                             } else {
@@ -894,7 +894,7 @@ impl ParquetRecordBatchReader {
                                     rec => {
                                         mask_builder.append_n(rec, true);
                                         read_records += rec;
-                                    },
+                                    }
                                 };
                             }
                         }
@@ -911,7 +911,7 @@ impl ParquetRecordBatchReader {
         };
 
         let array = self.array_reader.consume_batch()?;
-        if array.is_empty(){
+        if array.is_empty() {
             return Ok(None);
         }
 
@@ -923,7 +923,6 @@ impl ParquetRecordBatchReader {
         };
 
         let struct_arr = final_array.as_struct_opt().expect("StructArray expected");
-
 
         Ok(if struct_arr.len() > 0 {
             Some(RecordBatch::from(struct_arr))
