@@ -27,6 +27,7 @@ use arrow::compute::{take, TakeOptions};
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
+use std::hint;
 
 fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
     let mut rng = seedable_rng();
@@ -43,11 +44,11 @@ fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
 }
 
 fn bench_take(values: &dyn Array, indices: &UInt32Array) {
-    criterion::black_box(take(values, indices, None).unwrap());
+    hint::black_box(take(values, indices, None).unwrap());
 }
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
-    criterion::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
+    hint::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

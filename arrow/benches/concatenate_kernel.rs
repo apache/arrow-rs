@@ -26,13 +26,14 @@ use arrow::array::*;
 use arrow::compute::concat;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
+use std::hint;
 
 fn bench_concat(v1: &dyn Array, v2: &dyn Array) {
-    criterion::black_box(concat(&[v1, v2]).unwrap());
+    hint::black_box(concat(&[v1, v2]).unwrap());
 }
 
 fn bench_concat_arrays(arrays: &[&dyn Array]) {
-    criterion::black_box(concat(arrays).unwrap());
+    hint::black_box(concat(arrays).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

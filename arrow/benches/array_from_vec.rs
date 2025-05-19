@@ -25,11 +25,11 @@ extern crate arrow;
 use arrow::array::*;
 use arrow_buffer::i256;
 use rand::Rng;
-use std::sync::Arc;
+use std::{hint, sync::Arc};
 
 fn array_from_vec(n: usize) {
     let v: Vec<i32> = (0..n as i32).collect();
-    criterion::black_box(Int32Array::from(v));
+    hint::black_box(Int32Array::from(v));
 }
 
 fn array_string_from_vec(n: usize) {
@@ -41,7 +41,7 @@ fn array_string_from_vec(n: usize) {
             v.push(None);
         }
     }
-    criterion::black_box(StringArray::from(v));
+    hint::black_box(StringArray::from(v));
 }
 
 fn struct_array_values(
@@ -70,11 +70,11 @@ fn struct_array_from_vec(
     let strings: ArrayRef = Arc::new(StringArray::from(strings.to_owned()));
     let ints: ArrayRef = Arc::new(Int32Array::from(ints.to_owned()));
 
-    criterion::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
+    hint::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
 }
 
 fn decimal128_array_from_vec(array: &[Option<i128>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
@@ -85,7 +85,7 @@ fn decimal128_array_from_vec(array: &[Option<i128>]) {
 }
 
 fn decimal256_array_from_vec(array: &[Option<i256>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
