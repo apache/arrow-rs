@@ -418,7 +418,7 @@ pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 ///
 /// ```
 /// # use arrow_array::Decimal128Array;
-/// // Create from Vec<Option<i18>>
+/// // Create from Vec<Option<i128>>
 /// let arr = Decimal128Array::from(vec![Some(1), None, Some(2)]);
 /// // Create from Vec<i128>
 /// let arr = Decimal128Array::from(vec![1, 2, 3]);
