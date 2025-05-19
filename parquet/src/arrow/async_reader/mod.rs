@@ -1593,9 +1593,9 @@ mod tests {
             &StringArray::from_iter_values(["2", "3", "4"])
         );
 
-        // Should only have made 2 requests. First request fetches the
-        // data for evaluating the predicate and second request fetches
-        // the data for evaluating the projection
+        // Should only have made 2 requests:
+        // * First request fetches data for evaluating the predicate
+        // * Second request fetches data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
@@ -1665,6 +1665,9 @@ mod tests {
         assert_eq!(val, 3);
 
         // Should only have made 3 requests
+        // * First request fetches data for evaluating the first predicate
+        // * Second request fetches data for evaluating the second predicate
+        // * Third request fetches data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 3);
     }
 
@@ -2264,6 +2267,9 @@ mod tests {
         assert_eq!(val, 3);
 
         // Should only have made 3 requests
+        // * First request fetches data for evaluating the first predicate
+        // * Second request fetches data for evaluating the second predicate
+        // * Third request fetches data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 3);
     }
 
