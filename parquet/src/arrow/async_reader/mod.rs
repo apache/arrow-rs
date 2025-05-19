@@ -1593,7 +1593,9 @@ mod tests {
             &StringArray::from_iter_values(["2", "3", "4"])
         );
 
-        // Should only have made 2 requests
+        // Should only have made 2 requests. First request fetches the
+        // data for evaluating the predicate and second request fetches
+        // the data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 2);
     }
 
