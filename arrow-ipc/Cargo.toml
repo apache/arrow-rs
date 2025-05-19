@@ -49,7 +49,7 @@ default = []
 lz4 = ["lz4_flex"]
 
 [dev-dependencies]
-criterion = "0.5.1"
+criterion = "0.6.0"
 tempfile = "3.3"
 tokio = "1.43.0"
 # used in benches
