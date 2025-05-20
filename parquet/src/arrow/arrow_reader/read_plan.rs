@@ -122,6 +122,7 @@ impl ReadPlanBuilder {
             &reader.schema(),
             predicate.projection(),
             projection_mask,
+            self.batch_size,
         );
         for maybe_batch in reader {
             let batch = maybe_batch?;
@@ -138,7 +139,7 @@ impl ReadPlanBuilder {
         }
 
         let (raw, cached_predicate_result) =
-            cached_results_builder.build(self.batch_size, predicate.projection())?;
+            cached_results_builder.build(predicate.projection())?;
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),
