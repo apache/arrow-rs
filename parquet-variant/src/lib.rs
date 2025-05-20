@@ -15,21 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::types::Date32Type;
-use arrow_cast::parse::Parser;
-use criterion::*;
-use std::hint;
-
-fn criterion_benchmark(c: &mut Criterion) {
-    let timestamps = ["2020-09-08", "2020-9-8", "2020-09-8", "2020-9-08"];
-
-    for timestamp in timestamps {
-        let t = hint::black_box(timestamp);
-        c.bench_function(t, |b| {
-            b.iter(|| Date32Type::parse(t).unwrap());
-        });
-    }
-}
-
-criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
+//! Implementation of [Variant Binary Encoding] from [Apache Parquet].
+//!
+//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+//! [Apache Parquet]: https://parquet.apache.org/
+//!
+//! ## 🚧 Work In Progress
+//!
+//! This crate is under active development and is not yet ready for production use.
+//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
+//!
+//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736

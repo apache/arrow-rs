@@ -989,6 +989,9 @@ impl ArrowColumnWriterFactory {
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
+                ArrowDataType::FixedSizeBinary(_) => {
+                    out.push(bytes(leaves.next().unwrap())?)
+                }
                 _ => {
                     out.push(col(leaves.next().unwrap())?)
                 }
@@ -1333,6 +1336,7 @@ mod tests {
     use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
     use half::f16;
+    use num::{FromPrimitive, ToPrimitive};
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -1912,6 +1916,50 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_in_dict() {
+        fn test_fixed_size_binary_in_dict_inner<K>()
+        where
+            K: ArrowDictionaryKeyType,
+            K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
+            <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
+        {
+            let field = Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(K::DATA_TYPE),
+                    Box::new(DataType::FixedSizeBinary(4)),
+                ),
+                false,
+            );
+            let schema = Schema::new(vec![field]);
+
+            let keys: Vec<K::Native> = vec![
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(1u8).unwrap(),
+            ];
+            let keys = PrimitiveArray::<K>::from_iter_values(keys);
+            let values = FixedSizeBinaryArray::try_from_iter(
+                vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
+            )
+            .unwrap();
+
+            let data = DictionaryArray::<K>::new(keys, Arc::new(values));
+            let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+            roundtrip(batch, None);
+        }
+
+        test_fixed_size_binary_in_dict_inner::<UInt8Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt32Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int8Type>();
+        test_fixed_size_binary_in_dict_inner::<Int16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int32Type>();
+        test_fixed_size_binary_in_dict_inner::<Int64Type>();
+    }
+
+    #[test]
     fn test_empty_dict() {
         let struct_fields = Fields::from(vec![Field::new(
             "dict",
@@ -2471,25 +2519,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }

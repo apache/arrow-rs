@@ -213,7 +213,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
         (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
-        (FixedSizeBinary(_), Binary | LargeBinary) => true,
+        (FixedSizeBinary(_), Binary | LargeBinary | BinaryView) => true,
         (
             Utf8 | LargeUtf8 | Utf8View,
             Binary
@@ -1192,6 +1192,7 @@ pub fn cast_with_options(
         (FixedSizeBinary(size), _) => match to_type {
             Binary => cast_fixed_size_binary_to_binary::<i32>(array, *size),
             LargeBinary => cast_fixed_size_binary_to_binary::<i64>(array, *size),
+            BinaryView => cast_fixed_size_binary_to_binary_view(array, *size),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type:?} to {to_type:?} not supported",
             ))),
@@ -2316,6 +2317,27 @@ fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
 
     let mut builder = GenericBinaryBuilder::<O>::with_capacity(array.len(), array.len());
 
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            builder.append_value(array.value(i));
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn cast_fixed_size_binary_to_binary_view(
+    array: &dyn Array,
+    _byte_width: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+
+    let mut builder = BinaryViewBuilder::with_capacity(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
             builder.append_null();
@@ -4844,6 +4866,12 @@ mod tests {
 
         let array_ref = cast(&a1, &DataType::LargeBinary).unwrap();
         let down_cast = array_ref.as_binary::<i64>();
+        assert_eq!(bytes_1, down_cast.value(0));
+        assert_eq!(bytes_2, down_cast.value(1));
+        assert!(down_cast.is_null(2));
+
+        let array_ref = cast(&a1, &DataType::BinaryView).unwrap();
+        let down_cast = array_ref.as_binary_view();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));

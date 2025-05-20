@@ -212,12 +212,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         if let Some(file_encryption_properties) = &properties.file_encryption_properties {
             file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
 
-            if !file_encryption_properties.encrypt_footer() {
-                return Err(general_err!(
-                    "Writing encrypted files with plaintext footers is not supported yet"
-                ));
-            }
-
             Ok(Some(Arc::new(FileEncryptor::new(
                 file_encryption_properties.clone(),
             )?)))

@@ -23,12 +23,14 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
 const RIGHT_TWELVE: u128 = 0x0000_0000_ffff_ffff_ffff_ffff_ffff_ffff;
-const NONCE_LEN: usize = 12;
-const TAG_LEN: usize = 16;
-const SIZE_LEN: usize = 4;
+pub(crate) const NONCE_LEN: usize = 12;
+pub(crate) const TAG_LEN: usize = 16;
+pub(crate) const SIZE_LEN: usize = 4;
 
 pub(crate) trait BlockDecryptor: Debug + Send + Sync {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
+
+    fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>>;
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,19 @@ impl BlockDecryptor for RingGcmBlockDecryptor {
         // Truncate result to remove the tag
         result.resize(result.len() - TAG_LEN, 0u8);
         Ok(result)
+    }
+
+    fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+        let mut plaintext = plaintext.to_vec();
+        let nonce = &plaintext[plaintext.len() - NONCE_LEN - TAG_LEN..plaintext.len() - TAG_LEN];
+        let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce)?;
+        let plaintext_end = plaintext.len() - NONCE_LEN - TAG_LEN;
+        let tag = self.key.seal_in_place_separate_tag(
+            nonce,
+            Aad::from(aad),
+            &mut plaintext[..plaintext_end],
+        )?;
+        Ok(tag.as_ref().to_vec())
     }
 }
 
