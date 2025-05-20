@@ -837,6 +837,39 @@ impl ParquetRecordBatchReader {
     ///
     /// Returns `Result<Option<..>>` rather than `Option<Result<..>>` to
     /// simplify error handling with `?`
+    ///
+    /// Use the adaptive selection strategy to read the next batch of rows, here are the
+    /// details about the policy:
+    ///
+    /// **Window Size**: The adaptive window size equals the configured `batch_size`.
+    /// For each call, the reader processes up to `batch_size` rows in one logical window.
+    /// It dynamically decides on a per-subwindow basis whether to use:
+    /// - **Range-based selection** (default, for higher throughput)
+    /// - **Bitmap-based selection** (finer granularity when runs are very short)
+    ///
+    /// **Switching Criterion**: Only when the *average run length* in the subwindow is < 10 rows
+    /// (i.e. `total_rows < 10 * num_runs`) do we switch from range to bitmap mode.
+    ///
+    /// **Example Patterns (sub-window examples)**：
+    /// *Note: these totals refer to a sampled sub-window of the full batch, not the entire `batch_size`.*
+    ///
+    /// ```text
+    /// Batch size = 8192 rows (Window)
+    ///
+    /// 1) Big range runs:
+    ///    [2000 read | 2000 skip | 4192 read]
+    ///    avg ≈ 3 runs, avg length ≈ 2730 → **range** mode
+    ///
+    /// 2) Medium range runs:
+    ///    [200 read | 200 skip | 200 read ...]
+    ///    avg length ≈ 200 → **range** mode
+    ///
+    /// 3) Dense small runs (many small alternations):
+    ///    [ 5 read | 10 skip | 5 read | 10 skip | 5 read | 5 read ... ]
+    ///    avg ≈ 6.7 < 10 → **bitmap** mode
+    /// ```
+    ///
+    /// Returns a `RecordBatch` if any rows are produced, or `None` when no rows remain.
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
@@ -859,40 +892,8 @@ impl ParquetRecordBatchReader {
                     let select_count = cur_selection.iter().count();
                     let total = total_skip + total_read;
 
-                    /// Reads the next batch of records according to the adaptive selection strategy.
-                    ///
-                    /// **Window Size**: The adaptive window size equals the configured `batch_size`.
-                    /// For each call, the reader processes up to `batch_size` rows in one logical window.
-                    /// It dynamically decides on a per-subwindow basis whether to use:
-                    /// - **Range-based selection** (default, for higher throughput)
-                    /// - **Bitmap-based selection** (finer granularity when runs are very short)
-                    ///
-                    /// **Switching Criterion**: Only when the *average run length* in the subwindow is < 10 rows
-                    /// (i.e. `total_rows < 10 * num_runs`) do we switch from range to bitmap mode.
-                    ///
-                    /// **Example Patterns (sub-window examples)**：
-                    /// *Note: these totals refer to a sampled sub-window of the full batch, not the entire `batch_size`.*
-                    ///
-                    /// ```text
-                    /// Batch size = 8192 rows (Window)
-                    ///
-                    /// 1) Big range runs:
-                    ///    [2000 read | 2000 skip | 4192 read]
-                    ///    avg ≈ 3 runs, avg length ≈ 2730 → **range** mode
-                    ///
-                    /// 2) Medium range runs:
-                    ///    [200 read | 200 skip | 200 read ...]
-                    ///    avg length ≈ 200 → **range** mode
-                    ///
-                    /// 3) Dense small runs (many small alternations):
-                    ///    [ 5 read | 10 skip | 5 read | 10 skip | 5 read | 5 read ... ]
-                    ///    avg ≈ 6.7 < 10 → **bitmap** mode
-                    /// ```
-                    ///
-                    /// Returns a `RecordBatch` if any rows are produced, or `None` when no rows remain.
-
-                    // Choose bitmap and then to filter if runs are on average < 10 rows
                     if total < 10 * select_count {
+                        // Choose bitmap and then to filter if runs are on average < 10 rows
                         let mut bitmap_builder = BooleanBufferBuilder::new(total);
                         for select in cur_selection.iter() {
                             bitmap_builder.append_n(select.row_count, !select.skip);
