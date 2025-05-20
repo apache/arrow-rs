@@ -756,7 +756,7 @@ pub fn lexsort_to_indices(
 // Sort a fixed number of columns using FixedLexicographicalComparator
 fn sort_fixed_column<const N: usize>(
     columns: &[SortColumn],
-    value_indices: &mut Vec<usize>,
+    value_indices: &mut [usize],
     len: usize,
 ) -> Result<(), ArrowError> {
     let lexicographical_comparator = FixedLexicographicalComparator::<N>::try_new(columns)?;
