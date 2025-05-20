@@ -29,6 +29,7 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_select::interleave::interleave;
+use std::hint;
 
 fn do_bench(
     c: &mut Criterion,
@@ -61,7 +62,7 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
         .collect();
 
     c.bench_function(name, |b| {
-        b.iter(|| criterion::black_box(interleave(values, &indices).unwrap()))
+        b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
 }
 

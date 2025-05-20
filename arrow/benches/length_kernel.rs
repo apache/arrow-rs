@@ -23,9 +23,10 @@ extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::kernels::length::length;
+use std::hint;
 
 fn bench_length(array: &StringArray) {
-    criterion::black_box(length(array).unwrap());
+    hint::black_box(length(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
