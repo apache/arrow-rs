@@ -140,7 +140,7 @@ impl ReadPlanBuilder {
     }
 }
 
-/// Bbuilder for [`ReadPlan`] that applies a limit and offset to the read plan
+/// Builder for [`ReadPlan`] that applies a limit and offset to the read plan
 ///
 /// See [`ReadPlanBuilder::limited`] to create this builder.
 pub(crate) struct LimitedReadPlanBuilder {

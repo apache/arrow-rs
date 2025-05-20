@@ -16,7 +16,6 @@
 // under the License.
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
-
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
@@ -841,7 +840,6 @@ impl ParquetRecordBatchReader {
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
-
         let mut mask_builder = BooleanBufferBuilder::new(batch_size);
 
         match self.read_plan.selection_mut() {
@@ -860,7 +858,6 @@ impl ParquetRecordBatchReader {
                     }
                     let select_count = cur_selection.iter().count();
                     let total = total_skip + total_read;
-
                     if total < 10 * select_count {
                         let mut bitmap_builder = BooleanBufferBuilder::new(total);
                         for select in cur_selection.iter() {
