@@ -215,28 +215,28 @@ pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
     (v.div_euclid(base), v.rem_euclid(base) as u32)
 }
 
-/// converts a `i64` representing a `duration(s)` to [`Duration`]
+/// converts a `i64` representing a `duration(s)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_s_to_duration(v: i64) -> Duration {
-    Duration::try_seconds(v).unwrap()
+pub fn duration_s_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_seconds(v)
 }
 
-/// converts a `i64` representing a `duration(ms)` to [`Duration`]
+/// converts a `i64` representing a `duration(ms)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_ms_to_duration(v: i64) -> Duration {
-    Duration::try_milliseconds(v).unwrap()
+pub fn duration_ms_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_milliseconds(v)
 }
 
-/// converts a `i64` representing a `duration(us)` to [`Duration`]
+/// converts a `i64` representing a `duration(us)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_us_to_duration(v: i64) -> Duration {
-    Duration::microseconds(v)
+pub fn duration_us_to_duration(v: i64) -> Option<Duration> {
+    Some(Duration::microseconds(v))
 }
 
-/// converts a `i64` representing a `duration(ns)` to [`Duration`]
+/// converts a `i64` representing a `duration(ns)` to [`Option<Duration>`]
 #[inline]
-pub fn duration_ns_to_duration(v: i64) -> Duration {
-    Duration::nanoseconds(v)
+pub fn duration_ns_to_duration(v: i64) -> Option<Duration> {
+    Some(Duration::nanoseconds(v))
 }
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
@@ -296,10 +296,10 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
 pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
     match T::DATA_TYPE {
         DataType::Duration(unit) => match unit {
-            TimeUnit::Second => Some(duration_s_to_duration(v)),
-            TimeUnit::Millisecond => Some(duration_ms_to_duration(v)),
-            TimeUnit::Microsecond => Some(duration_us_to_duration(v)),
-            TimeUnit::Nanosecond => Some(duration_ns_to_duration(v)),
+            TimeUnit::Second => duration_s_to_duration(v),
+            TimeUnit::Millisecond => duration_ms_to_duration(v),
+            TimeUnit::Microsecond => duration_us_to_duration(v),
+            TimeUnit::Nanosecond => duration_ns_to_duration(v),
         },
         _ => None,
     }

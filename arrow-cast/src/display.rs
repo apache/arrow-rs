@@ -601,9 +601,23 @@ macro_rules! duration_display {
 
             fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let v = self.value(idx);
+                // Attempt conversion (Option<TimeDelta>)
+                let opt_td = $convert(v);
                 match fmt {
-                    DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
-                    DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                    DurationFormat::ISO8601 => {
+                        if opt_td.is_some() {
+                            write!(f, "{}", opt_td.unwrap())?;
+                        } else {
+                            write!(f, "<invalid>")?;
+                        }
+                    }
+                    DurationFormat::Pretty => {
+                        if opt_td.is_some() {
+                            duration_fmt!(f, v, $scale)?
+                        } else {
+                            write!(f, "<invalid>")?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -1071,9 +1085,10 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::StringRunBuilder;
-
     use super::*;
+    use crate::pretty::pretty_format_columns_with_options;
+    use arrow_array::builder::StringRunBuilder;
+    use std::sync::Arc;
 
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
@@ -1233,5 +1248,33 @@ mod tests {
             "input_value1",
             array_value_to_string(&map_array, 3).unwrap()
         );
+    }
+
+    #[test]
+    fn duration_pretty_and_iso_extremes() {
+        // Build [MIN, MAX, 3661, NULL]
+        let arr = DurationSecondArray::from(vec![Some(i64::MIN), Some(i64::MAX), Some(3661), None]);
+        let array: ArrayRef = Arc::new(arr);
+
+        // Pretty formatting
+        let opts = FormatOptions::default().with_null("<NULL>");
+        let opts = opts.with_duration_format(DurationFormat::Pretty);
+        let pretty = pretty_format_columns_with_options("pretty", &[array.clone()], &opts)
+            .unwrap()
+            .to_string();
+        assert_eq!(pretty.matches("<invalid>").count(), 2);
+        assert!(pretty.contains("0 days 1 hours 1 mins 1 secs"));
+        assert!(pretty.contains("<NULL>"));
+
+        // ISO8601 formatting
+        let opts_iso = FormatOptions::default()
+            .with_null("<NULL>")
+            .with_duration_format(DurationFormat::ISO8601);
+        let iso = pretty_format_columns_with_options("iso", &[array], &opts_iso)
+            .unwrap()
+            .to_string();
+        assert_eq!(iso.matches("<invalid>").count(), 2);
+        assert!(iso.contains("PT3661S"));
+        assert!(iso.contains("<NULL>"));
     }
 }
