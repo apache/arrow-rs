@@ -846,8 +846,8 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?
             .try_into();
-        let compare_items =
-            compare_items.map_err(|x| ArrowError::InvalidArgumentError("".to_string()))?;
+        let compare_items: [Box<dyn Fn(usize, usize) -> Ordering + Send + Sync + 'static>; N] =
+            compare_items.map_err(|_| ArrowError::ComputeError("Could not create fixed size array".to_string()))?;
         Ok(FixedLexicographicalComparator { compare_items })
     }
 }
