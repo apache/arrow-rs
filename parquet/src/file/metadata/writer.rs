@@ -29,8 +29,9 @@ use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
+use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
-use crate::format::{AesGcmV1, ColumnCryptoMetaData, EncryptionAlgorithm};
+use crate::format::{AesGcmV1, ColumnCryptoMetaData};
 use crate::format::{
     ColumnChunk, ColumnIndex, ColumnOrder, FileMetaData, IEEE754TotalOrder, OffsetIndex, RowGroup,
     TypeDefinedOrder,
