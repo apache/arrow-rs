@@ -724,6 +724,8 @@ pub fn lexsort_to_indices(
         len = limit.min(len);
     }
 
+    // Instantiate specialized versions of comparisons for small numbers
+    // of columns as it helps the compiler generate better code.
     match columns.len() {
         2 => {
             sort_fixed_column::<2>(columns, &mut value_indices, len)?;
