@@ -294,6 +294,13 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
         let nulls = self.null_buffer_builder.finish();
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                self.values_builder.len(),
+                "nulls/values length mismatch"
+            );
+        }
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
@@ -308,6 +315,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let len = self.len();
         let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
+        // Verify values and nulls buffers are the same length
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                values_buffer.len(),
+                "nulls/values length mismatch"
+            );
+        }
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
@@ -343,6 +358,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+
+    /// Returns the inner value and null buffer builders.
+    pub fn inner_mut(&mut self) -> (&mut BufferBuilder<T::Native>, &mut NullBufferBuilder) {
+        (&mut self.values_builder, &mut self.null_buffer_builder)
     }
 }
 

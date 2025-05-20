@@ -95,6 +95,9 @@ impl ReadPlanBuilder {
     ///
     /// # Arguments
     ///
+    /// * `num_original_columns`: The number of columns in the original parquet
+    ///   schema.
+    ///
     /// * `array_reader`: The array reader to use for evaluating the predicate.
     ///   must be configured with the projection mask specified by
     ///   [`ArrowPredicate::projection`] for the `predicate`.
@@ -114,17 +117,20 @@ impl ReadPlanBuilder {
     /// [`RowSelection`] in addition to one or more predicates.
     pub(crate) fn with_predicate(
         mut self,
+        num_original_columns: usize,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
         projection_mask: &ProjectionMask,
     ) -> Result<Self> {
         // Prepare to decode all rows in the selection to evaluate the predicate
         let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
-        let mut cached_results_builder = CachedPredicateResultBuilder::new(
+        let mut cached_results_builder = CachedPredicateResultBuilder::try_new(
+            num_original_columns,
             &reader.schema(),
             predicate.projection(),
             projection_mask,
-        );
+            self.batch_size,
+        )?;
         for maybe_batch in reader {
             let batch = maybe_batch?;
             let input_rows = batch.num_rows();
@@ -139,8 +145,7 @@ impl ReadPlanBuilder {
             cached_results_builder.add(batch, filter)?;
         }
 
-        let (raw, cached_predicate_result) =
-            cached_results_builder.build(self.batch_size, predicate.projection())?;
+        let (raw, cached_predicate_result) = cached_results_builder.build()?;
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),

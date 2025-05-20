@@ -43,6 +43,8 @@ mod primitive_array;
 mod struct_array;
 
 mod cached;
+mod incremental_array_builder;
+mod incremental_batch_builder;
 #[cfg(test)]
 mod test_util;
 

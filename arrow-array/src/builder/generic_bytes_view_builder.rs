@@ -28,7 +28,7 @@ use hashbrown::HashTable;
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -406,6 +406,98 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         };
         buffer_size + in_progress + tracker + views + null
     }
+
+    /// Append all views from the given array into the inprogress builder
+    ///
+    /// TODO: make a configurable option about what threshold to compact buffers
+    pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
+        let num_rows = array.len();
+        if num_rows == 0 {
+            return; // nothing to do
+        }
+
+        // Flush the in-progress buffer
+        self.flush_in_progress();
+
+        let null_buffer_builder = &mut self.null_buffer_builder;
+        let buffers = &mut self.completed;
+        let new_views = &mut self.views_builder;
+
+        // Copy nulls
+        if let Some(nulls) = array.nulls() {
+            null_buffer_builder.append_buffer(nulls);
+        } else {
+            null_buffer_builder.append_n_non_nulls(array.len());
+        }
+
+        // Copy views.
+        let ideal_buffer_size = ideal_buffer_size(array);
+        let actual_buffer_size = array.get_buffer_memory_size();
+        let starting_view = new_views.len();
+        new_views.append_slice(array.views());
+
+        // Copy buffers
+
+        // if the array is not sparse, simply copy the buffers and update the views
+        // to point to the new buffers
+        if actual_buffer_size < 2 * ideal_buffer_size {
+            let num_buffers_before: u32 = buffers.len().try_into().expect("buffer count overflow");
+            buffers.extend_from_slice(array.data_buffers());
+
+            // Update any views that point to the old buffers
+            for v in new_views.as_slice_mut()[starting_view..].iter_mut() {
+                let view_len = *v as u32;
+                // if view_len is 12 or less, data is inlined and doesn't need an update
+                // if view is 12 or more, need to update the buffer offset
+                if view_len > 12 {
+                    let mut view = ByteView::from(*v);
+                    let new_buffer_index = num_buffers_before + view.buffer_index;
+                    view.buffer_index = new_buffer_index;
+                    *v = view.into(); // update view
+                }
+            }
+        } else {
+            // otherwise the array is sparse so copy the data into a single new
+            // buffer as well as updating the views
+            let mut new_buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
+            let new_buffer_index = buffers.len() as u32; // making one new buffer
+                                                         // Update any views that point to the old buffers.
+            for v in new_views.as_slice_mut()[starting_view..].iter_mut() {
+                let view_len = *v as u32;
+                // if view_len is 12 or less, data is inlined and doesn't need an update
+                // if view is 12 or more, need to copy the data to the new buffer and update the index and buffer offset
+                if view_len > 12 {
+                    let mut view = ByteView::from(*v);
+                    let old_buffer = &array.data_buffers()[view.buffer_index as usize].as_slice();
+
+                    let new_offset = new_buffer.len();
+                    let old_offset = view.offset as usize;
+                    let str_data = &old_buffer[old_offset..old_offset + view_len as usize];
+                    new_buffer.extend_from_slice(str_data);
+                    view.offset = new_offset as u32;
+                    view.buffer_index = new_buffer_index;
+                    *v = view.into(); // update view
+                }
+            }
+            buffers.push(new_buffer.into());
+        }
+    }
+}
+
+/// return the size required for buffers to hold all strings
+fn ideal_buffer_size<T: ByteViewType + ?Sized>(view_array: &GenericByteViewArray<T>) -> usize {
+    view_array
+        .views()
+        .iter()
+        .map(|v| {
+            let len = (*v as u32) as usize;
+            if len > 12 {
+                len
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 impl<T: ByteViewType + ?Sized> Default for GenericByteViewBuilder<T> {

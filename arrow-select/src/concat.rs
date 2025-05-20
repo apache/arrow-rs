@@ -31,7 +31,9 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, StringViewBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -40,6 +42,44 @@ use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
+
+/// Extension trait for [`ArrayBuilder`] which adds add a method for appending
+/// entire arrays based on a filter predicate.
+///
+/// TODO move the methods from ArrayBuilders that already exist to this trait
+pub trait ArrayBuilderExtAppend {
+    /// Appends all rows from `array` to the current array
+    ///
+    ///
+    fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError>;
+}
+
+impl<T: ArrowPrimitiveType> ArrayBuilderExtAppend for PrimitiveBuilder<T> {
+    fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError> {
+        let array = array.as_primitive::<T>();
+        // TODO move append array into this module?
+        <PrimitiveBuilder<T>>::append_array(self, array);
+        Ok(())
+    }
+}
+
+impl ArrayBuilderExtAppend for BooleanBuilder {
+    fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError> {
+        // TODO move append array into this module?
+        let array = array.as_boolean();
+        <BooleanBuilder>::append_array(self, array);
+        Ok(())
+    }
+}
+
+impl ArrayBuilderExtAppend for StringViewBuilder {
+    fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError> {
+        // TODO move append array into this module?
+        let array = array.as_string_view();
+        <StringViewBuilder>::append_array(self, array);
+        Ok(())
+    }
+}
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
