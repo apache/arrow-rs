@@ -20,6 +20,7 @@ extern crate criterion;
 use criterion::Criterion;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use rand::Rng;
+use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
@@ -139,7 +140,7 @@ fn build_dict_array(size: usize) -> ArrayRef {
 
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
-    criterion::black_box(cast(array, &to_type).unwrap());
+    hint::black_box(cast(array, &to_type).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
