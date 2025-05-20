@@ -38,7 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{build_array_reader, RowGroups};
+use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
@@ -613,8 +613,8 @@ where
                     .fetch(&mut self.input, predicate.projection(), selection)
                     .await?;
 
-                let array_reader =
-                    build_array_reader(self.fields.as_deref(), predicate.projection(), &row_group)?;
+                let array_reader = ArrayReaderBuilder::new(&row_group)
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -661,7 +661,9 @@ where
 
         let plan = plan_builder.build();
 
-        let array_reader = build_array_reader(self.fields.as_deref(), &projection, &row_group)?;
+        let array_reader = ArrayReaderBuilder::new(&row_group)
+            .build_array_reader(self.fields.as_deref(), &projection)?;
+
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
         Ok((self, Some(reader)))
