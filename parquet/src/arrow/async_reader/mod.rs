@@ -665,7 +665,7 @@ where
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
- 
+
         Ok((self, Some(reader)))
     }
 }
