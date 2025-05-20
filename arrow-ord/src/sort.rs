@@ -759,7 +759,7 @@ pub fn lexsort_to_indices(
     }
     Ok(UInt32Array::from(
         value_indices[..len]
-            .into_iter()
+            .iter()
             .map(|i| *i as u32)
             .collect::<Vec<_>>(),
     ))
@@ -847,7 +847,9 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
             .collect::<Result<Vec<_>, ArrowError>>()?
             .try_into();
         let compare_items: [Box<dyn Fn(usize, usize) -> Ordering + Send + Sync + 'static>; N] =
-            compare_items.map_err(|_| ArrowError::ComputeError("Could not create fixed size array".to_string()))?;
+            compare_items.map_err(|_| {
+                ArrowError::ComputeError("Could not create fixed size array".to_string())
+            })?;
         Ok(FixedLexicographicalComparator { compare_items })
     }
 }
