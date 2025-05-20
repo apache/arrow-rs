@@ -716,6 +716,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .row_groups
             .unwrap_or_else(|| (0..self.metadata.num_row_groups()).collect());
 
+        let num_original_columns = self.metadata.file_metadata().schema_descr().num_columns();
+
         let reader = ReaderRowGroups {
             reader: Arc::new(self.input.0),
             metadata: self.metadata,
@@ -739,6 +741,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                         .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(
+                    num_original_columns,
                     array_reader,
                     predicate.as_mut(),
                     &self.projection,
