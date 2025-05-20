@@ -858,6 +858,40 @@ impl ParquetRecordBatchReader {
                     }
                     let select_count = cur_selection.iter().count();
                     let total = total_skip + total_read;
+
+                    /// Reads the next batch of records according to the adaptive selection strategy.
+                    ///
+                    /// **Window Size**: The adaptive window size equals the configured `batch_size`.
+                    /// For each call, the reader processes up to `batch_size` rows in one logical window.
+                    /// It dynamically decides on a per-subwindow basis whether to use:
+                    /// - **Range-based selection** (default, for higher throughput)
+                    /// - **Bitmap-based selection** (finer granularity when runs are very short)
+                    ///
+                    /// **Switching Criterion**: Only when the *average run length* in the subwindow is < 10 rows
+                    /// (i.e. `total_rows < 10 * num_runs`) do we switch from range to bitmap mode.
+                    ///
+                    /// **Example Patterns (sub-window examples)**：
+                    /// *Note: these totals refer to a sampled sub-window of the full batch, not the entire `batch_size`.*
+                    ///
+                    /// ```text
+                    /// Batch size = 8192 rows (Window)
+                    ///
+                    /// 1) Big range runs:
+                    ///    [2000 read | 2000 skip | 4192 read]
+                    ///    avg ≈ 3 runs, avg length ≈ 2730 → **range** mode
+                    ///
+                    /// 2) Medium range runs:
+                    ///    [200 read | 200 skip | 200 read ...]
+                    ///    avg length ≈ 200 → **range** mode
+                    ///
+                    /// 3) Dense small runs (many small alternations):
+                    ///    [ 5 read | 10 skip | 5 read | 10 skip | 5 read | 5 read ... ]
+                    ///    avg ≈ 6.7 < 10 → **bitmap** mode
+                    /// ```
+                    ///
+                    /// Returns a `RecordBatch` if any rows are produced, or `None` when no rows remain.
+
+                    // Choose bitmap and then to filter if runs are on average < 10 rows
                     if total < 10 * select_count {
                         let mut bitmap_builder = BooleanBufferBuilder::new(total);
                         for select in cur_selection.iter() {
@@ -868,6 +902,7 @@ impl ParquetRecordBatchReader {
                         mask_builder.append_buffer(bitmap.values());
                         read_records += bitmap.true_count();
                     } else {
+                        // Use fast range-Based skip/read
                         for select in cur_selection.iter() {
                             if select.skip {
                                 let skipped = self.array_reader.skip_records(select.row_count)?;
@@ -896,12 +931,14 @@ impl ParquetRecordBatchReader {
                             }
                         }
                     }
+                    // Stop once ~75% of window size is filled
                     if read_records >= (batch_size / 4 * 3) {
                         break;
                     }
                 }
             }
             None => {
+                // No selector: read entire batch
                 let rec = self.array_reader.read_records(self.batch_size())?;
                 mask_builder.append_n(rec, true);
             }
@@ -912,6 +949,7 @@ impl ParquetRecordBatchReader {
             return Ok(None);
         }
 
+        // Apply mask if used
         let final_array = if mask_builder.is_empty() {
             array
         } else {
@@ -921,6 +959,7 @@ impl ParquetRecordBatchReader {
 
         let struct_arr = final_array.as_struct_opt().expect("StructArray expected");
 
+        // Return only non-empty batches
         Ok(if struct_arr.len() > 0 {
             Some(RecordBatch::from(struct_arr))
         } else {
