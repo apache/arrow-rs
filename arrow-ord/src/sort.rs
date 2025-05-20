@@ -27,6 +27,7 @@ use arrow_buffer::BooleanBufferBuilder;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
+// use seq_macro::seq; // removed, no longer needed
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -726,28 +727,16 @@ pub fn lexsort_to_indices(
 
     match columns.len() {
         2 => {
-            let lexicographical_comparator = FixedLexicographicalComparator::<2>::try_new(columns)?;
-            sort_unstable_by(&mut value_indices, len, |a, b| {
-                lexicographical_comparator.compare(*a, *b)
-            });
+            sort_fixed_column::<2>(columns, &mut value_indices, len)?;
         }
         3 => {
-            let lexicographical_comparator = FixedLexicographicalComparator::<3>::try_new(columns)?;
-            sort_unstable_by(&mut value_indices, len, |a, b| {
-                lexicographical_comparator.compare(*a, *b)
-            });
+            sort_fixed_column::<3>(columns, &mut value_indices, len)?;
         }
         4 => {
-            let lexicographical_comparator = FixedLexicographicalComparator::<4>::try_new(columns)?;
-            sort_unstable_by(&mut value_indices, len, |a, b| {
-                lexicographical_comparator.compare(*a, *b)
-            });
+            sort_fixed_column::<4>(columns, &mut value_indices, len)?;
         }
         5 => {
-            let lexicographical_comparator = FixedLexicographicalComparator::<5>::try_new(columns)?;
-            sort_unstable_by(&mut value_indices, len, |a, b| {
-                lexicographical_comparator.compare(*a, *b)
-            });
+            sort_fixed_column::<5>(columns, &mut value_indices, len)?;
         }
         _ => {
             let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
@@ -763,6 +752,19 @@ pub fn lexsort_to_indices(
             .map(|i| *i as u32)
             .collect::<Vec<_>>(),
     ))
+}
+
+// Sort a fixed number of columns using FixedLexicographicalComparator
+fn sort_fixed_column<const N: usize>(
+    columns: &[SortColumn],
+    value_indices: &mut Vec<usize>,
+    len: usize,
+) -> Result<(), ArrowError> {
+    let lexicographical_comparator = FixedLexicographicalComparator::<N>::try_new(columns)?;
+    sort_unstable_by(value_indices, len, |a, b| {
+        lexicographical_comparator.compare(*a, *b)
+    });
+    Ok(())
 }
 
 /// It's unstable_sort, may not preserve the order of equal elements
@@ -832,6 +834,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
 
     /// Create a new lex comparator that will wrap the given sort columns and give comparison
     /// results with two indices.
+    /// The number of columns should be equal to the compile-time constant N.
     pub fn try_new(
         columns: &[SortColumn],
     ) -> Result<FixedLexicographicalComparator<N>, ArrowError> {
