@@ -27,7 +27,6 @@ use arrow_buffer::BooleanBufferBuilder;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
-// use seq_macro::seq; // removed, no longer needed
 use std::cmp::Ordering;
 use std::sync::Arc;
 
