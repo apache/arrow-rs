@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     reader.seek(SeekFrom::Start(0))?;
 
     let start = Instant::now();
-    let options = ReadOptions { use_utf8view: true };
+    let options = ReadOptions::default().with_utf8view(true);
     let batch_view = read_avro_with_options(&mut reader, &options)?;
     let view_duration = start.elapsed();
 
@@ -108,7 +108,7 @@ fn read_avro_with_options(
     let string_data = vec!["avro1", "avro2", "avro3", "avro4", "avro5"];
     let int_data = vec![1, 2, 3, 4, 5];
 
-    let string_array: ArrayRef = if options.use_utf8view {
+    let string_array: ArrayRef = if options.use_utf8view() {
         Arc::new(StringViewArray::from(string_data))
     } else {
         Arc::new(StringArray::from(string_data))

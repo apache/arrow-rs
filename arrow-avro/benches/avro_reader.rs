@@ -110,7 +110,7 @@ fn read_avro_test_file(
         ints.push(i32::from_le_bytes(int_bytes));
     }
 
-    let string_array: ArrayRef = if options.use_utf8view {
+    let string_array: ArrayRef = if options.use_utf8view() {
         Arc::new(StringViewArray::from_iter(
             strings.iter().map(|s| Some(s.as_str())),
         ))
@@ -123,7 +123,7 @@ fn read_avro_test_file(
     let int_array: ArrayRef = Arc::new(Int32Array::from(ints));
 
     let schema = Arc::new(Schema::new(vec![
-        if options.use_utf8view {
+        if options.use_utf8view() {
             Field::new("string_field", DataType::Utf8View, false)
         } else {
             Field::new("string_field", DataType::Utf8, false)
@@ -244,10 +244,7 @@ fn bench_avro_reader(c: &mut Criterion) {
 
         group.bench_function(format!("string_array_{}_chars", str_length), |b| {
             b.iter(|| {
-                let options = ReadOptions {
-                    use_utf8view: false,
-                };
-
+                let options = ReadOptions::default();
                 let batch = read_avro_test_file(file_path, &options).unwrap();
                 criterion::black_box(batch)
             })
@@ -255,8 +252,7 @@ fn bench_avro_reader(c: &mut Criterion) {
 
         group.bench_function(format!("string_view_{}_chars", str_length), |b| {
             b.iter(|| {
-                let options = ReadOptions { use_utf8view: true };
-
+                let options = ReadOptions::default().with_utf8view(true);
                 let batch = read_avro_test_file(file_path, &options).unwrap();
                 criterion::black_box(batch)
             })

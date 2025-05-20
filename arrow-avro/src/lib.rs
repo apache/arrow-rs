@@ -33,10 +33,10 @@
 /// Implements the primary reader interface and record decoding logic.
 pub mod reader;
 
-/// Avro schema parsing and representation
-///
-/// Provides types for parsing and representing Avro schema definitions.
-pub mod schema;
+// Avro schema parsing and representation
+//
+// Provides types for parsing and representing Avro schema definitions.
+mod schema;
 
 /// Compression codec implementations for Avro
 ///

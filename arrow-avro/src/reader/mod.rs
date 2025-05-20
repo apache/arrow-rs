@@ -42,20 +42,33 @@ mod vlq;
 /// let default_options = ReadOptions::default();
 ///
 /// // Enable Utf8View support for better string performance
-/// let options = ReadOptions {
-///     use_utf8view: true,
-///     ..ReadOptions::default()
-/// };
+/// let options = ReadOptions::default()
+///     .with_utf8view(true);
 /// ```
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct ReadOptions {
-    /// If true, use StringViewArray instead of StringArray for string data
+    use_utf8view: bool,
+}
+
+impl ReadOptions {
+    /// Create a new `ReadOptions` with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether to use StringViewArray for string data
     ///
-    /// When this option is enabled, string data from Avro files will be loaded
-    /// into Arrow's StringViewArray instead of the standard StringArray.
-    ///
-    /// Default: false
-    pub use_utf8view: bool,
+    /// When enabled, string data from Avro files will be loaded into
+    /// Arrow's StringViewArray instead of the standard StringArray.
+    pub fn with_utf8view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    /// Get whether StringViewArray is enabled for string data
+    pub fn use_utf8view(&self) -> bool {
+        self.use_utf8view
+    }
 }
 
 /// Read a [`Header`] from the provided [`BufRead`]
@@ -131,11 +144,8 @@ mod test {
         let schema = header.schema().unwrap().unwrap();
         let root = AvroField::try_from(&schema).unwrap();
 
-        let mut decoder = if options.use_utf8view {
-            RecordDecoder::try_new_with_options(root.data_type(), true).unwrap()
-        } else {
-            RecordDecoder::try_new(root.data_type()).unwrap()
-        };
+        let mut decoder =
+            RecordDecoder::try_new_with_options(root.data_type(), options.clone()).unwrap();
 
         for result in read_blocks(reader) {
             let block = result.unwrap();

@@ -19,6 +19,7 @@ use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
+use crate::reader::ReadOptions;
 use crate::schema::*;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -38,28 +39,27 @@ pub struct RecordDecoder {
 }
 
 impl RecordDecoder {
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`]
+    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
     pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::try_new_with_options(data_type, false)
+        Self::try_new_with_options(data_type, ReadOptions::default())
     }
 
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options
     ///
     /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
-    /// In particular, it allows enabling Utf8View support for better string performance.
     ///
     /// # Parameters
     /// * `data_type` - The Avro data type to decode
-    /// * `use_utf8view` - If true, use StringViewArray instead of StringArray for string data
+    /// * `options` - Configuration options for decoding
     pub fn try_new_with_options(
         data_type: &AvroDataType,
-        use_utf8view: bool,
+        options: ReadOptions,
     ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
-                use_utf8view,
+                use_utf8view: options.use_utf8view(),
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
