@@ -23,15 +23,14 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::ProjectionMask;
 use crate::errors::Result;
 use arrow_array::cast::AsArray;
-use arrow_array::{new_empty_array, Array, ArrayRef, BooleanArray, RecordBatch, StringViewArray};
-use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ByteView;
+use arrow_array::{new_empty_array, Array, ArrayRef, BooleanArray, RecordBatch,};
 use arrow_schema::{DataType, Schema};
 use arrow_select::concat::concat;
 use arrow_select::filter::{filter, prep_null_mask_filter};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use arrow_array::builder::StringViewBuilder;
 
 /// Incrementally builds the result of evaluating a ArrowPredicate on
 /// a RowGroup.
@@ -144,8 +143,8 @@ impl CachedPredicateResultBuilder {
         let mut in_progress_arrays = VecDeque::from(in_progress_arrays);
 
         // Now find the location of the filter columns in the original parquet schema
-        for i in 0..mask.len() {
-            if mask[i] {
+        for (i, &item) in mask.iter().enumerate() {
+            if item {
                 let mut in_progress = in_progress_arrays
                     .pop_front()
                     .expect("insufficient in progress arrays");
@@ -228,7 +227,7 @@ impl CachedArrayReader {
         //let input: Vec<&dyn Array> = filters.iter().map(|b| b as &dyn Array).collect::<Vec<_>>();
         //let filter = concat(&input).unwrap().as_boolean().clone();
         let data_type = cached_arrays
-            .get(0)
+            .first()
             .expect("had at least one array")
             .data_type()
             .clone();
@@ -322,7 +321,7 @@ fn create_in_progress_array(
     match data_type {
         DataType::Utf8View => Box::new(InProgressArrayImpl::new(
             batch_size,
-            InProgressStringViewBuilder::new_with_capacity(batch_size),
+            StringViewBuilder::with_capacity(batch_size),
         )),
         _ => {
             // TODO implement more specific types
@@ -389,7 +388,7 @@ impl<B: InProgressArrayBuilder> InProgressArrayImpl<B> {
 
     /// Add an array to the list of current arrays
     fn add_current(&mut self, array: ArrayRef) {
-        if array.len() == 0 {
+        if array.is_empty() {
             // no rows to add
             return;
         }
@@ -475,132 +474,20 @@ impl InProgressArrayBuilder for GenericArrayBuilder {
     }
 }
 
-/// An implementation of InProgressArray for StringViewArray
-/// that knows how to efficiently and incrementally concatenate arrays
-///
-/// TODO move this to StringViewBuilder (basically probably add `append_array` to it)
-struct InProgressStringViewBuilder {
-    new_views: Vec<u128>,
-    null_buffer_builder: NullBufferBuilder,
-    buffers: Vec<Buffer>,
-    initial_capacity: usize,
-}
-
-impl InProgressStringViewBuilder {
-    fn new_with_capacity(initial_capacity: usize) -> Self {
-        Self {
-            new_views: Vec::with_capacity(initial_capacity),
-            null_buffer_builder: NullBufferBuilder::new(initial_capacity),
-            buffers: Vec::with_capacity(100), // TODO better estimate of number of buffers
-            initial_capacity,
-        }
-    }
-}
-
-impl InProgressArrayBuilder for InProgressStringViewBuilder {
+/// Implement the InProgressArrayBuilder for StringViewBuilder
+impl InProgressArrayBuilder for StringViewBuilder {
     fn append(&mut self, array: ArrayRef) {
-        // Special case for StringViewArray inspired by DataFusion:
-        // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L222-L221
-        let num_rows = array.len();
-        if num_rows == 0 {
-            return; // nothing to do
-        }
         let array = array.as_string_view();
-
-        let null_buffer_builder = &mut self.null_buffer_builder;
-        let buffers = &mut self.buffers;
-        let new_views = &mut self.new_views;
-
-        // Copy nulls
-        if let Some(nulls) = array.nulls() {
-            null_buffer_builder.append_buffer(nulls);
-        } else {
-            null_buffer_builder.append_n_non_nulls(array.len());
-        }
-
-        // Copy views.
-        let ideal_buffer_size = ideal_buffer_size(array);
-        let actual_buffer_size = array.get_buffer_memory_size();
-        let starting_view = new_views.len();
-        new_views.extend_from_slice(array.views());
-
-        // Copy buffers
-
-        // if the array is not sparse, simply copy the buffers and update the views
-        // to point to the new buffers
-        if actual_buffer_size < 2 * ideal_buffer_size {
-            let num_buffers_before: u32 = buffers.len().try_into().expect("buffer count overflow");
-            buffers.extend_from_slice(array.data_buffers());
-
-            // Update any views that point to the old buffers
-            for v in new_views[starting_view..].iter_mut() {
-                let view_len = *v as u32;
-                // if view_len is 12 or less, data is inlined and doesn't need an update
-                // if view is 12 or more, need to update the buffer offset
-                if view_len > 12 {
-                    let mut view = ByteView::from(*v);
-                    let new_buffer_index = num_buffers_before + view.buffer_index;
-                    view.buffer_index = new_buffer_index;
-                    *v = view.into(); // update view
-                }
-            }
-        } else {
-            // otherwise the array is sparse so copy the data into a single new
-            // buffer as well as updating the views
-            let mut new_buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
-            let new_buffer_index = buffers.len() as u32; // making one new buffer
-                                                         // Update any views that point to the old buffers.
-            for v in new_views[starting_view..].iter_mut() {
-                let view_len = *v as u32;
-                // if view_len is 12 or less, data is inlined and doesn't need an update
-                // if view is 12 or more, need to copy the data to the new buffer and update the index and buffer offset
-                if view_len > 12 {
-                    let mut view = ByteView::from(*v);
-                    let old_buffer = &array.data_buffers()[view.buffer_index as usize].as_slice();
-
-                    let new_offset = new_buffer.len();
-                    let old_offset = view.offset as usize;
-                    let str_data = &old_buffer[old_offset..old_offset + view_len as usize];
-                    new_buffer.extend_from_slice(str_data);
-                    view.offset = new_offset as u32;
-                    view.buffer_index = new_buffer_index;
-                    *v = view.into(); // update view
-                }
-            }
-            buffers.push(new_buffer.into());
-        }
+        self.append_array(array);
     }
 
     fn try_build(&mut self) -> Result<Option<ArrayRef>> {
-        // Form output array
-        let nulls = self.null_buffer_builder.finish();
-        let new_views = std::mem::replace(
-            &mut self.new_views,
-            Vec::with_capacity(self.initial_capacity),
-        );
-        let buffers = std::mem::replace(&mut self.buffers, Vec::with_capacity(100)); // TODO better buffer estimate
-
-        // safety: we know what we are doing above
-        let new_array = unsafe {
-            StringViewArray::new_unchecked(ScalarBuffer::from(new_views), buffers, nulls)
-        };
-
-        Ok(Some(Arc::new(new_array)))
+        let new_array = self.finish();
+        if new_array.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Arc::new(new_array)))
+        }
     }
 }
 
-/// return the size required for buffers to hold all strings
-fn ideal_buffer_size(string_view_array: &StringViewArray) -> usize {
-    string_view_array
-        .views()
-        .iter()
-        .map(|v| {
-            let len = (*v as u32) as usize;
-            if len > 12 {
-                len
-            } else {
-                0
-            }
-        })
-        .sum()
-}
