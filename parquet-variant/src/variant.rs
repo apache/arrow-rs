@@ -5,6 +5,7 @@ use arrow_schema::ArrowError;
 use strum_macros::EnumDiscriminants;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// Encodes the Variant Metadata, see the Variant spec file for more information
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
 }
@@ -16,11 +17,12 @@ impl<'m> VariantMetadata<'m> {
         self.bytes
     }
 
+    /// Whether the dictionary keys are sorted and unique
     pub fn is_sorted(&self) -> bool {
         todo!()
     }
 
-    #[inline]
+    /// Get the dict length
     pub fn dict_len(&self) -> Result<usize, ArrowError> {
         let dict_len_bytes = &self.bytes[1..self.offset_size()? as usize + 1];
         let dict_len = usize::from_le_bytes(dict_len_bytes.try_into().map_err(|e| {
@@ -36,17 +38,27 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get the offset by index
-    #[inline]
     pub fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
         todo!()
     }
 
-    #[inline]
+    /// Get the header byte, which has the following form
+    ///              7     6  5   4  3             0
+    ///             +-------+---+---+---------------+
+    /// header      |       |   |   |    version    |
+    ///             +-------+---+---+---------------+
+    ///                 ^         ^
+    ///                 |         +-- sorted_strings
+    ///                 +-- offset_size_minus_one
+    /// The version is a 4-bit value that must always contain the value 1.
+    /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
+    /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
+    /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
     pub fn header(&self) -> u8 {
         self.bytes[0]
     }
 
-    #[inline]
+    /// Get the offset_minus_one value from the header
     pub fn offset_size_minus_one(&self) -> Result<u8, ArrowError> {
         if self.bytes.is_empty() {
             Err(ArrowError::InvalidArgumentError(
@@ -58,15 +70,14 @@ impl<'m> VariantMetadata<'m> {
         }
     }
 
-    #[inline]
+    /// Get the offset_size
     pub fn offset_size(&self) -> Result<u8, ArrowError> {
         Ok(self.offset_size_minus_one()? + 1)
     }
 
-    /// Get the offset by index
+    /// Get the offsets as an iterator
     // TODO: Do we want this kind of API?
     // TODO: Test once API is agreed upon
-    #[inline]
     pub fn offsets(&'m self) -> Result<impl Iterator<Item = (usize, usize)> + 'm, ArrowError> {
         struct OffsetIterators<'m> {
             buffer: &'m [u8],
@@ -112,7 +123,8 @@ impl<'m> VariantMetadata<'m> {
     pub fn get_by(&self, index: usize) -> Result<&'m str, ArrowError> {
         todo!()
     }
-    /// Get all key-names as string
+    /// Get all key-names as an Iterator of strings
+    // TODO: Result
     pub fn fields(&self) -> impl Iterator<Item = &'m str> {
         // Do the same as for offsets
         todo!();

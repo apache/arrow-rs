@@ -18,7 +18,7 @@ pub enum VariantPrimitiveType {
     BooleanTrue = 1,
     BooleanFalse = 2,
     Int8 = 3,
-    // TODO: Add 'legs' for the rest, once API is agreed upon
+    // TODO: Add 'legs' for the rest of primitives, once API is agreed upon
     String = 16,
 }
 
