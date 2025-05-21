@@ -590,7 +590,35 @@ temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
 temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
+/// Derive [`DisplayIndexState`] for `PrimitiveArray<$t>`
+///
+/// Arguments
+/// * `$convert` - function to convert the value to an `Duration`
+/// * `$t` - [`ArrowPrimitiveType`] of the array
+/// * `$scale` - scale of the duration (passed to `duration_fmt`)
 macro_rules! duration_display {
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = DurationFormat;
+
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                Ok(options.duration_format)
+            }
+
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
+                    DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+/// Similar to [`duration_display`] but `$convert` returns an `Option`
+macro_rules! duration_option_display {
     ($convert:ident, $t:ty, $scale:tt) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = DurationFormat;
@@ -663,10 +691,10 @@ macro_rules! duration_fmt {
     }};
 }
 
-duration_display!(try_duration_s_to_duration, DurationSecondType, 0);
-duration_display!(try_duration_ms_to_duration, DurationMillisecondType, 3);
-duration_display!(try_duration_us_to_duration, DurationMicrosecondType, 6);
-duration_display!(try_duration_ns_to_duration, DurationNanosecondType, 9);
+duration_option_display!(try_duration_s_to_duration, DurationSecondType, 0);
+duration_option_display!(try_duration_ms_to_duration, DurationMillisecondType, 3);
+duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
+duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
 impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
