@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::{black_box, Criterion};
+use criterion::Criterion;
 
 use std::sync::Arc;
 
@@ -28,6 +28,7 @@ use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 use arrow_ord::rank::rank;
+use std::hint;
 
 fn create_f32_array(size: usize, with_nulls: bool) -> ArrayRef {
     let null_density = if with_nulls { 0.5 } else { 0.0 };
@@ -43,7 +44,7 @@ fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
 }
 
 fn bench_sort(array: &dyn Array) {
-    black_box(sort(array, None).unwrap());
+    hint::black_box(sort(array, None).unwrap());
 }
 
 fn bench_lexsort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
@@ -58,11 +59,11 @@ fn bench_lexsort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
         },
     ];
 
-    black_box(lexsort(&columns, limit).unwrap());
+    hint::black_box(lexsort(&columns, limit).unwrap());
 }
 
 fn bench_sort_to_indices(array: &dyn Array, limit: Option<usize>) {
-    black_box(sort_to_indices(array, None, limit).unwrap());
+    hint::black_box(sort_to_indices(array, None, limit).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -215,22 +216,22 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr = create_f32_array(2usize.pow(12), false);
     c.bench_function("rank f32 2^12", |b| {
-        b.iter(|| black_box(rank(&arr, None).unwrap()))
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
     let arr = create_f32_array(2usize.pow(12), true);
     c.bench_function("rank f32 nulls 2^12", |b| {
-        b.iter(|| black_box(rank(&arr, None).unwrap()))
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
     let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 10);
     c.bench_function("rank string[10] 2^12", |b| {
-        b.iter(|| black_box(rank(&arr, None).unwrap()))
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
     let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 10);
     c.bench_function("rank string[10] nulls 2^12", |b| {
-        b.iter(|| black_box(rank(&arr, None).unwrap()))
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 }
 

@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
 };
 use arrow_array::RecordBatch;
 use arrow_json::{LineDelimitedWriter, ReaderBuilder};
+use std::hint;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -30,7 +31,7 @@ use std::sync::Arc;
 fn do_bench(c: &mut Criterion, name: &str, json: &str, schema: SchemaRef) {
     c.bench_function(name, |b| {
         b.iter(|| {
-            let cursor = Cursor::new(black_box(json));
+            let cursor = Cursor::new(hint::black_box(json));
             let builder = ReaderBuilder::new(schema.clone()).with_batch_size(64);
             let reader = builder.build(cursor).unwrap();
             for next in reader {

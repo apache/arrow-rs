@@ -16,6 +16,7 @@
 // under the License.
 
 use std::{
+    hint,
     iter::{repeat, repeat_with},
     sync::Arc,
 };
@@ -73,7 +74,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     )
                     .unwrap();
 
-                    b.iter(|| black_box(array.logical_nulls()))
+                    b.iter(|| hint::black_box(array.logical_nulls()))
                 },
             );
         }

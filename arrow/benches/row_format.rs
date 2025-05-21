@@ -28,8 +28,8 @@ use arrow::util::bench_util::{
 };
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
-use criterion::{black_box, Criterion};
-use std::sync::Arc;
+use criterion::Criterion;
+use std::{hint, sync::Arc};
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
@@ -40,7 +40,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     c.bench_function(&format!("convert_columns {name}"), |b| {
         b.iter(|| {
             let converter = RowConverter::new(fields.clone()).unwrap();
-            black_box(converter.convert_columns(&cols).unwrap())
+            hint::black_box(converter.convert_columns(&cols).unwrap())
         });
     });
 
@@ -48,11 +48,11 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let rows = converter.convert_columns(&cols).unwrap();
     // using a pre-prepared row converter should be faster than the first time
     c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
-        b.iter(|| black_box(converter.convert_columns(&cols).unwrap()));
+        b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
     });
 
     c.bench_function(&format!("convert_rows {name}"), |b| {
-        b.iter(|| black_box(converter.convert_rows(&rows).unwrap()));
+        b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 }
 
@@ -66,7 +66,7 @@ fn bench_iter(c: &mut Criterion) {
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
             for r in rows.iter() {
-                std::hint::black_box(r.as_ref());
+                hint::black_box(r.as_ref());
             }
         })
     });
