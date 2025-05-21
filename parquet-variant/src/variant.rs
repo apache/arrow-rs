@@ -20,8 +20,103 @@ impl<'m> VariantMetadata<'m> {
         todo!()
     }
 
-    pub fn dict_len(&self) -> usize {
+    #[inline]
+    pub fn dict_len(&self) -> Result<usize, ArrowError> {
+        let dict_len_bytes = &self.bytes[1..self.offset_size()? as usize + 1];
+        let dict_len = usize::from_le_bytes(dict_len_bytes.try_into().map_err(|e| {
+            ArrowError::InvalidArgumentError(format!(
+                "Unable to convert dictionary_size bytes into usize: {}",
+                e,
+            ))
+        })?);
+        Ok(dict_len)
+    }
+    pub fn version(&self) -> usize {
         todo!()
+    }
+
+    /// Get the offset by index
+    #[inline]
+    pub fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
+        todo!()
+    }
+
+    #[inline]
+    pub fn header(&self) -> u8 {
+        self.bytes[0]
+    }
+
+    #[inline]
+    pub fn offset_size_minus_one(&self) -> Result<u8, ArrowError> {
+        if self.bytes.is_empty() {
+            Err(ArrowError::InvalidArgumentError(
+                "Tried to get offset_size_minus_one from header, but self.bytes buffer is emtpy."
+                    .to_string(),
+            ))
+        } else {
+            Ok(self.bytes[0] & (0b11 << 6)) // Grab the last 2 bits
+        }
+    }
+
+    #[inline]
+    pub fn offset_size(&self) -> Result<u8, ArrowError> {
+        Ok(self.offset_size_minus_one()? + 1)
+    }
+
+    /// Get the offset by index
+    // TODO: Do we want this kind of API?
+    // TODO: Test once API is agreed upon
+    #[inline]
+    pub fn offsets(&'m self) -> Result<impl Iterator<Item = (usize, usize)> + 'm, ArrowError> {
+        struct OffsetIterators<'m> {
+            buffer: &'m [u8],
+            total: usize,
+            seen: usize,
+            offset_size: usize,
+        }
+        impl<'m> Iterator for OffsetIterators<'m> {
+            type Item = (usize, usize); // (start, end) positions of the bytes
+
+            fn next(&mut self) -> Option<Self::Item> {
+                // +1 to skip the first offset
+                if self.seen < self.total {
+                    let start = usize::from_le_bytes(
+                        self.buffer[(self.seen ) * self.offset_size + 1 // +1 to skip header
+                            ..(self.seen ) * self.offset_size + 1]
+                            .try_into()
+                            .ok()?,
+                    );
+                    self.seen += 1;
+                    let end = usize::from_le_bytes(
+                        self.buffer[(self.seen ) * self.offset_size + 1 // +1 to skip header
+                            ..(self.seen ) * self.offset_size + 1]
+                            .try_into()
+                            .ok()?,
+                    );
+
+                    Some((start, end))
+                } else {
+                    None
+                }
+            }
+        }
+        let iterator: OffsetIterators = OffsetIterators {
+            buffer: self.bytes,
+            total: self.dict_len()?,
+            seen: 0,
+            offset_size: self.offset_size()? as usize,
+        };
+        Ok(iterator)
+    }
+    /// Get the key-name-bytes by index
+    pub fn get_by(&self, index: usize) -> Result<&'m str, ArrowError> {
+        todo!()
+    }
+    /// Get all key-names as string
+    pub fn fields(&self) -> impl Iterator<Item = &'m str> {
+        // Do the same as for offsets
+        todo!();
+        vec![].into_iter()
     }
 }
 
