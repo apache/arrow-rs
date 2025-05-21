@@ -808,54 +808,45 @@ impl ParquetRecordBatchReader {
     /// Returns `Result<Option<..>>` rather than `Option<Result<..>>` to
     /// simplify error handling with `?`
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
+        let mut end_of_stream = false;
         let mut read_records = 0;
         let batch_size = self.batch_size();
-        match self.read_plan.selection_mut() {
-            Some(selection) => {
-                while read_records < batch_size && !selection.is_empty() {
-                    let front = selection.pop_front().unwrap();
-                    if front.skip {
-                        let skipped = self.array_reader.skip_records(front.row_count)?;
+        while read_records < batch_size {
+            let Some(front) = self.read_plan.next() else {
+                end_of_stream = true;
+                break;
+            };
 
-                        if skipped != front.row_count {
-                            return Err(general_err!(
-                                "failed to skip rows, expected {}, got {}",
-                                front.row_count,
-                                skipped
-                            ));
-                        }
-                        continue;
-                    }
+            if front.skip {
+                let skipped = self.array_reader.skip_records(front.row_count)?;
 
-                    //Currently, when RowSelectors with row_count = 0 are included then its interpreted as end of reader.
-                    //Fix is to skip such entries. See https://github.com/apache/arrow-rs/issues/2669
-                    if front.row_count == 0 {
-                        continue;
-                    }
-
-                    // try to read record
-                    let need_read = batch_size - read_records;
-                    let to_read = match front.row_count.checked_sub(need_read) {
-                        Some(remaining) if remaining != 0 => {
-                            // if page row count less than batch_size we must set batch size to page row count.
-                            // add check avoid dead loop
-                            selection.push_front(RowSelector::select(remaining));
-                            need_read
-                        }
-                        _ => front.row_count,
-                    };
-                    match self.array_reader.read_records(to_read)? {
-                        0 => break,
-                        rec => read_records += rec,
-                    };
+                if skipped != front.row_count {
+                    return Err(general_err!(
+                        "Internal Error: failed to skip rows, expected {}, got {}",
+                        front.row_count,
+                        skipped
+                    ));
                 }
-            }
-            None => {
-                self.array_reader.read_records(batch_size)?;
-            }
-        };
+            } else {
+                let read = self.array_reader.read_records(front.row_count)?;
+                if read == 0 {
+                    end_of_stream = true;
+                    break;
+                }
+
+                read_records += read
+            };
+        }
 
         let array = self.array_reader.consume_batch()?;
+
+        // Reader should read exactly `batch_size` records except for last batch
+        if !end_of_stream && (read_records != batch_size) {
+            return Err(general_err!(
+                "Internal Error: unexpected read count. Expected {batch_size} got {read_records}"
+            ));
+        }
+
         let struct_array = array.as_struct_opt().ok_or_else(|| {
             ArrowError::ParquetError("Struct array reader should return struct array".to_string())
         })?;
