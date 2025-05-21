@@ -221,7 +221,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
 
-    use crate::display::array_value_to_string;
+    use crate::display::{array_value_to_string, DurationFormat};
 
     use super::*;
 
@@ -1185,5 +1185,57 @@ mod tests {
 
         let actual: Vec<&str> = batch.lines().collect();
         assert_eq!(expected_table, actual, "Actual result:\n{batch}");
+    }
+
+    #[test]
+    fn duration_pretty_and_iso_extremes() {
+        // Build [MIN, MAX, 3661, NULL]
+        let arr = DurationSecondArray::from(vec![Some(i64::MIN), Some(i64::MAX), Some(3661), None]);
+        let array: ArrayRef = Arc::new(arr);
+
+        // Pretty formatting
+        let opts = FormatOptions::default().with_null("null");
+        let opts = opts.with_duration_format(DurationFormat::Pretty);
+        let pretty = pretty_format_columns_with_options("pretty", &[array.clone()], &opts)
+            .unwrap()
+            .to_string();
+
+        // Expected output
+        let expected_pretty = vec![
+            "+------------------------------+",
+            "| pretty                       |",
+            "+------------------------------+",
+            "| <invalid>                    |",
+            "| <invalid>                    |",
+            "| 0 days 1 hours 1 mins 1 secs |",
+            "| null                         |",
+            "+------------------------------+",
+        ];
+
+        let actual: Vec<&str> = pretty.lines().collect();
+        assert_eq!(expected_pretty, actual, "Actual result:\n{pretty}");
+
+        // ISO8601 formatting
+        let opts_iso = FormatOptions::default()
+            .with_null("null")
+            .with_duration_format(DurationFormat::ISO8601);
+        let iso = pretty_format_columns_with_options("iso", &[array], &opts_iso)
+            .unwrap()
+            .to_string();
+
+        // Expected output
+        let expected_iso = vec![
+            "+-----------+",
+            "| iso       |",
+            "+-----------+",
+            "| <invalid> |",
+            "| <invalid> |",
+            "| PT3661S   |",
+            "| null      |",
+            "+-----------+",
+        ];
+
+        let actual: Vec<&str> = iso.lines().collect();
+        assert_eq!(expected_iso, actual, "Actual result:\n{iso}");
     }
 }

@@ -37,7 +37,6 @@ all-features = true
 
 [features]
 prettyprint = ["comfy-table"]
-default     = ["prettyprint"]
 force_validate = []
 
 [dependencies]
