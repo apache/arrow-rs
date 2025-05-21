@@ -857,7 +857,14 @@ fn filter_struct(
         None
     };
 
-    Ok(unsafe { StructArray::new_unchecked(array.fields().clone(), columns, nulls) })
+    Ok(unsafe {
+        StructArray::new_unchecked_with_length(
+            array.fields().clone(),
+            columns,
+            nulls,
+            predicate.count(),
+        )
+    })
 }
 
 /// `filter` implementation for sparse unions
