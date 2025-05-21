@@ -243,28 +243,14 @@ pub fn try_duration_ms_to_duration(v: i64) -> Option<Duration> {
 
 /// converts a `i64` representing a `duration(us)` to [`Duration`]
 #[inline]
-#[deprecated(since = "55.2.0", note = "Use `try_duration_us_to_duration` instead")]
 pub fn duration_us_to_duration(v: i64) -> Duration {
     Duration::microseconds(v)
 }
 
-/// converts a `i64` representing a `duration(us)` to [`Option<Duration>`]
-#[inline]
-pub fn try_duration_us_to_duration(v: i64) -> Option<Duration> {
-    Some(Duration::microseconds(v))
-}
-
 /// converts a `i64` representing a `duration(ns)` to [`Duration`]
 #[inline]
-#[deprecated(since = "55.2.0", note = "Use `try_duration_ns_to_duration` instead")]
 pub fn duration_ns_to_duration(v: i64) -> Duration {
     Duration::nanoseconds(v)
-}
-
-/// converts a `i64` representing a `duration(ns)` to [`Option<Duration>`]
-#[inline]
-pub fn try_duration_ns_to_duration(v: i64) -> Option<Duration> {
-    Some(Duration::nanoseconds(v))
 }
 
 /// Converts an [`ArrowPrimitiveType`] to [`NaiveDateTime`]
@@ -326,8 +312,8 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
         DataType::Duration(unit) => match unit {
             TimeUnit::Second => try_duration_s_to_duration(v),
             TimeUnit::Millisecond => try_duration_ms_to_duration(v),
-            TimeUnit::Microsecond => try_duration_us_to_duration(v),
-            TimeUnit::Nanosecond => try_duration_ns_to_duration(v),
+            TimeUnit::Microsecond => Some(duration_us_to_duration(v)),
+            TimeUnit::Nanosecond => Some(duration_ns_to_duration(v)),
         },
         _ => None,
     }
