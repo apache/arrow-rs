@@ -191,7 +191,7 @@ pub enum Variant<'m, 'v> {
     BooleanFalse,
 
     // only need the *value* buffer
-    // TODO: Do we want Cow<'v, str> over &'v str? It eanbles From<String> - discuss on PR
+    // TODO: Do we want Cow<'v, str> over &'v str? It enables From<String> - discuss on PR
     String(Cow<'v, str>),
     ShortString(Cow<'v, str>),
 
