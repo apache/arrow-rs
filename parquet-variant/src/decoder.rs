@@ -66,6 +66,11 @@ pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, Arr
 /// Extracts the variant type from the value section of a variant. The variant
 /// type is defined as the set of all basic types and all primitive types.
 pub fn get_variant_type(value: &[u8]) -> Result<VariantType, ArrowError> {
+    if value.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "Tried to get variant type from empty buffer array".to_string(),
+        ));
+    }
     let header = value[0];
     let variant_type = match get_basic_type(header)? {
         VariantBasicType::Primitive => match get_primitive_type(header)? {
@@ -95,14 +100,29 @@ fn invalid_utf8_err() -> ArrowError {
 
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
+    if value.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "Got empty value buffer so can't decode into int8.".to_string(),
+        ));
+    }
     let value = i8::from_le_bytes([value[1]]);
     Ok(value)
 }
 
 /// Decodes a long string from the value section of a variant.
 pub(crate) fn decode_long_string(value: &[u8]) -> Result<&str, ArrowError> {
+    if value.len() < 5 {
+        return Err(ArrowError::InvalidArgumentError(
+            "Tried to decode value buffer into long_string, but it's too short (len<5)."
+                .to_string(),
+        ));
+    }
     let len =
         u32::from_le_bytes(value[1..=4].try_into().map_err(map_try_from_slice_error)?) as usize;
+    if value.len() < len + 5 {
+        let err_str = format!("The length of the buffer for the long_string is soo short, it is {} and it should be at least {} ({} < {} + 5)", value.len(), len + 5 , value.len(), len);
+        return Err(ArrowError::InvalidArgumentError(err_str));
+    }
     let string_bytes = &value[5..5 + len];
     let string = str::from_utf8(string_bytes).map_err(|_| invalid_utf8_err())?;
     Ok(string)
@@ -110,7 +130,17 @@ pub(crate) fn decode_long_string(value: &[u8]) -> Result<&str, ArrowError> {
 
 /// Decodes a short string from the value section of a variant.
 pub(crate) fn decode_short_string(value: &[u8]) -> Result<&str, ArrowError> {
+    if value.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "Tried to decode value buffer into short_string, but it's empty.".to_string(),
+        ));
+    }
     let len = ((value[0] & 0b11111100) >> 2) as usize;
+
+    if value.len() < len + 1 {
+        let err_str = format!("The length of the buffer for the short_string is too short, it is {} and it should be at least {} ({} < {} + 1)", value.len(), len + 1 , value.len(), len);
+        return Err(ArrowError::InvalidArgumentError(err_str));
+    }
     let string_bytes = &value[1..1 + len];
     let string = str::from_utf8(string_bytes).map_err(|_| invalid_utf8_err())?;
     Ok(string)

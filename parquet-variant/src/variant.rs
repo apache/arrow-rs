@@ -24,7 +24,16 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the dict length
     pub fn dict_len(&self) -> Result<usize, ArrowError> {
-        let dict_len_bytes = &self.bytes[1..self.offset_size()? as usize + 1];
+        let end_location = self.offset_size()? as usize + 1;
+        if self.bytes.len() < end_location {
+            let err_str = format!(
+                "Invalid metadata bytes, must have at least length {} but has length {}",
+                &end_location,
+                self.bytes.len()
+            );
+            return Err(ArrowError::InvalidArgumentError(err_str));
+        }
+        let dict_len_bytes = &self.bytes[1..end_location];
         let dict_len = usize::from_le_bytes(dict_len_bytes.try_into().map_err(|e| {
             ArrowError::InvalidArgumentError(format!(
                 "Unable to convert dictionary_size bytes into usize: {}",
@@ -54,8 +63,13 @@ impl<'m> VariantMetadata<'m> {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub fn header(&self) -> u8 {
-        self.bytes[0]
+    pub fn header(&self) -> Result<u8, ArrowError> {
+        if self.bytes.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Can't get header from empty buffer".to_string(),
+            ));
+        }
+        Ok(self.bytes[0])
     }
 
     /// Get the offset_minus_one value from the header
@@ -87,6 +101,8 @@ impl<'m> VariantMetadata<'m> {
         }
         impl<'m> Iterator for OffsetIterators<'m> {
             type Item = (usize, usize); // (start, end) positions of the bytes
+
+            // TODO: Check bounds here or ensure they're correct
 
             fn next(&mut self) -> Option<Self::Item> {
                 // +1 to skip the first offset
