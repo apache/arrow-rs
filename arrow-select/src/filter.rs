@@ -2067,4 +2067,59 @@ mod tests {
 
         assert_eq!(result.to_data(), expected.to_data());
     }
+
+    #[test]
+    fn test_filter_empty_struct() {
+        /*
+            "a": {
+                "b": int64,
+                "c": {}
+            },
+        */
+        let fields = arrow_schema::Field::new(
+            "a",
+            arrow_schema::DataType::Struct(arrow_schema::Fields::from(vec![
+                arrow_schema::Field::new("b", arrow_schema::DataType::Int64, true),
+                arrow_schema::Field::new(
+                    "c",
+                    arrow_schema::DataType::Struct(arrow_schema::Fields::empty()),
+                    true,
+                ),
+            ])),
+            true,
+        );
+
+        /* Test record
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+        */
+
+        // Create the record batch with the nested struct array
+        let schema = Arc::new(Schema::new(vec![fields]));
+
+        let b = Arc::new(Int64Array::from(vec![None, None, None]));
+        let c = Arc::new(StructArray::new_empty_fields(
+            3,
+            Some(NullBuffer::from(vec![true, true, true])),
+        ));
+        let a = StructArray::new(
+            vec![
+                Field::new("b", DataType::Int64, true),
+                Field::new("c", DataType::Struct(Fields::empty()), true),
+            ]
+            .into(),
+            vec![b.clone(), c.clone()],
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let record_batch = RecordBatch::try_new(schema, vec![Arc::new(a)]).unwrap();
+        println!("{record_batch:?}");
+
+        // Apply the filter
+        let predicate = BooleanArray::from(vec![true, false, true]);
+        let filtered_batch = filter_record_batch(&record_batch, &predicate).unwrap();
+
+        // The filtered batch should have 2 rows (the 1st and 3rd)
+        assert_eq!(filtered_batch.num_rows(), 2);
+    }
 }
