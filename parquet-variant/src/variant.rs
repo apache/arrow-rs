@@ -275,25 +275,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Borrow the raw metadata, if this variant has any.
     pub fn metadata(&self) -> Option<&'m [u8]> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
             | Variant::Array(VariantArray { metadata, .. }) => Some(metadata.as_bytes()),
-            _ => None,
-        }
-    }
-
-    /// Borrow the raw value bytes, if present.
-    pub fn value(&'v self) -> Option<&'v [u8]> {
-        match self {
-            // Both arms bind `value` with the same type
-            Variant::Object(VariantObject { value, .. })
-            | Variant::Array(VariantArray { value, .. }) => Some(*value),
-
-            // Short and long strings borrow from inside the slice
-            Variant::String(s) | Variant::ShortString(s) => Some(s.as_bytes()),
-
             _ => None,
         }
     }
