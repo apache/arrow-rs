@@ -32,8 +32,6 @@ rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = "55.1.0"
-strum = "0.27.1"
-strum_macros = "0.27.1"
 
 [lib]
 

@@ -1,8 +1,7 @@
-use std::{borrow::Cow, ops::Index};
+use std::{ops::Index};
 
-use crate::decoder::{self, get_variant_type};
+use crate::decoder::{self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType};
 use arrow_schema::ArrowError;
-use strum_macros::EnumDiscriminants;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// Encodes the Variant Metadata, see the Variant spec file for more information
@@ -196,8 +195,7 @@ impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
 
 /// Variant value. May contain references to metadata and value
 // TODO: Add copy if no Cow on String and Shortstring?
-#[derive(Clone, Debug, PartialEq, EnumDiscriminants)]
-#[strum_discriminants(name(VariantType))]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Variant<'m, 'v> {
     // TODO: Add 'legs' for the rest of the primitive types, once API is agreed upon
     Null,
@@ -206,10 +204,9 @@ pub enum Variant<'m, 'v> {
     BooleanTrue,
     BooleanFalse,
 
-    // only need the *value* buffer
-    // TODO: Do we want Cow<'v, str> over &'v str? It enables From<String> - discuss on PR
-    String(Cow<'v, str>),
-    ShortString(Cow<'v, str>),
+    // Note: only need the *value* buffer
+    String(&'v str),
+    ShortString(& 'v str),
 
     // need both metadata & value
     Object(VariantObject<'m, 'v>),
@@ -219,31 +216,32 @@ pub enum Variant<'m, 'v> {
 impl<'m, 'v> Variant<'m, 'v> {
     /// Parse the buffers and return the appropriate variant.
     pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
-        Ok(match get_variant_type(value)? {
-            VariantType::Null => Variant::Null,
-            VariantType::BooleanTrue => Variant::BooleanTrue,
-            VariantType::BooleanFalse => Variant::BooleanFalse,
-
-            VariantType::Int8 => Variant::Int8(decoder::decode_int8(value)?),
-
-            // TODO: Add 'legs' for the rest of the primitive types, once API is agreed upon
-            VariantType::String => {
-                Variant::String(Cow::Borrowed(decoder::decode_long_string(value)?))
-            }
-
-            VariantType::ShortString => {
-                Variant::ShortString(Cow::Borrowed(decoder::decode_short_string(value)?))
-            }
-
-            VariantType::Object => Variant::Object(VariantObject {
+        if value.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Tried to get variant type from empty buffer array".to_string(),
+            ));
+        }
+        let header = value[0];
+        let new_self = match get_basic_type(header)? {
+            VariantBasicType::Primitive => match get_primitive_type(header)? {
+                VariantPrimitiveType::Null => Variant::Null,
+                VariantPrimitiveType::Int8 => Variant::Int8(decoder::decode_int8(value)?),
+                VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
+                VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
+                // TODO: Add 'legs' for the rest, once API is agreed upon
+                VariantPrimitiveType::String => Variant::String(decoder::decode_long_string(value)?),
+            },
+            VariantBasicType::ShortString => Variant::ShortString(decoder::decode_short_string(value)?),
+            VariantBasicType::Object => Variant::Object(VariantObject {
                 metadata: VariantMetadata { bytes: metadata },
                 value,
             }),
-            VariantType::Array => Variant::Array(VariantArray {
+            VariantBasicType::Array => Variant::Array (VariantArray {
                 metadata: VariantMetadata { bytes: metadata },
                 value,
             }),
-        })
+        };
+        Ok(new_self)
     }
 
     pub fn as_null(&self) -> Option<()> {
@@ -303,19 +301,9 @@ impl<'m, 'v> From<bool> for Variant<'m, 'v> {
 impl<'m, 'v> From<&'v str> for Variant<'m, 'v> {
     fn from(value: &'v str) -> Self {
         if value.len() < 64 {
-            Variant::ShortString(Cow::Borrowed(value))
+            Variant::ShortString(value)
         } else {
-            Variant::String(Cow::Borrowed(value))
-        }
-    }
-}
-
-impl<'m, 'v> From<String> for Variant<'m, 'v> {
-    fn from(value: String) -> Self {
-        if value.len() < 64 {
-            Variant::ShortString(Cow::Owned(value))
-        } else {
-            Variant::String(Cow::Owned(value))
+            Variant::String(value)
         }
     }
 }

@@ -1,6 +1,5 @@
 // NOTE: Largely based on the implementation of @PinkCrow007 in https://github.com/apache/arrow-rs/pull/7452
 // And the feedback there.
-use crate::variant::VariantType;
 use arrow_schema::ArrowError;
 use std::{array::TryFromSliceError, str};
 
@@ -63,30 +62,6 @@ pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, Arr
     Ok(primitive_type)
 }
 
-/// Extracts the variant type from the value section of a variant. The variant
-/// type is defined as the set of all basic types and all primitive types.
-pub fn get_variant_type(value: &[u8]) -> Result<VariantType, ArrowError> {
-    if value.is_empty() {
-        return Err(ArrowError::InvalidArgumentError(
-            "Tried to get variant type from empty buffer array".to_string(),
-        ));
-    }
-    let header = value[0];
-    let variant_type = match get_basic_type(header)? {
-        VariantBasicType::Primitive => match get_primitive_type(header)? {
-            VariantPrimitiveType::Null => VariantType::Null,
-            VariantPrimitiveType::Int8 => VariantType::Int8,
-            VariantPrimitiveType::BooleanTrue => VariantType::BooleanTrue,
-            VariantPrimitiveType::BooleanFalse => VariantType::BooleanFalse,
-            // TODO: Add 'legs' for the rest, once API is agreed upon
-            VariantPrimitiveType::String => VariantType::String,
-        },
-        VariantBasicType::ShortString => VariantType::ShortString,
-        VariantBasicType::Object => VariantType::Object,
-        VariantBasicType::Array => VariantType::Array,
-    };
-    Ok(variant_type)
-}
 
 /// To be used in `map_err` when unpacking an integer from a slice of bytes.
 fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
