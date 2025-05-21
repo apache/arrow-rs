@@ -20,9 +20,6 @@
 use std::fmt::{Display, Formatter};
 use std::pin::Pin;
 
-use futures::{stream::Peekable, Stream, StreamExt};
-use prost::Message;
-use tonic::{Request, Response, Status, Streaming};
 use super::{
     ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
     ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
@@ -41,6 +38,9 @@ use crate::{
     FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult,
     SchemaResult, Ticket,
 };
+use futures::{stream::Peekable, Stream, StreamExt};
+use prost::Message;
+use tonic::{Request, Response, Status, Streaming};
 
 pub(crate) static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
 pub(crate) static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";

@@ -22,20 +22,24 @@ use crate::common::utils::make_primitive_batch;
 
 use arrow_array::RecordBatch;
 use arrow_flight::decode::FlightRecordBatchStream;
+use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
-use arrow_flight::sql::{ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionEndTransactionRequest, CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt, SqlInfo, TableDefinitionOptions, TableExistsOption, TableNotExistOption};
+use arrow_flight::sql::{
+    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionEndTransactionRequest,
+    CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt, SqlInfo,
+    TableDefinitionOptions, TableExistsOption, TableNotExistOption,
+};
 use arrow_flight::{Action, FlightData, FlightDescriptor};
 use futures::{StreamExt, TryStreamExt};
+use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
-use prost::Message;
 use tokio::sync::Mutex;
 use tonic::{IntoStreamingRequest, Request, Status};
 use uuid::Uuid;
-use arrow_flight::encode::FlightDataEncoderBuilder;
 
 #[tokio::test]
 pub async fn test_begin_end_transaction() {
@@ -127,19 +131,17 @@ pub async fn test_do_put_empty_stream() {
     // Create an empty request stream
     let input_data = futures::stream::iter(vec![]);
     let flight_descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-    let flight_data_encoder= FlightDataEncoderBuilder::default()
-        .with_flight_descriptor(Some(flight_descriptor)).build(input_data);
-    let flight_data: Vec<FlightData>  = Box::pin(flight_data_encoder).try_collect().await.unwrap();
+    let flight_data_encoder = FlightDataEncoderBuilder::default()
+        .with_flight_descriptor(Some(flight_descriptor))
+        .build(input_data);
+    let flight_data: Vec<FlightData> = Box::pin(flight_data_encoder).try_collect().await.unwrap();
     let request_stream = futures::stream::iter(flight_data);
-    
+
     // Execute a `do_put` and verify that the server error contains the expected message
-    let err = flight_sql_client
-        .do_put(request_stream)
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("Unhandled Error: Command is missing."),
-    );
+    let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Unhandled Error: Command is missing."),);
 }
 
 #[tokio::test]
@@ -156,27 +158,23 @@ pub async fn test_do_put_first_element_err() {
 
     // Create a fallible request stream such that the 1st element is a FlightError
     let input_data = futures::stream::iter(vec![
-        Err(FlightError::NotYetImplemented(
-            "random error".to_string(),
-        )),
+        Err(FlightError::NotYetImplemented("random error".to_string())),
         Ok(make_primitive_batch(5)),
     ]);
     let flight_descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-    let flight_data_encoder= FlightDataEncoderBuilder::default()
-        .with_flight_descriptor(Some(flight_descriptor)).build(input_data);
+    let flight_data_encoder = FlightDataEncoderBuilder::default()
+        .with_flight_descriptor(Some(flight_descriptor))
+        .build(input_data);
     let flight_data: FallibleRequestStream<FlightData, FlightError> =
         FallibleRequestStream::new(sender, Box::pin(flight_data_encoder));
     let request_stream = flight_data.into_streaming_request();
 
     // Execute a `do_put` and verify that the server error contains the expected message
-    let err = flight_sql_client
-        .do_put(request_stream)
-        .await
-        .unwrap_err();
+    let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
 
-    assert!(
-        err.to_string().contains("Unhandled Error: Command is missing."),
-    );
+    assert!(err
+        .to_string()
+        .contains("Unhandled Error: Command is missing."),);
 }
 
 #[tokio::test]
@@ -188,22 +186,19 @@ pub async fn test_do_put_missing_flight_descriptor() {
     let channel = fixture.channel().await;
     let mut flight_sql_client = FlightSqlServiceClient::new(channel);
 
-
     // Create a request stream such that the flight descriptor is missing
     let stream = futures::stream::iter(vec![Ok(make_primitive_batch(5))]);
-    let flight_data_encoder= FlightDataEncoderBuilder::default()
-        .with_flight_descriptor(None).build(stream);
-    let flight_data: Vec<FlightData>  = Box::pin(flight_data_encoder).try_collect().await.unwrap();
+    let flight_data_encoder = FlightDataEncoderBuilder::default()
+        .with_flight_descriptor(None)
+        .build(stream);
+    let flight_data: Vec<FlightData> = Box::pin(flight_data_encoder).try_collect().await.unwrap();
     let request_stream = futures::stream::iter(flight_data);
 
     // Execute a `do_put` and verify that the server error contains the expected message
-    let err = flight_sql_client
-        .do_put(request_stream)
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("Unhandled Error: Flight descriptor is missing."),
-    );
+    let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("Unhandled Error: Flight descriptor is missing."),);
 }
 
 fn make_ingest_command() -> CommandStatementIngest {
