@@ -595,7 +595,7 @@ temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 /// Arguments
 /// * `$convert` - function to convert the value to an `Duration`
 /// * `$t` - [`ArrowPrimitiveType`] of the array
-/// * `$scale` - scale of the duration (passed to [`duration_fmt`])
+/// * `$scale` - scale of the duration (passed to `duration_fmt`)
 macro_rules! duration_display {
     ($convert:ident, $t:ty, $scale:tt) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
