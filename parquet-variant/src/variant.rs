@@ -45,7 +45,8 @@ impl OffsetSizeBytes {
         let result = match self {
             One => u8::from_le_bytes(array_from_slice(bytes, offset)?).into(),
             Two => u16::from_le_bytes(array_from_slice(bytes, offset)?).into(),
-            Three => todo!(), // ugh, endianness
+            // TODO: Do this one
+            Three => todo!(),
             Four => u32::from_le_bytes(array_from_slice(bytes, offset)?)
                 .try_into()
                 .map_err(|e: TryFromIntError| ArrowError::InvalidArgumentError(e.to_string()))?,
@@ -153,8 +154,8 @@ impl<'m> VariantMetadata<'m> {
     pub fn dictionary_size(&self) -> usize {
         self.dict_size
     }
-    pub fn version(&self) -> usize {
-        todo!()
+    pub fn version(&self) -> u8 {
+        self.header.version
     }
 
     /// Get the offset by key-index
@@ -182,63 +183,61 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get the key-name by index
-    pub fn get_by(&self, index: usize) -> Result<&'m str, ArrowError> {
+    pub fn get_field_by_index(&self, index: usize) -> Result<&'m str, ArrowError> {
         match self.get_offset_by(index) {
-            Ok(range) => {
-                let bytes = slice_from_slice(self.bytes, 1 + range.start..1 + range.end)?;
-                let result = str::from_utf8(bytes).map_err(|_| invalid_utf8_err())?;
-                Ok(result)
-            }
+            Ok(range) => self.get_field_by_offset(range),
             Err(e) => Err(e),
         }
+    }
+
+    /// Gets the field using an offset (Range) - helper method to keep consistent API.
+    pub fn get_field_by_offset(&self, offset: Range<usize>) -> Result<&'m str, ArrowError> {
+        let dictionary_key_start_byte = 1 // header
+                    + self.header.offset_size as usize // dictionary_size field itself
+                    + (self.dict_size + 1) * (self.header.offset_size as usize); // all offset entries
+        let dictionary_keys_bytes =
+            slice_from_slice(self.bytes, dictionary_key_start_byte..self.bytes.len())?;
+        let dictionary_key_bytes =
+            slice_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
+        let result = str::from_utf8(dictionary_key_bytes).map_err(|_| invalid_utf8_err())?;
+        Ok(result)
     }
 
     pub fn header(&self) -> VariantMetadataHeader {
         self.header
     }
 
-    // TODO: Fix this + next two
-    /// Get the offset_minus_one value from the header
-    pub fn offset_size_minus_one(&self) -> Result<u8, ArrowError> {
-        Ok(non_empty_slice(self.bytes)?[0] & (0b11 << 6)) // Grab the last 2 bits
-    }
-
-    /// Get the offset_size
-    pub fn offset_size(&self) -> Result<u8, ArrowError> {
-        Ok(self.offset_size_minus_one()? + 1)
-    }
-
     /// Get the offsets as an iterator
-    // TODO: Do we want this kind of API?
-    // TODO: Test once API is agreed upon
-    pub fn offsets(&'m self) -> Result<impl Iterator<Item = (usize, usize)> + 'm, ArrowError> {
+    // TODO: Write tests
+    pub fn offsets(
+        &'m self,
+    ) -> Result<impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm, ArrowError> {
         struct OffsetIterators<'m> {
             buffer: &'m [u8],
+            header: &'m VariantMetadataHeader,
             dict_len: usize,
             seen: usize,
-            offset_size: usize,
         }
         impl<'m> Iterator for OffsetIterators<'m> {
-            type Item = (usize, usize); // (start, end) positions of the bytes
-                                        // TODO: Check bounds here or ensure they're correct
+            type Item = Result<Range<usize>, ArrowError>; // Range = (start, end) positions of the bytes
             fn next(&mut self) -> Option<Self::Item> {
-                // +1 to skip the first offset
                 if self.seen < self.dict_len {
-                    let start = usize::from_le_bytes(
-                        self.buffer[(self.seen ) * self.offset_size + 1 // +1 to skip header
-                            ..(self.seen ) * self.offset_size + 1]
-                            .try_into()
-                            .ok()?,
-                    );
-                    self.seen += 1;
-                    let end = usize::from_le_bytes(
-                        self.buffer[(self.seen ) * self.offset_size + 1 // +1 to skip header
-                            ..(self.seen ) * self.offset_size + 1]
-                            .try_into()
-                            .ok()?,
-                    );
+                    let start = self
+                        .header
+                        .offset_size
+                        // skip header via byte_offset=1 and self.seen + 1 because first is dictionary_size
+                        .unpack_usize(self.buffer, 1, self.seen + 1);
 
-                    Some((start, end))
+                    let end = self
+                        .header
+                        .offset_size
+                        // skip header via byte_offset=1 and self.seen + 2 to get end offset
+                        .unpack_usize(self.buffer, 1, self.seen + 2);
+                    self.seen += 1;
+                    match (start, end) {
+                        (Ok(start), Ok(end)) => Some(Ok(start..end)),
+                        (Err(e), _) | (_, Err(e)) => Some(Err(e)),
+                    }
                 } else {
                     None
                 }
@@ -246,19 +245,65 @@ impl<'m> VariantMetadata<'m> {
         }
         let iterator: OffsetIterators = OffsetIterators {
             buffer: self.bytes,
+            header: &self.header,
             dict_len: self.dict_size,
             seen: 0,
-            offset_size: self.offset_size()? as usize,
         };
         Ok(iterator)
     }
 
     /// Get all key-names as an Iterator of strings
-    // TODO: Result
-    pub fn fields(&self) -> impl Iterator<Item = &'m str> {
-        // Do the same as for offsets
-        todo!();
-        vec![].into_iter()
+    // NOTE: Duplicated code due to issues putting Impl's on structs, this is the same as `.offsets` except it
+    // extracts the field using the offset instead of returning the offset.
+    pub fn fields(
+        &'m self,
+    ) -> Result<impl Iterator<Item = Result<&'m str, ArrowError>> + 'm, ArrowError> {
+        struct FieldIterator<'m> {
+            buffer: &'m [u8],
+            header: &'m VariantMetadataHeader,
+            dict_len: usize,
+            seen: usize,
+        }
+        impl<'m> Iterator for FieldIterator<'m> {
+            type Item = Result<&'m str, ArrowError>;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.seen < self.dict_len {
+                    let start = self
+                        .header
+                        .offset_size
+                        // skip header via byte_offset=1 and self.seen + 1 because first is dictionary_size
+                        .unpack_usize(self.buffer, 1, self.seen + 1);
+
+                    let end = self
+                        .header
+                        .offset_size
+                        // skip header via byte_offset=1 and self.seen + 2 to get end offset
+                        .unpack_usize(self.buffer, 1, self.seen + 2);
+                    self.seen += 1;
+                    let result = match (start, end) {
+                        (Ok(start), Ok(end)) => {
+                            // Try to get the slice
+                            match slice_from_slice(self.buffer, 1 + start..1 + end) {
+                                // Get the field and return it
+                                Ok(bytes) => str::from_utf8(bytes).map_err(|_| invalid_utf8_err()),
+                                Err(e) => Err(e),
+                            }
+                        }
+                        (Err(e), _) | (_, Err(e)) => Err(e),
+                    };
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+        }
+        let iterator: FieldIterator = FieldIterator {
+            buffer: self.bytes,
+            header: &self.header,
+            dict_len: self.dict_size,
+            seen: 0,
+        };
+        Ok(iterator)
     }
 }
 
