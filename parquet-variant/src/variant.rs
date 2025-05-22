@@ -1,14 +1,13 @@
+use crate::decoder::{
+    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
+};
 use crate::utils::{array_from_slice, invalid_utf8_err, non_empty_slice, slice_from_slice};
+use arrow_schema::ArrowError;
 use std::{
     num::TryFromIntError,
     ops::{Index, Range},
     str,
 };
-
-use crate::decoder::{
-    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
-};
-use arrow_schema::ArrowError;
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum OffsetSizeBytes {
@@ -86,7 +85,6 @@ impl<'m> VariantMetadataHeader {
         let version = header & 0x0F; // First four bits
         let is_sorted = (header & 0x10) != 0; // Fifth bit
         let offset_size_minus_one = (header >> 6) & 0x03; // Last two bits
-
         Ok(Self {
             version,
             is_sorted,
@@ -100,6 +98,7 @@ impl<'m> VariantMetadataHeader {
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
+    dict_size: usize,
 }
 
 impl<'m> VariantMetadata<'m> {
@@ -111,23 +110,24 @@ impl<'m> VariantMetadata<'m> {
 
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
         let header = VariantMetadataHeader::try_new(bytes)?;
-        let dictionary_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
+        // Offset 1, index 0 because first element after header is dictionary size
+        let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
 
         // TODO: Refactor, add test for validation
-        let valid = (0..=dictionary_size)
+        let valid = (0..=dict_size)
             .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
             .scan(0, |prev, cur| {
                 let Ok(cur_offset) = cur else {
                     return Some(false);
                 };
-                *prev = cur_offset;
-
                 // Skip the first offset, which is always 0
                 if *prev == 0 {
+                    *prev = cur_offset;
                     return Some(true);
                 }
 
                 let valid = cur_offset > *prev;
+                *prev = cur_offset;
                 Some(valid)
             })
             .all(|valid| valid);
@@ -137,7 +137,11 @@ impl<'m> VariantMetadata<'m> {
                 "Offsets are not monotonically increasing".to_string(),
             ));
         }
-        Ok(Self { bytes, header })
+        Ok(Self {
+            bytes,
+            header,
+            dict_size,
+        })
     }
 
     /// Whether the dictionary keys are sorted and unique
@@ -145,25 +149,9 @@ impl<'m> VariantMetadata<'m> {
         self.header.is_sorted
     }
 
-    /// Get the dict length
-    pub fn dict_len(&self) -> Result<usize, ArrowError> {
-        let end_location = self.offset_size()? as usize + 1;
-        if self.bytes.len() < end_location {
-            let err_str = format!(
-                "Invalid metadata bytes, must have at least length {} but has length {}",
-                &end_location,
-                self.bytes.len()
-            );
-            return Err(ArrowError::InvalidArgumentError(err_str));
-        }
-        let dict_len_bytes = &self.bytes[1..end_location];
-        let dict_len = usize::from_le_bytes(dict_len_bytes.try_into().map_err(|e| {
-            ArrowError::InvalidArgumentError(format!(
-                "Unable to convert dictionary_size bytes into usize: {}",
-                e,
-            ))
-        })?);
-        Ok(dict_len)
+    /// Get the dictionary size
+    pub fn dictionary_size(&self) -> usize {
+        self.dict_size
     }
     pub fn version(&self) -> usize {
         todo!()
@@ -172,11 +160,10 @@ impl<'m> VariantMetadata<'m> {
     /// Get the offset by key-index
     pub fn get_offset_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
         // TODO: Should we memoize the offsets? There could be thousands of them (https://github.com/apache/arrow-rs/pull/7535#discussion_r2101351294)
-        if index >= self.dict_len()? {
+        if index >= self.dict_size {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
-                index,
-                self.dict_len()?
+                index, self.dict_size
             )));
         }
 
@@ -233,9 +220,7 @@ impl<'m> VariantMetadata<'m> {
         }
         impl<'m> Iterator for OffsetIterators<'m> {
             type Item = (usize, usize); // (start, end) positions of the bytes
-
-            // TODO: Check bounds here or ensure they're correct
-
+                                        // TODO: Check bounds here or ensure they're correct
             fn next(&mut self) -> Option<Self::Item> {
                 // +1 to skip the first offset
                 if self.seen < self.dict_len {
@@ -261,7 +246,7 @@ impl<'m> VariantMetadata<'m> {
         }
         let iterator: OffsetIterators = OffsetIterators {
             buffer: self.bytes,
-            dict_len: self.dict_len()?,
+            dict_len: self.dict_size,
             seen: 0,
             offset_size: self.offset_size()? as usize,
         };
@@ -282,14 +267,12 @@ pub struct VariantObject<'m, 'v> {
     pub metadata: &'m VariantMetadata<'m>,
     pub value: &'v [u8],
 }
-
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
         todo!();
         #[allow(unreachable_code)] // Just to infer the return type
         Ok(vec![].into_iter())
     }
-
     pub fn field(&self, _name: &'m str) -> Result<Variant<'m, 'v>, ArrowError> {
         todo!()
     }

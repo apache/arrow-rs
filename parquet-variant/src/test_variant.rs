@@ -23,7 +23,7 @@ fn load_case(name: &str) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
     Ok((meta, val))
 }
 
-fn get_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
+fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     vec![
     ("primitive_boolean_false", Variant::BooleanFalse),
     ("primitive_boolean_true", Variant::BooleanTrue),
@@ -37,14 +37,36 @@ fn get_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     ]
 }
 
+fn get_non_primitive_cases() -> Vec<&'static str> {
+    vec!["object_primitive"]
+}
+
 #[test]
-fn variant() -> Result<(), ArrowError> {
-    let cases = get_cases();
+fn variant_primitive() -> Result<(), ArrowError> {
+    let cases = get_primitive_cases();
     for (case, want) in cases {
-        let (metadata, value) = load_case(case)?;
-        let metadata_header = VariantMetadata::try_new(&metadata)?;
-        let got = Variant::try_new(&metadata_header, &value)?;
+        let (metadata_bytes, value) = load_case(case)?;
+        let metadata = VariantMetadata::try_new(&metadata_bytes)?;
+        let got = Variant::try_new(&metadata, &value)?;
         assert_eq!(got, want);
+    }
+    Ok(())
+}
+
+#[test]
+fn variant_non_primitive() -> Result<(), ArrowError> {
+    let cases = get_non_primitive_cases();
+    for case in cases {
+        let (metadata, value) = load_case(case)?;
+        let metadata = VariantMetadata::try_new(&metadata)?;
+        let variant = Variant::try_new(&metadata, &value)?;
+        match case {
+            "object_primitive" => {
+                assert!(matches!(variant, Variant::Object(_)));
+                assert_eq!(metadata.dictionary_size(), 7);
+            }
+            _ => unreachable!(),
+        }
     }
     Ok(())
 }
