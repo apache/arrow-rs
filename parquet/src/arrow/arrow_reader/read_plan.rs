@@ -709,7 +709,17 @@ mod tests {
                 }
                 Some(expected) => {
                     // Gather the generated selectors to compare with the expected
-                    let actual: Vec<RowSelector> = plan.collect();
+                    let actual: Vec<RowSelector> = plan.into_iter()
+                        .map(|read_step| {
+                            match read_step{
+                                ReadStep::Read(n) => RowSelector::select(n),
+                                ReadStep::Skip(n) => RowSelector::skip(n),
+                                ReadStep::Mask(mask) => {
+                                    todo!()
+                                }
+                            }
+                        })
+                        .collect();
                     Self::validate_selection(&actual, batch_size);
                     // use debug formatting with newlines to generate easier to grok diffs
                     // if the test fails
