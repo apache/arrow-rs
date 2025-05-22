@@ -3,6 +3,8 @@
 use arrow_schema::ArrowError;
 use std::{array::TryFromSliceError, str};
 
+use crate::utils::invalid_utf8_err;
+
 #[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {
     Primitive = 0,
@@ -65,11 +67,6 @@ pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, Arr
 /// To be used in `map_err` when unpacking an integer from a slice of bytes.
 fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
     ArrowError::InvalidArgumentError(e.to_string())
-}
-
-/// Constructs the error message for an invalid UTF-8 string.
-fn invalid_utf8_err() -> ArrowError {
-    ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string())
 }
 
 /// Decodes an Int8 from the value section of a variant.

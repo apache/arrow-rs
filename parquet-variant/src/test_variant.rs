@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::variant::Variant;
+use crate::variant::{Variant, VariantMetadata};
 use arrow_schema::ArrowError;
 
 fn cases_dir() -> PathBuf {
@@ -42,7 +42,8 @@ fn variant() -> Result<(), ArrowError> {
     let cases = get_cases();
     for (case, want) in cases {
         let (metadata, value) = load_case(case)?;
-        let got = Variant::try_new(&metadata, &value)?;
+        let metadata_header = VariantMetadata::try_new(&metadata)?;
+        let got = Variant::try_new(&metadata_header, &value)?;
         assert_eq!(got, want);
     }
     Ok(())

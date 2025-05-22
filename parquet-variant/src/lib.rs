@@ -33,6 +33,9 @@ mod decoder;
 // TODO: dead code removal
 #[allow(dead_code)]
 mod variant;
+// TODO: dead code removal
+#[allow(dead_code)]
+mod utils;
 
 #[cfg(test)]
 mod test_variant;

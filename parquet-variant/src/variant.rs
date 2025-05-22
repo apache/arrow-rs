@@ -1,14 +1,105 @@
-use std::ops::Index;
+use crate::utils::{array_from_slice, invalid_utf8_err, slice_from_slice};
+use std::{
+    num::TryFromIntError,
+    ops::{Index, Range},
+    str,
+};
 
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use arrow_schema::ArrowError;
 
+#[derive(Clone, Debug, Copy, PartialEq)]
+enum OffsetSizeBytes {
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+}
+
+impl OffsetSizeBytes {
+    fn try_new(offset_size_minus_one: u8) -> Result<Self, ArrowError> {
+        use OffsetSizeBytes::*;
+        let result = match offset_size_minus_one {
+            0 => One,
+            1 => Two,
+            2 => Three,
+            3 => Four,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offset_size_minus_one must be 0–3".to_string(),
+                ))
+            }
+        };
+        Ok(result)
+    }
+
+    fn unpack_usize(
+        &self,
+        bytes: &[u8],
+        byte_offset: usize,  // how many bytes to skip
+        offset_index: usize, // which offset in an array of offsets
+    ) -> Result<usize, ArrowError> {
+        use OffsetSizeBytes::*;
+        let offset = byte_offset + (*self as usize) * offset_index;
+        let result = match self {
+            One => u8::from_le_bytes(array_from_slice(bytes, offset)?).into(),
+            Two => u16::from_le_bytes(array_from_slice(bytes, offset)?).into(),
+            Three => todo!(), // ugh, endianness
+            Four => u32::from_le_bytes(array_from_slice(bytes, offset)?)
+                .try_into()
+                .map_err(|e: TryFromIntError| ArrowError::InvalidArgumentError(e.to_string()))?,
+        };
+        Ok(result)
+    }
+}
+
+#[derive(Clone, Debug, Copy, PartialEq)]
+pub(crate) struct VariantMetadataHeader {
+    version: u8,
+    is_sorted: bool,
+    /// Note: This is `offset_size_minus_one` + 1
+    offset_size: OffsetSizeBytes,
+}
+
+impl<'m> VariantMetadataHeader {
+    /// Tries to construct the variant metadata header, which has the form
+    ///              7     6  5   4  3             0
+    ///             +-------+---+---+---------------+
+    /// header      |       |   |   |    version    |
+    ///             +-------+---+---+---------------+
+    ///                 ^         ^
+    ///                 |         +-- sorted_strings
+    ///                 +-- offset_size_minus_one
+    /// The version is a 4-bit value that must always contain the value 1.
+    /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
+    /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
+    /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
+    pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
+        let Some(header) = bytes.get(0) else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Received zero bytes".to_string(),
+            ));
+        };
+
+        let version = header & 0x0F; // First four bits
+        let is_sorted = (header & 0x10) != 0; // Fifth bit
+        let offset_size_minus_one = (header >> 6) & 0x03; // Last two bits
+
+        Ok(Self {
+            version,
+            is_sorted,
+            offset_size: OffsetSizeBytes::try_new(offset_size_minus_one)?,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 /// Encodes the Variant Metadata, see the Variant spec file for more information
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
+    header: VariantMetadataHeader,
 }
 
 impl<'m> VariantMetadata<'m> {
@@ -18,9 +109,40 @@ impl<'m> VariantMetadata<'m> {
         self.bytes
     }
 
+    pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
+        let header = VariantMetadataHeader::try_new(bytes)?;
+        let dictionary_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
+
+        // TODO: Refactor, add test for validation
+        let valid = (0..=dictionary_size)
+            .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
+            .scan(0, |prev, cur| {
+                let Ok(cur_offset) = cur else {
+                    return Some(false);
+                };
+                *prev = cur_offset;
+
+                // Skip the first offset, which is always 0
+                if *prev == 0 {
+                    return Some(true);
+                }
+
+                let valid = cur_offset > *prev;
+                Some(valid)
+            })
+            .all(|valid| valid);
+
+        if !valid {
+            return Err(ArrowError::InvalidArgumentError(
+                "Offsets are not monotonically increasing".to_string(),
+            ));
+        }
+        Ok(Self { bytes, header })
+    }
+
     /// Whether the dictionary keys are sorted and unique
     pub fn is_sorted(&self) -> bool {
-        todo!()
+        self.header.is_sorted
     }
 
     /// Get the dict length
@@ -47,32 +169,47 @@ impl<'m> VariantMetadata<'m> {
         todo!()
     }
 
-    /// Get the offset by index
-    pub fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
-        todo!()
-    }
-
-    /// Get the header byte, which has the following form
-    ///              7     6  5   4  3             0
-    ///             +-------+---+---+---------------+
-    /// header      |       |   |   |    version    |
-    ///             +-------+---+---+---------------+
-    ///                 ^         ^
-    ///                 |         +-- sorted_strings
-    ///                 +-- offset_size_minus_one
-    /// The version is a 4-bit value that must always contain the value 1.
-    /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
-    /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
-    /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub fn header(&self) -> Result<u8, ArrowError> {
-        if self.bytes.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Can't get header from empty buffer".to_string(),
-            ));
+    /// Get the offset by key-index
+    pub fn get_offset_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
+        if index >= self.dict_len()? {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {} out of bounds for dictionary of length {}",
+                index,
+                self.dict_len()?
+            )));
         }
-        Ok(self.bytes[0])
+
+        // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
+        // TODO: Validate size before looking up?
+        // TODO: Fix location / bytes here, the index is wrong.
+        let start = self
+            .header
+            .offset_size
+            .unpack_usize(self.bytes, 1, index + 1)?;
+        let end = self
+            .header
+            .offset_size
+            .unpack_usize(self.bytes, 1, index + 2)?;
+        Ok(start..end)
     }
 
+    /// Get the key-name by index
+    pub fn get_by(&self, index: usize) -> Result<&'m str, ArrowError> {
+        match self.get_offset_by(index) {
+            Ok(range) => {
+                let bytes = slice_from_slice(self.bytes, 1 + range.start..1 + range.end)?;
+                let result = str::from_utf8(bytes).map_err(|_| invalid_utf8_err())?;
+                Ok(result)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn header(&self) -> VariantMetadataHeader {
+        self.header
+    }
+
+    // TODO: Fix this + next two
     /// Get the offset_minus_one value from the header
     pub fn offset_size_minus_one(&self) -> Result<u8, ArrowError> {
         if self.bytes.is_empty() {
@@ -136,10 +273,7 @@ impl<'m> VariantMetadata<'m> {
         };
         Ok(iterator)
     }
-    /// Get the key-name-bytes by index
-    pub fn get_by(&self, index: usize) -> Result<&'m str, ArrowError> {
-        todo!()
-    }
+
     /// Get all key-names as an Iterator of strings
     // TODO: Result
     pub fn fields(&self) -> impl Iterator<Item = &'m str> {
@@ -151,7 +285,7 @@ impl<'m> VariantMetadata<'m> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
-    pub metadata: VariantMetadata<'m>,
+    pub metadata: &'m VariantMetadata<'m>,
     pub value: &'v [u8],
 }
 
@@ -169,7 +303,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantArray<'m, 'v> {
-    pub metadata: VariantMetadata<'m>,
+    pub metadata: &'m VariantMetadata<'m>,
     pub value: &'v [u8],
 }
 
@@ -214,7 +348,7 @@ pub enum Variant<'m, 'v> {
 
 impl<'m, 'v> Variant<'m, 'v> {
     /// Parse the buffers and return the appropriate variant.
-    pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
+    pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
         if value.is_empty() {
             return Err(ArrowError::InvalidArgumentError(
                 "Tried to get variant type from empty buffer array".to_string(),
@@ -235,14 +369,8 @@ impl<'m, 'v> Variant<'m, 'v> {
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value)?)
             }
-            VariantBasicType::Object => Variant::Object(VariantObject {
-                metadata: VariantMetadata { bytes: metadata },
-                value,
-            }),
-            VariantBasicType::Array => Variant::Array(VariantArray {
-                metadata: VariantMetadata { bytes: metadata },
-                value,
-            }),
+            VariantBasicType::Object => Variant::Object(VariantObject { metadata, value }),
+            VariantBasicType::Array => Variant::Array(VariantArray { metadata, value }),
         };
         Ok(new_self)
     }
@@ -272,6 +400,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_int8(&self) -> Option<i8> {
         match self {
             Variant::Int8(i) => Some(*i),
+            // TODO: Add branches for type-widening/shortening when implemting rest of primitives for int
+            // Variant::Int16(i) => i.try_into().ok(),
+            // ...
             _ => None,
         }
     }
