@@ -1,5 +1,3 @@
-// NOTE: Largely based on the implementation of @PinkCrow007 in https://github.com/apache/arrow-rs/pull/7452
-// And the feedback there.
 use arrow_schema::ArrowError;
 use std::{array::TryFromSliceError, str};
 
