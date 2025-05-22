@@ -26,6 +26,7 @@ use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::collections::VecDeque;
+use arrow_buffer::BooleanBuffer;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone)]
@@ -144,6 +145,36 @@ impl ReadPlanBuilder {
     }
 }
 
+/// How to select the next batch of rows to read from the Parquet file
+///
+/// This allows the reader to dynamically choose between decoding strategies
+pub(crate) enum ReadStep {
+    /// Read n rows
+    Read(usize),
+    /// Skip n rows
+    Skip(usize),
+    /// Reads mask.len() rows then applies the filter mask to select just the desired
+    /// rows.
+    ///
+    /// Any row with a 1 value in the mask will be selected and included
+    /// in the output batch.
+    ///
+    /// This is used in situations where the overhead of preferentially decoding
+    /// only the selected rows is higher than decoding all rows and then
+    /// applying a mask via filter.
+    Mask(BooleanBuffer),
+}
+
+impl From<RowSelector> for ReadStep {
+    fn from(value: RowSelector) -> Self {
+        if value.skip {
+            Self::Skip(value.row_count)
+        } else {
+            Self::Read(value.row_count)
+        }
+    }
+}
+
 /// Incrementally returns [`RowSelector`]s that describe reading from a Parquet file.
 ///
 /// The returned stream of [`RowSelector`]s is guaranteed to have:
@@ -166,7 +197,7 @@ pub(crate) struct SelectionIterator {
 }
 
 impl Iterator for SelectionIterator {
-    type Item = RowSelector;
+    type Item = ReadStep;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(mut front) = self.input_selectors.pop_front() {
@@ -177,7 +208,7 @@ impl Iterator for SelectionIterator {
             }
 
             if front.skip {
-                return Some(front);
+                return Some(ReadStep::from(front));
             }
 
             let need_read = self.batch_size - self.read_records;
@@ -199,7 +230,7 @@ impl Iterator for SelectionIterator {
                 self.read_records = 0;
             }
 
-            return Some(front);
+            return Some(ReadStep::from(front));
         }
         // no more selectors to read, end of stream
         None
@@ -328,13 +359,13 @@ pub(crate) enum ReadPlan {
 }
 
 impl Iterator for ReadPlan {
-    type Item = RowSelector;
+    type Item = ReadStep;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             // If we are reading all rows, return a selector that selects
             // the next batch_size rows
-            Self::All { batch_size } => Some(RowSelector::select(*batch_size)),
+            Self::All { batch_size } => Some(ReadStep::Read(*batch_size)),
             Self::Subset { iterator } => iterator.next(),
         }
     }

@@ -38,6 +38,7 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
+use crate::arrow::arrow_reader::read_plan::ReadStep;
 
 mod filter;
 mod read_plan;
@@ -812,29 +813,34 @@ impl ParquetRecordBatchReader {
         let mut read_records = 0;
         let batch_size = self.batch_size();
         while read_records < batch_size {
-            let Some(front) = self.read_plan.next() else {
+            let Some(step) = self.read_plan.next() else {
                 end_of_stream = true;
                 break;
             };
 
-            if front.skip {
-                let skipped = self.array_reader.skip_records(front.row_count)?;
 
-                if skipped != front.row_count {
-                    return Err(general_err!(
-                        "Internal Error: failed to skip rows, expected {}, got {}",
-                        front.row_count,
-                        skipped
-                    ));
-                }
-            } else {
-                let read = self.array_reader.read_records(front.row_count)?;
-                if read == 0 {
-                    end_of_stream = true;
-                    break;
-                }
+            match step {
+                ReadStep::Skip(row_count) => {
+                    let skipped = self.array_reader.skip_records(row_count)?;
 
-                read_records += read
+                    if skipped != row_count {
+                        return Err(general_err!(
+                            "Internal Error: failed to skip rows, expected {row_count}, got {skipped}",
+                        ));
+                    }
+                }
+                ReadStep::Read(row_count) => {
+                    let read = self.array_reader.read_records(row_count)?;
+                    if read == 0 {
+                        end_of_stream = true;
+                        break;
+                    }
+
+                    read_records += read
+                }
+                ReadStep::Mask(mask) => {
+                    todo!();
+                }
             };
         }
 
