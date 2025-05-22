@@ -9,7 +9,6 @@ pub(crate) fn slice_from_slice<R>(bytes: &[u8], range: R) -> Result<&[u8], Arrow
 where
     R: RangeBounds<usize>,
 {
-    // ----- translate RangeBounds → concrete `[start, end_exclusive)` -----
     let start = match range.start_bound() {
         Bound::Included(&s) => s,
         Bound::Excluded(&s) => s.saturating_add(1),
@@ -22,7 +21,6 @@ where
         Bound::Unbounded => bytes.len(),
     };
 
-    // ----- bounds check --------------------------------------------------
     if start > end_exclusive || end_exclusive > bytes.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Tried to extract {} bytes at offset {} from {}-byte buffer",
@@ -32,7 +30,6 @@ where
         )));
     }
 
-    // Safe: we just verified the range.
     Ok(&bytes[start..end_exclusive])
 }
 pub(crate) fn array_from_slice<const N: usize>(
