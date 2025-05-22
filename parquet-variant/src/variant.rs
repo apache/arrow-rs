@@ -96,7 +96,7 @@ impl<'m> VariantMetadata<'m> {
     pub fn offsets(&'m self) -> Result<impl Iterator<Item = (usize, usize)> + 'm, ArrowError> {
         struct OffsetIterators<'m> {
             buffer: &'m [u8],
-            total: usize,
+            dict_len: usize,
             seen: usize,
             offset_size: usize,
         }
@@ -107,7 +107,7 @@ impl<'m> VariantMetadata<'m> {
 
             fn next(&mut self) -> Option<Self::Item> {
                 // +1 to skip the first offset
-                if self.seen < self.total {
+                if self.seen < self.dict_len {
                     let start = usize::from_le_bytes(
                         self.buffer[(self.seen ) * self.offset_size + 1 // +1 to skip header
                             ..(self.seen ) * self.offset_size + 1]
@@ -130,7 +130,7 @@ impl<'m> VariantMetadata<'m> {
         }
         let iterator: OffsetIterators = OffsetIterators {
             buffer: self.bytes,
-            total: self.dict_len()?,
+            dict_len: self.dict_len()?,
             seen: 0,
             offset_size: self.offset_size()? as usize,
         };
