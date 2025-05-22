@@ -1,6 +1,8 @@
-use std::{ops::Index};
+use std::ops::Index;
 
-use crate::decoder::{self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType};
+use crate::decoder::{
+    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
+};
 use arrow_schema::ArrowError;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,8 +173,6 @@ pub struct VariantArray<'m, 'v> {
     pub value: &'v [u8],
 }
 
-// TODO: Let's agree on the API here, also should we expose a way to get the values as a vec of
-// variants for those who want it? Would require allocations.
 impl<'m, 'v> VariantArray<'m, 'v> {
     pub fn len(&self) -> usize {
         todo!()
@@ -194,10 +194,9 @@ impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
 }
 
 /// Variant value. May contain references to metadata and value
-// TODO: Add copy if no Cow on String and Shortstring?
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub enum Variant<'m, 'v> {
-    // TODO: Add 'legs' for the rest of the primitive types, once API is agreed upon
+    // TODO: Add types for the rest of the primitive types, once API is agreed upon
     Null,
     Int8(i8),
 
@@ -206,7 +205,7 @@ pub enum Variant<'m, 'v> {
 
     // Note: only need the *value* buffer
     String(&'v str),
-    ShortString(& 'v str),
+    ShortString(&'v str),
 
     // need both metadata & value
     Object(VariantObject<'m, 'v>),
@@ -228,15 +227,19 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int8 => Variant::Int8(decoder::decode_int8(value)?),
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
-                // TODO: Add 'legs' for the rest, once API is agreed upon
-                VariantPrimitiveType::String => Variant::String(decoder::decode_long_string(value)?),
+                // TODO: Add types for the rest, once API is agreed upon
+                VariantPrimitiveType::String => {
+                    Variant::String(decoder::decode_long_string(value)?)
+                }
             },
-            VariantBasicType::ShortString => Variant::ShortString(decoder::decode_short_string(value)?),
+            VariantBasicType::ShortString => {
+                Variant::ShortString(decoder::decode_short_string(value)?)
+            }
             VariantBasicType::Object => Variant::Object(VariantObject {
                 metadata: VariantMetadata { bytes: metadata },
                 value,
             }),
-            VariantBasicType::Array => Variant::Array (VariantArray {
+            VariantBasicType::Array => Variant::Array(VariantArray {
                 metadata: VariantMetadata { bytes: metadata },
                 value,
             }),

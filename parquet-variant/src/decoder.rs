@@ -17,7 +17,7 @@ pub enum VariantPrimitiveType {
     BooleanTrue = 1,
     BooleanFalse = 2,
     Int8 = 3,
-    // TODO: Add 'legs' for the rest of primitives, once API is agreed upon
+    // TODO: Add types for the rest of primitives, once API is agreed upon
     String = 16,
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, Arr
         1 => VariantPrimitiveType::BooleanTrue,
         2 => VariantPrimitiveType::BooleanFalse,
         3 => VariantPrimitiveType::Int8,
-        // TODO: Add 'legs' for the rest, once API is agreed upon
+        // TODO: Add types for the rest, once API is agreed upon
         16 => VariantPrimitiveType::String,
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -61,7 +61,6 @@ pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, Arr
     };
     Ok(primitive_type)
 }
-
 
 /// To be used in `map_err` when unpacking an integer from a slice of bytes.
 fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
