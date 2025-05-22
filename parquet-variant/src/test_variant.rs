@@ -64,7 +64,7 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
             "object_primitive" => {
                 assert!(matches!(variant, Variant::Object(_)));
                 assert_eq!(metadata.dictionary_size(), 7);
-                let dict_val = metadata.get_field_by_index(0)?;
+                let dict_val = metadata.get_field_by(0)?;
                 assert_eq!(dict_val, "int_field");
             }
             _ => unreachable!(),
