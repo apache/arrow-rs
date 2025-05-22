@@ -1,4 +1,4 @@
-use crate::utils::{array_from_slice, invalid_utf8_err, slice_from_slice};
+use crate::utils::{array_from_slice, invalid_utf8_err, non_empty_slice, slice_from_slice};
 use std::{
     num::TryFromIntError,
     ops::{Index, Range},
@@ -212,14 +212,7 @@ impl<'m> VariantMetadata<'m> {
     // TODO: Fix this + next two
     /// Get the offset_minus_one value from the header
     pub fn offset_size_minus_one(&self) -> Result<u8, ArrowError> {
-        if self.bytes.is_empty() {
-            Err(ArrowError::InvalidArgumentError(
-                "Tried to get offset_size_minus_one from header, but self.bytes buffer is emtpy."
-                    .to_string(),
-            ))
-        } else {
-            Ok(self.bytes[0] & (0b11 << 6)) // Grab the last 2 bits
-        }
+        Ok(non_empty_slice(self.bytes)?[0] & (0b11 << 6)) // Grab the last 2 bits
     }
 
     /// Get the offset_size
@@ -349,12 +342,7 @@ pub enum Variant<'m, 'v> {
 impl<'m, 'v> Variant<'m, 'v> {
     /// Parse the buffers and return the appropriate variant.
     pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
-        if value.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Tried to get variant type from empty buffer array".to_string(),
-            ));
-        }
-        let header = value[0];
+        let header = non_empty_slice(value)?[0];
         let new_self = match get_basic_type(header)? {
             VariantBasicType::Primitive => match get_primitive_type(header)? {
                 VariantPrimitiveType::Null => Variant::Null,
