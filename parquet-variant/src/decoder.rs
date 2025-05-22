@@ -33,10 +33,9 @@ pub(crate) fn get_basic_type(header: u8) -> Result<VariantBasicType, ArrowError>
         2 => VariantBasicType::Object,
         3 => VariantBasicType::Array,
         _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "unknown basic type: {}",
-                basic_type
-            )))
+            //NOTE:  A 2-bit value has a max of 4 different values (0-3), hence this is unreachable as we
+            // masked `basic_type` with 0x03 above.
+            unreachable!();
         }
     };
     Ok(basic_type)
