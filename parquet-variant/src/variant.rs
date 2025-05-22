@@ -134,7 +134,7 @@ impl<'m> VariantMetadata<'m> {
         // Offset 1, index 0 because first element after header is dictionary size
         let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
 
-        // TODO: Refactor, add test for validation
+        // TODO: add test for validation
         let valid = (0..=dict_size)
             .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
             .scan(0, |prev, cur| {
@@ -180,7 +180,6 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the offset by key-index
     pub fn get_offset_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
-        // TODO: Should we memoize the offsets? There could be thousands of them (https://github.com/apache/arrow-rs/pull/7535#discussion_r2101351294)
         if index >= self.dict_size {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
@@ -189,8 +188,6 @@ impl<'m> VariantMetadata<'m> {
         }
 
         // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
-        // TODO: Validate size before looking up?
-        // TODO: Fix location / bytes here, the index is wrong.
         let start = self
             .header
             .offset_size
