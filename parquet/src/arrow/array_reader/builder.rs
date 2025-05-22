@@ -23,7 +23,7 @@ use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::{
-    make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
+    make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader, CachedPredicateResult,
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
@@ -37,11 +37,18 @@ use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
 pub(crate) struct ArrayReaderBuilder<'a> {
     row_groups: &'a dyn RowGroups,
+    cached_predicate_result: Option<&'a CachedPredicateResult>,
 }
 
 impl<'a> ArrayReaderBuilder<'a> {
-    pub(crate) fn new(row_groups: &'a dyn RowGroups) -> Self {
-        Self { row_groups }
+    pub(crate) fn new(
+        row_groups: &'a dyn RowGroups,
+        cached_predicate_result: Option<&'a CachedPredicateResult>,
+    ) -> Self {
+        Self {
+            row_groups,
+            cached_predicate_result,
+        }
     }
 
     /// Create [`ArrayReader`] from parquet schema, projection mask, and parquet file reader.
@@ -68,6 +75,10 @@ impl<'a> ArrayReaderBuilder<'a> {
         field: &ParquetField,
         mask: &ProjectionMask,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
+        if let Some(builder) = self.build_cached_reader(field, mask)? {
+            return Ok(Some(builder));
+        }
+
         match field.field_type {
             ParquetFieldType::Primitive { .. } => self.build_primitive_reader(field, mask),
             ParquetFieldType::Group { .. } => match &field.arrow_type {
@@ -79,6 +90,33 @@ impl<'a> ArrayReaderBuilder<'a> {
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
+    }
+
+    /// Build cached array reader if the field is in the projection mask and in the cache
+    fn build_cached_reader(
+        &self,
+        field: &ParquetField,
+        mask: &ProjectionMask,
+    ) -> Result<Option<Box<dyn ArrayReader>>> {
+        let Some(cached_predicate_result) = self.cached_predicate_result else {
+            return Ok(None);
+        };
+
+        // TODO how to find a cached struct / list
+        // (Probably have to cache the individual fields)
+        let ParquetFieldType::Primitive {
+            col_idx,
+            primitive_type: _,
+        } = &field.field_type
+        else {
+            return Ok(None);
+        };
+
+        if !mask.leaf_included(*col_idx) {
+            return Ok(None);
+        }
+
+        cached_predicate_result.build_reader(*col_idx)
     }
 
     /// Build array reader for map type.
@@ -375,7 +413,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = ArrayReaderBuilder::new(&file_reader)
+        let cached_predicate_result = None;
+        let array_reader = ArrayReaderBuilder::new(&file_reader, cached_predicate_result)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
