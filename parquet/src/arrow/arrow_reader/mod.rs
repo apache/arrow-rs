@@ -38,12 +38,13 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
-use crate::arrow::arrow_reader::read_plan::ReadStep;
+use crate::arrow::arrow_reader::read_step::ReadStep;
 
 mod filter;
 mod read_plan;
 mod selection;
 pub mod statistics;
+pub mod read_step;
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
@@ -838,7 +839,7 @@ impl ParquetRecordBatchReader {
 
                     read_records += read
                 }
-                ReadStep::Mask(mask) => {
+                ReadStep::Mask{..} => {
                     todo!();
                 }
             };

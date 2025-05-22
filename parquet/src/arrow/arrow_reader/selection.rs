@@ -436,6 +436,11 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
+    
+    /// Returns the inner selectors
+    pub fn into_inner(self) -> Vec<RowSelector> {
+        self.selectors
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
@@ -476,7 +481,7 @@ impl FromIterator<RowSelector> for RowSelection {
 
 impl From<RowSelection> for Vec<RowSelector> {
     fn from(r: RowSelection) -> Self {
-        r.selectors
+        r.into_inner()
     }
 }
 

@@ -25,15 +25,14 @@ use crate::arrow::arrow_reader::{
 use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
-use std::collections::VecDeque;
-use arrow_buffer::BooleanBuffer;
+use crate::arrow::arrow_reader::read_step::{OptimizedReadSteps, ReadStep, ReadSteps};
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone)]
 pub(crate) struct ReadPlanBuilder {
     batch_size: usize,
-    /// Current to apply, includes all filters
-    selection: Option<RowSelection>,
+    /// Current steps to apply, includes all filters
+    steps: Option<ReadSteps>,
 }
 
 impl ReadPlanBuilder {
@@ -41,19 +40,21 @@ impl ReadPlanBuilder {
     pub(crate) fn new(batch_size: usize) -> Self {
         Self {
             batch_size,
-            selection: None,
+            steps: None,
         }
     }
 
-    /// Set the current selection to the given value
+    /// Set the current steps to the given row selection, if any
     pub(crate) fn with_selection(mut self, selection: Option<RowSelection>) -> Self {
-        self.selection = selection;
+        self.steps = selection.map(ReadSteps::from);
         self
     }
 
     /// Returns the current selection, if any
     pub(crate) fn selection(&self) -> Option<&RowSelection> {
-        self.selection.as_ref()
+        None
+        // TODO
+        // self.selection.as_ref()
     }
 
     /// Returns a [`LimitedReadPlanBuilder`] to apply offset and limit to the in
@@ -67,15 +68,17 @@ impl ReadPlanBuilder {
 
     /// Returns true if the current plan selects any rows
     pub(crate) fn selects_any(&self) -> bool {
-        self.selection
+        self.steps
             .as_ref()
-            .map(|s| s.selects_any())
+            .map(ReadSteps::selects_any)
+            // no steps means all rows are selected
             .unwrap_or(true)
     }
 
     /// Returns the number of rows selected, or `None` if all rows are selected.
     pub(crate) fn num_rows_selected(&self) -> Option<usize> {
-        self.selection.as_ref().map(|s| s.row_count())
+        self.steps.as_ref().map(ReadSteps::num_selected)
+
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -111,6 +114,8 @@ impl ReadPlanBuilder {
             };
         }
 
+        // TODO potentially make this more efficient
+        
         let raw = RowSelection::from_filters(&filters);
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
@@ -123,11 +128,11 @@ impl ReadPlanBuilder {
     pub(crate) fn build(mut self) -> ReadPlan {
         // If selection is empty, truncate
         if !self.selects_any() {
-            self.selection = Some(RowSelection::from(vec![]));
+            self.steps = Some(ReadSteps::empty());
         }
         let Self {
             batch_size,
-            selection,
+            steps,
         } = self;
 
         // If the batch size is 0, read "all rows"
@@ -136,34 +141,15 @@ impl ReadPlanBuilder {
         }
 
         // If no selection is provided, read all rows
-        let Some(selection) = selection else {
+        let Some(steps) = steps else {
             return ReadPlan::All { batch_size };
         };
 
-        let iterator = SelectionIterator::new(batch_size, selection.into());
+        let iterator = OptimizedReadSteps::new(batch_size, steps);
         ReadPlan::Subset { iterator }
     }
 }
 
-/// How to select the next batch of rows to read from the Parquet file
-///
-/// This allows the reader to dynamically choose between decoding strategies
-pub(crate) enum ReadStep {
-    /// Read n rows
-    Read(usize),
-    /// Skip n rows
-    Skip(usize),
-    /// Reads mask.len() rows then applies the filter mask to select just the desired
-    /// rows.
-    ///
-    /// Any row with a 1 value in the mask will be selected and included
-    /// in the output batch.
-    ///
-    /// This is used in situations where the overhead of preferentially decoding
-    /// only the selected rows is higher than decoding all rows and then
-    /// applying a mask via filter.
-    Mask(BooleanBuffer),
-}
 
 impl From<RowSelector> for ReadStep {
     fn from(value: RowSelector) -> Self {
@@ -172,88 +158,6 @@ impl From<RowSelector> for ReadStep {
         } else {
             Self::Read(value.row_count)
         }
-    }
-}
-
-/// Incrementally returns [`RowSelector`]s that describe reading from a Parquet file.
-///
-/// The returned stream of [`RowSelector`]s is guaranteed to have:
-/// 1. No empty selections (that select no rows)
-/// 2. No selections that span batch_size boundaries
-/// 3. No trailing skip selections
-///
-/// For example, if the `batch_size` is 100 and we are selecting all 200 rows
-/// from a Parquet file, the selectors will be:
-/// - `RowSelector::select(100)  <-- forced break at batch_size boundary`
-/// - `RowSelector::select(100)`
-#[derive(Debug, Clone)]
-pub(crate) struct SelectionIterator {
-    /// how many rows to read in each batch
-    batch_size: usize,
-    /// how many records have been read by RowSelection in the "current" batch
-    read_records: usize,
-    /// Input selectors to read from
-    input_selectors: VecDeque<RowSelector>,
-}
-
-impl Iterator for SelectionIterator {
-    type Item = ReadStep;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(mut front) = self.input_selectors.pop_front() {
-            // RowSelectors with row_count = 0 terminate the read, so skip such
-            // entries. See https://github.com/apache/arrow-rs/issues/2669
-            if front.row_count == 0 {
-                continue;
-            }
-
-            if front.skip {
-                return Some(ReadStep::from(front));
-            }
-
-            let need_read = self.batch_size - self.read_records;
-
-            // if there are more rows in the current RowSelector than needed to
-            // finish the batch, split it up
-            if front.row_count > need_read {
-                // Part 1: return remaining rows to the front of the queue
-                let remaining = front.row_count - need_read;
-                self.input_selectors
-                    .push_front(RowSelector::select(remaining));
-                // Part 2: adjust the current selector to read the rows we need
-                front.row_count = need_read;
-            }
-
-            self.read_records += front.row_count;
-            // if read enough records to complete a batch, emit
-            if self.read_records == self.batch_size {
-                self.read_records = 0;
-            }
-
-            return Some(ReadStep::from(front));
-        }
-        // no more selectors to read, end of stream
-        None
-    }
-}
-
-impl SelectionIterator {
-    fn new(batch_size: usize, mut input_selectors: VecDeque<RowSelector>) -> Self {
-        // trim any trailing empty selectors
-        while input_selectors.back().map(|x| x.skip).unwrap_or(false) {
-            input_selectors.pop_back();
-        }
-
-        Self {
-            batch_size,
-            read_records: 0,
-            input_selectors,
-        }
-    }
-
-    /// Return the number of rows to read in each output batch
-    fn batch_size(&self) -> usize {
-        self.batch_size
     }
 }
 
@@ -307,20 +211,20 @@ impl LimitedReadPlanBuilder {
 
         // If the selection is empty, truncate
         if !inner.selects_any() {
-            inner.selection = Some(RowSelection::from(vec![]));
+            inner.steps = Some(ReadSteps::empty());
         }
 
         // If an offset is defined, apply it to the `selection`
         if let Some(offset) = offset {
-            inner.selection = Some(match row_count.checked_sub(offset) {
-                None => RowSelection::from(vec![]),
+            inner.steps = Some(match row_count.checked_sub(offset) {
+                None => ReadSteps::empty(),
                 Some(remaining) => inner
-                    .selection
-                    .map(|selection| selection.offset(offset))
+                    .steps
+                    .map(|steps| steps.offset(offset))
                     .unwrap_or_else(|| {
-                        RowSelection::from(vec![
-                            RowSelector::skip(offset),
-                            RowSelector::select(remaining),
+                        ReadSteps::from(vec![
+                            ReadStep::Skip(offset),
+                            ReadStep::Read(remaining),
                         ])
                     }),
             });
@@ -328,12 +232,12 @@ impl LimitedReadPlanBuilder {
 
         // If a limit is defined, apply it to the final `selection`
         if let Some(limit) = limit {
-            inner.selection = Some(
+            inner.steps = Some(
                 inner
-                    .selection
-                    .map(|selection| selection.limit(limit))
+                    .steps
+                    .map(|steps| steps.limit(limit))
                     .unwrap_or_else(|| {
-                        RowSelection::from(vec![RowSelector::select(limit.min(row_count))])
+                        ReadSteps::from(vec![ReadStep::Read(limit.min(row_count))])
                     }),
             );
         }
@@ -355,7 +259,7 @@ pub(crate) enum ReadPlan {
         batch_size: usize,
     },
     /// Read only a specific subset of rows
-    Subset { iterator: SelectionIterator },
+    Subset { iterator: OptimizedReadSteps },
 }
 
 impl Iterator for ReadPlan {
@@ -714,7 +618,7 @@ mod tests {
                             match read_step{
                                 ReadStep::Read(n) => RowSelector::select(n),
                                 ReadStep::Skip(n) => RowSelector::skip(n),
-                                ReadStep::Mask(mask) => {
+                                ReadStep::Mask{mask, num_selected} => {
                                     todo!()
                                 }
                             }
