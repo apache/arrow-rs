@@ -44,7 +44,7 @@ pub(crate) fn get_basic_type(header: u8) -> Result<VariantBasicType, ArrowError>
 pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, ArrowError> {
     // See https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-encoding
     //// Primitive type is encoded in the last 6 bits of the header byte
-    let primitive_type = (header >> 2) & 0x3F;
+    let primitive_type = header >> 2;
     let primitive_type = match primitive_type {
         0 => VariantPrimitiveType::Null,
         1 => VariantPrimitiveType::BooleanTrue,
@@ -109,7 +109,7 @@ pub(crate) fn decode_short_string(value: &[u8]) -> Result<&str, ArrowError> {
             "Tried to decode value buffer into short_string, but it's empty.".to_string(),
         ));
     }
-    let len = ((value[0] & 0b11111100) >> 2) as usize;
+    let len = (value[0] >> 2) as usize;
 
     if value.len() < len + 1 {
         let err_str = format!("The length of the buffer for the short_string is too short, it is {} and it should be at least {} ({} < {} + 1)", value.len(), len + 1 , value.len(), len);
