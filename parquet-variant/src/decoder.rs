@@ -39,26 +39,28 @@ pub(crate) fn get_basic_type(header: u8) -> Result<VariantBasicType, ArrowError>
     Ok(basic_type)
 }
 
-/// Extracts the primitive type from a header byte
-pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, ArrowError> {
-    // See https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-encoding
-    //// Primitive type is encoded in the last 6 bits of the header byte
-    let primitive_type = header >> 2;
-    let primitive_type = match primitive_type {
-        0 => VariantPrimitiveType::Null,
-        1 => VariantPrimitiveType::BooleanTrue,
-        2 => VariantPrimitiveType::BooleanFalse,
-        3 => VariantPrimitiveType::Int8,
-        // TODO: Add types for the rest, once API is agreed upon
-        16 => VariantPrimitiveType::String,
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
+impl TryFrom<u8> for VariantPrimitiveType {
+    type Error = ArrowError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(VariantPrimitiveType::Null),
+            1 => Ok(VariantPrimitiveType::BooleanTrue),
+            2 => Ok(VariantPrimitiveType::BooleanFalse),
+            3 => Ok(VariantPrimitiveType::Int8),
+            // TODO: Add types for the rest, once API is agreed upon
+            16 => Ok(VariantPrimitiveType::String),
+            _ => Err(ArrowError::InvalidArgumentError(format!(
                 "unknown primitive type: {}",
-                primitive_type
-            )))
+                value
+            ))),
         }
-    };
-    Ok(primitive_type)
+    }
+}
+/// Extract the primitive type from a Variant value-header byte
+pub(crate) fn get_primitive_type(header: u8) -> Result<VariantPrimitiveType, ArrowError> {
+    // last 6 bits contain the primitive-type, see spec
+    VariantPrimitiveType::try_from(header >> 2)
 }
 
 /// To be used in `map_err` when unpacking an integer from a slice of bytes.
