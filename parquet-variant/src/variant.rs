@@ -171,6 +171,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the offset by key-index
     pub fn get_offset_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
+        // TODO: Should we memoize the offsets? There could be thousands of them (https://github.com/apache/arrow-rs/pull/7535#discussion_r2101351294)
         if index >= self.dict_len()? {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
