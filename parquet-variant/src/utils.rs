@@ -1,36 +1,17 @@
-use std::{
-    array::TryFromSliceError,
-    ops::{Bound, RangeBounds},
-};
+use std::{array::TryFromSliceError, ops::Range};
 
 use arrow_schema::ArrowError;
 
-pub(crate) fn slice_from_slice<R>(bytes: &[u8], range: R) -> Result<&[u8], ArrowError>
-where
-    R: RangeBounds<usize>,
-{
-    let start = match range.start_bound() {
-        Bound::Included(&s) => s,
-        Bound::Excluded(&s) => s.saturating_add(1),
-        Bound::Unbounded => 0,
-    };
-
-    let end_exclusive = match range.end_bound() {
-        Bound::Included(&e) => e.saturating_add(1), // inclusive → exclusive
-        Bound::Excluded(&e) => e,
-        Bound::Unbounded => bytes.len(),
-    };
-
-    if start > end_exclusive || end_exclusive > bytes.len() {
-        return Err(ArrowError::InvalidArgumentError(format!(
+#[inline]
+pub(crate) fn slice_from_slice(bytes: &[u8], range: Range<usize>) -> Result<&[u8], ArrowError> {
+    bytes.get(range.clone()).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
             "Tried to extract {} bytes at offset {} from {}-byte buffer",
-            end_exclusive.saturating_sub(start),
-            start,
+            range.end - range.start,
+            range.start,
             bytes.len(),
-        )));
-    }
-
-    Ok(&bytes[start..end_exclusive])
+        ))
+    })
 }
 pub(crate) fn array_from_slice<const N: usize>(
     bytes: &[u8],
