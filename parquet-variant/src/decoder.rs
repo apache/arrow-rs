@@ -3,7 +3,7 @@
 use arrow_schema::ArrowError;
 use std::{array::TryFromSliceError, str};
 
-use crate::utils::{invalid_utf8_err, non_empty_slice, slice_from_slice};
+use crate::utils::{array_from_slice, invalid_utf8_err, non_empty_slice, slice_from_slice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {
@@ -71,7 +71,7 @@ fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
-    let value = i8::from_le_bytes([non_empty_slice(value)?[1]]);
+    let value = i8::from_le_bytes(array_from_slice(value, 1)?);
     Ok(value)
 }
 
