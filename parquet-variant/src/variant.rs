@@ -83,6 +83,10 @@ pub(crate) struct VariantMetadataHeader {
     offset_size: OffsetSizeBytes,
 }
 
+// According to the spec this is currently always = 1, and so we store this const for validation
+// purposes and to make that visible.
+const CORRECT_VERSION_VALUE: u8 = 1;
+
 impl<'m> VariantMetadataHeader {
     /// Tries to construct the variant metadata header, which has the form
     ///              7     6  5   4  3             0
@@ -104,8 +108,15 @@ impl<'m> VariantMetadataHeader {
         };
 
         let version = header & 0x0F; // First four bits
+        if version != CORRECT_VERSION_VALUE {
+            let err_msg = format!(
+                "The version bytes in the header is not {CORRECT_VERSION_VALUE}, got {:b}",
+                version
+            );
+            return Err(ArrowError::InvalidArgumentError(err_msg));
+        }
         let is_sorted = (header & 0x10) != 0; // Fifth bit
-        let offset_size_minus_one = (header >> 6) & 0x03; // Last two bits
+        let offset_size_minus_one = header >> 6; // Last two bits
         Ok(Self {
             version,
             is_sorted,
