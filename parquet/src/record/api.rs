@@ -2008,11 +2008,11 @@ mod tests {
         );
         assert_eq!(
             Field::TimeMillis(47445123).to_json_value(),
-            Value::String("13:10:45.123".to_string())
+            Value::String(String::from("13:10:45.123"))
         );
         assert_eq!(
             Field::TimeMicros(47445123456).to_json_value(),
-            Value::String("13:10:45.123456".to_string())
+            Value::String(String::from("13:10:45.123456"))
         );
 
         let fields = vec![
