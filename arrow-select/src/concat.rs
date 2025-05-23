@@ -38,7 +38,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
+use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
@@ -231,6 +231,46 @@ fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, Arr
     Ok(Arc::new(builder.finish()))
 }
 
+fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, ArrowError> {
+    let mut len = 0;
+    let mut has_nulls = false;
+    let structs = arrays
+        .iter()
+        .map(|a| {
+            len += a.len();
+            has_nulls |= a.null_count() > 0;
+            a.as_struct()
+        })
+        .collect::<Vec<_>>();
+
+    let nulls = has_nulls.then(|| {
+        let mut b = BooleanBufferBuilder::new(len);
+        for s in &structs {
+            match s.nulls() {
+                Some(n) => b.append_buffer(n.inner()),
+                None => b.append_n(s.len(), true),
+            }
+        }
+        NullBuffer::new(b.finish())
+    });
+
+    let column_concat_result = (0..fields.len())
+        .map(|i| {
+            let extracted_cols = structs
+                .iter()
+                .map(|s| s.column(i).as_ref())
+                .collect::<Vec<_>>();
+            concat(&extracted_cols)
+        })
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+
+    Ok(Arc::new(StructArray::try_new(
+        fields.clone(),
+        column_concat_result,
+        nulls,
+    )?))
+}
+
 /// Concatenate multiple RunArray instances into a single RunArray.
 ///
 /// This function handles the special case of concatenating RunArrays by:
@@ -370,6 +410,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::Struct(fields) => concat_structs(arrays, fields),
         DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
         DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
         DataType::Binary => concat_bytes::<BinaryType>(arrays),
@@ -882,6 +923,36 @@ mod tests {
             .unwrap()
             .column(0);
         assert_eq!(actual_primitive, &expected_primitive_output);
+    }
+
+    #[test]
+    fn test_concat_struct_arrays_no_nulls() {
+        let input_1a = vec![1, 2, 3];
+        let input_1b = vec!["one", "two", "three"];
+        let input_2a = vec![4, 5, 6, 7];
+        let input_2b = vec!["four", "five", "six", "seven"];
+
+        let struct_from_primitives = |ints: Vec<i64>, strings: Vec<&str>| {
+            StructArray::try_from(vec![
+                ("ints", Arc::new(Int64Array::from(ints)) as _),
+                ("strings", Arc::new(StringArray::from(strings)) as _),
+            ])
+        };
+
+        let expected_output = struct_from_primitives(
+            [input_1a.clone(), input_2a.clone()].concat(),
+            [input_1b.clone(), input_2b.clone()].concat(),
+        )
+        .unwrap();
+
+        let input_1 = struct_from_primitives(input_1a, input_1b).unwrap();
+        let input_2 = struct_from_primitives(input_2a, input_2b).unwrap();
+
+        let arr = concat(&[&input_1, &input_2]).unwrap();
+        let struct_result = arr.as_struct();
+
+        assert_eq!(struct_result, &expected_output);
+        assert_eq!(arr.null_count(), 0);
     }
 
     #[test]

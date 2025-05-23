@@ -17,7 +17,7 @@
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, IntervalUnit, SchemaBuilder, SchemaRef, TimeUnit,
+    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef, TimeUnit,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -45,6 +45,19 @@ pub struct AvroDataType {
 }
 
 impl AvroDataType {
+    /// Create a new [`AvroDataType`] with the given parts.
+    pub fn new(
+        codec: Codec,
+        metadata: HashMap<String, String>,
+        nullability: Option<Nullability>,
+    ) -> Self {
+        AvroDataType {
+            codec,
+            metadata,
+            nullability,
+        }
+    }
+
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
         let d = self.codec.data_type();
@@ -183,6 +196,8 @@ pub enum Codec {
     List(Arc<AvroDataType>),
     /// Represents Avro record type, maps to Arrow's Struct data type
     Struct(Arc<[AvroField]>),
+    /// Represents Avro map type, maps to Arrow's Map data type
+    Map(Arc<AvroDataType>),
     /// Represents Avro duration logical type, maps to Arrow's Interval(IntervalUnit::MonthDayNano) data type
     Interval,
 }
@@ -214,6 +229,22 @@ impl Codec {
                 DataType::List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
             }
             Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
+            Self::Map(value_type) => {
+                let val_dt = value_type.codec.data_type();
+                let val_field = Field::new("value", val_dt, value_type.nullability.is_some())
+                    .with_metadata(value_type.metadata.clone());
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            val_field,
+                        ])),
+                        false,
+                    )),
+                    false,
+                )
+            }
         }
     }
 }
@@ -390,9 +421,14 @@ fn make_data_type<'a>(
             ComplexType::Enum(e) => Err(ArrowError::NotYetImplemented(format!(
                 "Enum of {e:?} not currently supported"
             ))),
-            ComplexType::Map(m) => Err(ArrowError::NotYetImplemented(format!(
-                "Map of {m:?} not currently supported"
-            ))),
+            ComplexType::Map(m) => {
+                let val = make_data_type(&m.values, namespace, resolver, use_utf8view)?;
+                Ok(AvroDataType {
+                    nullability: None,
+                    metadata: m.attributes.field_metadata(),
+                    codec: Codec::Map(Arc::new(val)),
+                })
+            }
         },
         Schema::Type(t) => {
             let mut field = make_data_type(
