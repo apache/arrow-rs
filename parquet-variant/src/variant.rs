@@ -212,8 +212,7 @@ impl<'m> VariantMetadata<'m> {
         let dictionary_key_start_byte = 1 // header
                     + self.header.offset_size as usize // dictionary_size field itself
                     + (self.dict_size + 1) * (self.header.offset_size as usize); // all offset entries
-        let dictionary_keys_bytes =
-            slice_from_slice(self.bytes, dictionary_key_start_byte..self.bytes.len())?;
+        let dictionary_keys_bytes = slice_from_slice(self.bytes, dictionary_key_start_byte..)?;
         let dictionary_key_bytes =
             slice_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
         let result = str::from_utf8(dictionary_key_bytes).map_err(|_| invalid_utf8_err())?;
