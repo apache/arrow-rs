@@ -131,6 +131,7 @@ pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
     dict_size: usize,
+    dictionary_key_start_byte: usize,
 }
 
 impl<'m> VariantMetadata<'m> {
@@ -154,7 +155,7 @@ impl<'m> VariantMetadata<'m> {
         // 1 + offset_size + (dict_size + 1) * offset_size
         let offset_size = header.offset_size as usize; // Cheap to copy
 
-        let dict_bytes_offset = 1usize // 1-byte header
+        let dictionary_key_start_byte = 1usize // 1-byte header
             .checked_add(offset_size) // 1 + offset_size
             .and_then(|p| {
                 dict_size
@@ -163,14 +164,13 @@ impl<'m> VariantMetadata<'m> {
                     .and_then(|table_size| p.checked_add(table_size))
             })
             .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
-        if bytes.len() < dict_bytes_offset {
+        if bytes.len() < dictionary_key_start_byte {
             return Err(ArrowError::InvalidArgumentError(
                 "Metadata shorter than dictionary_size implies".to_string(),
             ));
         }
 
         // Check that all offsets are monotonically increasing
-        // TODO: add test for validation
         let mut prev = None;
         for (i, offset) in (0..=dict_size)
             .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
@@ -192,7 +192,7 @@ impl<'m> VariantMetadata<'m> {
 
         // Check that the final offset equals the length of the
         // dictionary-string section.
-        let dict_block_len = bytes.len() - dict_bytes_offset; // actual length of the string block
+        let dict_block_len = bytes.len() - dictionary_key_start_byte; // actual length of the string block
 
         if prev != Some(dict_block_len) {
             // `prev` holds the last offset seen still
@@ -205,6 +205,7 @@ impl<'m> VariantMetadata<'m> {
             bytes,
             header,
             dict_size,
+            dictionary_key_start_byte,
         })
     }
 
@@ -243,11 +244,8 @@ impl<'m> VariantMetadata<'m> {
 
     /// Gets the field using an offset (Range) - helper method to keep consistent API.
     pub(crate) fn get_field_by_offset(&self, offset: Range<usize>) -> Result<&'m str, ArrowError> {
-        let dictionary_key_start_byte = 1 // header
-                    + self.header.offset_size as usize // dictionary_size field itself
-                    + (self.dict_size + 1) * (self.header.offset_size as usize); // all offset entries
         let dictionary_keys_bytes =
-            slice_from_slice(self.bytes, dictionary_key_start_byte..self.bytes.len())?;
+            slice_from_slice(self.bytes, self.dictionary_key_start_byte..self.bytes.len())?;
         let dictionary_key_bytes =
             slice_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
         let result = str::from_utf8(dictionary_key_bytes).map_err(|_| invalid_utf8_err())?;
