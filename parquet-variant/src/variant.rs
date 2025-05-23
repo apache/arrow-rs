@@ -265,7 +265,6 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get the offsets as an iterator
-    // TODO: Write tests
     pub fn offsets(&self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
         let offset_size = self.header.offset_size; // `Copy`
         let bytes = self.bytes;
@@ -329,15 +328,63 @@ impl<'m, 'v> VariantArray<'m, 'v> {
         #[allow(unreachable_code)] // Just to infer the return type
         Ok(vec![].into_iter())
     }
-}
 
-impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
-    type Output = Variant<'m, 'v>;
+    pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+        // The 6 first bits to the left are the value_header and the 2 bits
+        // to the right are the basic type, so we shift to get only the value_header
+        let value_header = first_byte_from_slice(self.value)? >> 2;
+        let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
+        let field_offset_size_minus_one = value_header & 0x03; // Last two bits
+        let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
 
-    fn index(&self, _index: usize) -> &Self::Output {
-        todo!()
+        // The size of the num_elements entry in the array value_data is 4 bytes if
+        // is_large is true, otherwise 1 byte.
+        let num_elements_size = if is_large { 4 } else { 1 };
+
+        // Skip the header byte to read the num_elements
+        let num_elements_bytes = slice_from_slice(self.value, 1..num_elements_size + 1)?;
+        let num_elements = match num_elements_size {
+            1 => num_elements_bytes[0] as usize,
+            4 => {
+                let arr: [u8; 4] =
+                    num_elements_bytes
+                        .try_into()
+                        .map_err(|e: std::array::TryFromSliceError| {
+                            ArrowError::InvalidArgumentError(e.to_string())
+                        })?;
+                u32::from_le_bytes(arr) as usize
+            }
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Invalid num_elements_size".to_string(),
+                ))
+            }
+        };
+
+        // Following the spec, there are "num_elements + 1" offsets in the value section
+        let first_value_byte = 1 + num_elements_size + (1 + num_elements) * offset_size as usize;
+
+        // Skip header and num_elements bytes to read the offsets
+        let start_field_offset_from_first_value_byte =
+            offset_size.unpack_usize(self.value, 1 + num_elements_size, index)?;
+        let end_field_offset_from_first_value_byte =
+            offset_size.unpack_usize(self.value, 1 + num_elements_size, index + 1)?;
+
+        // Read the value bytes from the offsets
+        let variant_value_bytes = slice_from_slice(
+            self.value,
+            first_value_byte + start_field_offset_from_first_value_byte
+                ..first_value_byte + end_field_offset_from_first_value_byte,
+        )?;
+        let variant = Variant::try_new(self.metadata, variant_value_bytes)?;
+        Ok(variant)
     }
 }
+
+// impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
+//     type Output = Variant<'m, 'v>;
+//
+// }
 
 /// Variant value. May contain references to metadata and value
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -594,6 +641,7 @@ mod tests {
             .collect();
         assert_eq!(fields, vec![(0usize, "cat"), (1usize, "dog")]);
     }
+
     /// Too short buffer test (missing one required offset).
     /// Should error with “metadata shorter than dictionary_size implies”.
     #[test]

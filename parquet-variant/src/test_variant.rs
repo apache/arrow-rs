@@ -38,7 +38,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
 }
 
 fn get_non_primitive_cases() -> Vec<&'static str> {
-    vec!["object_primitive"]
+    vec!["object_primitive", "array_primitive"]
 }
 
 #[test]
@@ -67,6 +67,15 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
                 let dict_val = metadata.get_field_by(0)?;
                 assert_eq!(dict_val, "int_field");
             }
+            "array_primitive" => match variant {
+                Variant::Array(arr) => {
+                    let v = arr.get(0)?;
+                    assert!(matches!(v, Variant::Int8(2)));
+                    let v = arr.get(1)?;
+                    assert!(matches!(v, Variant::Int8(1)));
+                }
+                _ => panic!("expected an array"),
+            },
             _ => unreachable!(),
         }
     }
