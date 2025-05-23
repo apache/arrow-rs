@@ -586,6 +586,13 @@ mod tests {
                      if msg.contains("Index 2 out of bounds for dictionary of length 2")),
             "unexpected error: {err:?}"
         );
+        let fields: Vec<(usize, &str)> = md
+            .fields()
+            .unwrap()
+            .enumerate()
+            .map(|(i, r)| (i, r.unwrap()))
+            .collect();
+        assert_eq!(fields, vec![(0usize, "cat"), (1usize, "dog")]);
     }
     /// Too short buffer test (missing one required offset).
     /// Should error with “metadata shorter than dictionary_size implies”.
