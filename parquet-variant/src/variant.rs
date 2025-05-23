@@ -188,15 +188,8 @@ impl<'m> VariantMetadata<'m> {
         }
 
         // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
-        let start = self
-            .header
-            .offset_size
-            .unpack_usize(self.bytes, 1, index + 1)?;
-        let end = self
-            .header
-            .offset_size
-            .unpack_usize(self.bytes, 1, index + 2)?;
-        Ok(start..end)
+        let unpack = |i| self.header.offset_size.unpack_usize(self.bytes, 1, i + 1);
+        Ok(unpack(index)?..unpack(index + 1)?)
     }
 
     /// Get the key-name by index
