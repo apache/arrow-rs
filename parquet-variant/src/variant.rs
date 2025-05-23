@@ -1,7 +1,7 @@
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
-use crate::utils::{array_from_slice, invalid_utf8_err, non_empty_slice, slice_from_slice};
+use crate::utils::{array_from_slice, first_byte_from_slice, invalid_utf8_err, slice_from_slice};
 use arrow_schema::ArrowError;
 use std::{
     num::TryFromIntError,
@@ -196,7 +196,6 @@ impl<'m> VariantMetadata<'m> {
     pub fn get_field_by(&self, index: usize) -> Result<&'m str, ArrowError> {
         let range = self.get_offset_by(index)?;
         self.get_field_by_offset(range)
-        }
     }
 
     /// Gets the field using an offset (Range) - helper method to keep consistent API.
@@ -313,7 +312,7 @@ pub enum Variant<'m, 'v> {
 impl<'m, 'v> Variant<'m, 'v> {
     /// Parse the buffers and return the appropriate variant.
     pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let header = non_empty_slice(value)?[0];
+        let header = *first_byte_from_slice(value)?;
         let new_self = match get_basic_type(header)? {
             VariantBasicType::Primitive => match get_primitive_type(header)? {
                 VariantPrimitiveType::Null => Variant::Null,

@@ -26,10 +26,10 @@ pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
     ArrowError::InvalidArgumentError(e.to_string())
 }
 
-pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
-    slice.get(0).ok_or_else(|| {
-        ArrowError::InvalidArgumentError("Received empty bytes".to_string())
-    });
+pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<&u8, ArrowError> {
+    slice
+        .get(0)
+        .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
 /// Constructs the error message for an invalid UTF-8 string.
