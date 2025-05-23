@@ -212,7 +212,8 @@ impl<'m> VariantMetadata<'m> {
         let dictionary_key_start_byte = 1 // header
                     + self.header.offset_size as usize // dictionary_size field itself
                     + (self.dict_size + 1) * (self.header.offset_size as usize); // all offset entries
-        let dictionary_keys_bytes = slice_from_slice(self.bytes, dictionary_key_start_byte..)?;
+        let dictionary_keys_bytes =
+            slice_from_slice(self.bytes, dictionary_key_start_byte..self.bytes.len())?;
         let dictionary_key_bytes =
             slice_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
         let result = str::from_utf8(dictionary_key_bytes).map_err(|_| invalid_utf8_err())?;
@@ -225,7 +226,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the offsets as an iterator
     // TODO: Write tests
-    pub fn offsets(&'m self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
+    pub fn offsets(&self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
         let offset_size = self.header.offset_size; // `Copy`
         let bytes = self.bytes;
 
@@ -248,7 +249,7 @@ impl<'m> VariantMetadata<'m> {
     /// Get all key-names as an Iterator of strings
     pub fn fields(
         &'m self,
-    ) -> Result<impl Iterator<Item = Result<&'m str, ArrowError>> + 'm, ArrowError> {
+    ) -> Result<impl Iterator<Item = Result<&'m str, ArrowError>>, ArrowError> {
         let iterator = self
             .offsets()
             .map(move |range_res| range_res.and_then(|r| self.get_field_by_offset(r)));
