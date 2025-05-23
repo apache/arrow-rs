@@ -108,16 +108,8 @@ impl RowSelection {
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
-        let mut next_offset = 0;
-        let total_rows = filters.iter().map(|x| x.len()).sum();
-
-        let iter = filters.iter().flat_map(|filter| {
-            let offset = next_offset;
-            next_offset += filter.len();
-            assert_eq!(filter.null_count(), 0);
-            SlicesIterator::new(filter).map(move |(start, end)| start + offset..end + offset)
-        });
-
+        let iter = FilterSlices::new(filters);
+        let total_rows = iter.total_rows();
         Self::from_consecutive_ranges(iter, total_rows)
     }
 
@@ -126,33 +118,7 @@ impl RowSelection {
         ranges: I,
         total_rows: usize,
     ) -> Self {
-        let mut selectors: Vec<RowSelector> = Vec::with_capacity(ranges.size_hint().0);
-        let mut last_end = 0;
-        for range in ranges {
-            let len = range.end - range.start;
-            if len == 0 {
-                continue;
-            }
-
-            match range.start.cmp(&last_end) {
-                Ordering::Equal => match selectors.last_mut() {
-                    Some(last) => last.row_count = last.row_count.checked_add(len).unwrap(),
-                    None => selectors.push(RowSelector::select(len)),
-                },
-                Ordering::Greater => {
-                    selectors.push(RowSelector::skip(range.start - last_end));
-                    selectors.push(RowSelector::select(len))
-                }
-                Ordering::Less => panic!("out of order"),
-            }
-            last_end = range.end;
-        }
-
-        if last_end != total_rows {
-            selectors.push(RowSelector::skip(total_rows - last_end))
-        }
-
-        Self { selectors }
+        ConsecutiveRangesIter::new(ranges, total_rows).collect()
     }
 
     /// Given an offset index, return the byte ranges for all data pages selected by `self`
@@ -248,11 +214,9 @@ impl RowSelection {
             selectors: remaining,
         }
     }
-    /// returns a [`RowSelection`] representing rows that are selected in both
-    /// input [`RowSelection`]s.
-    ///
-    /// This is equivalent to the logical `AND` / conjunction of the two
-    /// selections.
+
+    /// Returns a [`RowSelection`] representing rows that are selected after
+    /// applying the selection in `other` to only the non-skipped rows in self.
     ///
     /// # Example
     /// If `N` means the row is not selected, and `Y` means it is
@@ -271,9 +235,40 @@ impl RowSelection {
     /// by this RowSelection
     ///
     pub fn and_then(&self, other: &Self) -> Self {
-        let mut selectors = vec![];
-        let mut first = self.selectors.iter().cloned().peekable();
-        let mut second = other.selectors.iter().cloned().peekable();
+        let capacity = self.selectors.len() + other.selectors.len();
+        Self::and_then_inner(
+            self.selectors.iter().cloned(),
+            other.selectors.iter().cloned(),
+            Some(capacity),
+        )
+    }
+
+    /// Applies a set of [`filters`] to this [`RowSelection`]
+    ///
+    /// Logically this is the equivalent of
+    /// `self.and_then(RowSelection::from_filters(filters))`
+    pub(crate) fn apply_filters(&self, filters: &[BooleanArray]) -> Self {
+        let filter_ranges = FilterSlices::new(filters);
+        let total_rows = filter_ranges.total_rows();
+        let selection_ranges = ConsecutiveRangesIter::new(filter_ranges, total_rows);
+
+        let capacity = None;
+        Self::and_then_inner(self.selectors.iter().cloned(), selection_ranges, capacity)
+    }
+
+    /// Computes [`Self::and_then`] for two iterators into a new `RowSelection`
+    pub(crate) fn and_then_inner<I1, I2>(first: I1, second: I2, capacity: Option<usize>) -> Self
+    where
+        I1: IntoIterator<Item = RowSelector>,
+        I2: IntoIterator<Item = RowSelector>,
+    {
+        // New output selectors
+        let mut selectors = capacity
+            .map(|capacity| Vec::with_capacity(capacity))
+            .unwrap_or_default();
+
+        let mut first = first.into_iter().peekable();
+        let mut second = second.into_iter().peekable();
 
         let mut to_skip = 0;
         while let Some(b) = second.peek_mut() {
@@ -488,6 +483,190 @@ impl From<RowSelection> for Vec<RowSelector> {
 impl From<RowSelection> for VecDeque<RowSelector> {
     fn from(r: RowSelection) -> Self {
         r.selectors.into()
+    }
+}
+
+/// An iterator of `(usize, usize)` each representing the interval
+/// `[start, end)` in the underlying set of [`BooleanArray`]s where
+/// the value is `true`.
+struct FilterSlices<'a> {
+    /// Index into filters
+    ///
+    /// if > filters.len() end of iterator
+    current_filter: usize,
+    /// The input filters
+    filters: &'a [BooleanArray],
+    /// Iterator of slices over the current filter
+    current_iterator: Option<SlicesIterator<'a>>,
+    /// offset to add to the elements of the current iterator
+    current_offset: usize,
+    /// where the next offset will start
+    next_offset: usize,
+    /// Total size of the filters.
+    ///
+    /// Used to compute final skip if necessary
+    total_rows: usize,
+}
+
+impl<'a> FilterSlices<'a> {
+    fn new(filters: &'a [BooleanArray]) -> Self {
+        Self {
+            current_filter: 0,
+            filters,
+            current_iterator: None,
+            current_offset: 0,
+            next_offset: 0,
+            total_rows: filters.iter().map(|x| x.len()).sum(),
+        }
+    }
+
+    /// Return the total read and skipped rows represented by this iterator (sum
+    /// of all filter lengths)
+    fn total_rows(&self) -> usize {
+        self.total_rows
+    }
+}
+
+impl<'a> Iterator for FilterSlices<'a> {
+    type Item = Range<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // end of iterator
+            if self.current_filter >= self.filters.len() {
+                return None;
+            }
+            // if we have no current iterator, create one
+            let (start, end) = match self.current_iterator.as_mut() {
+                None => {
+                    let filter = &self.filters[self.current_filter];
+                    assert_eq!(filter.null_count(), 0);
+
+                    let filter = &self.filters[self.current_filter];
+                    self.current_offset = self.next_offset;
+                    self.next_offset += filter.len();
+
+                    let mut new_iterator = SlicesIterator::new(filter);
+                    let next_item = new_iterator.next();
+                    self.current_iterator = Some(new_iterator);
+                    next_item
+                }
+                Some(iterator) => {
+                    let next_item = iterator.next();
+                    if next_item.is_none() {
+                        // current iterator is exhausted, move to the next filter
+                        self.current_iterator = None;
+                        self.current_filter += 1;
+                        continue;
+                    };
+                    next_item
+                }
+            }?;
+            // adjust by current offset
+            let next_range = start + self.current_offset..end + self.current_offset;
+            return Some(next_range);
+        }
+    }
+}
+
+/// An iterator that dynamically generates RowSelection from an iterator
+/// of consecutive ranges
+///
+/// Combines adjacent ranges into a single RowSelector
+struct ConsecutiveRangesIter<I> {
+    /// underlying iterator
+    ranges: I,
+    /// Total logical rows to output
+    total_rows: usize,
+    /// the end of the last range
+    last_end: usize,
+    /// The current in progress row selector, if any
+    ///
+    /// if `Some`, it may be extended during processing
+    in_progress: Option<RowSelector>,
+    /// The next completed RowSelector to return, if any
+    next: Option<RowSelector>,
+}
+
+impl<I> ConsecutiveRangesIter<I> {
+    fn new(ranges: I, total_rows: usize) -> Self {
+        Self {
+            ranges,
+            total_rows,
+            last_end: 0,
+            in_progress: None,
+            next: None,
+        }
+    }
+}
+
+impl<I> Iterator for ConsecutiveRangesIter<I>
+where
+    I: Iterator<Item = Range<usize>>,
+{
+    type Item = RowSelector;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(next) = self.next.take() {
+                return Some(next);
+            }
+
+            // Are there any remaining ranges in the underlying iterator?
+            let Some(range) = self.ranges.next() else {
+                // Is there a remaining row selection?
+                if let Some(selector) = self.in_progress.take() {
+                    return Some(selector);
+                }
+                // Is there any last remainder?
+                if self.last_end != self.total_rows {
+                    let selector = RowSelector::skip(self.total_rows - self.last_end);
+                    self.last_end = self.total_rows;
+                    return Some(selector);
+                }
+                return None;
+            };
+
+            // skip empty ranges
+            let len = range.end - range.start;
+            if len == 0 {
+                continue;
+            }
+
+            let last_end = self.last_end;
+            self.last_end = range.end;
+
+            match range.start.cmp(&last_end) {
+                // Consecutive ranges
+                Ordering::Equal => match self.in_progress.as_mut() {
+                    Some(next) => next.row_count = next.row_count.checked_add(len).unwrap(),
+                    None => self.in_progress = Some(RowSelector::select(len)),
+                },
+                // is a new range, need to output selectors in the following pattern
+                // * (if any) in progress
+                // * skip
+                // * then start select
+                Ordering::Greater => {
+                    let skip = RowSelector::skip(range.start - last_end);
+                    let select = RowSelector::select(len);
+
+                    let return_selector = match self.in_progress.take() {
+                        Some(in_progress) => {
+                            self.next = Some(skip);
+                            self.in_progress = Some(select);
+                            in_progress
+                        }
+                        None => {
+                            self.next = Some(select);
+                            skip
+                        }
+                    };
+
+                    return Some(return_selector);
+                }
+                Ordering::Less => panic!("out of order selectors"),
+            }
+        }
     }
 }
 
