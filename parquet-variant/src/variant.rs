@@ -545,4 +545,96 @@ mod tests {
         let err = width.unpack_usize(&buf, 1, 4);
         assert!(err.is_err())
     }
+
+    /// `"cat"`, `"dog"` – valid metadata
+    #[test]
+    fn try_new_ok_inline() {
+        let bytes = &[
+            0b0000_0001, // header, offset_size_minus_one=0 and version=1
+            0x02,        // dictionary_size (2 strings)
+            0x00,
+            0x03,
+            0x06,
+            b'c',
+            b'a',
+            b't',
+            b'd',
+            b'o',
+            b'g',
+        ];
+
+        let md = VariantMetadata::try_new(bytes).expect("should parse");
+        assert_eq!(md.dictionary_size(), 2);
+        assert_eq!(md.get_field_by(0).unwrap(), "cat");
+        assert_eq!(md.get_field_by(1).unwrap(), "dog");
+    }
+    /// Too short buffer test (missing one required offset).
+    /// Should error with “metadata shorter than dictionary_size implies”.
+    #[test]
+    fn try_new_missing_last_value() {
+        let bytes = &[
+            0b0000_0001, // header, offset_size_minus_one=0 and version=1
+            0x02,        // dictionary_size = 2
+            0x00,
+            0x01,
+            0x02,
+            b'a',
+            b'b', // <-- we'll remove this
+        ];
+
+        let working_md = VariantMetadata::try_new(bytes).expect("should parse");
+        assert_eq!(working_md.dictionary_size(), 2);
+        assert_eq!(working_md.get_field_by(0).unwrap(), "a");
+        assert_eq!(working_md.get_field_by(1).unwrap(), "b");
+
+        let truncated = &bytes[..bytes.len() - 1];
+
+        let err = VariantMetadata::try_new(truncated).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(ref msg)
+                     if msg.contains("Last offset")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_new_fails_non_monotonic() {
+        // 'cat', 'dog', 'lamb'
+        let bytes = &[
+            0b0000_0001, // header, offset_size_minus_one=0 and version=1
+            0x03,        // dictionary_size
+            0x00,
+            0x02,
+            0x01, // Doesn't increase monotonically
+            0x10,
+            b'c',
+            b'a',
+            b't',
+            b'd',
+            b'o',
+            b'g',
+            b'l',
+            b'a',
+            b'm',
+            b'b',
+        ];
+
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(ref msg) if msg.contains("monotonically")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_new_truncated_offsets_inline() {
+        // Missing final offset
+        let bytes = &[0b0000_0001, 0x02, 0x00, 0x01];
+
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(ref msg) if msg.contains("shorter")),
+            "unexpected error: {err:?}"
+        );
+    }
 }
