@@ -243,7 +243,7 @@ impl RowSelection {
         )
     }
 
-    /// Applies a set of [`filters`] to this [`RowSelection`]
+    /// Applies a set of `filters` to this [`RowSelection`]
     ///
     /// Logically this is the equivalent of
     /// `self.and_then(RowSelection::from_filters(filters))`
