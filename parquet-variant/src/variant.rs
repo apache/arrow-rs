@@ -194,9 +194,8 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the key-name by index
     pub fn get_field_by(&self, index: usize) -> Result<&'m str, ArrowError> {
-        match self.get_offset_by(index) {
-            Ok(range) => self.get_field_by_offset(range),
-            Err(e) => Err(e),
+        let range = self.get_offset_by(index)?;
+        self.get_field_by_offset(range)
         }
     }
 
