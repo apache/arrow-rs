@@ -226,100 +226,33 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the offsets as an iterator
     // TODO: Write tests
-    pub fn offsets(
-        &'m self,
-    ) -> Result<impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm, ArrowError> {
-        struct OffsetIterators<'m> {
-            buffer: &'m [u8],
-            header: &'m VariantMetadataHeader,
-            dict_len: usize,
-            seen: usize,
-        }
-        impl<'m> Iterator for OffsetIterators<'m> {
-            type Item = Result<Range<usize>, ArrowError>; // Range = (start, end) positions of the bytes
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.seen < self.dict_len {
-                    let start = self
-                        .header
-                        .offset_size
-                        // skip header via byte_offset=1 and self.seen + 1 because first is dictionary_size
-                        .unpack_usize(self.buffer, 1, self.seen + 1);
+    pub fn offsets(&'m self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
+        let offset_size = self.header.offset_size; // `Copy`
+        let bytes = self.bytes;
 
-                    let end = self
-                        .header
-                        .offset_size
-                        // skip header via byte_offset=1 and self.seen + 2 to get end offset
-                        .unpack_usize(self.buffer, 1, self.seen + 2);
-                    self.seen += 1;
-                    match (start, end) {
-                        (Ok(start), Ok(end)) => Some(Ok(start..end)),
-                        (Err(e), _) | (_, Err(e)) => Some(Err(e)),
-                    }
-                } else {
-                    None
-                }
+        let iterator = (0..self.dict_size).map(move |i| {
+            // This wont be out of bounds as long as dict_size and offsets have been validated
+            // during construction via `try_new`, as it calls unpack_usize for the
+            // indices `1..dict_size+1` already.
+            let start = offset_size.unpack_usize(bytes, 1, i + 1);
+            let end = offset_size.unpack_usize(bytes, 1, i + 2);
+
+            match (start, end) {
+                (Ok(s), Ok(e)) => Ok(s..e),
+                (Err(e), _) | (_, Err(e)) => Err(e),
             }
-        }
-        let iterator: OffsetIterators = OffsetIterators {
-            buffer: self.bytes,
-            header: &self.header,
-            dict_len: self.dict_size,
-            seen: 0,
-        };
-        Ok(iterator)
+        });
+
+        iterator
     }
 
     /// Get all key-names as an Iterator of strings
-    // NOTE: Duplicated code due to issues putting Impl's on structs, this is the same as `.offsets` except it
-    // extracts the field using the offset instead of returning the offset.
     pub fn fields(
         &'m self,
     ) -> Result<impl Iterator<Item = Result<&'m str, ArrowError>> + 'm, ArrowError> {
-        struct FieldIterator<'m> {
-            buffer: &'m [u8],
-            header: &'m VariantMetadataHeader,
-            dict_len: usize,
-            seen: usize,
-        }
-        impl<'m> Iterator for FieldIterator<'m> {
-            type Item = Result<&'m str, ArrowError>;
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.seen < self.dict_len {
-                    let start = self
-                        .header
-                        .offset_size
-                        // skip header via byte_offset=1 and self.seen + 1 because first is dictionary_size
-                        .unpack_usize(self.buffer, 1, self.seen + 1);
-
-                    let end = self
-                        .header
-                        .offset_size
-                        // skip header via byte_offset=1 and self.seen + 2 to get end offset
-                        .unpack_usize(self.buffer, 1, self.seen + 2);
-                    self.seen += 1;
-                    let result = match (start, end) {
-                        (Ok(start), Ok(end)) => {
-                            // Try to get the slice
-                            match slice_from_slice(self.buffer, 1 + start..1 + end) {
-                                // Get the field and return it
-                                Ok(bytes) => str::from_utf8(bytes).map_err(|_| invalid_utf8_err()),
-                                Err(e) => Err(e),
-                            }
-                        }
-                        (Err(e), _) | (_, Err(e)) => Err(e),
-                    };
-                    Some(result)
-                } else {
-                    None
-                }
-            }
-        }
-        let iterator: FieldIterator = FieldIterator {
-            buffer: self.bytes,
-            header: &self.header,
-            dict_len: self.dict_size,
-            seen: 0,
-        };
+        let iterator = self
+            .offsets()
+            .map(move |range_res| range_res.and_then(|r| self.get_field_by_offset(r)));
         Ok(iterator)
     }
 }
