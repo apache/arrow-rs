@@ -76,11 +76,7 @@ pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
 
 /// Decodes a long string from the value section of a variant.
 pub(crate) fn decode_long_string(value: &[u8]) -> Result<&str, ArrowError> {
-    let len = u32::from_le_bytes(
-        slice_from_slice(value, 1..5)?
-            .try_into()
-            .map_err(map_try_from_slice_error)?,
-    ) as usize;
+    let len = u32::from_le_bytes(array_from_slice(value, 1)?) as usize;
     let string = string_from_slice(value, 5..5 + len)?;
     Ok(string)
 }

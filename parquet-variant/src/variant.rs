@@ -217,8 +217,8 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Get the offset by key-index
-    pub fn get_offset_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
+    /// Get the offset start and end range for a key by index
+    pub fn get_offsets_for_key_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
         if index >= self.dict_size {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
@@ -231,9 +231,23 @@ impl<'m> VariantMetadata<'m> {
         Ok(unpack(index)?..unpack(index + 1)?)
     }
 
+    /// Get a single offset by index
+    pub fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
+        if index >= self.dict_size {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {} out of bounds for dictionary of length {}",
+                index, self.dict_size
+            )));
+        }
+
+        // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
+        let unpack = |i| self.header.offset_size.unpack_usize(self.bytes, 1, i + 1);
+        Ok(unpack(index)?)
+    }
+
     /// Get the key-name by index
     pub fn get_field_by(&self, index: usize) -> Result<&'m str, ArrowError> {
-        let range = self.get_offset_by(index)?;
+        let range = self.get_offsets_for_key_by(index)?;
         self.get_field_by_offset(range)
     }
 
@@ -557,8 +571,21 @@ mod tests {
 
         let md = VariantMetadata::try_new(bytes).expect("should parse");
         assert_eq!(md.dictionary_size(), 2);
+        // Fields
         assert_eq!(md.get_field_by(0).unwrap(), "cat");
         assert_eq!(md.get_field_by(1).unwrap(), "dog");
+
+        // Offsets
+        assert_eq!(md.get_offset_by(0).unwrap(), 0x00);
+        assert_eq!(md.get_offset_by(1).unwrap(), 0x03);
+        // We only have 2 keys, the final offset should not be accessible using this method.
+        let err = md.get_offset_by(2).unwrap_err();
+
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(ref msg)
+                     if msg.contains("Index 2 out of bounds for dictionary of length 2")),
+            "unexpected error: {err:?}"
+        );
     }
     /// Too short buffer test (missing one required offset).
     /// Should error with “metadata shorter than dictionary_size implies”.
