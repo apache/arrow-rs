@@ -21,6 +21,9 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
+/// Represents reading or skipping some number of contiguous
+/// rows when decoding a parquet file
+///
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -358,14 +361,6 @@ impl RowSelection {
         self.selectors.iter().any(|x| !x.skip)
     }
 
-    /// Trims this [`RowSelection`] removing any trailing skips
-    pub(crate) fn trim(mut self) -> Self {
-        while self.selectors.last().map(|x| x.skip).unwrap_or(false) {
-            self.selectors.pop();
-        }
-        self
-    }
-
     /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
     pub(crate) fn offset(mut self, offset: usize) -> Self {
         if offset == 0 {
@@ -441,6 +436,11 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
+    
+    /// Returns the inner selectors
+    pub fn into_inner(self) -> Vec<RowSelector> {
+        self.selectors
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
@@ -481,7 +481,7 @@ impl FromIterator<RowSelector> for RowSelection {
 
 impl From<RowSelection> for Vec<RowSelector> {
     fn from(r: RowSelection) -> Self {
-        r.selectors
+        r.into_inner()
     }
 }
 
