@@ -145,30 +145,62 @@ impl<'m> VariantMetadata<'m> {
         // Offset 1, index 0 because first element after header is dictionary size
         let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
 
-        // TODO: add test for validation
-        let valid = (0..=dict_size)
-            .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
-            .scan(0, |prev, cur| {
-                let Ok(cur_offset) = cur else {
-                    return Some(false);
-                };
-                // Skip the first offset, which is always 0
-                if *prev == 0 {
-                    *prev = cur_offset;
-                    return Some(true);
-                }
+        // Check that we have the correct metadata length according to dictionary_size, or return
+        // error early.
+        // Minimum number of bytes the metadata buffer must contain:
+        // 1 byte header
+        // + offset_size-byte `dictionary_size` field
+        // + (dict_size + 1) offset entries, each `offset_size` bytes. (Table size, essentially)
+        // 1 + offset_size + (dict_size + 1) * offset_size
+        let offset_size = header.offset_size as usize; // Cheap to copy
 
-                let valid = cur_offset > *prev;
-                *prev = cur_offset;
-                Some(valid)
+        let dict_bytes_offset = 1usize // 1-byte header
+            .checked_add(offset_size) // 1 + offset_size
+            .and_then(|p| {
+                dict_size
+                    .checked_add(1) // dict_size + 1
+                    .and_then(|n| n.checked_mul(offset_size))
+                    .and_then(|table_size| p.checked_add(table_size))
             })
-            .all(|valid| valid);
-
-        if !valid {
+            .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
+        if bytes.len() < dict_bytes_offset {
             return Err(ArrowError::InvalidArgumentError(
-                "Offsets are not monotonically increasing".to_string(),
+                "Metadata shorter than dictionary_size implies".to_string(),
             ));
         }
+
+        // Check that all offsets are monotonically increasing
+        // TODO: add test for validation
+        let mut prev = None;
+        for (i, offset) in (0..=dict_size)
+            .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
+            .enumerate()
+        {
+            let offset = offset?;
+            if i == 0 && offset != 0 {
+                return Err(ArrowError::InvalidArgumentError(
+                    "First offset is non-zero".to_string(),
+                ));
+            }
+            if prev.is_some_and(|prev| prev >= offset) {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Offsets are not monotonically increasing".to_string(),
+                ));
+            }
+            prev = Some(offset);
+        }
+
+        // Check that the final offset equals the length of the
+        // dictionary-string section.
+        let dict_block_len = bytes.len() - dict_bytes_offset; // actual length of the string block
+
+        if prev != Some(dict_block_len) {
+            // `prev` holds the last offset seen still
+            return Err(ArrowError::InvalidArgumentError(
+                "Last offset does not equal dictionary length".to_string(),
+            ));
+        }
+
         Ok(Self {
             bytes,
             header,
