@@ -1,4 +1,4 @@
-use std::{array::TryFromSliceError, ops::Range};
+use std::{array::TryFromSliceError, ops::Range, str};
 
 use arrow_schema::ArrowError;
 
@@ -32,7 +32,11 @@ pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<&u8, ArrowError> {
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
-/// Constructs the error message for an invalid UTF-8 string.
-pub(crate) fn invalid_utf8_err() -> ArrowError {
-    ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string())
+// /// Constructs the error message for an invalid UTF-8 string.
+// pub(crate) fn invalid_utf8_err() -> ArrowError {
+//     ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string())
+// }
+pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&str, ArrowError> {
+    str::from_utf8(slice_from_slice(slice, range)?)
+        .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }

@@ -1,7 +1,7 @@
 use arrow_schema::ArrowError;
-use std::{array::TryFromSliceError, str};
+use std::array::TryFromSliceError;
 
-use crate::utils::{array_from_slice, first_byte_from_slice, invalid_utf8_err, slice_from_slice};
+use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {
@@ -81,8 +81,7 @@ pub(crate) fn decode_long_string(value: &[u8]) -> Result<&str, ArrowError> {
             .try_into()
             .map_err(map_try_from_slice_error)?,
     ) as usize;
-    let string =
-        str::from_utf8(slice_from_slice(value, 5..5 + len)?).map_err(|_| invalid_utf8_err())?;
+    let string = string_from_slice(value, 5..5 + len)?;
     Ok(string)
 }
 
@@ -90,8 +89,7 @@ pub(crate) fn decode_long_string(value: &[u8]) -> Result<&str, ArrowError> {
 pub(crate) fn decode_short_string(value: &[u8]) -> Result<&str, ArrowError> {
     let len = (first_byte_from_slice(value)? >> 2) as usize;
 
-    let string =
-        str::from_utf8(slice_from_slice(value, 1..1 + len)?).map_err(|_| invalid_utf8_err())?;
+    let string = string_from_slice(value, 1..1 + len)?;
     Ok(string)
 }
 

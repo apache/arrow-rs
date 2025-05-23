@@ -1,12 +1,11 @@
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
-use crate::utils::{array_from_slice, first_byte_from_slice, invalid_utf8_err, slice_from_slice};
+use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 use arrow_schema::ArrowError;
 use std::{
     num::TryFromIntError,
     ops::{Index, Range},
-    str,
 };
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -87,7 +86,7 @@ pub(crate) struct VariantMetadataHeader {
 // purposes and to make that visible.
 const CORRECT_VERSION_VALUE: u8 = 1;
 
-impl<'m> VariantMetadataHeader {
+impl VariantMetadataHeader {
     /// Tries to construct the variant metadata header, which has the form
     ///              7     6  5   4  3             0
     ///             +-------+---+---+---------------+
@@ -100,12 +99,8 @@ impl<'m> VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        let Some(header) = bytes.get(0) else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Received zero bytes".to_string(),
-            ));
-        };
+    pub fn try_new(bytes: &[u8]) -> Result<Self, ArrowError> {
+        let header = first_byte_from_slice(bytes)?;
 
         let version = header & 0x0F; // First four bits
         if version != CORRECT_VERSION_VALUE {
@@ -246,9 +241,8 @@ impl<'m> VariantMetadata<'m> {
     pub(crate) fn get_field_by_offset(&self, offset: Range<usize>) -> Result<&'m str, ArrowError> {
         let dictionary_keys_bytes =
             slice_from_slice(self.bytes, self.dictionary_key_start_byte..self.bytes.len())?;
-        let dictionary_key_bytes =
-            slice_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
-        let result = str::from_utf8(dictionary_key_bytes).map_err(|_| invalid_utf8_err())?;
+        let result = string_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
+
         Ok(result)
     }
 
