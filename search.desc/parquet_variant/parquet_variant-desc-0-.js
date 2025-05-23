@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_variant", 0, "Implementation of Variant Binary Encoding from Apache …")
