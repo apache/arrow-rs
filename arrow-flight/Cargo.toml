@@ -61,7 +61,9 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+flight-sql = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+# TODO: Remove in the next release
+flight-sql-experimental = ["flight-sql"]
 tls = ["tonic/tls"]
 # Enable CLI tools
 cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber"]
