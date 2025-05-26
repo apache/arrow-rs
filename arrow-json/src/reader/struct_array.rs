@@ -26,6 +26,7 @@ pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
     strict_mode: bool,
+    ignore_type_conflicts: bool,
     is_nullable: bool,
     struct_mode: StructMode,
 }
@@ -35,6 +36,7 @@ impl StructArrayDecoder {
         data_type: DataType,
         coerce_primitive: bool,
         strict_mode: bool,
+        ignore_type_conflicts: bool,
         is_nullable: bool,
         struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
@@ -49,6 +51,7 @@ impl StructArrayDecoder {
                     f.data_type().clone(),
                     coerce_primitive,
                     strict_mode,
+                    ignore_type_conflicts,
                     nullable,
                     struct_mode,
                 )
@@ -59,6 +62,7 @@ impl StructArrayDecoder {
             data_type,
             decoders,
             strict_mode,
+            ignore_type_conflicts,
             is_nullable,
             struct_mode,
         })
@@ -86,6 +90,10 @@ impl ArrayDecoder for StructArrayDecoder {
                             end_idx
                         }
                         (TapeElement::Null, Some(nulls)) => {
+                            nulls.append(false);
+                            continue;
+                        }
+                        (_, Some(nulls)) if self.ignore_type_conflicts => {
                             nulls.append(false);
                             continue;
                         }
@@ -126,6 +134,10 @@ impl ArrayDecoder for StructArrayDecoder {
                             end_idx
                         }
                         (TapeElement::Null, Some(nulls)) => {
+                            nulls.append(false);
+                            continue;
+                        }
+                        (_, Some(nulls)) if self.ignore_type_conflicts => {
                             nulls.append(false);
                             continue;
                         }
