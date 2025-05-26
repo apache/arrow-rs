@@ -85,18 +85,18 @@ uuid = { version = "1.10.0", features = ["v4"] }
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql-experimental", "tls"]
+required-features = ["flight-sql", "tls"]
 
 [[bin]]
 name = "flight_sql_client"
-required-features = ["cli", "flight-sql-experimental", "tls"]
+required-features = ["cli", "flight-sql", "tls"]
 
 [[test]]
 name = "flight_sql_client"
 path = "tests/flight_sql_client.rs"
-required-features = ["flight-sql-experimental", "tls"]
+required-features = ["flight-sql", "tls"]
 
 [[test]]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
-required-features = ["cli", "flight-sql-experimental", "tls"]
+required-features = ["cli", "flight-sql", "tls"]
