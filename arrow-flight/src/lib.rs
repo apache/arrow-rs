@@ -35,8 +35,6 @@
 //! 3. Support for [Flight SQL] in [`sql`]. Requires the
 //!    `flight-sql` feature of this crate to be activated.
 //!
-//! 4. The feature [`flight-sql-experimental`] is deprecated and will be removed in a future release.
-//!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 
 #![doc(
