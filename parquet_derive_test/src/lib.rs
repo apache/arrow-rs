@@ -347,6 +347,36 @@ mod tests {
         assert_eq!(drs[0].isize, out[0].isize);
     }
 
+    #[test]
+    fn test_aliased_result() {
+        // Issue 7547, Where aliasing the `Result` led to
+        // a collision with the macro internals of derive ParquetRecordReader
+
+        mod aliased_result {
+            use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
+            pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+            #[derive(ParquetRecordReader, ParquetRecordWriter, Debug)]
+            pub struct ARecord {
+                pub bool: bool,
+                pub string: String,
+            }
+
+            impl ARecord {
+                pub fn validate(&self) -> Result {
+                    Ok(())
+                }
+            }
+        }
+
+        use aliased_result::ARecord;
+        let foo = ARecord {
+            bool: true,
+            string: "test".to_string(),
+        };
+        assert!(foo.validate().is_ok());
+    }
+
     /// Returns file handle for a temp file in 'target' directory with a provided content
     pub fn get_temp_file(file_name: &str, content: &[u8]) -> fs::File {
         // build tmp path to a file in "target/debug/testdata"
