@@ -322,6 +322,8 @@ impl WriterProperties {
     }
 
     /// Returns `true` if IEEE 754 total order should be used for floating point statistics.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_ieee754_total_order`]
     pub fn ieee754_total_order(&self) -> bool {
         self.ieee754_total_order
     }
