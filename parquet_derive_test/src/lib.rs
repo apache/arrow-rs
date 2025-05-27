@@ -354,7 +354,13 @@ mod tests {
 
         mod aliased_result {
             use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
-            pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+            // This is the normal pattern that raised this issue
+            // pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+            // not an actual result type
+            // Used here only to make the harder.
+            pub type Result = ();
 
             #[derive(ParquetRecordReader, ParquetRecordWriter, Debug)]
             pub struct ARecord {
@@ -363,7 +369,8 @@ mod tests {
             }
 
             impl ARecord {
-                pub fn validate(&self) -> Result {
+                pub fn do_nothing(&self) -> Result {}
+                pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
                     Ok(())
                 }
             }
@@ -374,6 +381,7 @@ mod tests {
             bool: true,
             string: "test".to_string(),
         };
+        foo.do_nothing();
         assert!(foo.validate().is_ok());
     }
 
