@@ -43,7 +43,7 @@ use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
-/// Extension trait for [`ArrayBuilder`] which adds add a method for appending
+/// Extension trait for `ArrayBuilder`s which adds methods for appending
 /// entire arrays based on a filter predicate.
 ///
 /// TODO move the methods from ArrayBuilders that already exist to this trait
