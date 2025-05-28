@@ -1324,9 +1324,12 @@ mod tests {
     use super::*;
 
     use std::fs::File;
+    use std::io::Seek;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::format::PageHeader;
+    use crate::thrift::TCompactSliceInputProtocol;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -3765,5 +3768,69 @@ mod tests {
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
         assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn test_page_stats_truncation() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let binary_field = Field::new("b", DataType::Binary, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let raw_binary_values = [b"Blart Versenwald III".to_vec()];
+        let raw_binary_value_refs = raw_binary_values
+            .iter()
+            .map(|x| x.as_slice())
+            .collect::<Vec<_>>();
+
+        let string_values = StringArray::from(raw_string_values.clone());
+        let binary_values = BinaryArray::from(raw_binary_value_refs);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(Some(2))
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+
+        // check second page now
+        let next_page = buf.len() - prot.as_slice().len() + hdr.compressed_page_size as usize;
+        let second_page = &buf[next_page..];
+        let mut prot = TCompactSliceInputProtocol::new(second_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
     }
 }
