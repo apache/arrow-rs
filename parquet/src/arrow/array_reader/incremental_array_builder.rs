@@ -91,9 +91,7 @@ impl ArrayBuilder for GenericIncrementalArrayBuilder {
     fn finish_cloned(&self) -> ArrayRef {
         // must conform to concat signature
         let concat_input: Vec<&dyn Array> = self.arrays.iter().map(|a| a.as_ref()).collect();
-        let output_array =
-            arrow_select::concat::concat(&concat_input).expect("concat should not fail");
-        output_array
+        arrow_select::concat::concat(&concat_input).expect("concat should not fail")
     }
 
     fn as_any(&self) -> &dyn Any {
