@@ -949,6 +949,58 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .unwrap_or_else(|| (data.to_vec(), false))
     }
 
+    // Truncate the min and max values in a page or column chunk Statistics
+    fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
+        let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+        match statistics {
+            Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
+                let (min, did_truncate_min) = self.truncate_min_value(
+                    self.props.statistics_truncate_length(),
+                    stats.min_bytes_opt().unwrap(),
+                );
+                let (max, did_truncate_max) = self.truncate_max_value(
+                    self.props.statistics_truncate_length(),
+                    stats.max_bytes_opt().unwrap(),
+                );
+                Statistics::ByteArray(
+                    ValueStatistics::new(
+                        Some(min.into()),
+                        Some(max.into()),
+                        stats.distinct_count(),
+                        stats.null_count_opt(),
+                        backwards_compatible_min_max,
+                    )
+                    .with_max_is_exact(!did_truncate_max)
+                    .with_min_is_exact(!did_truncate_min),
+                )
+            }
+            Statistics::FixedLenByteArray(stats)
+                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
+            {
+                let (min, did_truncate_min) = self.truncate_min_value(
+                    self.props.statistics_truncate_length(),
+                    stats.min_bytes_opt().unwrap(),
+                );
+                let (max, did_truncate_max) = self.truncate_max_value(
+                    self.props.statistics_truncate_length(),
+                    stats.max_bytes_opt().unwrap(),
+                );
+                Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        Some(min.into()),
+                        Some(max.into()),
+                        stats.distinct_count(),
+                        stats.null_count_opt(),
+                        backwards_compatible_min_max,
+                    )
+                    .with_max_is_exact(!did_truncate_max)
+                    .with_min_is_exact(!did_truncate_min),
+                )
+            }
+            stats => stats,
+        }
+    }
+
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
     fn add_data_page(&mut self) -> Result<()> {
@@ -992,6 +1044,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
         let page_statistics = page_statistics.map(Statistics::from);
+        let page_statistics = page_statistics.map(|stats| self.truncate_statistics(stats));
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
@@ -1147,53 +1200,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
-            let statistics = match statistics {
-                Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
-                    let (min, did_truncate_min) = self.truncate_min_value(
-                        self.props.statistics_truncate_length(),
-                        stats.min_bytes_opt().unwrap(),
-                    );
-                    let (max, did_truncate_max) = self.truncate_max_value(
-                        self.props.statistics_truncate_length(),
-                        stats.max_bytes_opt().unwrap(),
-                    );
-                    Statistics::ByteArray(
-                        ValueStatistics::new(
-                            Some(min.into()),
-                            Some(max.into()),
-                            stats.distinct_count(),
-                            stats.null_count_opt(),
-                            backwards_compatible_min_max,
-                        )
-                        .with_max_is_exact(!did_truncate_max)
-                        .with_min_is_exact(!did_truncate_min),
-                    )
-                }
-                Statistics::FixedLenByteArray(stats)
-                    if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
-                {
-                    let (min, did_truncate_min) = self.truncate_min_value(
-                        self.props.statistics_truncate_length(),
-                        stats.min_bytes_opt().unwrap(),
-                    );
-                    let (max, did_truncate_max) = self.truncate_max_value(
-                        self.props.statistics_truncate_length(),
-                        stats.max_bytes_opt().unwrap(),
-                    );
-                    Statistics::FixedLenByteArray(
-                        ValueStatistics::new(
-                            Some(min.into()),
-                            Some(max.into()),
-                            stats.distinct_count(),
-                            stats.null_count_opt(),
-                            backwards_compatible_min_max,
-                        )
-                        .with_max_is_exact(!did_truncate_max)
-                        .with_min_is_exact(!did_truncate_min),
-                    )
-                }
-                stats => stats,
-            };
+            let statistics = self.truncate_statistics(statistics);
 
             builder = builder
                 .set_statistics(statistics)
@@ -3244,6 +3251,8 @@ mod tests {
         } else {
             panic!("expecting Statistics::ByteArray");
         }
+
+        // TODO(ets): need to test that page stats are truncated as well
     }
 
     #[test]
