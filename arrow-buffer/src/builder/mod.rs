@@ -339,6 +339,12 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len = self.buffer.len() / std::mem::size_of::<T>();
     }
 
+    /// Consume the builder and return a buffer
+    #[inline]
+    pub fn build(self) -> Buffer {
+        self.buffer.into()
+    }
+
     /// Resets this builder and returns an immutable [Buffer].
     ///
     /// # Example:

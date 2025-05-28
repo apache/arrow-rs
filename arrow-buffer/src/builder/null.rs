@@ -193,6 +193,14 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Builds the null buffer consuming the builder.
+    /// Returns `None` if the builder only contains `true`s.
+    pub fn build(self) -> Option<NullBuffer> {
+        self.bitmap_builder
+            .map(|bitmap_builder| bitmap_builder.build())
+            .map(NullBuffer::new)
+    }
+
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {

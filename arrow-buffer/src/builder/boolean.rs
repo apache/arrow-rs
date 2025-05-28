@@ -244,6 +244,12 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
+    /// Creates a [`BooleanBuffer`] annd consumes the builder
+    #[inline]
+    pub fn build(self) -> BooleanBuffer {
+        BooleanBuffer::new(self.buffer.into(), 0, self.len)
+    }
+
     /// Creates a [`BooleanBuffer`]
     #[inline]
     pub fn finish(&mut self) -> BooleanBuffer {

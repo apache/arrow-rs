@@ -187,7 +187,13 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             T::DATA_TYPE,
             data_type
         );
-        Self { data_type, ..self }
+        // Type is Checked above
+        unsafe { self.with_data_type_unchecked(data_type) }
+    }
+
+    pub unsafe fn with_data_type_unchecked(mut self, data_type: DataType) -> Self {
+        self.data_type = data_type;
+        self
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
@@ -288,6 +294,32 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.append_trusted_len_iter(iter);
         self.null_buffer_builder
             .append_n_non_nulls(self.len() - starting_len);
+    }
+
+    /// Builds the [`PrimitiveArray`] and consumes this builder.
+    pub fn build(self) -> PrimitiveArray<T> {
+        let len = self.len();
+        let Self {
+            values_builder,
+            null_buffer_builder,
+            data_type,
+        } = self;
+        let nulls = null_buffer_builder.build();
+
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                values_builder.len(),
+                "nulls/values length mismatch"
+            );
+        }
+        let builder = ArrayData::builder(data_type)
+            .len(len)
+            .add_buffer(values_builder.build())
+            .nulls(nulls);
+
+        let array_data = unsafe { builder.build_unchecked() };
+        PrimitiveArray::<T>::from(array_data)
     }
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
