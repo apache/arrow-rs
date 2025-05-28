@@ -560,14 +560,12 @@ mod tests {
     fn test_fixed_decoding() {
         let avro_type = avro_from_codec(Codec::Fixed(3));
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
-
-        // First fixed-size item
+        
         let data1 = [1u8, 2, 3];
         let mut cursor1 = AvroCursor::new(&data1);
         decoder.decode(&mut cursor1).expect("Failed to decode data1");
         assert_eq!(cursor1.position(), 3, "Cursor should advance by fixed size");
-
-        // Second fixed-size item
+        
         let data2 = [4u8, 5, 6];
         let mut cursor2 = AvroCursor::new(&data2);
         decoder.decode(&mut cursor2).expect("Failed to decode data2");
