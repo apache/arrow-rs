@@ -19,8 +19,7 @@ use crate::arrow::array_reader::incremental_array_builder::{
     GenericIncrementalArrayBuilder, IncrementalArrayBuilder,
 };
 use arrow_array::builder::{BinaryViewBuilder, PrimitiveBuilder, StringViewBuilder};
-use arrow_array::types::{Int16Type, Int32Type, Int64Type, Int8Type};
-use arrow_array::{BooleanArray, RecordBatch};
+use arrow_array::{downcast_primitive, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use arrow_select::filter::{FilterBuilder, FilterPredicate, SlicesIterator};
 use std::borrow::Cow;
@@ -314,13 +313,16 @@ fn get_filter_limit(filter: &BooleanArray, row_limit: usize) -> FilterLimit {
 /// Create an incremental array builder for the given data type
 ///
 /// Uses a generic implementation if we don't have a specific builder for the type
-fn instantiate_builder(data_type: &arrow_schema::DataType, batch_size: usize) -> ArrayBuilderImpl {
-    match data_type {
-        // TODO other primitive types
-        DataType::Int8 => Box::new(PrimitiveBuilder::<Int8Type>::with_capacity(batch_size)),
-        DataType::Int16 => Box::new(PrimitiveBuilder::<Int16Type>::with_capacity(batch_size)),
-        DataType::Int32 => Box::new(PrimitiveBuilder::<Int32Type>::with_capacity(batch_size)),
-        DataType::Int64 => Box::new(PrimitiveBuilder::<Int64Type>::with_capacity(batch_size)),
+fn instantiate_builder(data_type: &DataType, batch_size: usize) -> ArrayBuilderImpl {
+    // Create a primitive builder for the given data type
+    macro_rules! primitive_builder_helper {
+        ($t:ty, $DT:expr, $SZ:expr) => {
+            Box::new(PrimitiveBuilder::<$t>::with_capacity($SZ).with_data_type($DT.clone()))
+        };
+    }
+
+    downcast_primitive! {
+        data_type => (primitive_builder_helper, data_type, batch_size),
         DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(batch_size)),
         DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(batch_size)),
 
