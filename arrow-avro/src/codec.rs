@@ -405,16 +405,18 @@ fn make_data_type<'a>(
                     codec: Codec::List(Arc::new(field)),
                 })
             }
-            ComplexType::Fixed(fx) => {
-                let size = fx.size as i32;
+            ComplexType::Fixed(f) => {
+                let size = f.size.try_into().map_err(|e| {
+                    ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
+                })?;
 
-                let fixed_dt = AvroDataType {
+                let field = AvroDataType {
                     nullability: None,
-                    metadata: fx.attributes.field_metadata(),
+                    metadata: f.attributes.field_metadata(),
                     codec: Codec::Fixed(size),
                 };
-                resolver.register(fx.name, namespace, fixed_dt.clone());
-                Ok(fixed_dt)
+                resolver.register(f.name, namespace, field.clone());
+                Ok(field)
             }
             ComplexType::Enum(e) => Err(ArrowError::NotYetImplemented(format!(
                 "Enum of {e:?} not currently supported"
