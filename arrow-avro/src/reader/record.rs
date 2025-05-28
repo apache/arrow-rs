@@ -197,6 +197,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
+            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
         };
 
         Ok(match data_type.nullability() {
