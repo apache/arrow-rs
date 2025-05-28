@@ -107,7 +107,7 @@ impl Iterator for IndexIterator<'_> {
     }
 }
 
-/// Extension trait for [`ArrayBuilder`] which adds add a method for appending rows from
+/// Extension trait for `ArrayBuilder`s which adds add a method for appending rows from
 /// an array based on a filter.
 ///
 /// Values from `array` are copied into the builder where the corresponding predicate
