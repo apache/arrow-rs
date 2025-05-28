@@ -32,7 +32,7 @@
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
-    BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, StringViewBuilder,
+    BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -72,11 +72,11 @@ impl ArrayBuilderExtAppend for BooleanBuilder {
     }
 }
 
-impl ArrayBuilderExtAppend for StringViewBuilder {
+impl<T: ByteViewType> ArrayBuilderExtAppend for GenericByteViewBuilder<T> {
     fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError> {
         // TODO move append array into this module?
-        let array = array.as_string_view();
-        <StringViewBuilder>::append_array(self, array);
+        let array = array.as_byte_view::<T>();
+        <GenericByteViewBuilder<T>>::append_array(self, array);
         Ok(())
     }
 }
