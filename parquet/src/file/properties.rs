@@ -799,7 +799,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the max length of min/max value fields when writing the column
-    /// [`Index`] (defaults to `None` (no limit)).
+    /// [`Index`] (defaults to `Some(64)`).
     ///
     /// This can be used to prevent columns with very long values (hundreds of
     /// bytes long) from causing the parquet metadata to become huge.
