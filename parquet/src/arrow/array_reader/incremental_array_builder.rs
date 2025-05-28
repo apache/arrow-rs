@@ -18,10 +18,10 @@
 //! Incrementally builds Arrow Arrays from a stream of values
 
 use arrow_array::builder::{ArrayBuilder, PrimitiveBuilder, StringViewBuilder};
-use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, BooleanArray};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType};
 use arrow_schema::ArrowError;
 use arrow_select::concat::ArrayBuilderExtAppend;
-use arrow_select::filter::{filter, ArrayBuilderExtFilter, FilterPredicate};
+use arrow_select::filter::{ ArrayBuilderExtFilter, FilterPredicate};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -143,4 +143,5 @@ impl ArrayBuilderExtAppend for GenericIncrementalArrayBuilder {
 impl IncrementalArrayBuilder for GenericIncrementalArrayBuilder {}
 
 impl<T: ArrowPrimitiveType> IncrementalArrayBuilder for PrimitiveBuilder<T> {}
-// TODO implement for StringViewBuilder
+
+impl IncrementalArrayBuilder for StringViewBuilder { }

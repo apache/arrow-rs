@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::incremental_array_builder::{
     GenericIncrementalArrayBuilder, IncrementalArrayBuilder,
 };
-use arrow_array::builder::{PrimitiveBuilder, StringViewBuilder};
+use arrow_array::builder::{BinaryViewBuilder, PrimitiveBuilder, StringViewBuilder};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, Int8Type};
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -321,14 +321,9 @@ fn instantiate_builder(data_type: &arrow_schema::DataType, batch_size: usize) ->
         DataType::Int16 => Box::new(PrimitiveBuilder::<Int16Type>::with_capacity(batch_size)),
         DataType::Int32 => Box::new(PrimitiveBuilder::<Int32Type>::with_capacity(batch_size)),
         DataType::Int64 => Box::new(PrimitiveBuilder::<Int64Type>::with_capacity(batch_size)),
-        // TODO
-        /*
-        DataType::Utf8View => {
+        DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(batch_size)),
+        DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(batch_size)),
 
-            Box::new(StringViewBuilder::with_capacity(batch_size))
-        }
-
-         */
         // Default to using the generic builder for all other types
         // TODO file tickets tracking specific builders for other types
         _ => Box::new(GenericIncrementalArrayBuilder::new()),
