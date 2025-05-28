@@ -3251,8 +3251,6 @@ mod tests {
         } else {
             panic!("expecting Statistics::ByteArray");
         }
-
-        // TODO(ets): need to test that page stats are truncated as well
     }
 
     #[test]
