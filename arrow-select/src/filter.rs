@@ -676,13 +676,13 @@ fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -
 where
     T: ArrowPrimitiveType,
 {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(predicate.count)
-        .with_data_type(array.data_type().clone());
+    let builder = PrimitiveBuilder::<T>::with_capacity(predicate.count);
+    let mut builder = unsafe { builder.with_data_type_unchecked(array.data_type().clone()) };
     builder
         .append_filtered(array, predicate)
         .expect("Failed to append filtered values");
 
-    builder.finish()
+    builder.build()
 }
 
 /// [`FilterBytes`] is created from a source [`GenericByteArray`] and can be
