@@ -361,6 +361,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Returns the inner value and null buffer builders.
+    ///
+    /// These must be kept in sync
     pub fn inner_mut(&mut self) -> (&mut BufferBuilder<T::Native>, &mut NullBufferBuilder) {
         (&mut self.values_builder, &mut self.null_buffer_builder)
     }
