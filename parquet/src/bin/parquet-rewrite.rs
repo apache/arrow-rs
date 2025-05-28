@@ -41,7 +41,7 @@ use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::Compression,
     file::{
-        properties::{EnabledStatistics, WriterProperties, WriterVersion},
+        properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},
         reader::FileReader,
         serialized_reader::SerializedFileReader,
     },
@@ -139,6 +139,24 @@ impl From<WriterVersionArgs> for WriterVersion {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum BloomFilterPositionArgs {
+    /// Write Bloom Filters of each row group right after the row group
+    AfterRowGroup,
+
+    /// Write Bloom Filters at the end of the file
+    End,
+}
+
+impl From<BloomFilterPositionArgs> for BloomFilterPosition {
+    fn from(value: BloomFilterPositionArgs) -> Self {
+        match value {
+            BloomFilterPositionArgs::AfterRowGroup => Self::AfterRowGroup,
+            BloomFilterPositionArgs::End => Self::End,
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Read and write parquet file with potentially different settings"), long_about = None)]
 struct Args {
@@ -187,6 +205,10 @@ struct Args {
     /// Sets number of distinct values (ndv) for bloom filter for any column.
     #[clap(long)]
     bloom_filter_ndv: Option<u64>,
+
+    /// Sets the position of bloom filter
+    #[clap(long)]
+    bloom_filter_position: Option<BloomFilterPositionArgs>,
 
     /// Sets flag to enable/disable dictionary encoding for any column.
     #[clap(long)]
@@ -255,6 +277,10 @@ fn main() {
             }
             if let Some(value) = args.bloom_filter_ndv {
                 writer_properties_builder = writer_properties_builder.set_bloom_filter_ndv(value);
+            }
+            if let Some(value) = args.bloom_filter_position {
+                writer_properties_builder =
+                    writer_properties_builder.set_bloom_filter_position(value.into());
             }
         }
     }
