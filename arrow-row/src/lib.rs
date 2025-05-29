@@ -1173,6 +1173,43 @@ fn null_sentinel(options: SortOptions) -> u8 {
     }
 }
 
+enum LengthTracker {
+    Fixed {
+        length: usize,
+        num_rows: usize,
+    },
+    Variable {
+        fixed_length: usize,
+        lengths: Vec<usize>,
+    }
+}
+
+impl LengthTracker {
+    fn new(num_rows: usize) -> Self {
+        Self::Fixed { length: 0, num_rows }
+    }
+
+    fn push_fixed(&mut self, new_length: usize) {
+        match self {
+            LengthTracker::Fixed { length, .. } => *length += new_length,
+            LengthTracker::Variable { fixed_length, .. } => *fixed_length += new_length,
+        }
+    }
+
+    fn push_variable(&mut self, new_lengths: impl ExactSizeIterator<Item = usize>) {
+        match self {
+            LengthTracker::Fixed { length, .. } => {
+                // todo: avoid materialization if all items of new_lengths are same
+                *self = LengthTracker::Variable { fixed_length: *length, lengths: new_lengths.collect() }
+            },
+            LengthTracker::Variable { lengths, .. } => {
+                assert_eq!(lengths.len(), new_lengths.len());
+                lengths.iter_mut().zip(new_lengths.into_iter()).for_each(|(length, new_length)| *length += new_length);
+            }
+        }
+    }
+}
+
 /// Computes the length of each encoded [`Rows`] and returns an empty [`Rows`]
 fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> Vec<usize> {
     use fixed::FixedLengthEncoding;
