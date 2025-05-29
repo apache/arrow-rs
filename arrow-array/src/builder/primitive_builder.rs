@@ -192,6 +192,9 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Set the data type of the builder without checking if it is compatible
+    ///
+    /// # Safety
+    /// the DataType must be compatible with the type `T`
     pub unsafe fn with_data_type_unchecked(mut self, data_type: DataType) -> Self {
         self.data_type = data_type;
         self
