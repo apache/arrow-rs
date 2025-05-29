@@ -863,7 +863,10 @@ fn load_metadata(path: &Path) -> ArrowReaderMetadata {
             //
             // The clickbench_partitioned dataset has textual fields listed as
             // binary for some historical reason so translate Binary to Utf8View
-            if matches!(f.data_type(), DataType::Utf8 | DataType::Binary | DataType::Boolean) {
+            if matches!(
+                f.data_type(),
+                DataType::Utf8 | DataType::Binary | DataType::BinaryView
+            ) {
                 let new_field = f.as_ref().clone().with_data_type(DataType::Utf8View);
                 Arc::new(new_field)
             } else {
