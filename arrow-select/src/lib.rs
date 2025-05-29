@@ -27,6 +27,8 @@
 pub mod concat;
 mod dictionary;
 pub mod filter;
+pub mod incremental_array_builder;
+pub mod incremental_batch_builder;
 pub mod interleave;
 pub mod nullif;
 pub mod take;

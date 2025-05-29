@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::incremental_array_builder::{
-    GenericIncrementalArrayBuilder, IncrementalArrayBuilder,
-};
+//! [`IncrementalRecordBatchBuilder`] for incrementally building RecordBatches from other arrays
+
+use crate::filter::{FilterBuilder, FilterPredicate, SlicesIterator};
+use crate::incremental_array_builder::{GenericIncrementalArrayBuilder, IncrementalArrayBuilder};
 use arrow_array::builder::{BinaryViewBuilder, PrimitiveBuilder, StringViewBuilder};
 use arrow_array::{downcast_primitive, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
-use arrow_select::filter::{FilterBuilder, FilterPredicate, SlicesIterator};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
