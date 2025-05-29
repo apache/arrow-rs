@@ -113,16 +113,8 @@ impl ArrayBuilderExtFilter for GenericIncrementalArrayBuilder {
         array: &dyn Array,
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        println!(
-            "[GenericIncrementalArrayBuilder] append_filtered {} called",
-            array.data_type()
-        );
         // Filter the array using the filter mask
         let filtered_array = crate::filter::filter_array(array, filter)?;
-        println!(
-            "[GenericIncrementalArrayBuilder] filtered_array_type {} ",
-            filtered_array.data_type()
-        );
         self.arrays.push(filtered_array);
         Ok(())
     }
@@ -130,10 +122,6 @@ impl ArrayBuilderExtFilter for GenericIncrementalArrayBuilder {
 
 impl ArrayBuilderExtAppend for GenericIncrementalArrayBuilder {
     fn append_array(&mut self, array: &ArrayRef) -> Result<(), ArrowError> {
-        println!(
-            "[GenericIncrementalArrayBuilder] append_ {} called",
-            array.data_type()
-        );
         self.arrays.push(Arc::clone(array));
         Ok(())
     }
