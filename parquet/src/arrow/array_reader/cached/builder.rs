@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::incremental_batch_builder::IncrementalRecordBatchBuilder;
 use crate::arrow::array_reader::CachedPredicateResult;
 use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::ProjectionMask;
 use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
 use arrow_select::filter::prep_null_mask_filter;
+use arrow_select::incremental_batch_builder::IncrementalRecordBatchBuilder;
 use std::sync::Arc;
 
 /// Incrementally builds the result of evaluating an ArrowPredicate on

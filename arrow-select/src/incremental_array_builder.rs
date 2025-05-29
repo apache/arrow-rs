@@ -17,12 +17,12 @@
 
 //! Incrementally builds Arrow Arrays from a stream of values
 
+use crate::concat::ArrayBuilderExtAppend;
+use crate::filter::{ArrayBuilderExtFilter, FilterPredicate};
 use arrow_array::builder::{ArrayBuilder, GenericByteViewBuilder, PrimitiveBuilder};
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType};
 use arrow_schema::ArrowError;
-use arrow_select::concat::ArrayBuilderExtAppend;
-use arrow_select::filter::{ArrayBuilderExtFilter, FilterPredicate};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ pub trait IncrementalArrayBuilder:
 /// Uses `concat` / `filter` to build the final output array. This is less
 /// efficient than using a specific builder but works for any Arrow Array type
 /// until we have implemented specific builders all types.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GenericIncrementalArrayBuilder {
     /// In progress arrays being built
     arrays: Vec<ArrayRef>,
@@ -67,7 +67,7 @@ pub struct GenericIncrementalArrayBuilder {
 impl GenericIncrementalArrayBuilder {
     /// Create a new generic incremental array builder
     pub fn new() -> Self {
-        Self { arrays: Vec::new() }
+        Default::default()
     }
 }
 
@@ -91,7 +91,7 @@ impl ArrayBuilder for GenericIncrementalArrayBuilder {
     fn finish_cloned(&self) -> ArrayRef {
         // must conform to concat signature
         let concat_input: Vec<&dyn Array> = self.arrays.iter().map(|a| a.as_ref()).collect();
-        arrow_select::concat::concat(&concat_input).expect("concat should not fail")
+        crate::concat::concat(&concat_input).expect("concat should not fail")
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -118,7 +118,7 @@ impl ArrayBuilderExtFilter for GenericIncrementalArrayBuilder {
             array.data_type()
         );
         // Filter the array using the filter mask
-        let filtered_array = arrow_select::filter::filter_array(array, filter)?;
+        let filtered_array = crate::filter::filter_array(array, filter)?;
         println!(
             "[GenericIncrementalArrayBuilder] filtered_array_type {} ",
             filtered_array.data_type()
