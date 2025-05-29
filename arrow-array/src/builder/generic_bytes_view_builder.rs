@@ -84,6 +84,18 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
     block_size: BlockSizeGrowthStrategy,
+    /// When appending views from an existing Array, the builder will copy
+    /// the underlying strings into a new buffer if the array is sparse.
+    ///
+    /// If None, the builder will not copy long strings
+    ///
+    /// If Some, the builder will *copy* long strings if the total size of the used
+    /// buffer bytes / the total size is less than than `append_load_factor`
+    ///
+    /// So if `append_load_factor` is `Some(0.5)`, the builder will copy long
+    /// strings if the total size of the used buffers is less than 50% of the
+    /// total size of the buffers.
+    target_buffer_load_factor: Option<f32>,
     /// Some if deduplicating strings
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
@@ -103,12 +115,32 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             null_buffer_builder: NullBufferBuilder::new(capacity),
             completed: vec![],
             in_progress: vec![],
+            target_buffer_load_factor: Some(0.5),
             block_size: BlockSizeGrowthStrategy::Exponential {
                 current_size: STARTING_BLOCK_SIZE,
             },
             string_tracker: None,
             phantom: Default::default(),
         }
+    }
+
+    /// Set the target buffer load factor for appending views from existing arrays
+    ///
+    /// Defaults to 50% if not set.
+    ///
+    /// Panics if the load factor is not between 0 and 1.
+    pub fn with_target_buffer_load_factor(
+        mut self,
+        target_buffer_load_factor: Option<f32>,
+    ) -> Self {
+        if let Some(load_factor) = target_buffer_load_factor {
+            assert!(
+                load_factor > 0.0 && load_factor <= 1.0,
+                "Target buffer load factor must be between 0 and 1"
+            );
+        }
+        self.target_buffer_load_factor = target_buffer_load_factor;
+        self
     }
 
     /// Set a fixed buffer size for variable length strings
@@ -409,7 +441,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Append all views from the given array into the inprogress builder
     ///
-    /// TODO: make a configurable option about what threshold to compact buffers
+    /// Will copy the underlying views based on the value of target_buffer_load_factor
     pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
         let num_rows = array.len();
         if num_rows == 0 {
@@ -458,16 +490,26 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let buffers = &mut self.completed;
         let views = &mut self.views_builder;
 
-        let ideal_buffer_size = array.minimum_buffer_size();
-        let actual_buffer_size = array.get_buffer_memory_size();
+        let mut used_buffer_size = 0;
+        let use_exising_buffers = match self.target_buffer_load_factor {
+            None => true,
+            Some(load_factor) => {
+                used_buffer_size = array.minimum_buffer_size();
+                let actual_buffer_size = array.get_buffer_memory_size();
+                // If the total size of the buffers is less than the load factor, copy them existing buffers
+                used_buffer_size >= (actual_buffer_size as f32 * load_factor) as usize
+            }
+        };
 
-        // if the array is not sparse, simply copy the buffers and update the views
-        // to point to the new buffers
-        // TODO make this load factor a parameter of the builder
-
-        if actual_buffer_size < 2 * ideal_buffer_size {
+        if use_exising_buffers {
             let num_buffers_before: u32 = buffers.len().try_into().expect("buffer count overflow");
-            buffers.extend_from_slice(array.data_buffers());
+            buffers.extend_from_slice(array.data_buffers()); //
+
+            // If there were no existing buffers, the views do not need to be updated
+            // as the buffers of `array` are the same
+            if num_buffers_before == 0 {
+                return;
+            }
 
             // Update any views that point to the old buffers
             for v in views.as_slice_mut()[starting_view..].iter_mut() {
@@ -484,7 +526,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         } else {
             // otherwise the array is sparse so copy the data into a single new
             // buffer as well as updating the views
-            let mut new_buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
+            let mut new_buffer: Vec<u8> = Vec::with_capacity(used_buffer_size);
             let new_buffer_index = buffers.len() as u32; // making one new buffer
                                                          // Update any views that point to the old buffers.
             for v in views.as_slice_mut()[starting_view..].iter_mut() {

@@ -897,7 +897,9 @@ fn filter_byte_view<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
     predicate: &FilterPredicate,
 ) -> GenericByteViewArray<T> {
-    let mut builder = GenericByteViewBuilder::<T>::with_capacity(predicate.count);
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(predicate.count)
+        // turn off string copy coalescing
+        .with_target_buffer_load_factor(None);
     builder
         .append_filtered(array, predicate)
         .expect("Failed to append filtered values");
