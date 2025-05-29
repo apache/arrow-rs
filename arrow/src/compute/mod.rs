@@ -37,3 +37,6 @@ pub use self::kernels::take::*;
 pub use self::kernels::temporal::*;
 pub use self::kernels::union_extract::*;
 pub use self::kernels::window::*;
+
+pub use arrow_select::incremental_array_builder::*;
+pub use arrow_select::incremental_batch_builder::IncrementalRecordBatchBuilder;

@@ -180,7 +180,6 @@
 //! ```
 
 experimental!(mod array_reader);
-pub use arrow_select::incremental_batch_builder::IncrementalRecordBatchBuilder;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
