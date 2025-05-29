@@ -444,6 +444,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use serde_json::{json, Value};
 
+    use super::encoder::{UnionEncoder, UnionFormat};
     use super::LineDelimited;
     use super::{Encoder, WriterBuilder};
     use arrow_array::builder::*;
@@ -2090,51 +2091,30 @@ mod tests {
         impl EncoderFactory for UnionEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                _field: &'a FieldRef,
+                field: &'a FieldRef,
                 array: &'a dyn Array,
-                _options: &'a EncoderOptions,
+                options: &'a EncoderOptions,
             ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
-                let data_type = array.data_type();
-                let fields = match data_type {
-                    DataType::Union(fields, UnionMode::Sparse) => fields,
-                    _ => return Ok(None),
-                };
-                // check that the fields are supported
-                let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
-                for f in fields.iter() {
-                    match f.data_type() {
-                        DataType::Null => {}
-                        DataType::Int32 => {}
-                        DataType::Utf8 => {}
-                        _ => return Ok(None),
+                match array.data_type() {
+                    DataType::Union(_fields, _) => {
+                        if let Some(union_array) = array.as_any().downcast_ref::<UnionArray>() {
+                            let encoder = Box::new(UnionEncoder::try_new_with_format(
+                                field,
+                                union_array,
+                                options,
+                                UnionFormat::Simple,
+                            )?);
+
+                            let nulls = array.nulls().cloned();
+                            Ok(Some(NullableEncoder::new(encoder, nulls)))
+                        } else {
+                            Err(ArrowError::InvalidArgumentError(
+                                "Cannot downcast Array to UnionArray".to_string(),
+                            ))
+                        }
                     }
+                    _ => Ok(None),
                 }
-                let (_, type_ids, _, buffers) = array.as_union().clone().into_parts();
-                let mut values = Vec::with_capacity(type_ids.len());
-                for idx in 0..type_ids.len() {
-                    let type_id = type_ids[idx];
-                    let field = &fields[type_id as usize];
-                    let value = match field.data_type() {
-                        DataType::Null => None,
-                        DataType::Int32 => Some(UnionValue::Int32(
-                            buffers[type_id as usize]
-                                .as_primitive::<Int32Type>()
-                                .value(idx),
-                        )),
-                        DataType::Utf8 => Some(UnionValue::String(
-                            buffers[type_id as usize]
-                                .as_string::<i32>()
-                                .value(idx)
-                                .to_string(),
-                        )),
-                        _ => unreachable!(),
-                    };
-                    values.push(value);
-                }
-                let array_encoder =
-                    Box::new(UnionEncoder { array: values }) as Box<dyn Encoder + 'a>;
-                let nulls = array.nulls().cloned();
-                Ok(Some(NullableEncoder::new(array_encoder, nulls)))
             }
         }
 
@@ -2183,8 +2163,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_encoder_factory_line_delimited_implicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+    fn test_union_encoder_line_delimited_implicit_nulls() {
+        let (batch, encoder_factory) = make_union_encoder_test_data();
 
         let mut buf = Vec::new();
         {
@@ -2208,8 +2188,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_encoder_factory_line_delimited_explicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+    fn test_union_encoder_line_delimited_explicit_nulls() {
+        let (batch, encoder_factory) = make_union_encoder_test_data();
 
         let mut buf = Vec::new();
         {
@@ -2231,8 +2211,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_encoder_factory_array_implicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+    fn test_union_encoder_array_implicit_nulls() {
+        let (batch, encoder_factory) = make_union_encoder_test_data();
 
         let json_value: Value = {
             let mut buf = Vec::new();
@@ -2254,8 +2234,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_encoder_factory_array_explicit_nulls() {
-        let (batch, encoder_factory) = make_fallback_encoder_test_data();
+    fn test_union_encoder_array_explicit_nulls() {
+        let (batch, encoder_factory) = make_union_encoder_test_data();
 
         let json_value: Value = {
             let mut buf = Vec::new();
@@ -2466,5 +2446,235 @@ mod tests {
         ]);
 
         assert_eq!(json_value, expected);
+    }
+
+    #[test]
+    fn test_union_encoder_simple_format() {
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("int", 1).unwrap();
+        builder.append::<Float64Type>("float", 3.24).unwrap();
+        builder.append::<Int32Type>("int", -42).unwrap();
+        let array = builder.build().unwrap();
+
+        let field = Arc::new(Field::new("test_union", array.data_type().clone(), true));
+        let options = EncoderOptions::default();
+
+        let mut encoder =
+            UnionEncoder::try_new_with_format(&field, &array, &options, UnionFormat::Simple)
+                .unwrap();
+
+        let mut out = Vec::new();
+        encoder.encode(0, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "1");
+
+        out.clear();
+        encoder.encode(1, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "3.24");
+
+        out.clear();
+        encoder.encode(2, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "-42");
+    }
+
+    #[test]
+    fn test_union_encoder_with_type_info() {
+        let string_array = StringArray::from(vec!["hello"]);
+        let int_array = Int32Array::from(vec![1]);
+        let float_array = Float64Array::from(vec![3.24]);
+
+        let fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, false))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, false))),
+            (2, Arc::new(Field::new("float", DataType::Float64, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let type_ids = [0, 1, 2].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let children = [
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(string_array),
+            Arc::new(float_array),
+        ]
+        .into_iter()
+        .collect();
+
+        let array = UnionArray::try_new(fields, type_ids, Some(offsets), children).unwrap();
+
+        let field = Arc::new(Field::new("test_union", array.data_type().clone(), true));
+        let options = EncoderOptions::default();
+
+        // Test WithTypeInfo format
+        let mut encoder =
+            UnionEncoder::try_new_with_format(&field, &array, &options, UnionFormat::WithTypeInfo)
+                .unwrap();
+
+        let mut out = Vec::new();
+        encoder.encode(0, &mut out);
+        assert_eq!(
+            std::str::from_utf8(&out).unwrap(),
+            "{\"type_id\":0,\"value\":1}"
+        );
+
+        out.clear();
+        encoder.encode(1, &mut out);
+        assert_eq!(
+            std::str::from_utf8(&out).unwrap(),
+            "{\"type_id\":1,\"value\":\"hello\"}"
+        );
+
+        out.clear();
+        encoder.encode(2, &mut out);
+        assert_eq!(
+            std::str::from_utf8(&out).unwrap(),
+            "{\"type_id\":2,\"value\":3.24}"
+        );
+    }
+
+    #[test]
+    fn test_union_encoder_with_nulls() {
+        let (batch, _) = make_union_encoder_test_data();
+
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+
+        let field = Arc::new(Field::new("test_union", array.data_type().clone(), true));
+        let options = EncoderOptions::default();
+
+        // Test nulls with Simple format
+        let mut encoder =
+            UnionEncoder::try_new_with_format(&field, array, &options, UnionFormat::Simple)
+                .unwrap();
+
+        let mut out = Vec::new();
+        encoder.encode(0, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "1");
+
+        out.clear();
+        encoder.encode(2, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "null");
+
+        // Test WithTypeInfo format with nulls
+        let mut encoder =
+            UnionEncoder::try_new_with_format(&field, array, &options, UnionFormat::WithTypeInfo)
+                .unwrap();
+
+        out.clear();
+        encoder.encode(2, &mut out);
+        assert_eq!(
+            std::str::from_utf8(&out).unwrap(),
+            "{\"type_id\":2,\"value\":null}"
+        );
+    }
+
+    #[test]
+    fn test_union_encoder_sparse_array() {
+        let mut builder = UnionBuilder::new_sparse();
+        builder.append::<Int32Type>("int", 1).unwrap();
+        builder.append::<Float64Type>("float", 2.5).unwrap();
+        let array = builder.build().unwrap();
+
+        let field = Arc::new(Field::new("test_union", array.data_type().clone(), true));
+        let options = EncoderOptions::default();
+
+        let mut encoder =
+            UnionEncoder::try_new_with_format(&field, &array, &options, UnionFormat::Simple)
+                .unwrap();
+
+        let mut out = Vec::new();
+        encoder.encode(0, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "1");
+
+        out.clear();
+        encoder.encode(1, &mut out);
+        assert_eq!(std::str::from_utf8(&out).unwrap(), "2.5");
+    }
+
+    #[test]
+    fn test_union_array_serialization() {
+        use arrow_array::builder::{StringDictionaryBuilder, UnionBuilder};
+        use arrow_array::types::{Int32Type, UInt8Type};
+
+        let mut builder = UnionBuilder::new_dense();
+
+        builder.append::<Int32Type>("a", 1).unwrap();
+
+        let mut dict_builder = StringDictionaryBuilder::<UInt8Type>::new();
+        dict_builder.append("foo").unwrap();
+        let _string_array = dict_builder.finish();
+
+        builder.append_null::<Int32Type>("a").unwrap();
+
+        let union_array = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "union",
+            union_array.data_type().clone(),
+            true,
+        )]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union_array)]).unwrap();
+
+        let buf = Vec::new();
+        let mut writer = LineDelimitedWriter::new(buf);
+        writer.write_batches(&[&batch]).unwrap();
+        writer.finish().unwrap();
+        let buf = writer.into_inner();
+
+        let actual = std::str::from_utf8(&buf).unwrap();
+        let expected =
+            "{\"union\":{\"type_id\":0,\"value\":1}}\n{\"union\":{\"type_id\":0,\"value\":null}}\n";
+        assert_eq!(actual, expected);
+
+        let buf = Vec::new();
+        let mut writer = ArrayWriter::new(buf);
+        writer.write_batches(&[&batch]).unwrap();
+        writer.finish().unwrap();
+        let buf = writer.into_inner();
+
+        let actual = std::str::from_utf8(&buf).unwrap();
+        let expected =
+            "[{\"union\":{\"type_id\":0,\"value\":1}},{\"union\":{\"type_id\":0,\"value\":null}}]";
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_sparse_union_array_serialization() {
+        use arrow_array::builder::{StringDictionaryBuilder, UnionBuilder};
+        use arrow_array::types::{Int32Type, UInt8Type};
+
+        let mut builder = UnionBuilder::new_sparse();
+
+        builder.append::<Int32Type>("a", 1).unwrap();
+
+        let mut dict_builder = StringDictionaryBuilder::<UInt8Type>::new();
+        dict_builder.append("foo").unwrap();
+        let _string_array = dict_builder.finish();
+
+        builder.append_null::<Int32Type>("a").unwrap();
+
+        let union_array = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "union",
+            union_array.data_type().clone(),
+            true,
+        )]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union_array)]).unwrap();
+
+        let buf = Vec::new();
+        let mut writer = LineDelimitedWriter::new(buf);
+        writer.write_batches(&[&batch]).unwrap();
+        writer.finish().unwrap();
+        let buf = writer.into_inner();
+
+        let actual = std::str::from_utf8(&buf).unwrap();
+        let expected =
+            "{\"union\":{\"type_id\":0,\"value\":1}}\n{\"union\":{\"type_id\":0,\"value\":null}}\n";
+        assert_eq!(actual, expected);
     }
 }
