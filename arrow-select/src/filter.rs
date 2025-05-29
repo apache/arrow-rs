@@ -433,9 +433,8 @@ impl<T: ArrowPrimitiveType> ArrayBuilderExtFilter for PrimitiveBuilder<T> {
             IterationStrategy::Indices(indices) => {
                 append_filtered_nulls(null_buffer_builder, array, predicate);
                 let iter = indices.iter().map(|x| values[*x]);
-                for v in iter {
-                    values_builder.append(v);
-                }
+                // safety: Vec + Map knows its length correctly
+                unsafe { values_builder.append_trusted_len_iter(iter); }
             }
             IterationStrategy::All => {
                 self.append_array(array); // Also appends nulls
@@ -866,9 +865,8 @@ impl<T: ByteViewType> ArrayBuilderExtFilter for GenericByteViewBuilder<T> {
             IterationStrategy::Indices(indices) => {
                 append_filtered_nulls(null_buffer_builder, array, predicate);
                 let iter = indices.iter().map(|x| views[*x]);
-                for v in iter {
-                    view_builder.append(v);
-                }
+                // Safety: Vec + Map knows its length correctly
+                unsafe { view_builder.append_trusted_len_iter(iter); }
             }
             IterationStrategy::All => {
                 // handles nulls and compaction as well
