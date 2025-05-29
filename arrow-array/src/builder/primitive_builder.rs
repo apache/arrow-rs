@@ -191,6 +191,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         unsafe { self.with_data_type_unchecked(data_type) }
     }
 
+    /// Set the data type of the builder without checking if it is compatible
     pub unsafe fn with_data_type_unchecked(mut self, data_type: DataType) -> Self {
         self.data_type = data_type;
         self
