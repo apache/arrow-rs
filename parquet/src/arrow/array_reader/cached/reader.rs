@@ -69,13 +69,21 @@ impl ArrayReader for CachedArrayReader {
             return Ok(new_empty_array(&self.data_type));
         }
 
-        let next_array = self.cached_arrays.pop_front().ok_or_else(|| {
+        let mut next_array = self.cached_arrays.pop_front().ok_or_else(|| {
             crate::errors::ParquetError::General(
                 "Internal error: no more cached arrays".to_string(),
             )
         })?;
 
         // the next batch is the next array in the queue
+        // when a limit is applied, the next array may be smaller than the cached batch size, which is fine as we are
+        // just consuming the next available array
+        // TODO take this limit into account as part of the filter creation
+        // TODO this was hit by DataFusion tests, not arrow-rs tests, so there is a gap in our testing
+        // TODO add coverage
+        if self.current_length < next_array.len() {
+            next_array = next_array.slice(0, self.current_length);
+        }
         assert_eq!(self.current_length, next_array.len());
         self.current_length = 0;
         Ok(next_array)
