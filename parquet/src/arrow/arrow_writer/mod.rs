@@ -3820,8 +3820,7 @@ mod tests {
         assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
 
         // check second page now
-        let next_page = buf.len() - prot.as_slice().len() + hdr.compressed_page_size as usize;
-        let second_page = &buf[next_page..];
+        let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
         let mut prot = TCompactSliceInputProtocol::new(second_page);
         let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
