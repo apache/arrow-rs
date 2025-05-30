@@ -1156,12 +1156,15 @@ enum LengthTracker {
     Variable {
         fixed_length: usize,
         lengths: Vec<usize>,
-    }
+    },
 }
 
 impl LengthTracker {
     fn new(num_rows: usize) -> Self {
-        Self::Fixed { length: 0, num_rows }
+        Self::Fixed {
+            length: 0,
+            num_rows,
+        }
     }
 
     fn push_fixed(&mut self, new_length: usize) {
@@ -1175,23 +1178,29 @@ impl LengthTracker {
         match self {
             LengthTracker::Fixed { length, .. } => {
                 // todo: avoid materialization if all items of new_lengths are same
-                *self = LengthTracker::Variable { fixed_length: *length, lengths: new_lengths.collect() }
-            },
+                *self = LengthTracker::Variable {
+                    fixed_length: *length,
+                    lengths: new_lengths.collect(),
+                }
+            }
             LengthTracker::Variable { lengths, .. } => {
                 assert_eq!(lengths.len(), new_lengths.len());
-                lengths.iter_mut().zip(new_lengths.into_iter()).for_each(|(length, new_length)| *length += new_length);
+                lengths
+                    .iter_mut()
+                    .zip(new_lengths.into_iter())
+                    .for_each(|(length, new_length)| *length += new_length);
             }
         }
     }
 
     fn materialized(&mut self) -> &mut [usize] {
         if let LengthTracker::Fixed { length, num_rows } = *self {
-            *self = LengthTracker::Variable { 
-                fixed_length: length, 
-                lengths: vec![0; num_rows]
+            *self = LengthTracker::Variable {
+                fixed_length: length,
+                lengths: vec![0; num_rows],
             };
         }
-        
+
         match self {
             LengthTracker::Variable { lengths, .. } => lengths,
             LengthTracker::Fixed { .. } => unreachable!(),
@@ -1215,13 +1224,14 @@ impl LengthTracker {
     fn extend_offsets(&self, initial_offset: usize, offsets: &mut Vec<usize>) -> usize {
         match self {
             LengthTracker::Fixed { length, num_rows } => {
-                offsets.extend(
-                    (0..*num_rows).map(|i| initial_offset + i * length)
-                );
-                
+                offsets.extend((0..*num_rows).map(|i| initial_offset + i * length));
+
                 initial_offset + num_rows * length
-            },
-            LengthTracker::Variable { fixed_length, lengths } => {
+            }
+            LengthTracker::Variable {
+                fixed_length,
+                lengths,
+            } => {
                 offsets.reserve(lengths.len());
 
                 let mut acc = initial_offset;
@@ -1231,7 +1241,7 @@ impl LengthTracker {
                 }
 
                 acc
-            },
+            }
         }
     }
 }
@@ -1302,12 +1312,10 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             }
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
-                tracker.push_variable(
-                    (0..array.len()).map(|idx| match array.is_valid(idx) {
-                        true => 1 + rows.row(idx).as_ref().len(),
-                        false => 1 + null.data.len(),
-                    })
-                );
+                tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                    true => 1 + rows.row(idx).as_ref().len(),
+                    false => 1 + null.data.len(),
+                }));
             }
             Encoder::List(rows) => match array.data_type() {
                 DataType::List(_) => {
