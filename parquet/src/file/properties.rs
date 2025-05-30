@@ -302,11 +302,13 @@ impl WriterProperties {
         self.column_index_truncate_length
     }
 
-    /// Returns the maximum length of truncated min/max values in statistics.
+    /// Returns the maximum length of truncated min/max values in [`Statistics`].
     ///
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_statistics_truncate_length`]
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn statistics_truncate_length(&self) -> Option<usize> {
         self.statistics_truncate_length
     }
@@ -822,12 +824,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets the max length of min/max value fields in row group level
-    /// [`Statistics`] (defaults to `None` (no limit)).
+    /// Sets the max length of min/max value fields in row group and page [`Statistics`]
+    /// (defaults to `None` (no limit)).
     ///
     /// # Notes
     /// Row group level [`Statistics`] are written when [`Self::set_statistics_enabled`] is
-    /// set to [`EnabledStatistics::Chunk`] or [`EnabledStatistics::Page`].
+    /// set to [`EnabledStatistics::Chunk`] or [`EnabledStatistics::Page`]. Page level
+    /// [`Statistics`] are written when [`Self::set_statistics_enabled`] is set to
+    /// [`EnabledStatistics::Page`].
     ///
     /// * If `Some`, must be greater than 0, otherwise will panic
     /// * If `None`, there's no effective limit.
