@@ -467,10 +467,10 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    pub fn metadata(&self) -> Option<&'m [u8]> {
+    pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::Array(VariantArray { metadata, .. }) => Some(metadata.as_bytes()),
+            | Variant::Array(VariantArray { metadata, .. }) => Some(*metadata),
             _ => None,
         }
     }
