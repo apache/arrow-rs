@@ -5151,7 +5151,7 @@ impl crate::thrift::TSerializable for PageLocation {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct OffsetIndex {
   /// PageLocations, ordered by increasing PageLocation.offset. It is required
-  /// that page_locations[i].first_row_index < page_locations[i+1].first_row_index.
+  /// that page_locations\[i\].first_row_index < page_locations\[i+1\].first_row_index.
   pub page_locations: Vec<PageLocation>,
   /// Unencoded/uncompressed size for BYTE_ARRAY types.
   /// 
@@ -5249,8 +5249,8 @@ impl crate::thrift::TSerializable for OffsetIndex {
 /// 
 /// If this structure is present, OffsetIndex must also be present.
 /// 
-/// For each field in this structure, <field>[i] refers to the page at
-/// OffsetIndex.page_locations[i]
+/// For each field in this structure, `<field>`\[i\] refers to the page at
+/// OffsetIndex.page_locations\[i\]
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnIndex {
   /// A list of Boolean values to determine the validity of the corresponding
