@@ -164,17 +164,15 @@ impl<'m> VariantMetadata<'m> {
         // + offset_size-byte `dictionary_size` field
         // + (dict_size + 1) offset entries, each `offset_size` bytes. (Table size, essentially)
         // 1 + offset_size + (dict_size + 1) * offset_size
+        // = (dict_size + 2) * offset_size + 1
         let offset_size = header.offset_size as usize; // Cheap to copy
 
-        let dictionary_key_start_byte = 1usize // 1-byte header
-            .checked_add(offset_size) // 1 + offset_size
-            .and_then(|p| {
-                dict_size
-                    .checked_add(1) // dict_size + 1
-                    .and_then(|n| n.checked_mul(offset_size))
-                    .and_then(|table_size| p.checked_add(table_size))
-            })
+        let dictionary_key_start_byte = dict_size
+            .checked_add(2)
+            .and_then(|n| n.checked_mul(offset_size))
+            .and_then(|n| n.checked_add(1))
             .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
+
         if bytes.len() < dictionary_key_start_byte {
             return Err(ArrowError::InvalidArgumentError(
                 "Metadata shorter than dictionary_size implies".to_string(),
@@ -233,8 +231,8 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Get the offset start and end range for a key by index
-    pub fn get_offsets_for_key_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
+    /// Helper method to get the offset start and end range for a key by index.
+    fn get_offsets_for_key_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
         if index >= self.dict_size {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
@@ -263,15 +261,15 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the key-name by index
     pub fn get_field_by(&self, index: usize) -> Result<&'m str, ArrowError> {
-        let range = self.get_offsets_for_key_by(index)?;
-        self.get_field_by_offset(range)
+        let offset_range = self.get_offsets_for_key_by(index)?;
+        self.get_field_by_offset(offset_range)
     }
 
     /// Gets the field using an offset (Range) - helper method to keep consistent API.
     pub(crate) fn get_field_by_offset(&self, offset: Range<usize>) -> Result<&'m str, ArrowError> {
         let dictionary_keys_bytes =
             slice_from_slice(self.bytes, self.dictionary_key_start_byte..self.bytes.len())?;
-        let result = string_from_slice(dictionary_keys_bytes, offset.start..offset.end)?;
+        let result = string_from_slice(dictionary_keys_bytes, offset)?;
 
         Ok(result)
     }
@@ -307,7 +305,7 @@ impl<'m> VariantMetadata<'m> {
     ) -> Result<impl Iterator<Item = Result<&'m str, ArrowError>>, ArrowError> {
         let iterator = self
             .offsets()
-            .map(move |range_res| range_res.and_then(|r| self.get_field_by_offset(r)));
+            .map(move |offset_range| self.get_field_by_offset(offset_range?));
         Ok(iterator)
     }
 }
@@ -352,39 +350,39 @@ impl<'m, 'v> VariantArray<'m, 'v> {
         let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
         let field_offset_size_minus_one = value_header & 0x03; // Last two bits
         let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
-
         // The size of the num_elements entry in the array value_data is 4 bytes if
         // is_large is true, otherwise 1 byte.
-        let num_elements_size = if is_large { 4 } else { 1 };
-
-        // Skip the header byte to read the num_elements
-        let num_elements_bytes = slice_from_slice(self.value, 1..num_elements_size + 1)?;
-        let num_elements = match num_elements_size {
-            1 => num_elements_bytes[0] as usize,
-            4 => {
-                let arr: [u8; 4] =
-                    num_elements_bytes
-                        .try_into()
-                        .map_err(|e: std::array::TryFromSliceError| {
-                            ArrowError::InvalidArgumentError(e.to_string())
-                        })?;
-                u32::from_le_bytes(arr) as usize
-            }
-            _ => {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Invalid num_elements_size".to_string(),
-                ))
-            }
+        let num_elements_size = match is_large {
+            true => OffsetSizeBytes::Four,
+            false => OffsetSizeBytes::One,
         };
+        // Skip the header byte to read the num_elements
+        // The size of the num_elements entry in the array value_data is 4 bytes if
+        // is_large is true, otherwise 1 byte.
+        let num_elements = num_elements_size.unpack_usize(self.value, 1, 0)?;
+        let first_offset_byte = 1 + num_elements_size as usize;
 
-        // Following the spec, there are "num_elements + 1" offsets in the value section
-        let first_value_byte = 1 + num_elements_size + (1 + num_elements) * offset_size as usize;
+        let overflow =
+            || ArrowError::InvalidArgumentError("Variant value_byte_length overflow".into());
+
+        // 1.  num_elements + 1
+        let n_offsets = num_elements.checked_add(1).ok_or_else(overflow)?;
+
+        // 2.  (num_elements + 1) * offset_size
+        let value_bytes = n_offsets
+            .checked_mul(offset_size as usize)
+            .ok_or_else(overflow)?;
+
+        // 3.  first_offset_byte + ...
+        let first_value_byte = first_offset_byte
+            .checked_add(value_bytes)
+            .ok_or_else(overflow)?;
 
         // Skip header and num_elements bytes to read the offsets
         let start_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, 1 + num_elements_size, index)?;
+            offset_size.unpack_usize(self.value, first_offset_byte, index)?;
         let end_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, 1 + num_elements_size, index + 1)?;
+            offset_size.unpack_usize(self.value, first_offset_byte, index + 1)?;
 
         // Read the value bytes from the offsets
         let variant_value_bytes = slice_from_slice(
@@ -446,10 +444,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     }
 
     pub fn as_null(&self) -> Option<()> {
-        match self {
-            Variant::Null => Some(()),
-            _ => None,
-        }
+        matches!(self, Variant::Null).then_some(())
     }
 
     pub fn as_boolean(&self) -> Option<bool> {
@@ -468,8 +463,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     }
 
     pub fn as_int8(&self) -> Option<i8> {
-        match self {
-            Variant::Int8(i) => Some(*i),
+        match *self {
+            Variant::Int8(i) => Some(i),
             // TODO: Add branches for type-widening/shortening when implemting rest of primitives for int
             // Variant::Int16(i) => i.try_into().ok(),
             // ...
@@ -494,10 +489,9 @@ impl<'m, 'v> From<i8> for Variant<'m, 'v> {
 
 impl<'m, 'v> From<bool> for Variant<'m, 'v> {
     fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
         }
     }
 }
