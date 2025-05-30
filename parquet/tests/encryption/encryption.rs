@@ -257,6 +257,77 @@ fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
 }
 
 #[test]
+fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+    let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
+
+    let footer_key = b"0123456789012345";
+    let key_retriever = TestKeyRetriever::new()
+        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
+        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
+        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+        .build()
+        .unwrap();
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    // read example data
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+
+    let temp_file = tempfile::tempfile().unwrap();
+    // write example data
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(
+        temp_file.try_clone().unwrap(),
+        metadata.schema().clone(),
+        Some(props),
+    )
+        .unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+
+    writer.close().unwrap();
+
+    let key_retriever = TestKeyRetriever::new()
+        .with_key("kf".to_owned(), "0123456789012345".as_bytes().to_vec())
+        .with_key("kc1".to_owned(), "1234567890123450".as_bytes().to_vec())
+        .with_key("kc2".to_owned(), "1234567890123451".as_bytes().to_vec());
+
+    let decryption_properties =
+        FileDecryptionProperties::with_key_retriever(Arc::new(key_retriever))
+            .build()
+            .unwrap();
+
+    // read example data
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties.clone());
+    let metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(temp_file, options).unwrap();
+    let batch_reader = builder.build().unwrap();
+    let batches = batch_reader
+        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
+        .unwrap();
+}
+
+#[test]
 fn test_non_uniform_encryption_with_key_retriever() {
     let test_data = arrow::util::test_util::parquet_test_data();
     let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
