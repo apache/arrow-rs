@@ -18,13 +18,18 @@ use std::{array::TryFromSliceError, ops::Range, str};
 
 use arrow_schema::ArrowError;
 
+use std::fmt::Debug;
+use std::slice::SliceIndex;
+
 #[inline]
-pub(crate) fn slice_from_slice(bytes: &[u8], range: Range<usize>) -> Result<&[u8], ArrowError> {
-    bytes.get(range.clone()).ok_or_else(|| {
+
+pub(crate) fn slice_from_slice<I: SliceIndex<[u8]> + Clone + Debug>(
+    bytes: &[u8],
+    index: I,
+) -> Result<&I::Output, ArrowError> {
+    bytes.get(index.clone()).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!(
-            "Tried to extract {} bytes at offset {} from {}-byte buffer",
-            range.end - range.start,
-            range.start,
+            "Tried to extract byte(s) {index:?} from {}-byte buffer",
             bytes.len(),
         ))
     })

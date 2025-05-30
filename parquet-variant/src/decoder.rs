@@ -17,7 +17,7 @@
 use arrow_schema::ArrowError;
 use std::array::TryFromSliceError;
 
-use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
+use crate::utils::{array_from_slice, first_byte_from_slice, string_from_slice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {

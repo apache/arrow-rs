@@ -180,30 +180,25 @@ impl<'m> VariantMetadata<'m> {
         }
 
         // Check that all offsets are monotonically increasing
-        let mut prev = None;
-        for (i, offset) in (0..=dict_size)
-            .map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1))
-            .enumerate()
-        {
+        let mut offsets = (0..=dict_size).map(|i| header.offset_size.unpack_usize(bytes, 1, i + 1));
+        let Some(Ok(mut end @ 0)) = offsets.next() else {
+            return Err(ArrowError::InvalidArgumentError(
+                "First offset is non-zero".to_string(),
+            ));
+        };
+
+        for offset in offsets {
             let offset = offset?;
-            if i == 0 && offset != 0 {
-                return Err(ArrowError::InvalidArgumentError(
-                    "First offset is non-zero".to_string(),
-                ));
-            }
-            if prev.is_some_and(|prev| prev >= offset) {
+            if end >= offset {
                 return Err(ArrowError::InvalidArgumentError(
                     "Offsets are not monotonically increasing".to_string(),
                 ));
             }
-            prev = Some(offset);
+            end = offset;
         }
 
-        // Check that the final offset equals the length of the
-        // dictionary-string section.
-        let dict_block_len = bytes.len() - dictionary_key_start_byte; // actual length of the string block
-
-        if prev != Some(dict_block_len) {
+        // Verify the buffer covers the whole dictionary-string section
+        if end > bytes.len() - dictionary_key_start_byte {
             // `prev` holds the last offset seen still
             return Err(ArrowError::InvalidArgumentError(
                 "Last offset does not equal dictionary length".to_string(),
