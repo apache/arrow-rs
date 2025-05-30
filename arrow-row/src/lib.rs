@@ -1232,13 +1232,13 @@ impl LengthTracker {
                 fixed_length,
                 lengths,
             } => {
-                offsets.reserve(lengths.len());
-
                 let mut acc = initial_offset;
-                for length in lengths {
-                    offsets.push(acc);
-                    acc += length + fixed_length; // todo: overflow check (?)
-                }
+
+                offsets.extend(lengths.iter().map(|length| {
+                    let current = acc;
+                    acc += length + fixed_length;
+                    current
+                }));
 
                 acc
             }
