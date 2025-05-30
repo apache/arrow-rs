@@ -17,8 +17,12 @@
 
 //! Interleave elements from multiple arrays
 
-use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use crate::dictionary::{
+    merge_dictionary_values, should_merge_dictionary_values, ShouldMergeValues,
+};
+use arrow_array::builder::{
+    BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -36,8 +40,8 @@ macro_rules! primitive_helper {
 }
 
 macro_rules! dict_helper {
-    ($t:ty, $values:expr, $indices:expr) => {
-        Ok(Arc::new(interleave_dictionaries::<$t>($values, $indices)?) as _)
+    ($t:ty, $value_type:expr, $values:expr, $indices:expr) => {
+        interleave_dictionaries::<$t>($value_type.as_ref(), $values, $indices)
     };
 }
 
@@ -101,8 +105,8 @@ pub fn interleave(
         DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
         DataType::BinaryView => interleave_views::<BinaryViewType>(values, indices),
         DataType::Utf8View => interleave_views::<StringViewType>(values, indices),
-        DataType::Dictionary(k, _) => downcast_integer! {
-            k.as_ref() => (dict_helper, values, indices),
+        DataType::Dictionary(k, v) => downcast_integer! {
+            k.as_ref() => (dict_helper, v, values, indices),
             _ => unreachable!("illegal dictionary key type {k}")
         },
         _ => interleave_fallback(values, indices)
@@ -191,14 +195,45 @@ fn interleave_bytes<T: ByteArrayType>(
 }
 
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
+    value_type: &DataType,
     arrays: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
-    if !should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
-        return interleave_fallback(arrays, indices);
+    let is_overflow = match should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
+        ShouldMergeValues::ConcatWillOverflow => true,
+        ShouldMergeValues::Yes => false,
+        ShouldMergeValues::No => {
+            return interleave_fallback(arrays, indices);
+        }
+    };
+
+    macro_rules! primitive_dict_helper {
+        ($t:ty) => {
+            merge_interleave_primitive_dictionaries::<K, $t>(&dictionaries, indices)
+        };
     }
 
+    downcast_primitive! {
+        value_type => (primitive_dict_helper),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+            merge_interleave_byte_dictionaries(&dictionaries, indices)
+        },
+        // merge not yet implemented for this type and it's not going to overflow, so fall back
+        // to concatenating values
+        _ if !is_overflow => interleave_fallback(arrays, indices),
+        other => Err(ArrowError::NotYetImplemented(format!(
+            "interleave of dictionaries would overflow key type {key_type:?} and \
+             value type {other:?} not yet supported for merging",
+            key_type = K::DATA_TYPE,
+        )))
+    }
+}
+
+fn merge_interleave_byte_dictionaries<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
     let masks: Vec<_> = dictionaries
         .iter()
         .enumerate()
@@ -215,7 +250,7 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
         })
         .collect();
 
-    let merged = merge_dictionary_values(&dictionaries, Some(&masks))?;
+    let merged = merge_dictionary_values(dictionaries, Some(&masks))?;
 
     // Recompute keys
     let mut keys = PrimitiveBuilder::<K>::with_capacity(indices.len());
@@ -231,6 +266,26 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     }
     let array = unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
     Ok(Arc::new(array))
+}
+
+fn merge_interleave_primitive_dictionaries<K: ArrowDictionaryKeyType, V: ArrowPrimitiveType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let dict_accessors: Vec<_> = dictionaries
+        .iter()
+        .map(|d| d.downcast_dict::<PrimitiveArray<V>>().unwrap())
+        .collect();
+    let mut builder = PrimitiveDictionaryBuilder::<K, V>::with_capacity(indices.len(), 0);
+    for (a, b) in indices {
+        let dict = dict_accessors[*a];
+        if dict.is_valid(*b) {
+            builder.append_value(dict.value(*b));
+        } else {
+            builder.append_null();
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn interleave_views<T: ByteViewType>(
@@ -461,6 +516,63 @@ mod tests {
             .collect();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_dictionary_overflows() {
+        // each array has length equal to the full dictionary key space
+        let len: usize = usize::try_from(i8::MAX).unwrap();
+
+        let a = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(Int8Array::from_value(0, len)),
+        );
+        let b = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(Int8Array::from_value(1, len)),
+        );
+
+        // Case 1: with a single input array, should _never_ overflow
+        let values = interleave(&[&a], &[(0, 2), (0, 2)]).unwrap();
+        let v = values.as_dictionary::<Int8Type>();
+        let vc = v.downcast_dict::<Int8Array>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &[0, 0]);
+
+        // Case 2: two arrays
+        // Should still not overflow, there are only two values
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 1)]).unwrap();
+        let v = values.as_dictionary::<Int8Type>();
+        let vc = v.downcast_dict::<Int8Array>().unwrap();
+        let collected: Vec<_> = vc.into_iter().map(Option::unwrap).collect();
+        assert_eq!(&collected, &[0, 0, 1]);
+    }
+
+    #[test]
+    fn test_unsupported_interleave_dictionary_overflow() {
+        // each array has length equal to the full dictionary key space
+        let len: usize = usize::try_from(i8::MAX).unwrap();
+
+        let a = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+        let b = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_value(0, len),
+            Arc::new(NullArray::new(len)),
+        );
+
+        // Case 1: with a single input array, should _never_ overflow
+        interleave(&[&a], &[(0, 2), (0, 2)]).unwrap();
+
+        // Case 2: two arrays
+        // Will fail to merge values on unsupported datatype
+        let values = interleave(&[&a, &b], &[(0, 2), (0, 2), (1, 1)]).unwrap_err();
+        assert_eq!(
+            values.to_string(),
+            "Not yet implemented: qinterleave of dictionaries would overflow key type Int8 and \
+             value type Null not yet supported for merging"
+        );
     }
 
     #[test]
