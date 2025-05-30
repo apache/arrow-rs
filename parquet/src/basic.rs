@@ -228,6 +228,8 @@ pub enum LogicalType {
     Uuid,
     /// A 16-bit floating point number.
     Float16,
+    /// A Variant.
+    Variant,
 }
 
 // ----------------------------------------------------------------------
@@ -529,6 +531,8 @@ pub enum SortOrder {
     UNSIGNED,
     /// Comparison is undefined.
     UNDEFINED,
+    /// Use IEEE 754 total order.
+    TOTAL_ORDER,
 }
 
 impl SortOrder {
@@ -549,14 +553,40 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    /// Column ordering to use for floating point types.
+    IEEE_754_TOTAL_ORDER,
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
     UNDEFINED,
 }
 
 impl ColumnOrder {
-    /// Returns sort order for a physical/logical type.
+    /// Returns the sort order for a physical/logical type.
+    ///
+    /// If `ieee754_total_order` is `true` then IEEE 754 total order will be used for floating point
+    /// types.
     pub fn get_sort_order(
+        logical_type: Option<LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+        ieee754_total_order: bool,
+    ) -> SortOrder {
+        // check for floating point types, then fall back to type defined order
+        match logical_type {
+            Some(LogicalType::Float16) if ieee754_total_order => SortOrder::TOTAL_ORDER,
+            _ => match physical_type {
+                Type::FLOAT | Type::DOUBLE if ieee754_total_order => SortOrder::TOTAL_ORDER,
+                _ => ColumnOrder::get_type_defined_sort_order(
+                    logical_type,
+                    converted_type,
+                    physical_type,
+                ),
+            },
+        }
+    }
+
+    /// Returns the type defined sort order for a physical/logical type.
+    pub fn get_type_defined_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
@@ -579,6 +609,7 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Variant => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -647,6 +678,7 @@ impl ColumnOrder {
     pub fn sort_order(&self) -> SortOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
+            ColumnOrder::IEEE_754_TOTAL_ORDER => SortOrder::TOTAL_ORDER,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
         }
     }
@@ -841,6 +873,7 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
+            parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
         }
     }
 }
@@ -882,6 +915,7 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
+            LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
         }
     }
 }
@@ -931,9 +965,10 @@ impl From<Option<LogicalType>> for ConvertedType {
                 },
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
-                    ConvertedType::NONE
-                }
+                LogicalType::Uuid
+                | LogicalType::Float16
+                | LogicalType::Variant
+                | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
         }
@@ -2134,7 +2169,11 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
+                    ColumnOrder::get_type_defined_sort_order(
+                        Some(tpe),
+                        ConvertedType::NONE,
+                        Type::BYTE_ARRAY
+                    ),
                     expected_order
                 );
             }
@@ -2229,7 +2268,7 @@ mod tests {
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(None, tpe, Type::BYTE_ARRAY),
+                    ColumnOrder::get_type_defined_sort_order(None, tpe, Type::BYTE_ARRAY),
                     expected_order
                 );
             }
