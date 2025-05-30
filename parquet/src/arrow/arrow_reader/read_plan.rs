@@ -112,10 +112,9 @@ impl ReadPlanBuilder {
             };
         }
 
-        let raw = RowSelection::from_filters(&filters);
         self.selection = match self.selection.take() {
-            Some(selection) => Some(selection.and_then(&raw)),
-            None => Some(raw),
+            Some(selection) => Some(selection.apply_filters(&filters)),
+            None => Some(RowSelection::from_filters(&filters)),
         };
         Ok(self)
     }
