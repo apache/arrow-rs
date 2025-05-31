@@ -51,6 +51,7 @@ impl ReadPlanBuilder {
     }
 
     /// Returns the current selection, if any
+    #[allow(dead_code)]
     pub(crate) fn selection(&self) -> Option<&RowSelection> {
         self.selection.as_ref()
     }
@@ -75,6 +76,7 @@ impl ReadPlanBuilder {
     }
 
     /// Returns the number of rows selected, or `None` if all rows are selected.
+    #[allow(dead_code)]
     pub(crate) fn num_rows_selected(&self) -> Option<usize> {
         self.selection.as_ref().map(|s| s.row_count())
     }
