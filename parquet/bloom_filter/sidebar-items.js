@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BITSET_MAX_LENGTH","BITSET_MIN_LENGTH","SALT","SBBF_HEADER_SIZE_ESTIMATE","SEED"],"fn":["chunk_read_bloom_filter_header_and_offset","hash_as_bytes","num_of_bits_from_ndv_fpp","optimal_num_of_bytes","read_bloom_filter_header_and_length"],"struct":["Block","Sbbf"]};
