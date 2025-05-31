@@ -31,7 +31,9 @@ use chrono::Datelike;
 use chrono::{Duration, TimeDelta};
 use half::f16;
 use parquet::arrow::ArrowWriter;
-use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::properties::{
+    EnabledStatistics, WriterProperties, DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
+};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -1045,8 +1047,8 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page);
     if matches!(scenario, Scenario::TruncatedUTF8) {
-        // The same as default `column_statistics_truncate_length` to check both with one value
-        builder = builder.set_statistics_truncate_length(Some(64));
+        // The same as default `column_index_truncate_length` to check both stats with one value
+        builder = builder.set_statistics_truncate_length(DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH);
     }
     let props = builder.build();
 
