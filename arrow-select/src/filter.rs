@@ -20,13 +20,13 @@
 use std::ops::AddAssign;
 use std::sync::Arc;
 
-use arrow_array::builder::BooleanBufferBuilder;
+use arrow_array::builder::{BooleanBufferBuilder, GenericByteViewBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, NullBuffer, RunEndBuffer};
+use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer, NullBufferBuilder, RunEndBuffer};
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
@@ -107,6 +107,31 @@ impl Iterator for IndexIterator<'_> {
     }
 }
 
+/// Extension trait for `ArrayBuilder`s which adds add a method for appending rows from
+/// an array based on a filter.
+///
+/// Values from `array` are copied into the builder where the corresponding predicate
+/// value is 1.
+///
+/// This is the equivalent of calling [`filter`] and then [`concat`] on the resulting
+/// arrays, but is more efficient as it avoids creating intermediate arrays.
+///
+/// See also:
+/// - InProgressRecordBatchBuilder (TODO add)
+pub trait ArrayBuilderExtFilter {
+    /// Appends all rows from `array` to the current arrays where `predicate` is
+    /// `true`.
+    ///
+    /// See [`FilterPredicate`] for more details on how the predicate is applied.
+    ///
+    /// Panic's if array is not the correct type for this builder.
+    fn append_filtered(
+        &mut self,
+        array: &dyn Array,
+        predicate: &FilterPredicate,
+    ) -> Result<(), ArrowError>;
+}
+
 /// Counts the number of set bits in `filter`
 fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
@@ -137,7 +162,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
 
-    if multiple_arrays(values.data_type()) {
+    if FilterBuilder::multiple_arrays(values.data_type()) {
         // Only optimize if filtering more than one array
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
@@ -146,16 +171,6 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     let predicate = filter_builder.build();
 
     filter_array(values, &predicate)
-}
-
-fn multiple_arrays(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Struct(fields) => {
-            fields.len() > 1 || fields.len() == 1 && multiple_arrays(fields[0].data_type())
-        }
-        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
-        _ => false,
-    }
 }
 
 /// Returns a filtered [RecordBatch] where the corresponding elements of
@@ -237,6 +252,19 @@ impl FilterBuilder {
             strategy: self.strategy,
         }
     }
+
+    ///  Returns true if the data type contains multiple arrays and hence would
+    /// benefit from [`FilterBuilder::optimize`]
+    pub fn multiple_arrays(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Struct(fields) => {
+                fields.len() > 1
+                    || fields.len() == 1 && Self::multiple_arrays(fields[0].data_type())
+            }
+            DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+            _ => false,
+        }
+    }
 }
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
@@ -281,6 +309,8 @@ impl IterationStrategy {
 }
 
 /// A filtering predicate that can be applied to an [`Array`]
+///
+/// See [`FilterBuilder`] to create a [`FilterPredicate`].
 #[derive(Debug)]
 pub struct FilterPredicate {
     filter: BooleanArray,
@@ -300,7 +330,95 @@ impl FilterPredicate {
     }
 }
 
-fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
+/// Appends the nulls from array for any filtered rows to the `null_buffer_builder`
+///
+/// Panics if the strategy is
+/// [`IterationStrategy::All`] or [`IterationStrategy::None`], which must be handled by the caller
+fn append_filtered_nulls(
+    null_buffer_builder: &mut NullBufferBuilder,
+    array: &dyn Array,
+    predicate: &FilterPredicate,
+) {
+    assert!(!matches!(
+        predicate.strategy,
+        IterationStrategy::All | IterationStrategy::None
+    ));
+
+    let Some(nulls) = array.nulls() else {
+        // No nulls in the source array, so it anything selected by filter will be non null as well
+        null_buffer_builder.append_n_non_nulls(predicate.count());
+        return;
+    };
+
+    // Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
+    // TODO: maybe this could be improved to avoid materializing the temporary buffer
+    let nulls = filter_bits(nulls.inner(), predicate);
+    let nulls = NullBuffer::from(BooleanBuffer::new(nulls, 0, predicate.count));
+
+    null_buffer_builder.append_buffer(&nulls);
+}
+
+impl<T: ArrowPrimitiveType> ArrayBuilderExtFilter for PrimitiveBuilder<T> {
+    fn append_filtered(
+        &mut self,
+        array: &dyn Array,
+        predicate: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        // todo reserve space for the new values
+        // self.reserve(predicate.count);
+
+        let array = array.as_primitive::<T>();
+        let values = array.values();
+
+        assert!(values.len() >= predicate.filter.len());
+
+        let (values_builder, null_buffer_builder) = self.inner_mut();
+        match &predicate.strategy {
+            IterationStrategy::SlicesIterator => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                for (start, end) in SlicesIterator::new(&predicate.filter) {
+                    values_builder.append_slice(&values[start..end]);
+                }
+            }
+            IterationStrategy::Slices(slices) => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                for (start, end) in slices {
+                    values_builder.append_slice(&values[*start..*end]);
+                }
+            }
+            IterationStrategy::IndexIterator => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                let iter =
+                    IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
+                // SAFETY: IndexIterator is trusted length
+                unsafe { values_builder.append_trusted_len_iter(iter) }
+            }
+            IterationStrategy::Indices(indices) => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                let iter = indices.iter().map(|x| values[*x]);
+                // safety: Vec + Map knows its length correctly
+                unsafe {
+                    values_builder.append_trusted_len_iter(iter);
+                }
+            }
+            IterationStrategy::All => {
+                self.append_array(array); // Also appends nulls
+            }
+            IterationStrategy::None => {}
+        }
+        let (values_builder, null_buffer_builder) = self.inner_mut();
+        assert_eq!(values_builder.len(), null_buffer_builder.len());
+        Ok(())
+    }
+}
+
+/// filter an [`Array`] with a pre-created [`FilterPredicate`]
+///
+/// See [`filter`] for a higher level API
+pub fn filter_array(
+    values: &dyn Array,
+    predicate: &FilterPredicate,
+) -> Result<ArrayRef, ArrowError> {
     if predicate.filter.len() > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
@@ -459,6 +577,9 @@ fn filter_null_mask(
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
+///
+/// Panics for `IterationStrategy::All` or `IterationStrategy::None` which must
+/// be handled by the caller
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
@@ -493,7 +614,8 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             }
             builder.into()
         }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+        IterationStrategy::All => unreachable!(),
+        IterationStrategy::None => unreachable!(),
     }
 }
 
@@ -513,56 +635,18 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::from(data)
 }
 
-#[inline(never)]
-fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
-    assert!(values.len() >= predicate.filter.len());
-
-    match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                buffer.extend_from_slice(&values[start..end]);
-            }
-            buffer.into()
-        }
-        IterationStrategy::Slices(slices) => {
-            let mut buffer = Vec::with_capacity(predicate.count);
-            for (start, end) in slices {
-                buffer.extend_from_slice(&values[*start..*end]);
-            }
-            buffer.into()
-        }
-        IterationStrategy::IndexIterator => {
-            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
-
-            // SAFETY: IndexIterator is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
-        }
-        IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| values[*x]);
-            iter.collect::<Vec<_>>().into()
-        }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
-    }
-}
-
 /// `filter` implementation for primitive arrays
 fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
-    let values = array.values();
-    let buffer = filter_native(values, predicate);
-    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
-        .len(predicate.count)
-        .add_buffer(buffer);
+    let builder = PrimitiveBuilder::<T>::with_capacity(predicate.count);
+    let mut builder = unsafe { builder.with_data_type_unchecked(array.data_type().clone()) };
+    builder
+        .append_filtered(array, predicate)
+        .expect("Failed to append filtered values");
 
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
-    let data = unsafe { builder.build_unchecked() };
-    PrimitiveArray::from(data)
+    builder.build()
 }
 
 /// [`FilterBytes`] is created from a source [`GenericByteArray`] and can be
@@ -707,23 +791,82 @@ where
     GenericByteArray::from(data)
 }
 
+impl<T: ByteViewType> ArrayBuilderExtFilter for GenericByteViewBuilder<T> {
+    fn append_filtered(
+        &mut self,
+        array: &dyn Array,
+        predicate: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        // todo reserve space for the new values
+        // self.reserve(predicate.count);
+
+        let array = array.as_byte_view::<T>();
+        let views = array.views();
+        assert!(views.len() >= predicate.filter.len());
+
+        // Note, this is basically the same as `filter_native` -- TODO figure out how to reuse that code (maybe also for filter_primitive)
+        let (view_builder, null_buffer_builder) = self.inner_mut();
+        let starting_view = view_builder.len();
+        match &predicate.strategy {
+            IterationStrategy::SlicesIterator => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                for (start, end) in SlicesIterator::new(&predicate.filter) {
+                    view_builder.append_slice(&views[start..end]);
+                }
+            }
+            IterationStrategy::Slices(slices) => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                for (start, end) in slices {
+                    view_builder.append_slice(&views[*start..*end]);
+                }
+            }
+            IterationStrategy::IndexIterator => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| views[x]);
+
+                // SAFETY: IndexIterator is trusted length
+                unsafe { view_builder.append_trusted_len_iter(iter) }
+            }
+            IterationStrategy::Indices(indices) => {
+                append_filtered_nulls(null_buffer_builder, array, predicate);
+                let iter = indices.iter().map(|x| views[*x]);
+                // Safety: Vec + Map knows its length correctly
+                unsafe {
+                    view_builder.append_trusted_len_iter(iter);
+                }
+            }
+            IterationStrategy::All => {
+                // handles nulls and compaction as well
+                self.append_array(array);
+                return Ok(());
+            }
+            IterationStrategy::None => {
+                return Ok(());
+            }
+        }
+
+        // Flush the in-progress buffer
+        unsafe {
+            // All views were coped from `array`
+            self.finalize_copied_views(starting_view, array);
+        }
+
+        Ok(())
+    }
+}
+
 /// `filter` implementation for byte view arrays.
 fn filter_byte_view<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
     predicate: &FilterPredicate,
 ) -> GenericByteViewArray<T> {
-    let new_view_buffer = filter_native(array.views(), predicate);
-
-    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
-        .len(predicate.count)
-        .add_buffer(new_view_buffer)
-        .add_buffers(array.data_buffers().to_vec());
-
-    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
-    }
-
-    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(predicate.count)
+        // turn off string copy coalescing
+        .with_target_buffer_load_factor(None);
+    builder
+        .append_filtered(array, predicate)
+        .expect("Failed to append filtered values");
+    builder.finish()
 }
 
 fn filter_fixed_size_binary(

@@ -28,7 +28,7 @@ use hashbrown::HashTable;
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -84,6 +84,18 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
     block_size: BlockSizeGrowthStrategy,
+    /// When appending views from an existing Array, the builder will copy
+    /// the underlying strings into a new buffer if the array is sparse.
+    ///
+    /// If None, the builder will not copy long strings
+    ///
+    /// If Some, the builder will *copy* long strings if the total size of the used
+    /// buffer bytes / the total size is less than than `append_load_factor`
+    ///
+    /// So if `append_load_factor` is `Some(0.5)`, the builder will copy long
+    /// strings if the total size of the used buffers is less than 50% of the
+    /// total size of the buffers.
+    target_buffer_load_factor: Option<f32>,
     /// Some if deduplicating strings
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
@@ -103,12 +115,32 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             null_buffer_builder: NullBufferBuilder::new(capacity),
             completed: vec![],
             in_progress: vec![],
+            target_buffer_load_factor: Some(0.5),
             block_size: BlockSizeGrowthStrategy::Exponential {
                 current_size: STARTING_BLOCK_SIZE,
             },
             string_tracker: None,
             phantom: Default::default(),
         }
+    }
+
+    /// Set the target buffer load factor for appending views from existing arrays
+    ///
+    /// Defaults to 50% if not set.
+    ///
+    /// Panics if the load factor is not between 0 and 1.
+    pub fn with_target_buffer_load_factor(
+        mut self,
+        target_buffer_load_factor: Option<f32>,
+    ) -> Self {
+        if let Some(load_factor) = target_buffer_load_factor {
+            assert!(
+                load_factor > 0.0 && load_factor <= 1.0,
+                "Target buffer load factor must be between 0 and 1"
+            );
+        }
+        self.target_buffer_load_factor = target_buffer_load_factor;
+        self
     }
 
     /// Set a fixed buffer size for variable length strings
@@ -236,7 +268,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Flushes the in progress block if any
     #[inline]
-    fn flush_in_progress(&mut self) {
+    pub fn flush_in_progress(&mut self) {
         if !self.in_progress.is_empty() {
             let f = Buffer::from_vec(std::mem::take(&mut self.in_progress));
             self.push_completed(f)
@@ -405,6 +437,122 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             None => 0,
         };
         buffer_size + in_progress + tracker + views + null
+    }
+
+    /// Append all views from the given array into the inprogress builder
+    ///
+    /// Will copy the underlying views based on the value of target_buffer_load_factor
+    pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
+        let num_rows = array.len();
+        if num_rows == 0 {
+            return; // nothing to do
+        }
+
+        let null_buffer_builder = &mut self.null_buffer_builder;
+        let views = &mut self.views_builder;
+
+        // Copy nulls
+        if let Some(nulls) = array.nulls() {
+            null_buffer_builder.append_buffer(nulls);
+        } else {
+            null_buffer_builder.append_n_non_nulls(array.len());
+        }
+
+        // Copy views from the source array
+        let starting_view = views.len();
+        views.append_slice(array.views());
+
+        // Safety we only appended views from array
+        unsafe {
+            self.finalize_copied_views(starting_view, array);
+        }
+    }
+
+    /// Finalizes the views and buffers of the array
+    ///
+    /// This must be called after appending views from `array` to the builder.
+    ///
+    /// The views from `array` will point to the old buffers. This function
+    /// updates all views starting at `starting_view` to point to the new
+    /// buffers or copies the values into a new buffer if the array is sparse.
+    ///
+    /// # Safety
+    ///
+    /// * self.views[starting_view..] must be valid views from `array`.
+    pub unsafe fn finalize_copied_views(
+        &mut self,
+        starting_view: usize,
+        array: &GenericByteViewArray<T>,
+    ) {
+        // Flush the in-progress buffer
+        self.flush_in_progress();
+
+        let buffers = &mut self.completed;
+        let views = &mut self.views_builder;
+
+        let mut used_buffer_size = 0;
+        let use_exising_buffers = match self.target_buffer_load_factor {
+            None => true,
+            Some(load_factor) => {
+                used_buffer_size = array.minimum_buffer_size();
+                let actual_buffer_size = array.get_buffer_memory_size();
+                // If the total size of the buffers is less than the load factor, copy them existing buffers
+                used_buffer_size >= (actual_buffer_size as f32 * load_factor) as usize
+            }
+        };
+
+        if use_exising_buffers {
+            let num_buffers_before: u32 = buffers.len().try_into().expect("buffer count overflow");
+            buffers.extend_from_slice(array.data_buffers()); //
+
+            // If there were no existing buffers, the views do not need to be updated
+            // as the buffers of `array` are the same
+            if num_buffers_before == 0 {
+                return;
+            }
+
+            // Update any views that point to the old buffers
+            for v in views.as_slice_mut()[starting_view..].iter_mut() {
+                let view_len = *v as u32;
+                // if view_len is 12 or less, data is inlined and doesn't need an update
+                // if view is 12 or more, need to update the buffer offset
+                if view_len > 12 {
+                    let mut view = ByteView::from(*v);
+                    let new_buffer_index = num_buffers_before + view.buffer_index;
+                    view.buffer_index = new_buffer_index;
+                    *v = view.into(); // update view
+                }
+            }
+        } else {
+            // otherwise the array is sparse so copy the data into a single new
+            // buffer as well as updating the views
+            let mut new_buffer: Vec<u8> = Vec::with_capacity(used_buffer_size);
+            let new_buffer_index = buffers.len() as u32; // making one new buffer
+                                                         // Update any views that point to the old buffers.
+            for v in views.as_slice_mut()[starting_view..].iter_mut() {
+                let view_len = *v as u32;
+                // if view_len is 12 or less, data is inlined and doesn't need an update
+                // if view is 12 or more, need to copy the data to the new buffer and update the index and buffer offset
+                if view_len > 12 {
+                    let mut view = ByteView::from(*v);
+                    let old_buffer = &array.data_buffers()[view.buffer_index as usize].as_slice();
+
+                    let new_offset = new_buffer.len();
+                    let old_offset = view.offset as usize;
+                    let str_data = &old_buffer[old_offset..old_offset + view_len as usize];
+                    new_buffer.extend_from_slice(str_data);
+                    view.offset = new_offset as u32;
+                    view.buffer_index = new_buffer_index;
+                    *v = view.into(); // update view
+                }
+            }
+            buffers.push(new_buffer.into());
+        }
+    }
+
+    /// Returns the inner views and null buffer builders and buffers.
+    pub fn inner_mut(&mut self) -> (&mut BufferBuilder<u128>, &mut NullBufferBuilder) {
+        (&mut self.views_builder, &mut self.null_buffer_builder)
     }
 }
 

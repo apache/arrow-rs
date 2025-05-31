@@ -187,7 +187,17 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             T::DATA_TYPE,
             data_type
         );
-        Self { data_type, ..self }
+        // Type is Checked above
+        unsafe { self.with_data_type_unchecked(data_type) }
+    }
+
+    /// Set the data type of the builder without checking if it is compatible
+    ///
+    /// # Safety
+    /// the DataType must be compatible with the type `T`
+    pub unsafe fn with_data_type_unchecked(mut self, data_type: DataType) -> Self {
+        self.data_type = data_type;
+        self
     }
 
     /// Returns the capacity of this builder measured in slots of type `T`
@@ -294,10 +304,43 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         self.values_builder.append_trusted_len_iter(iter);
     }
 
+    /// Builds the [`PrimitiveArray`] and consumes this builder.
+    pub fn build(self) -> PrimitiveArray<T> {
+        let len = self.len();
+        let Self {
+            values_builder,
+            null_buffer_builder,
+            data_type,
+        } = self;
+        let nulls = null_buffer_builder.build();
+
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                values_builder.len(),
+                "nulls/values length mismatch"
+            );
+        }
+        let builder = ArrayData::builder(data_type)
+            .len(len)
+            .add_buffer(values_builder.build())
+            .nulls(nulls);
+
+        let array_data = unsafe { builder.build_unchecked() };
+        PrimitiveArray::<T>::from(array_data)
+    }
+
     /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
         let nulls = self.null_buffer_builder.finish();
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                self.values_builder.len(),
+                "nulls/values length mismatch"
+            );
+        }
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(self.values_builder.finish())
@@ -312,6 +355,18 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let len = self.len();
         let nulls = self.null_buffer_builder.finish_cloned();
         let values_buffer = Buffer::from_slice_ref(self.values_builder.as_slice());
+        // Verify values and nulls buffers are the same length
+        // TODO for some reason this fails in the FixedSizeListBuilder
+        /*
+        if let Some(nulls) = &nulls {
+            assert_eq!(
+                nulls.len(),
+                values_buffer.len(),
+                "nulls/values length mismatch"
+            );
+        }
+
+         */
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
             .add_buffer(values_buffer)
@@ -347,6 +402,13 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             self.values_builder.as_slice_mut(),
             self.null_buffer_builder.as_slice_mut(),
         )
+    }
+
+    /// Returns the inner value and null buffer builders.
+    ///
+    /// These must be kept in sync
+    pub fn inner_mut(&mut self) -> (&mut BufferBuilder<T::Native>, &mut NullBufferBuilder) {
+        (&mut self.values_builder, &mut self.null_buffer_builder)
     }
 }
 
