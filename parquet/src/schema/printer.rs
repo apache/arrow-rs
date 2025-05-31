@@ -326,6 +326,9 @@ fn print_logical_and_converted(
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
+            LogicalType::Variant => "VARIANT".to_string(),
+            LogicalType::Geometry => "GEOMETRY".to_string(),
+            LogicalType::Geography => "GEOGRAPHY".to_string(),
             LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
