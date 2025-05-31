@@ -227,6 +227,10 @@ struct Args {
     #[clap(long)]
     dictionary_enabled: Option<bool>,
 
+    /// Sets best effort maximum dictionary page size, in bytes.
+    #[clap(long)]
+    dictionary_page_size_limit: Option<usize>,
+
     /// Sets maximum number of rows in a row group.
     #[clap(long)]
     max_row_group_size: Option<usize>,
@@ -244,10 +248,6 @@ struct Args {
     /// Applicable only if statistics are enabled.
     #[clap(long)]
     max_statistics_size: Option<usize>,
-
-    /// Sets best effort maximum dictionary page size, in bytes.
-    #[clap(long)]
-    dictionary_page_size_limit: Option<usize>,
 
     /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
