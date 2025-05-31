@@ -215,13 +215,17 @@ struct Args {
     #[clap(short, long)]
     output: String,
 
-    /// Compression used for any column.
+    /// Compression used for all columns.
     #[clap(long, value_enum)]
     compression: Option<CompressionArgs>,
 
-    /// Encoding used for any column, if dictionary is not enabled.
+    /// Encoding used for all columns, if dictionary is not enabled.
     #[clap(long, value_enum)]
     encoding: Option<EncodingArgs>,
+
+    /// Sets flag to enable/disable dictionary encoding for all columns.
+    #[clap(long)]
+    dictionary_enabled: Option<bool>,
 
     /// Sets maximum number of rows in a row group.
     #[clap(long)]
@@ -235,7 +239,7 @@ struct Args {
     #[clap(long)]
     data_page_size_limit: Option<usize>,
 
-    /// Sets max statistics size for any column.
+    /// Sets max statistics size for all columns.
     ///
     /// Applicable only if statistics are enabled.
     #[clap(long)]
@@ -245,15 +249,15 @@ struct Args {
     #[clap(long)]
     dictionary_page_size_limit: Option<usize>,
 
-    /// Sets whether bloom filter is enabled for any column.
+    /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
     bloom_filter_enabled: Option<bool>,
 
-    /// Sets bloom filter false positive probability (fpp) for any column.
+    /// Sets bloom filter false positive probability (fpp) for all columns.
     #[clap(long)]
     bloom_filter_fpp: Option<f64>,
 
-    /// Sets number of distinct values (ndv) for bloom filter for any column.
+    /// Sets number of distinct values (ndv) for bloom filter for all columns.
     #[clap(long)]
     bloom_filter_ndv: Option<u64>,
 
@@ -261,11 +265,7 @@ struct Args {
     #[clap(long)]
     bloom_filter_position: Option<BloomFilterPositionArgs>,
 
-    /// Sets flag to enable/disable dictionary encoding for any column.
-    #[clap(long)]
-    dictionary_enabled: Option<bool>,
-
-    /// Sets flag to enable/disable statistics for any column.
+    /// Sets flag to enable/disable statistics for all columns.
     #[clap(long)]
     statistics_enabled: Option<EnabledStatisticsArgs>,
 
@@ -303,19 +303,18 @@ fn main() {
     if let Some(value) = args.compression {
         writer_properties_builder = writer_properties_builder.set_compression(value.into());
     }
-    {
-        // setup encoding
-        if let Some(value) = args.dictionary_enabled {
-            writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
-        }
-        if let Some(value) = args.dictionary_page_size_limit {
-            writer_properties_builder =
-                writer_properties_builder.set_dictionary_page_size_limit(value);
-        }
-        if let Some(value) = args.encoding {
-            writer_properties_builder = writer_properties_builder.set_encoding(value.into());
-        }
+
+    // setup encoding
+    if let Some(value) = args.encoding {
+        writer_properties_builder = writer_properties_builder.set_encoding(value.into());
     }
+    if let Some(value) = args.dictionary_enabled {
+        writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
+    }
+    if let Some(value) = args.dictionary_page_size_limit {
+        writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
+    }
+
     if let Some(value) = args.max_row_group_size {
         writer_properties_builder = writer_properties_builder.set_max_row_group_size(value);
     }
