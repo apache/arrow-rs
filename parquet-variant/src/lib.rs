@@ -26,3 +26,16 @@
 //! If you are interested in helping, you can find more information on the GitHub [Variant issue]
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
+
+// TODO: dead code removal
+#[allow(dead_code)]
+mod decoder;
+// TODO: dead code removal
+#[allow(dead_code)]
+mod variant;
+// TODO: dead code removal
+#[allow(dead_code)]
+mod utils;
+
+#[cfg(test)]
+mod test_variant;
