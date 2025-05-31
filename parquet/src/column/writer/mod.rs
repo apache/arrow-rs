@@ -3006,7 +3006,10 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let props = Default::default();
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(None) // disable column index truncation
+            .build()
+            .into();
         let mut writer = get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
 
         let mut data = vec![FixedLenByteArray::default(); 3];
