@@ -91,6 +91,8 @@ enum Scenario {
     PeriodsInColumnNames,
     StructArray,
     UTF8,
+    /// UTF8 with max and min values truncated
+    TruncatedUTF8,
     UTF8View,
     BinaryView,
 }
@@ -987,6 +989,17 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_utf8_batch(vec![Some("e"), Some("f"), Some("g"), Some("h"), Some("i")]),
             ]
         }
+        Scenario::TruncatedUTF8 => {
+            // Make utf8 batch with strings longer than 64 bytes
+            // to check truncation of row group statistics
+            vec![make_utf8_batch(vec![
+                Some(&("a".repeat(64) + "1")),
+                Some(&("b".repeat(64) + "2")),
+                Some(&("c".repeat(64) + "3")),
+                Some(&("d".repeat(64) + "4")),
+                Some(&("e".repeat(64) + "5")),
+            ])]
+        }
         Scenario::UTF8View => {
             // Make utf8_view batch including string length <12 and >12 bytes
             // as the internal representation of StringView is differed for strings
@@ -1027,11 +1040,15 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .tempfile()
         .expect("tempfile creation");
 
-    let props = WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if matches!(scenario, Scenario::TruncatedUTF8) {
+        // The same as default `column_statistics_truncate_length` to check both with one value
+        builder = builder.set_statistics_truncate_length(Some(64));
+    }
+    let props = builder.build();
 
     let batches = create_data_batch(scenario);
     let schema = batches[0].schema();
