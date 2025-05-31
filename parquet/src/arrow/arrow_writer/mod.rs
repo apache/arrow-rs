@@ -3801,6 +3801,7 @@ mod tests {
         let mut file = roundtrip_opts(&batch, props);
 
         // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
         let mut buf = vec![];
         file.seek(std::io::SeekFrom::Start(0)).unwrap();
         let read = file.read_to_end(&mut buf).unwrap();
