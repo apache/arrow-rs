@@ -169,7 +169,7 @@ where
             // once the record_reader has been consumed, we've replaced its values with the default
             // variant of DictionaryBuffer (Offset). If `consume_batch`` then gets called again, we
             // avoid using the wrong variant of the buffer by returning empty array.
-            return Ok(new_empty_array(&self.data_type))
+            return Ok(new_empty_array(&self.data_type));
         }
 
         let buffer = self.record_reader.consume_record_data();
