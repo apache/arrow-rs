@@ -1187,7 +1187,7 @@ impl LengthTracker {
                 assert_eq!(lengths.len(), new_lengths.len());
                 lengths
                     .iter_mut()
-                    .zip(new_lengths.into_iter())
+                    .zip(new_lengths)
                     .for_each(|(length, new_length)| *length += new_length);
             }
         }
