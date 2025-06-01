@@ -1151,10 +1151,7 @@ fn null_sentinel(options: SortOptions) -> u8 {
 /// Stores the lengths of the rows. Lazily materializes lengths for columns with fixed-size types.
 enum LengthTracker {
     /// Fixed state: All rows have length `length`
-    Fixed {
-        length: usize,
-        num_rows: usize,
-    },
+    Fixed { length: usize, num_rows: usize },
     /// Variable state: The length of row `i` is `lengths[i] + fixed_length`
     Variable {
         fixed_length: usize,
@@ -1212,7 +1209,8 @@ impl LengthTracker {
         }
     }
 
-    /// Initializes the offsets using the lengths of the tracked columns.
+    /// Initializes the offsets using the tracked lengths. Returns the sum of the
+    /// lengths of the rows added.
     ///
     /// We initialize the offsets shifted down by one row index.
     ///
