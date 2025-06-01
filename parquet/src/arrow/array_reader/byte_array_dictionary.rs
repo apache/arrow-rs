@@ -19,7 +19,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{new_empty_array, Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -165,6 +165,13 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        if self.record_reader.num_values() == 0 {
+            // once the record_reader has been consumed, we've replaced its values with the default
+            // variant of DictionaryBuffer (Offset). If `consume_batch`` then gets called again, we
+            // avoid using the wrong variant of the buffer by returning empty array.
+            return Ok(new_empty_array(&self.data_type))
+        }
+
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
