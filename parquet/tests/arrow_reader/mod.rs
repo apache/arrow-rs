@@ -994,13 +994,29 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::TruncatedUTF8 => {
             // Make utf8 batch with strings longer than 64 bytes
             // to check truncation of row group statistics
-            vec![make_utf8_batch(vec![
-                Some(&("a".repeat(64) + "1")),
-                Some(&("b".repeat(64) + "2")),
-                Some(&("c".repeat(64) + "3")),
-                Some(&("d".repeat(64) + "4")),
-                Some(&("e".repeat(64) + "5")),
-            ])]
+            vec![
+                make_utf8_batch(vec![
+                    Some(&("a".repeat(64) + "1")),
+                    Some(&("b".repeat(64) + "2")),
+                    Some(&("c".repeat(64) + "3")),
+                    Some(&("d".repeat(64) + "4")),
+                    Some(&("e".repeat(64) + "5")),
+                ]),
+                make_utf8_batch(vec![
+                    Some(&("f".repeat(64) + "6")),
+                    None,
+                    Some("g"),
+                    Some(&("h".repeat(64) + "8")),
+                    Some(&("i".repeat(64) + "9")),
+                ]),
+                make_utf8_batch(vec![
+                    Some("j"),
+                    Some("k"),
+                    Some(&("l".repeat(64) + "12")),
+                    Some(&("m".repeat(64) + "13")),
+                    Some(&("n".repeat(64) + "14")),
+                ]),
+            ]
         }
         Scenario::UTF8View => {
             // Make utf8_view batch including string length <12 and >12 bytes

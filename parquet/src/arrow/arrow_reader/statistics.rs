@@ -1405,7 +1405,7 @@ impl<'a> StatisticsConverter<'a> {
 
     /// Extract the `is_max_value_exact` flags from row group statistics in [`RowGroupMetaData`]
     ///
-    /// See docs on [`Self::row_group_mins`] for details
+    /// See docs on [`Self::row_group_maxes`] for details
     pub fn row_group_is_max_value_exact<I>(&self, metadatas: I) -> Result<BooleanArray>
     where
         I: IntoIterator<Item = &'a RowGroupMetaData>,
