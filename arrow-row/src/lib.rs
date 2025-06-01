@@ -1148,11 +1148,14 @@ fn null_sentinel(options: SortOptions) -> u8 {
     }
 }
 
+/// Stores the lengths of the rows. Lazily materializes lengths for columns with fixed-size types.
 enum LengthTracker {
+    /// Fixed state: All rows have length `length`
     Fixed {
         length: usize,
         num_rows: usize,
     },
+    /// Variable state: The length of row `i` is `lengths[i] + fixed_length`
     Variable {
         fixed_length: usize,
         lengths: Vec<usize>,
@@ -1167,6 +1170,7 @@ impl LengthTracker {
         }
     }
 
+    /// Adds a column of fixed-length elements, each of size `new_length` to the LengthTracker
     fn push_fixed(&mut self, new_length: usize) {
         match self {
             LengthTracker::Fixed { length, .. } => *length += new_length,
@@ -1174,10 +1178,10 @@ impl LengthTracker {
         }
     }
 
+    /// Adds a column of possibly variable-length elements, element `i` has length `new_lengths.nth(i)`
     fn push_variable(&mut self, new_lengths: impl ExactSizeIterator<Item = usize>) {
         match self {
             LengthTracker::Fixed { length, .. } => {
-                // todo: avoid materialization if all items of new_lengths are same
                 *self = LengthTracker::Variable {
                     fixed_length: *length,
                     lengths: new_lengths.collect(),
@@ -1193,6 +1197,7 @@ impl LengthTracker {
         }
     }
 
+    /// Returns the tracked row lengths as a slice
     fn materialized(&mut self) -> &mut [usize] {
         if let LengthTracker::Fixed { length, num_rows } = *self {
             *self = LengthTracker::Variable {
@@ -1207,20 +1212,22 @@ impl LengthTracker {
         }
     }
 
-    // We initialize the offsets shifted down by one row index.
+    /// Initializes the offsets using the lengths of the tracked columns.
+    ///
+    /// We initialize the offsets shifted down by one row index.
+    ///
+    /// As the rows are appended to the offsets will be incremented to match
+    ///
+    /// For example, consider the case of 3 rows of length 3, 4, and 6 respectively.
+    /// The offsets would be initialized to `0, 0, 3, 7`
+    ///
+    /// Writing the first row entirely would yield `0, 3, 3, 7`
+    /// The second, `0, 3, 7, 7`
+    /// The third, `0, 3, 7, 13`
     //
-    // As the rows are appended to the offsets will be incremented to match
+    /// This would be the final offsets for reading
     //
-    // For example, consider the case of 3 rows of length 3, 4, and 6 respectively.
-    // The offsets would be initialized to `0, 0, 3, 7`
-    //
-    // Writing the first row entirely would yield `0, 3, 3, 7`
-    // The second, `0, 3, 7, 7`
-    // The third, `0, 3, 7, 13`
-    //
-    // This would be the final offsets for reading
-    //
-    // In this way offsets tracks the position during writing whilst eventually serving
+    /// In this way offsets tracks the position during writing whilst eventually serving
     fn extend_offsets(&self, initial_offset: usize, offsets: &mut Vec<usize>) -> usize {
         match self {
             LengthTracker::Fixed { length, num_rows } => {
