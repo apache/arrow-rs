@@ -30,7 +30,7 @@ use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, NullBuffer, RunEndB
 use arrow_buffer::{Buffer, MutableBuffer};
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 
 /// If the filter selects more than this fraction of rows, use
@@ -110,6 +110,43 @@ impl Iterator for IndexIterator<'_> {
 /// Counts the number of set bits in `filter`
 fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
+}
+
+/// Function that can filter arbitrary arrays
+///
+/// Deprecated: Use [`FilterPredicate`] instead
+#[deprecated]
+pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
+
+/// Returns a prepared function optimized to filter multiple arrays.
+///
+/// Creating this function requires time, but using it is faster than [filter] when the
+/// same filter needs to be applied to multiple arrays (e.g. a multi-column `RecordBatch`).
+/// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.
+/// Therefore, it is considered undefined behavior to pass `filter` with null values.
+///
+/// Deprecated: Use [`FilterBuilder`] instead
+#[deprecated]
+#[allow(deprecated)]
+pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
+    let iter = SlicesIterator::new(filter);
+    let filter_count = filter_count(filter);
+    let chunks = iter.collect::<Vec<_>>();
+
+    Ok(Box::new(move |array: &ArrayData| {
+        match filter_count {
+            // return all
+            len if len == array.len() => array.clone(),
+            0 => ArrayData::new_empty(array.data_type()),
+            _ => {
+                let mut mutable = MutableArrayData::new(vec![array], false, filter_count);
+                chunks
+                    .iter()
+                    .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                mutable.freeze()
+            }
+        }
+    }))
 }
 
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
@@ -853,15 +890,15 @@ fn filter_sparse_union(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use arrow_data::ArrayData;
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    use super::*;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
