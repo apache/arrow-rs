@@ -341,8 +341,12 @@ fn instantiate_builder(data_type: &DataType, batch_size: usize) -> ArrayBuilderI
 /// with https://github.com/apache/datafusion/pull/16208
 fn instantiate_builder(data_type: &DataType, batch_size: usize) -> ArrayBuilderImpl {
     match data_type {
-        DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(batch_size)),
-        DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(batch_size)),
+        DataType::Utf8View => {
+            Box::new(StringViewBuilder::with_capacity(batch_size).with_initial_capacity(batch_size))
+        }
+        DataType::BinaryView => {
+            Box::new(BinaryViewBuilder::with_capacity(batch_size).with_initial_capacity(batch_size))
+        }
 
         // Default to using the generic builder for all other types
         //

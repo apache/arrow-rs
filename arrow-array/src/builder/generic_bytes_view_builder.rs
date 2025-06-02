@@ -100,6 +100,10 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
     phantom: PhantomData<T>,
+    /// How much space to reserve for newly created buffers.
+    ///
+    /// Defaults to 0
+    initial_capacity: Option<usize>,
 }
 
 impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
@@ -121,7 +125,14 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             },
             string_tracker: None,
             phantom: Default::default(),
+            initial_capacity: None,
         }
+    }
+
+    /// Set the initial capacity for buffers after finish is called
+    pub fn with_initial_capacity(mut self, initial_capacity: usize) -> Self {
+        self.initial_capacity = Some(initial_capacity);
+        self
     }
 
     /// Set the target buffer load factor for appending views from existing arrays
@@ -398,8 +409,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.flush_in_progress();
         let completed = std::mem::take(&mut self.completed);
         let len = self.views_builder.len();
-        let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
-        let nulls = self.null_buffer_builder.finish();
+        let (mut views_builder, mut null_buffer_builder) = match self.initial_capacity {
+            Some(initial_capacity) => (
+                BufferBuilder::new(initial_capacity),
+                NullBufferBuilder::new(initial_capacity),
+            ),
+            None => (BufferBuilder::default(), NullBufferBuilder::new(len)),
+        };
+        std::mem::swap(&mut views_builder, &mut self.views_builder);
+        std::mem::swap(&mut null_buffer_builder, &mut self.null_buffer_builder);
+
+        let views = ScalarBuffer::new(views_builder.finish(), 0, len);
+        let nulls = null_buffer_builder.finish();
         if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
             ht.clear();
         }
