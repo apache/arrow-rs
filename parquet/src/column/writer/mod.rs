@@ -1038,18 +1038,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_data.variable_length_bytes,
         );
 
-        // From here on, we only need page statistics if they will be written to the page header.
-        let page_statistics =
-            page_statistics.filter(|_| self.props.write_page_header_statistics(self.descr.path()));
-
         // Update histograms and variable_length_bytes in column_metrics
         self.column_metrics
             .update_from_page_metrics(&self.page_metrics);
         self.column_metrics
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
-        let page_statistics = page_statistics.map(Statistics::from);
-        let page_statistics = page_statistics.map(|stats| self.truncate_statistics(stats));
+        // From here on, we only need page statistics if they will be written to the page header.
+        let page_statistics = page_statistics
+            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
