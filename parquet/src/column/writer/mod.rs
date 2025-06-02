@@ -949,7 +949,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .unwrap_or_else(|| (data.to_vec(), false))
     }
 
-    /// Truncate the min and max values that will be written to a data page 
+    /// Truncate the min and max values that will be written to a data page
     /// header or column chunk Statistics
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
         let backwards_compatible_min_max = self.descr.sort_order().is_signed();
