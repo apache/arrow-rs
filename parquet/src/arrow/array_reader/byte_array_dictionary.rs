@@ -167,7 +167,7 @@ where
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         if self.record_reader.num_values() == 0 {
             // once the record_reader has been consumed, we've replaced its values with the default
-            // variant of DictionaryBuffer (Offset). If `consume_batch`` then gets called again, we
+            // variant of DictionaryBuffer (Offset). If `consume_batch` then gets called again, we
             // avoid using the wrong variant of the buffer by returning empty array.
             return Ok(new_empty_array(&self.data_type));
         }
