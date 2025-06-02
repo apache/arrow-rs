@@ -307,7 +307,7 @@ fn main() {
         writer_properties_builder = writer_properties_builder.set_statistics_enabled(value.into());
     }
     // set this after statistics_enabled
-    if let Some(value) = args.write_page_header_statistcs {
+    if let Some(value) = args.write_page_header_statistics {
         writer_properties_builder =
             writer_properties_builder.set_write_page_header_statistics(value);
         if value {
