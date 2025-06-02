@@ -390,7 +390,7 @@ impl WriterProperties {
 
     /// Returns `true` if [`Statistics`] are to be written to the page header for a column.
     ///
-    /// For more details see [`WriterProperties::set_write_page_header_statistics`]
+    /// For more details see [`WriterPropertiesBuilder::set_write_page_header_statistics`]
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn write_page_header_statistics(&self, col: &ColumnPath) -> bool {
@@ -763,7 +763,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default statistics level for all columns (defaults to [`Page`] via
+    /// Sets default [`EnabledStatistics`] level for all columns (defaults to [`Page`] via
     /// [`DEFAULT_STATISTICS_ENABLED`]).
     ///
     /// [`Page`]: EnabledStatistics::Page
@@ -772,10 +772,19 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default flag to enable/disable writing the [`Statistics`] in theh page header
-    /// (defaults to `false` vi [`DEFAULT_WRITE_PAGE_HEADER_STATISTICS`]).
+    /// Sets default flag to enable/disable writing the [`Statistics`] in the page header
+    /// (defaults to `false` via [`DEFAULT_WRITE_PAGE_HEADER_STATISTICS`]).
+    ///
+    /// Only applicable if [`Page`] level statistics are gathered.
+    ///
+    /// Setting this value to `true` can greatly increase the size of the resulting Parquet
+    /// file while yielding very little added benefit. Most modern Parquet implementations
+    /// will use the min/max values stored in the [`ParquetColumnIndex`] rather than
+    /// those in the page header.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
+    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`Page`]: EnabledStatistics::Page
     pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
         self.default_column_properties
             .set_write_page_header_statistics(value);
@@ -878,7 +887,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets statistics level for a specific column.
+    /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
     pub fn set_column_statistics_enabled(
@@ -958,8 +967,12 @@ pub enum EnabledStatistics {
     /// Compute page-level and column chunk-level statistics.
     ///
     /// Setting this option will store one set of statistics for each relevant
-    /// column for each page and row group. The more row groups and the more
-    /// pages written, the more statistics will be stored.
+    /// column for each row group. In addition, this will enable the writing
+    /// of the column index (the offset index is always written regardless of
+    /// this setting). See [`ParquetColumnIndex`] for
+    /// more information.
+    ///
+    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
     Page,
 }
 
