@@ -19,8 +19,8 @@
 
 use crate::filter::{FilterBuilder, FilterPredicate, SlicesIterator};
 use crate::incremental_array_builder::{GenericIncrementalArrayBuilder, IncrementalArrayBuilder};
-use arrow_array::builder::{BinaryViewBuilder, PrimitiveBuilder, StringViewBuilder};
-use arrow_array::{downcast_primitive, BooleanArray, RecordBatch};
+use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
+use arrow_array::{BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -309,7 +309,7 @@ fn get_filter_limit(filter: &BooleanArray, row_limit: usize) -> FilterLimit {
         }
     }
 }
-
+/*
 /// Create an incremental array builder for the given data type
 ///
 /// Uses a generic implementation if we don't have a specific builder for the type
@@ -328,6 +328,24 @@ fn instantiate_builder(data_type: &DataType, batch_size: usize) -> ArrayBuilderI
 
         // Default to using the generic builder for all other types
         // TODO file tickets tracking specific builders for other types
+        _ => Box::new(GenericIncrementalArrayBuilder::new()),
+    }
+}
+*/
+
+/// Create an incremental array builder for the given data type
+///
+/// Uses a generic implementation if we don't have a specific builder for the type
+///
+/// TEMPORARY test: only use string view builder for now to test
+/// with https://github.com/apache/datafusion/pull/16208
+fn instantiate_builder(data_type: &DataType, batch_size: usize) -> ArrayBuilderImpl {
+    match data_type {
+        DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(batch_size)),
+        DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(batch_size)),
+
+        // Default to using the generic builder for all other types
+        //
         _ => Box::new(GenericIncrementalArrayBuilder::new()),
     }
 }
