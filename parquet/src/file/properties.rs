@@ -42,6 +42,8 @@ pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
+/// Default value for [`WriterProperties::write_page_header_statistics`]
+pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_statistics_size`]
 #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
@@ -384,6 +386,22 @@ impl WriterProperties {
             .and_then(|c| c.statistics_enabled())
             .or_else(|| self.default_column_properties.statistics_enabled())
             .unwrap_or(DEFAULT_STATISTICS_ENABLED)
+    }
+
+    /// Returns `true` if [`Statistics`] are to be written to the page header for a column.
+    ///
+    /// For more details see [`WriterProperties::set_write_page_header_statistics`]
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn write_page_header_statistics(&self, col: &ColumnPath) -> bool {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.write_page_header_statistics())
+            .or_else(|| {
+                self.default_column_properties
+                    .write_page_header_statistics()
+            })
+            .unwrap_or(DEFAULT_WRITE_PAGE_HEADER_STATISTICS)
     }
 
     /// Returns max size for statistics.
@@ -754,6 +772,16 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets default flag to enable/disable writing the [`Statistics`] in theh page header
+    /// (defaults to `false` vi [`DEFAULT_WRITE_PAGE_HEADER_STATISTICS`]).
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
+        self.default_column_properties
+            .set_write_page_header_statistics(value);
+        self
+    }
+
     /// Sets default max statistics size for all columns (defaults to `4096` via
     /// [`DEFAULT_MAX_STATISTICS_SIZE`]).
     ///
@@ -850,7 +878,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets statistics level for a specific column
+    /// Sets statistics level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
     pub fn set_column_statistics_enabled(
@@ -859,6 +887,17 @@ impl WriterPropertiesBuilder {
         value: EnabledStatistics,
     ) -> Self {
         self.get_mut_props(col).set_statistics_enabled(value);
+        self
+    }
+
+    /// Sets whether to write [`Statistics`] in the page header for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_write_page_header_statistics`].
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn set_column_write_page_header_statistics(mut self, col: ColumnPath, value: bool) -> Self {
+        self.get_mut_props(col)
+            .set_write_page_header_statistics(value);
         self
     }
 
@@ -990,6 +1029,7 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    write_page_header_statistics: Option<bool>,
     #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
@@ -1026,6 +1066,11 @@ impl ColumnProperties {
     /// Sets the statistics level for this column.
     fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
+    }
+
+    /// Sets whether to write statistics in the page header for this column.
+    fn set_write_page_header_statistics(&mut self, enabled: bool) {
+        self.write_page_header_statistics = Some(enabled);
     }
 
     /// Sets max size for statistics for this column.
@@ -1092,6 +1137,14 @@ impl ColumnProperties {
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
+    }
+
+    /// Returns `Some(true)` if [`Statistics`] are to be written to the page header for this
+    /// column.
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    fn write_page_header_statistics(&self) -> Option<bool> {
+        self.write_page_header_statistics
     }
 
     /// Returns optional max size in bytes for statistics.

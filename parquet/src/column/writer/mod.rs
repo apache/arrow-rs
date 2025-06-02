@@ -1038,6 +1038,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_data.variable_length_bytes,
         );
 
+        // From here on, we only need page statistics if they will be written to the page header.
+        let page_statistics =
+            page_statistics.filter(|_| self.props.write_page_header_statistics(self.descr.path()));
+
         // Update histograms and variable_length_bytes in column_metrics
         self.column_metrics
             .update_from_page_metrics(&self.page_metrics);
@@ -2229,7 +2233,11 @@ mod tests {
         let mut buf = Vec::with_capacity(100);
         let mut write = TrackedWrite::new(&mut buf);
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
-        let props = Default::default();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_write_page_header_statistics(true)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
