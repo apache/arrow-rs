@@ -543,8 +543,42 @@ impl MutableBuffer {
         iterator.for_each(|item| self.push(item));
     }
 
+    /// Extends a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
+    ///
+    /// See [`MutableBuffer::from_trusted_len_iter`] for more details.
+    ///
+    /// # Safety
+    /// This method assumes that the iterator's size is correct and is undefined
+    /// behavior to use it on an iterator that reports an incorrect length.
+    #[inline]
+    pub unsafe fn extend_from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
+        &mut self,
+        iterator: I,
+    ) {
+        let item_size = std::mem::size_of::<T>();
+        let (lower, _) = iterator.size_hint();
+        let additional = lower * item_size;
+        self.reserve(additional);
+
+        // this is necessary because of https://github.com/rust-lang/rust/issues/32155
+        let mut dst = unsafe { self.data.as_ptr().add(self.len) };
+        for item in iterator {
+            // note how there is no reserve here (compared with `extend_from_iter`)
+            let src = item.to_byte_slice().as_ptr();
+            std::ptr::copy_nonoverlapping(src, dst, item_size);
+            dst = dst.add(item_size);
+        }
+        self.len += additional;
+        assert_eq!(
+            dst.offset_from(self.data.as_ptr()) as usize,
+            self.len,
+            "Trusted iterator length was not accurately reported"
+        );
+    }
+
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
-    /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
+    /// Prefer this to `collect` whenever possible, as it is ~60% faster.
+    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::buffer::MutableBuffer;
@@ -554,16 +588,18 @@ impl MutableBuffer {
     /// assert_eq!(buffer.len(), 4) // u32 has 4 bytes
     /// ```
     /// # Safety
-    /// This method assumes that the iterator's size is correct and is undefined behavior
-    /// to use it on an iterator that reports an incorrect length.
-    // This implementation is required for two reasons:
-    // 1. there is no trait `TrustedLen` in stable rust and therefore
-    //    we can't specialize `extend` for `TrustedLen` like `Vec` does.
-    // 2. `from_trusted_len_iter` is faster.
+    /// This method assumes that the iterator's size is correct and is undefined
+    /// behavior to use it on an iterator that reports an incorrect length.
+    ///
+    /// This implementation is required for two reasons:
+    /// 1. there is no trait `TrustedLen` in stable Rust and therefore
+    ///    we can't specialize `extend` for `TrustedLen` like `Vec` does.
+    /// 2. `from_trusted_len_iter` is faster.
     #[inline]
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
+        // TODO: reduce duplication with `extend_from_trusted_len_iter`
         let item_size = std::mem::size_of::<T>();
         let (_, upper) = iterator.size_hint();
         let upper = upper.expect("from_trusted_len_iter requires an upper limit");
