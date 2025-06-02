@@ -3776,11 +3776,7 @@ mod tests {
         let schema = Schema::new(vec![string_field]);
         let raw_string_values = vec!["Blart Versenwald III"];
         let string_values = StringArray::from(raw_string_values.clone());
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(string_values)],
-        )
-        .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
 
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
