@@ -643,6 +643,8 @@ fn make_dict_batch() -> RecordBatch {
     .unwrap()
 }
 
+/// Create data batches for the given scenario.
+/// `make_test_file_rg` uses the first batch to inference the schema of the file.
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -1007,13 +1009,13 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                     Some(&("a".repeat(64) + "1")),
                     Some(&("b".repeat(64) + "2")),
                     Some(&("c".repeat(64) + "3")),
+                    None,
                     Some(&("d".repeat(64) + "4")),
-                    Some(&("e".repeat(64) + "5")),
                 ]),
                 make_utf8_batch(vec![
+                    Some(&("e".repeat(64) + "5")),
                     Some(&("f".repeat(64) + "6")),
-                    None,
-                    Some("g"),
+                    Some(&("g".repeat(64) + "7")),
                     Some(&("h".repeat(64) + "8")),
                     Some(&("i".repeat(64) + "9")),
                 ]),

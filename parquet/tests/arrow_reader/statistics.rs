@@ -389,27 +389,31 @@ async fn test_max_and_min_value_truncated() {
     Test {
         reader: &reader,
         // min is truncated to
-        // 1. `"a".repeate(64)`, original value is `"a".repeat(64) + "1"`
-        // 2. "", since there's a null in the second row group
-        // 3. "j"
-        expected_min: Arc::new(StringArray::from(vec![&("a".repeat(64)), "", "j"])),
+        // 1. `"a".repeat(64)`, original value is `"a".repeat(64) + "1"`
+        // 2. `"e".repeat(64)`, original value is `"e".repeat(64) + "5"`
+        // 3. "j", as expected with no truncation
+        expected_min: Arc::new(StringArray::from(vec![
+            &("a".repeat(64)),
+            &("e".repeat(64)),
+            "j",
+        ])),
         // max is truncated to
-        // 1. `"e".repeat(63) + "f"`, original value is `"e".repeat(64) + "5"`
+        // 1. `"d".repeat(63) + "e"`, original value is `"d".repeat(64) + "4"`
         // 2. `"i".repeat(63) + "j"`, original value is `"i".repeat(64) + "6"`
         // 3. `"n".repeat(63) + "o"`, original value is `"n".repeat(64) + "14"`
         expected_max: Arc::new(StringArray::from(vec![
-            "e".repeat(63) + "f",
+            "d".repeat(63) + "e",
             "i".repeat(63) + "j",
             "n".repeat(63) + "o",
         ])),
         // no nulls
-        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_null_counts: UInt64Array::from(vec![1, 0, 0]),
         // 3 rows
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
-        // all max values have been truncated
+        // all max values are truncated
         expected_max_value_exact: BooleanArray::from(vec![false, false, false]),
-        // min value is truncated in the first row group
-        expected_min_value_exact: BooleanArray::from(vec![false, true, true]),
+        // min values are truncated in the first two row groups
+        expected_min_value_exact: BooleanArray::from(vec![false, false, true]),
         column_name: "utf8",
         check: Check::Both,
     }
