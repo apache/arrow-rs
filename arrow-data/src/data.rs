@@ -551,11 +551,10 @@ impl ArrayData {
 
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
-            let new_offset = self.offset + offset;
             let new_data = ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: new_offset,
+                offset: self.offset,
                 buffers: self.buffers.clone(),
                 // Slice child data, to propagate offsets down to them
                 child_data: self
