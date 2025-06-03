@@ -127,7 +127,7 @@ impl Buffer {
 
     /// Returns the number of strong references to the buffer.
     ///
-    /// This method is safe but if the buffer is shared across mulitple threads
+    /// This method is safe but if the buffer is shared across multiple threads
     /// the underlying value could change between calling this method and using
     /// the result.
     pub fn strong_count(&self) -> usize {
