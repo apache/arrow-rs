@@ -540,8 +540,8 @@ mod tests {
     use super::*;
 
     use crate::{
-        cast::AsArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-        StringArray,
+        cast::AsArray, types::Int32Type, BooleanArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, StringArray,
     };
     use arrow_buffer::ToByteSlice;
 
@@ -856,7 +856,32 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_array_from_cpp_sliced_data() {
+    fn test_struct_array_data_slice() {
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        )
+        .into_data();
+        let sliced = struct_array.slice(1, 4);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(1, 4)
+        );
+
+        // This next test case is a regression test of a bug detected when converting a sliced
+        // struct from C++
+        //
+        // In arrow-rs struct slicing is done by setting the offset and length of
+        // child arrays.
+        //
+        // In the C++ implementation of Arrow struct slicing is done by setting the offset
+        // and length of the struct array.
+        //
+        // arrow-rs should be able to parse data received from C++ correctly.
         let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
         let y = Int32Array::from(vec![Some(5), Some(6), None, Some(8), Some(9), Some(10)]);
         let struct_array = StructArray::new(
@@ -877,13 +902,6 @@ mod tests {
             Some(NullBuffer::from(vec![true, false, true, true, true, true])),
         );
 
-        // In arrow-rs struct slicing is done by setting the offset and length of
-        // child arrays.
-        //
-        // In the C++ implementation of Arrow struct slicing is done by setting the offset
-        // and length of the struct array.
-        //
-        // arrow-rs should be able to parse data received from C++ correctly.
         let cpp_sliced_array = make_array(
             struct_array
                 .to_data()
