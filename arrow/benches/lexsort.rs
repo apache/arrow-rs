@@ -25,7 +25,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::{DataType, Field};
 use criterion::{criterion_group, criterion_main, Criterion};
-use std::sync::Arc;
+use std::{hint, sync::Arc};
 
 #[derive(Copy, Clone)]
 enum Column {
@@ -83,7 +83,7 @@ impl Column {
             Column::RequiredI32List => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
                     true,
                 );
                 create_random_array(&field, size, 0., 1.).unwrap()
@@ -91,7 +91,7 @@ impl Column {
             Column::OptionalI32List => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                     true,
                 );
                 create_random_array(&field, size, 0.2, 1.).unwrap()
@@ -99,7 +99,7 @@ impl Column {
             Column::Required4CharStringList => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, false))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, false))),
                     true,
                 );
                 create_random_array(&field, size, 0., 1.).unwrap()
@@ -107,7 +107,7 @@ impl Column {
             Column::Optional4CharStringList => {
                 let field = Field::new(
                     "_1",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 );
                 create_random_array(&field, size, 0.2, 1.).unwrap()
@@ -128,12 +128,12 @@ fn do_bench(c: &mut Criterion, columns: &[Column], len: usize) {
         .collect();
 
     c.bench_function(&format!("lexsort_to_indices({columns:?}): {len}"), |b| {
-        b.iter(|| criterion::black_box(lexsort_to_indices(&sort_columns, None).unwrap()))
+        b.iter(|| hint::black_box(lexsort_to_indices(&sort_columns, None).unwrap()))
     });
 
     c.bench_function(&format!("lexsort_rows({columns:?}): {len}"), |b| {
         b.iter(|| {
-            criterion::black_box({
+            hint::black_box({
                 let fields = arrays
                     .iter()
                     .map(|a| SortField::new(a.data_type().clone()))

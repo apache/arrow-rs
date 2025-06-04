@@ -38,6 +38,7 @@ use crate::{
     ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
 };
 use bitflags::bitflags;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
@@ -509,9 +510,6 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
-                                if *bits != "128" && *bits != "256" {
-                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
-                                }
                                 let parsed_precision = precision.parse::<u8>().map_err(|_| {
                                     ArrowError::CDataInterface(
                                         "The decimal type requires an integer precision".to_string(),
@@ -522,10 +520,10 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                if *bits == "128" {
-                                    DataType::Decimal128(parsed_precision, parsed_scale)
-                                } else {
-                                    DataType::Decimal256(parsed_precision, parsed_scale)
+                                match *bits {
+                                    "128" => DataType::Decimal128(parsed_precision, parsed_scale),
+                                    "256" => DataType::Decimal256(parsed_precision, parsed_scale),
+                                    _ => return Err(ArrowError::CDataInterface("Only 128- and 256- bit wide decimals are supported in the Rust implementation".to_string())),
                                 }
                             }
                             _ => {
@@ -685,57 +683,59 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
     }
 }
 
-fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
+fn get_format_string(dtype: &DataType) -> Result<Cow<'static, str>, ArrowError> {
     match dtype {
-        DataType::Null => Ok("n".to_string()),
-        DataType::Boolean => Ok("b".to_string()),
-        DataType::Int8 => Ok("c".to_string()),
-        DataType::UInt8 => Ok("C".to_string()),
-        DataType::Int16 => Ok("s".to_string()),
-        DataType::UInt16 => Ok("S".to_string()),
-        DataType::Int32 => Ok("i".to_string()),
-        DataType::UInt32 => Ok("I".to_string()),
-        DataType::Int64 => Ok("l".to_string()),
-        DataType::UInt64 => Ok("L".to_string()),
-        DataType::Float16 => Ok("e".to_string()),
-        DataType::Float32 => Ok("f".to_string()),
-        DataType::Float64 => Ok("g".to_string()),
-        DataType::BinaryView => Ok("vz".to_string()),
-        DataType::Binary => Ok("z".to_string()),
-        DataType::LargeBinary => Ok("Z".to_string()),
-        DataType::Utf8View => Ok("vu".to_string()),
-        DataType::Utf8 => Ok("u".to_string()),
-        DataType::LargeUtf8 => Ok("U".to_string()),
-        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
-        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
-        DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
-        DataType::Decimal256(precision, scale) => Ok(format!("d:{precision},{scale},256")),
-        DataType::Date32 => Ok("tdD".to_string()),
-        DataType::Date64 => Ok("tdm".to_string()),
-        DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),
-        DataType::Time32(TimeUnit::Millisecond) => Ok("ttm".to_string()),
-        DataType::Time64(TimeUnit::Microsecond) => Ok("ttu".to_string()),
-        DataType::Time64(TimeUnit::Nanosecond) => Ok("ttn".to_string()),
-        DataType::Timestamp(TimeUnit::Second, None) => Ok("tss:".to_string()),
-        DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".to_string()),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".to_string()),
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".to_string()),
-        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(format!("tss:{tz}")),
-        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{tz}")),
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{tz}")),
-        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{tz}")),
-        DataType::Duration(TimeUnit::Second) => Ok("tDs".to_string()),
-        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
-        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
-        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
-        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".to_string()),
-        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".to_string()),
-        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".to_string()),
-        DataType::List(_) => Ok("+l".to_string()),
-        DataType::LargeList(_) => Ok("+L".to_string()),
-        DataType::Struct(_) => Ok("+s".to_string()),
-        DataType::Map(_, _) => Ok("+m".to_string()),
-        DataType::RunEndEncoded(_, _) => Ok("+r".to_string()),
+        DataType::Null => Ok("n".into()),
+        DataType::Boolean => Ok("b".into()),
+        DataType::Int8 => Ok("c".into()),
+        DataType::UInt8 => Ok("C".into()),
+        DataType::Int16 => Ok("s".into()),
+        DataType::UInt16 => Ok("S".into()),
+        DataType::Int32 => Ok("i".into()),
+        DataType::UInt32 => Ok("I".into()),
+        DataType::Int64 => Ok("l".into()),
+        DataType::UInt64 => Ok("L".into()),
+        DataType::Float16 => Ok("e".into()),
+        DataType::Float32 => Ok("f".into()),
+        DataType::Float64 => Ok("g".into()),
+        DataType::BinaryView => Ok("vz".into()),
+        DataType::Binary => Ok("z".into()),
+        DataType::LargeBinary => Ok("Z".into()),
+        DataType::Utf8View => Ok("vu".into()),
+        DataType::Utf8 => Ok("u".into()),
+        DataType::LargeUtf8 => Ok("U".into()),
+        DataType::FixedSizeBinary(num_bytes) => Ok(Cow::Owned(format!("w:{num_bytes}"))),
+        DataType::FixedSizeList(_, num_elems) => Ok(Cow::Owned(format!("+w:{num_elems}"))),
+        DataType::Decimal128(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale}"))),
+        DataType::Decimal256(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},256")))
+        }
+        DataType::Date32 => Ok("tdD".into()),
+        DataType::Date64 => Ok("tdm".into()),
+        DataType::Time32(TimeUnit::Second) => Ok("tts".into()),
+        DataType::Time32(TimeUnit::Millisecond) => Ok("ttm".into()),
+        DataType::Time64(TimeUnit::Microsecond) => Ok("ttu".into()),
+        DataType::Time64(TimeUnit::Nanosecond) => Ok("ttn".into()),
+        DataType::Timestamp(TimeUnit::Second, None) => Ok("tss:".into()),
+        DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".into()),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".into()),
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".into()),
+        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(Cow::Owned(format!("tss:{tz}"))),
+        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(Cow::Owned(format!("tsm:{tz}"))),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(Cow::Owned(format!("tsu:{tz}"))),
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(Cow::Owned(format!("tsn:{tz}"))),
+        DataType::Duration(TimeUnit::Second) => Ok("tDs".into()),
+        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".into()),
+        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".into()),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".into()),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".into()),
+        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".into()),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".into()),
+        DataType::List(_) => Ok("+l".into()),
+        DataType::LargeList(_) => Ok("+L".into()),
+        DataType::Struct(_) => Ok("+s".into()),
+        DataType::Map(_, _) => Ok("+m".into()),
+        DataType::RunEndEncoded(_, _) => Ok("+r".into()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
         DataType::Union(fields, mode) => {
             let formats = fields
@@ -743,8 +743,8 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
                 .map(|(t, _)| t.to_string())
                 .collect::<Vec<_>>();
             match mode {
-                UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
-                UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),
+                UnionMode::Dense => Ok(Cow::Owned(format!("{}:{}", "+ud", formats.join(",")))),
+                UnionMode::Sparse => Ok(Cow::Owned(format!("{}:{}", "+us", formats.join(",")))),
             }
         }
         other => Err(ArrowError::CDataInterface(format!(
@@ -920,6 +920,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_ordered() {
+        #[allow(deprecated)]
         let schema = Schema::new(vec![Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

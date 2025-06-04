@@ -95,7 +95,7 @@ use std::sync::Arc;
 ///     .build()
 ///     .unwrap();
 /// let list_data_type = DataType::FixedSizeList(
-///     Arc::new(Field::new("item", DataType::Int32, false)),
+///     Arc::new(Field::new_list_field(DataType::Int32, false)),
 ///     3,
 /// );
 /// let list_data = ArrayData::builder(list_data_type.clone())
@@ -401,12 +401,24 @@ impl Array for FixedSizeListArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -482,7 +494,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_child_data(value_data.clone())
@@ -535,7 +547,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -564,7 +576,7 @@ mod tests {
 
         // Construct a fixed size list array from the above two
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 2);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data.clone())
@@ -622,7 +634,7 @@ mod tests {
 
         // Construct a fixed size list array from the above two
         let list_data_type =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 2);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 2);
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
@@ -645,7 +657,7 @@ mod tests {
             Some(4),
         ]));
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = FixedSizeListArray::new(field.clone(), 2, values.clone(), None);
         assert_eq!(list.len(), 3);
 
@@ -669,7 +681,7 @@ mod tests {
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls)).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2");
 
-        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let err = FixedSizeListArray::try_new(field.clone(), 2, values.clone(), None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\"");
 
@@ -677,14 +689,14 @@ mod tests {
         let nulls = NullBuffer::new(BooleanBuffer::new(Buffer::from([0b0000101]), 0, 3));
         FixedSizeListArray::new(field, 2, values.clone(), Some(nulls));
 
-        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
     }
 
     #[test]
     fn empty_fixed_size_list() {
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let nulls = NullBuffer::new_null(2);
         let values = new_empty_array(&DataType::Int32);
         let list = FixedSizeListArray::new(field.clone(), 0, values, Some(nulls));

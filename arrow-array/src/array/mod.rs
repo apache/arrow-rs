@@ -76,6 +76,8 @@ mod list_view_array;
 
 pub use list_view_array::*;
 
+use crate::iterator::ArrayIter;
+
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
 pub trait Array: std::fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`] so that it can be
@@ -164,6 +166,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_empty(), false);
     /// ```
     fn is_empty(&self) -> bool;
+
+    /// Shrinks the capacity of any exclusively owned buffer as much as possible
+    ///
+    /// Shared or externally allocated buffers will be ignored, and
+    /// any buffer offsets will be preserved.
+    fn shrink_to_fit(&mut self) {}
 
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
@@ -315,8 +323,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
-        // TODO this is not necessarily perfect default implementation, since null_count() and logical_null_count() are not always equivalent
-        self.null_count() != 0
+        self.logical_null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -362,6 +369,15 @@ impl Array for ArrayRef {
 
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
+    }
+
+    /// For shared buffers, this is a no-op.
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // We ignore shared buffers.
+        }
     }
 
     fn offset(&self) -> usize {
@@ -570,6 +586,63 @@ pub trait ArrayAccessor: Array {
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `StringArray`
+/// - `LargeStringArray`
+/// - `StringViewArray`
+///
+/// This trait helps to abstract over the different types of string arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait StringArrayType<'a>: ArrayAccessor<Item = &'a str> + Sized {
+    /// Returns true if all data within this string array is ASCII
+    fn is_ascii(&self) -> bool;
+
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> StringArrayType<'a> for &'a GenericStringArray<O> {
+    fn is_ascii(&self) -> bool {
+        GenericStringArray::<O>::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericStringArray::<O>::iter(self)
+    }
+}
+impl<'a> StringArrayType<'a> for &'a StringViewArray {
+    fn is_ascii(&self) -> bool {
+        StringViewArray::is_ascii(self)
+    }
+
+    fn iter(&self) -> ArrayIter<Self> {
+        StringViewArray::iter(self)
+    }
+}
+
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `BinaryArray`
+/// - `LargeBinaryArray`
+/// - `BinaryViewArray`
+///
+/// This trait helps to abstract over the different types of binary arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericBinaryArray::<O>::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        BinaryViewArray::iter(self)
+    }
+}
+
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -649,6 +722,12 @@ impl PartialEq for FixedSizeListArray {
 }
 
 impl PartialEq for StructArray {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
+impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
     }
@@ -870,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -928,7 +1007,7 @@ mod tests {
 
     #[test]
     fn test_null_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);

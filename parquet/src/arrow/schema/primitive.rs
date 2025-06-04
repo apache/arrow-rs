@@ -43,6 +43,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
         (DataType::Int32, DataType::Time32(_)) => hint,
         (DataType::Int64, DataType::Time64(_)) => hint,
+        (DataType::Int64, DataType::Duration(_)) => hint,
 
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
@@ -50,8 +51,23 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Coerce Date32 back to Date64 (#1666)
         (DataType::Date32, DataType::Date64) => hint,
 
-        // Determine timezone
+        // Timestamps of the same resolution can be converted to a a different timezone.
         (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
+
+        // INT96 default to Timestamp(TimeUnit::Nanosecond, None) (see from_parquet below).
+        // Allow different resolutions to support larger date ranges.
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second, _),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, _),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => hint,
 
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
@@ -114,7 +130,7 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
 }
 
 fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
-    if precision <= DECIMAL128_MAX_PRECISION as _ {
+    if precision <= DECIMAL128_MAX_PRECISION as i32 {
         decimal_128_type(scale, precision)
     } else {
         decimal_256_type(scale, precision)

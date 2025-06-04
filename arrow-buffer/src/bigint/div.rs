@@ -39,8 +39,8 @@ pub fn div_rem<const N: usize>(numerator: &[u64; N], divisor: &[u64; N]) -> ([u6
         return div_rem_small(numerator, divisor[0]);
     }
 
-    let numerator_words = (numerator_bits + 63) / 64;
-    let divisor_words = (divisor_bits + 63) / 64;
+    let numerator_words = numerator_bits.div_ceil(64);
+    let divisor_words = divisor_bits.div_ceil(64);
     let n = divisor_words;
     let m = numerator_words - divisor_words;
 
@@ -258,7 +258,7 @@ fn full_shl<const N: usize>(v: &[u64; N], shift: u32) -> ArrayPlusOne<u64, N> {
     let mut out = [0u64; N];
     out[0] = v[0] << shift;
     for i in 1..N {
-        out[i] = v[i - 1] >> (64 - shift) | v[i] << shift
+        out[i] = (v[i - 1] >> (64 - shift)) | (v[i] << shift)
     }
     let carry = v[N - 1] >> (64 - shift);
     ArrayPlusOne(out, carry)
@@ -272,7 +272,7 @@ fn full_shr<const N: usize>(a: &ArrayPlusOne<u64, N>, shift: u32) -> [u64; N] {
     }
     let mut out = [0; N];
     for i in 0..N - 1 {
-        out[i] = a[i] >> shift | a[i + 1] << (64 - shift)
+        out[i] = (a[i] >> shift) | (a[i + 1] << (64 - shift))
     }
     out[N - 1] = a[N - 1] >> shift;
     out

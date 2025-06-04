@@ -119,18 +119,32 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
+        #[allow(deprecated)]
+        let mut dictionary_tracker =
+            writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+        let data_gen = writer::IpcDataGenerator::default();
+        let data = IpcMessage(
+            data_gen
+                .schema_to_bytes_with_dictionary_tracker(
+                    &flight.schema,
+                    &mut dictionary_tracker,
+                    &options,
+                )
+                .ipc_message
+                .into(),
+        );
+        let schema_flight_data = FlightData {
+            data_header: data.0,
+            ..Default::default()
+        };
 
-        let schema = std::iter::once(Ok(SchemaAsIpc::new(&flight.schema, &options).into()));
+        let schema = std::iter::once(Ok(schema_flight_data));
 
         let batches = flight
             .chunks
             .iter()
             .enumerate()
             .flat_map(|(counter, batch)| {
-                let data_gen = writer::IpcDataGenerator::default();
-                let mut dictionary_tracker =
-                    writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
-
                 let (encoded_dictionaries, encoded_batch) = data_gen
                     .encoded_batch(batch, &mut dictionary_tracker, &options)
                     .expect("DictionaryTracker configured above to not error on replacement");

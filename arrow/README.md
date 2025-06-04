@@ -25,7 +25,7 @@
 This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation.
 
 The [API documentation](https://docs.rs/arrow/latest) contains examples and full API.
-There are several [examples](https://github.com/apache/arrow-rs/tree/master/arrow/examples) to start from as well.
+There are several [examples](https://github.com/apache/arrow-rs/tree/main/arrow/examples) to start from as well.
 
 The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow/index.html).
 
@@ -37,7 +37,7 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 The `arrow` crate follows the [SemVer standard] defined by Cargo and works well
 within the Rust crate ecosystem. See the [repository README] for more details on
-the release schedule and version.
+the release schedule, version and deprecation policy.
 
 [SemVer standard]: https://doc.rust-lang.org/cargo/reference/semver.html
 [repository README]: https://github.com/apache/arrow-rs
@@ -57,10 +57,11 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
 - `ipc_compression` - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
-  implementations of some [compute](https://github.com/apache/arrow-rs/tree/master/arrow/src/compute/kernels)
+  implementations of some [compute](https://github.com/apache/arrow-rs/tree/main/arrow/src/compute/kernels)
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
+- `canonical_extension_types` - definitions for [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html#format-canonical-extensions)
 
 ## Arrow Feature Status
 

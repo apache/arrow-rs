@@ -23,11 +23,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - arrow-array/**
@@ -60,7 +60,7 @@ jobs:
           cargo test -p arrow-flight --all-features
       - name: Test --examples
         run: |
-          cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
+          cargo test -p arrow-flight  --features=flight-sql,tls --examples
 
   vendor:
     name: Verify Vendored Code

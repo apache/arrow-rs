@@ -121,7 +121,10 @@ type Result<T> = std::result::Result<T, ArrowError>;
 /// This function copies the content of two FFI structs [arrow_data::ffi::FFI_ArrowArray] and
 /// [arrow_schema::ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
 /// Usually the raw pointers are provided by the array data consumer.
-#[deprecated(note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from")]
+#[deprecated(
+    since = "52.0.0",
+    note = "Use FFI_ArrowArray::new and FFI_ArrowSchema::try_from"
+)]
 pub unsafe fn export_array_into_raw(
     src: ArrayRef,
     out_array: *mut FFI_ArrowArray,
@@ -302,8 +305,8 @@ impl ImportedArrowArray<'_> {
         let len = self.array.len();
         let offset = self.array.offset();
         let null_count = match &self.data_type {
-            DataType::Null => 0,
-            _ => self.array.null_count(),
+            DataType::Null => Some(0),
+            _ => self.array.null_count_opt(),
         };
 
         let data_layout = layout(&self.data_type);
@@ -329,7 +332,7 @@ impl ImportedArrowArray<'_> {
             ArrayData::new_unchecked(
                 self.data_type,
                 len,
-                Some(null_count),
+                null_count,
                 null_bit_buffer,
                 offset,
                 buffers,
@@ -635,6 +638,38 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
+    #[test]
+    fn test_null_count_handling() {
+        let int32_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .null_bit_buffer(Some(Buffer::from([0b01011111, 0b00000001])))
+            .build()
+            .unwrap();
+        let mut ffi_array = FFI_ArrowArray::new(&int32_data);
+        assert_eq!(3, ffi_array.null_count());
+        assert_eq!(Some(3), ffi_array.null_count_opt());
+        // Simulating uninitialized state
+        unsafe {
+            ffi_array.set_null_count(-1);
+        }
+        assert_eq!(None, ffi_array.null_count_opt());
+        let int32_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Int32) }.unwrap();
+        assert_eq!(3, int32_data.null_count());
+
+        let null_data = &ArrayData::new_null(&DataType::Null, 10);
+        let mut ffi_array = FFI_ArrowArray::new(null_data);
+        assert_eq!(10, ffi_array.null_count());
+        assert_eq!(Some(10), ffi_array.null_count_opt());
+        // Simulating uninitialized state
+        unsafe {
+            ffi_array.set_null_count(-1);
+        }
+        assert_eq!(None, ffi_array.null_count_opt());
+        let null_data = unsafe { from_ffi_and_data_type(ffi_array, DataType::Null) }.unwrap();
+        assert_eq!(0, null_data.null_count());
+    }
+
     fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
         let array = GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
@@ -687,7 +722,7 @@ mod tests_to_then_from_ffi {
 
         // Construct a list array from the above two
         let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Arc::new(
-            Field::new("item", DataType::Int32, false),
+            Field::new_list_field(DataType::Int32, false),
         ));
 
         let list_data = ArrayData::builder(list_data_type)
@@ -1263,12 +1298,12 @@ mod tests_to_then_from_ffi {
 mod tests_from_ffi {
     use std::sync::Arc;
 
-    use arrow_buffer::{bit_util, buffer::Buffer, MutableBuffer, OffsetBuffer};
+    use arrow_buffer::{bit_util, buffer::Buffer};
     use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
 
-    use super::{ImportedArrowArray, Result};
+    use super::Result;
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
@@ -1446,7 +1481,7 @@ mod tests_from_ffi {
         let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
         let value_offsets = Buffer::from_slice_ref(offsets);
         let inner_list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
             .len(8)
             .add_buffer(value_offsets)
@@ -1472,7 +1507,11 @@ mod tests_from_ffi {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_empty_string_with_non_zero_offset() -> Result<()> {
+        use super::ImportedArrowArray;
+        use arrow_buffer::{MutableBuffer, OffsetBuffer};
+
         // Simulate an empty string array with a non-zero offset from a producer
         let data: Buffer = MutableBuffer::new(0).into();
         let offsets = OffsetBuffer::new(vec![123].into());

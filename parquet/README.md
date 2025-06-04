@@ -36,7 +36,7 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 The `parquet` crate follows the [SemVer standard] defined by Cargo and works well
 within the Rust crate ecosystem. See the [repository README] for more details on
-the release schedule and version.
+the release schedule, version and deprecation policy.
 
 [semver standard]: https://doc.rust-lang.org/cargo/reference/semver.html
 [repository readme]: https://github.com/apache/arrow-rs
@@ -51,17 +51,22 @@ major releases may contain breaking API changes.
 
 The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
 
-- `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
-- `async` - support `async` APIs for reading parquet
-- `json` - support for reading / writing `json` data to / from parquet
-- `brotli` (default) - support for parquet using `brotli` compression
-- `flate2` (default) - support for parquet using `gzip` compression
-- `lz4` (default) - support for parquet using `lz4` compression
-- `zstd` (default) - support for parquet using `zstd` compression
-- `snap` (default) - support for parquet using `snappy` compression
-- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `arrow` (default) - support for reading / writing [`arrow`] arrays to / from Parquet
+- `async` - support `async` APIs for reading Parquet
+- `json` - support for reading / writing `json` data to / from Parquet
+- `brotli` (default) - support for Parquet using `brotli` compression
+- `flate2` (default) - support for Parquet using `gzip` compression
+- `lz4` (default) - support for Parquet using `lz4` compression
+- `zstd` (default) - support for Parquet using `zstd` compression
+- `snap` (default) - support for Parquet using `snappy` compression
+- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/main/parquet/src/bin)
 - `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
+- `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
+- `encryption` - support for reading / writing encrypted Parquet files
+
+[`arrow`]: https://crates.io/crates/arrow
+[`simdutf8`]: https://crates.io/crates/simdutf8
 
 ## Parquet Feature Status
 
@@ -72,12 +77,14 @@ The `parquet` crate provides the following features which may be enabled in your
   - [x] Row record reader
   - [x] Arrow record reader
   - [x] Async support (to Arrow)
+  - [x] Encrypted files
 - [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
   - [x] Async support
+  - [x] Encrypted files
 - [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 

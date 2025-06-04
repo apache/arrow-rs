@@ -48,12 +48,13 @@ use std::ops::Range;
 ///     file: tokio::fs::File,
 /// }
 /// impl MetadataFetch for TokioFileMetadata {
-///     fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+///     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
 ///         // return a future that fetches data in range
 ///         async move {
-///             let mut buf = vec![0; range.len()]; // target buffer
+///             let len = (range.end - range.start).try_into().unwrap();
+///             let mut buf = vec![0; len]; // target buffer
 ///             // seek to the start of the range and read the data
-///             self.file.seek(SeekFrom::Start(range.start as u64)).await?;
+///             self.file.seek(SeekFrom::Start(range.start)).await?;
 ///             self.file.read_exact(&mut buf).await?;
 ///             Ok(Bytes::from(buf)) // convert to Bytes
 ///         }
@@ -66,13 +67,23 @@ pub trait MetadataFetch {
     ///
     /// Note the returned type is a boxed future, often created by
     /// [FutureExt::boxed]. See the trait documentation for an example
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
     }
+}
+
+/// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`] via suffix
+/// requests, without knowing the file size
+pub trait MetadataSuffixFetch: MetadataFetch {
+    /// Return a future that fetches the last `n` bytes asynchronously
+    ///
+    /// Note the returned type is a boxed future, often created by
+    /// [FutureExt::boxed]. See the trait documentation for an example
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
@@ -107,26 +118,29 @@ impl<F: MetadataFetch> MetadataLoader<F> {
             file_size - FOOTER_SIZE
         };
 
-        let suffix = fetch.fetch(footer_start..file_size).await?;
+        let suffix = fetch.fetch(footer_start as u64..file_size as u64).await?;
         let suffix_len = suffix.len();
 
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let length = ParquetMetaDataReader::decode_footer(&footer)?;
+        let footer = ParquetMetaDataReader::decode_footer_tail(&footer)?;
+        let length = footer.metadata_length();
 
         if file_size < length + FOOTER_SIZE {
             return Err(ParquetError::EOF(format!(
                 "file size of {} is less than footer + metadata {}",
                 file_size,
-                length + 8
+                length + FOOTER_SIZE
             )));
         }
 
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let (metadata, remainder) = if length > suffix_len - FOOTER_SIZE {
             let metadata_start = file_size - length - FOOTER_SIZE;
-            let meta = fetch.fetch(metadata_start..file_size - FOOTER_SIZE).await?;
+            let meta = fetch
+                .fetch(metadata_start as u64..(file_size - FOOTER_SIZE) as u64)
+                .await?;
             (ParquetMetaDataReader::decode_metadata(&meta)?, None)
         } else {
             let metadata_start = file_size - length - FOOTER_SIZE - footer_start;
@@ -176,16 +190,18 @@ impl<F: MetadataFetch> MetadataLoader<F> {
         };
 
         let data = match &self.remainder {
-            Some((remainder_start, remainder)) if *remainder_start <= range.start => {
-                let offset = range.start - *remainder_start;
-                remainder.slice(offset..range.end - *remainder_start + offset)
+            Some((remainder_start, remainder)) if *remainder_start as u64 <= range.start => {
+                let remainder_start = *remainder_start as u64;
+                let range_start = usize::try_from(range.start - remainder_start)?;
+                let range_end = usize::try_from(range.end - remainder_start)?;
+                remainder.slice(range_start..range_end)
             }
             // Note: this will potentially fetch data already in remainder, this keeps things simple
             _ => self.fetch.fetch(range.start..range.end).await?,
         };
 
         // Sanity check
-        assert_eq!(data.len(), range.end - range.start);
+        assert_eq!(data.len(), (range.end - range.start) as usize);
         let offset = range.start;
 
         if column_index {
@@ -197,10 +213,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.column_index_range() {
-                            Some(r) => decode_column_index(
-                                &data[r.start - offset..r.end - offset],
-                                c.column_type(),
-                            ),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - offset)?;
+                                let r_end = usize::try_from(r.end - offset)?;
+                                decode_column_index(&data[r_start..r_end], c.column_type())
+                            }
                             None => Ok(Index::NONE),
                         })
                         .collect::<Result<Vec<_>>>()
@@ -219,7 +236,11 @@ impl<F: MetadataFetch> MetadataLoader<F> {
                     x.columns()
                         .iter()
                         .map(|c| match c.offset_index_range() {
-                            Some(r) => decode_offset_index(&data[r.start - offset..r.end - offset]),
+                            Some(r) => {
+                                let r_start = usize::try_from(r.start - offset)?;
+                                let r_end = usize::try_from(r.end - offset)?;
+                                decode_offset_index(&data[r_start..r_end])
+                            }
                             None => Err(general_err!("missing offset index")),
                         })
                         .collect::<Result<Vec<_>>>()
@@ -245,8 +266,8 @@ where
     F: FnMut(Range<usize>) -> Fut + Send,
     Fut: Future<Output = Result<Bytes>> + Send,
 {
-    fn fetch(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range).await }.boxed()
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        async move { self.0(range.start.try_into()?..range.end.try_into()?).await }.boxed()
     }
 }
 
@@ -276,6 +297,7 @@ where
     F: FnMut(Range<usize>) -> Fut + Send,
     Fut: Future<Output = Result<Bytes>> + Send,
 {
+    let file_size = u64::try_from(file_size)?;
     let fetch = MetadataFetchFn(fetch);
     ParquetMetaDataReader::new()
         .with_prefetch_hint(prefetch)

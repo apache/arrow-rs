@@ -249,7 +249,7 @@ pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     /// map to the real values.
     keys: PrimitiveArray<K>,
 
-    /// Array of dictionary values (can by any DataType).
+    /// Array of dictionary values (can be any DataType).
     values: ArrayRef,
 
     /// Values are ordered.
@@ -327,6 +327,10 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     ///
     /// Safe provided [`Self::try_new`] would not return an error
     pub unsafe fn new_unchecked(keys: PrimitiveArray<K>, values: ArrayRef) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(keys, values);
+        }
+
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),
@@ -481,6 +485,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
     /// its keys and values if the underlying data buffer is not shared by others.
+    #[allow(clippy::result_large_err)]
     pub fn into_primitive_dict_builder<V>(self) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
     where
         V: ArrowPrimitiveType,
@@ -537,6 +542,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// assert_eq!(typed.value(1), 11);
     /// assert_eq!(typed.value(2), 21);
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn unary_mut<F, V>(self, op: F) -> Result<DictionaryArray<K>, DictionaryArray<K>>
     where
         V: ArrowPrimitiveType,
@@ -720,6 +726,11 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.keys.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.keys.offset()
     }
@@ -729,7 +740,7 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
-        match self.values.nulls() {
+        match self.values.logical_nulls() {
             None => self.nulls().cloned(),
             Some(value_nulls) => {
                 let mut builder = BooleanBufferBuilder::new(self.len());
@@ -746,6 +757,26 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
                 }
                 Some(builder.finish().into())
             }
+        }
+    }
+
+    fn logical_null_count(&self) -> usize {
+        match (self.keys.nulls(), self.values.logical_nulls()) {
+            (None, None) => 0,
+            (Some(key_nulls), None) => key_nulls.null_count(),
+            (None, Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .filter(|k| value_nulls.is_null(k.as_usize()))
+                .count(),
+            (Some(key_nulls), Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .enumerate()
+                .filter(|(idx, k)| key_nulls.is_null(*idx) || value_nulls.is_null(k.as_usize()))
+                .count(),
         }
     }
 
@@ -864,6 +895,10 @@ impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
         self.dictionary.logical_nulls()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        self.dictionary.logical_null_count()
     }
 
     fn is_nullable(&self) -> bool {
@@ -1016,7 +1051,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int16Array, Int32Array, Int8Array};
+    use crate::{Int16Array, Int32Array, Int8Array, RunArray};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]
@@ -1439,6 +1474,54 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(values, &[Some(50), None, None, Some(2)])
+    }
+
+    #[test]
+    fn test_logical_nulls() -> Result<(), ArrowError> {
+        let values = Arc::new(RunArray::try_new(
+            &Int32Array::from(vec![1, 3, 7]),
+            &Int32Array::from(vec![Some(1), None, Some(3)]),
+        )?) as ArrayRef;
+
+        // For this test to be meaningful, the values array need to have different nulls and logical nulls
+        assert_eq!(values.null_count(), 0);
+        assert_eq!(values.logical_null_count(), 2);
+
+        // Construct a trivial dictionary with 1-1 mapping to underlying array
+        let dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from((0..values.len()).map(|i| i as i8).collect::<Vec<_>>()),
+            Arc::clone(&values),
+        )?;
+
+        // No keys are null
+        assert_eq!(dictionary.null_count(), 0);
+        // Dictionary array values are logically nullable
+        assert_eq!(dictionary.logical_null_count(), values.logical_null_count());
+        assert_eq!(dictionary.logical_nulls(), values.logical_nulls());
+        assert!(dictionary.is_nullable());
+
+        // Construct a trivial dictionary with 1-1 mapping to underlying array except that key 0 is nulled out
+        let dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(
+                (0..values.len())
+                    .map(|i| i as i8)
+                    .map(|i| if i == 0 { None } else { Some(i) })
+                    .collect::<Vec<_>>(),
+            ),
+            Arc::clone(&values),
+        )?;
+
+        // One key is null
+        assert_eq!(dictionary.null_count(), 1);
+
+        // Dictionary array values are logically nullable
+        assert_eq!(
+            dictionary.logical_null_count(),
+            values.logical_null_count() + 1
+        );
+        assert!(dictionary.is_nullable());
+
+        Ok(())
     }
 
     #[test]

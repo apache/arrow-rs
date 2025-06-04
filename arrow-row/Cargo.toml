@@ -30,14 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_row"
-path = "src/lib.rs"
 bench = false
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["compile-time-rng"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-array = { workspace = true }
@@ -50,7 +46,5 @@ half = { version = "2.1", default-features = false }
 [dev-dependencies]
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
-
-[features]
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 

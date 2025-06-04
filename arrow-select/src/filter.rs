@@ -423,47 +423,45 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
 /// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
 fn filter_run_end_array<R: RunEndIndexType>(
-    re_arr: &RunArray<R>,
-    pred: &FilterPredicate,
+    array: &RunArray<R>,
+    predicate: &FilterPredicate,
 ) -> Result<RunArray<R>, ArrowError>
 where
     R::Native: Into<i64> + From<bool>,
     R::Native: AddAssign,
 {
-    let run_ends: &RunEndBuffer<R::Native> = re_arr.run_ends();
-    let mut values_filter = BooleanBufferBuilder::new(run_ends.len());
+    let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
 
-    let mut start = 0i64;
-    let mut i = 0;
-    let filter_values = pred.filter.values();
+    let mut start = 0u64;
+    let mut j = 0;
     let mut count = R::default_value();
+    let filter_values = predicate.filter.values();
+    let run_ends = run_ends.inner();
 
-    for end in run_ends.inner().into_iter().map(|i| (*i).into()) {
+    let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
         let mut keep = false;
-        // in filter_array the predicate array is checked to have the same len as the run end array
-        // this means the largest value in the run_ends is == to pred.len()
-        // so we're always within bounds when calling value_unchecked
+        let mut end = run_ends[i].into() as u64;
+        let difference = end.saturating_sub(filter_values.len() as u64);
+        end -= difference;
+
+        // Safety: we subtract the difference off `end` so we are always within bounds
         for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
             count += R::Native::from(pred);
             keep |= pred
         }
         // this is to avoid branching
-        new_run_ends[i] = count;
-        i += keep as usize;
+        new_run_ends[j] = count;
+        j += keep as usize;
 
-        values_filter.append(keep);
         start = end;
-    }
+        keep
+    })
+    .into();
 
-    new_run_ends.truncate(i);
+    new_run_ends.truncate(j);
 
-    if values_filter.is_empty() {
-        new_run_ends.clear();
-    }
-
-    let values = re_arr.values();
-    let pred = BooleanArray::new(values_filter.finish(), None);
+    let values = array.values();
     let values = filter(&values, &pred)?;
 
     let run_ends = PrimitiveArray::<R>::new(new_run_ends.into(), None);
@@ -519,14 +517,14 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder = BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
@@ -556,37 +554,33 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
 fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
     assert!(values.len() >= predicate.filter.len());
 
-    let buffer = match &predicate.strategy {
+    match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
-            buffer
+            buffer.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
+            let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
                 buffer.extend_from_slice(&values[*start..*end]);
             }
-            buffer
+            buffer.into()
         }
         IterationStrategy::IndexIterator => {
             let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
             // SAFETY: IndexIterator is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
+            unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
         }
         IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
-
-            // SAFETY: `Vec::iter` is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
+            iter.collect::<Vec<_>>().into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
-    };
-
-    buffer.into()
+    }
 }
 
 /// `filter` implementation for primitive arrays
@@ -615,8 +609,8 @@ where
 struct FilterBytes<'a, OffsetSize> {
     src_offsets: &'a [OffsetSize],
     src_values: &'a [u8],
-    dst_offsets: MutableBuffer,
-    dst_values: MutableBuffer,
+    dst_offsets: Vec<OffsetSize>,
+    dst_values: Vec<u8>,
     cur_offset: OffsetSize,
 }
 
@@ -628,10 +622,10 @@ where
     where
         T: ByteArrayType<Offset = OffsetSize>,
     {
-        let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
-        let mut dst_offsets = MutableBuffer::new(num_offsets_bytes);
-        let dst_values = MutableBuffer::new(0);
+        let dst_values = Vec::new();
+        let mut dst_offsets: Vec<OffsetSize> = Vec::with_capacity(capacity + 1);
         let cur_offset = OffsetSize::from_usize(0).unwrap();
+
         dst_offsets.push(cur_offset);
 
         Self {
@@ -659,27 +653,46 @@ where
         (start, end, len)
     }
 
+    fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        self.dst_offsets.extend(iter.map(|idx| {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
+            self.cur_offset += len;
+
+            self.cur_offset
+        }));
+    }
+
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
         for idx in iter {
-            let (start, end, len) = self.get_value_range(idx);
-            self.cur_offset += len;
-            self.dst_offsets.push(self.cur_offset);
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
             self.dst_values
                 .extend_from_slice(&self.src_values[start..end]);
         }
     }
 
-    /// Extends the in-progress array by the ranges in the provided iterator
-    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+    fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
+        self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
             // These can only fail if `array` contains invalid data
             for idx in start..end {
                 let (_, _, len) = self.get_value_range(idx);
                 self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset); // push_unchecked?
+                self.dst_offsets.push(self.cur_offset);
             }
+        }
+    }
 
+    /// Extends the in-progress array by the ranges in the provided iterator
+    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
+        for (start, end) in iter {
             let value_start = self.get_value_offset(start);
             let value_end = self.get_value_offset(end);
             self.dst_values
@@ -700,13 +713,21 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
+            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
-        IterationStrategy::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
+        IterationStrategy::Slices(slices) => {
+            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
+            filter.extend_slices(slices.iter().cloned())
+        }
         IterationStrategy::IndexIterator => {
+            filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
-        IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
+        IterationStrategy::Indices(indices) => {
+            filter.extend_offsets_idx(indices.iter().cloned());
+            filter.extend_idx(indices.iter().cloned())
+        }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
@@ -836,7 +857,14 @@ fn filter_struct(
         None
     };
 
-    Ok(unsafe { StructArray::new_unchecked(array.fields().clone(), columns, nulls) })
+    Ok(unsafe {
+        StructArray::new_unchecked_with_length(
+            array.fields().clone(),
+            columns,
+            nulls,
+            predicate.count(),
+        )
+    })
 }
 
 /// `filter` implementation for sparse unions
@@ -865,8 +893,10 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
     use arrow_array::types::*;
-    use rand::distributions::{Alphanumeric, Standard};
+    use rand::distr::uniform::{UniformSampler, UniformUsize};
+    use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
+    use rand::rng;
 
     use super::*;
 
@@ -1281,6 +1311,26 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_run_end_encoding_array_max_value_gt_predicate_len() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![false, true, true]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(2, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2]),
+            &Int64Array::from(vec![7, -2]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
     fn test_filter_dictionary_array() {
         let values = [Some("hello"), None, Some("world"), Some("!")];
         let a: Int8DictionaryArray = values.iter().copied().collect();
@@ -1312,7 +1362,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
@@ -1336,7 +1386,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let expected = ArrayData::builder(list_data_type)
             .len(2)
             .add_buffer(value_offsets)
@@ -1456,9 +1506,9 @@ mod tests {
     }
 
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
-        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.random()))
             .take(mask_len)
             .collect();
 
@@ -1497,15 +1547,19 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test_slices_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
-            let mask_len = rng.gen_range(0..1024);
+            let mask_len = rng.random_range(0..1024);
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = uusize
+                .sample(&mut rng)
+                .checked_rem(max_truncate)
+                .unwrap_or(0);
 
             test_slices_fuzz(mask_len, offset, truncate);
         }
@@ -1530,11 +1584,11 @@ mod tests {
     /// Generates an array of length `len` with `valid_percent` non-null values
     fn gen_primitive<T>(len: usize, valid_percent: f64) -> Vec<Option<T>>
     where
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
-            .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
             .collect()
     }
 
@@ -1544,11 +1598,11 @@ mod tests {
         valid_percent: f64,
         str_len_range: std::ops::Range<usize>,
     ) -> Vec<Option<String>> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(str_len_range.clone());
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(str_len_range.clone());
                     (0..len)
                         .map(|_| char::from(rng.sample(Alphanumeric)))
                         .collect()
@@ -1565,24 +1619,24 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_filter() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for i in 0..100 {
             let filter_percent = match i {
                 0..=4 => 1.,
                 5..=10 => 0.,
-                _ => rng.gen_range(0.0..1.0),
+                _ => rng.random_range(0.0..1.0),
             };
 
-            let valid_percent = rng.gen_range(0.0..1.0);
+            let valid_percent = rng.random_range(0.0..1.0);
 
-            let array_len = rng.gen_range(32..256);
-            let array_offset = rng.gen_range(0..10);
+            let array_len = rng.random_range(32..256);
+            let array_offset = rng.random_range(0..10);
 
             // Construct a predicate
-            let filter_offset = rng.gen_range(0..10);
-            let filter_truncate = rng.gen_range(0..10);
-            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
+            let filter_offset = rng.random_range(0..10);
+            let filter_truncate = rng.random_range(0..10);
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.random_bool(filter_percent)))
                 .take(array_len + filter_offset - filter_truncate)
                 .collect();
 
@@ -2019,5 +2073,60 @@ mod tests {
         let result = filter(&array, &predicate).unwrap();
 
         assert_eq!(result.to_data(), expected.to_data());
+    }
+
+    #[test]
+    fn test_filter_empty_struct() {
+        /*
+            "a": {
+                "b": int64,
+                "c": {}
+            },
+        */
+        let fields = arrow_schema::Field::new(
+            "a",
+            arrow_schema::DataType::Struct(arrow_schema::Fields::from(vec![
+                arrow_schema::Field::new("b", arrow_schema::DataType::Int64, true),
+                arrow_schema::Field::new(
+                    "c",
+                    arrow_schema::DataType::Struct(arrow_schema::Fields::empty()),
+                    true,
+                ),
+            ])),
+            true,
+        );
+
+        /* Test record
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+        */
+
+        // Create the record batch with the nested struct array
+        let schema = Arc::new(Schema::new(vec![fields]));
+
+        let b = Arc::new(Int64Array::from(vec![None, None, None]));
+        let c = Arc::new(StructArray::new_empty_fields(
+            3,
+            Some(NullBuffer::from(vec![true, true, true])),
+        ));
+        let a = StructArray::new(
+            vec![
+                Field::new("b", DataType::Int64, true),
+                Field::new("c", DataType::Struct(Fields::empty()), true),
+            ]
+            .into(),
+            vec![b.clone(), c.clone()],
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let record_batch = RecordBatch::try_new(schema, vec![Arc::new(a)]).unwrap();
+        println!("{record_batch:?}");
+
+        // Apply the filter
+        let predicate = BooleanArray::from(vec![true, false, true]);
+        let filtered_batch = filter_record_batch(&record_batch, &predicate).unwrap();
+
+        // The filtered batch should have 2 rows (the 1st and 3rd)
+        assert_eq!(filtered_batch.num_rows(), 2);
     }
 }

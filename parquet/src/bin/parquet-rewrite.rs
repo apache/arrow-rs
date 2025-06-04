@@ -41,7 +41,7 @@ use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::Compression,
     file::{
-        properties::{EnabledStatistics, WriterProperties, WriterVersion},
+        properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},
         reader::FileReader,
         serialized_reader::SerializedFileReader,
     },
@@ -139,6 +139,24 @@ impl From<WriterVersionArgs> for WriterVersion {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum BloomFilterPositionArgs {
+    /// Write Bloom Filters of each row group right after the row group
+    AfterRowGroup,
+
+    /// Write Bloom Filters at the end of the file
+    End,
+}
+
+impl From<BloomFilterPositionArgs> for BloomFilterPosition {
+    fn from(value: BloomFilterPositionArgs) -> Self {
+        match value {
+            BloomFilterPositionArgs::AfterRowGroup => Self::AfterRowGroup,
+            BloomFilterPositionArgs::End => Self::End,
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Read and write parquet file with potentially different settings"), long_about = None)]
 struct Args {
@@ -188,6 +206,10 @@ struct Args {
     #[clap(long)]
     bloom_filter_ndv: Option<u64>,
 
+    /// Sets the position of bloom filter
+    #[clap(long)]
+    bloom_filter_position: Option<BloomFilterPositionArgs>,
+
     /// Sets flag to enable/disable dictionary encoding for any column.
     #[clap(long)]
     dictionary_enabled: Option<bool>,
@@ -199,6 +221,10 @@ struct Args {
     /// Sets writer version.
     #[clap(long)]
     writer_version: Option<WriterVersionArgs>,
+
+    /// Sets whether to coerce Arrow types to match Parquet specification
+    #[clap(long)]
+    coerce_types: Option<bool>,
 }
 
 fn main() {
@@ -238,6 +264,7 @@ fn main() {
     if let Some(value) = args.dictionary_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
     }
+    #[allow(deprecated)]
     if let Some(value) = args.max_statistics_size {
         writer_properties_builder = writer_properties_builder.set_max_statistics_size(value);
     }
@@ -251,6 +278,10 @@ fn main() {
             if let Some(value) = args.bloom_filter_ndv {
                 writer_properties_builder = writer_properties_builder.set_bloom_filter_ndv(value);
             }
+            if let Some(value) = args.bloom_filter_position {
+                writer_properties_builder =
+                    writer_properties_builder.set_bloom_filter_position(value.into());
+            }
         }
     }
     if let Some(value) = args.dictionary_enabled {
@@ -261,6 +292,9 @@ fn main() {
     }
     if let Some(value) = args.writer_version {
         writer_properties_builder = writer_properties_builder.set_writer_version(value.into());
+    }
+    if let Some(value) = args.coerce_types {
+        writer_properties_builder = writer_properties_builder.set_coerce_types(value);
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(

@@ -24,9 +24,10 @@ extern crate arrow;
 use arrow::array::*;
 use arrow::compute::kernels::regexp::*;
 use arrow::util::bench_util::*;
+use std::hint;
 
 fn bench_regexp(arr: &GenericStringArray<i32>, regex_array: &dyn Datum) {
-    regexp_match(criterion::black_box(arr), regex_array, None).unwrap();
+    regexp_match(hint::black_box(arr), regex_array, None).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {

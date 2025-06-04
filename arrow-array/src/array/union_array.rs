@@ -653,6 +653,17 @@ impl UnionArray {
             }
         }
     }
+
+    /// Returns a vector of tuples containing each field's type_id and its logical null buffer.
+    /// Only fields with non-zero null counts are included.
+    fn fields_logical_nulls(&self) -> Vec<(i8, NullBuffer)> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(type_id, field)| Some((type_id as i8, field.as_ref()?.logical_nulls()?)))
+            .filter(|(_, nulls)| nulls.null_count() > 0)
+            .collect()
+    }
 }
 
 impl From<ArrayData> for UnionArray {
@@ -744,6 +755,17 @@ impl Array for UnionArray {
         self.type_ids.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.type_ids.shrink_to_fit();
+        if let Some(offsets) = &mut self.offsets {
+            offsets.shrink_to_fit();
+        }
+        for array in self.fields.iter_mut().flatten() {
+            array.shrink_to_fit();
+        }
+        self.fields.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
@@ -768,11 +790,7 @@ impl Array for UnionArray {
                 .flatten();
         }
 
-        let logical_nulls = fields
-            .iter()
-            .filter_map(|(type_id, _)| Some((type_id, self.child(type_id).logical_nulls()?)))
-            .filter(|(_, nulls)| nulls.null_count() > 0)
-            .collect::<Vec<_>>();
+        let logical_nulls = self.fields_logical_nulls();
 
         if logical_nulls.is_empty() {
             return None;
@@ -976,7 +994,7 @@ fn selection_mask(type_ids_chunk: &[i8], type_id: i8) -> u64 {
         .copied()
         .enumerate()
         .fold(0, |packed, (bit_idx, v)| {
-            packed | ((v == type_id) as u64) << bit_idx
+            packed | (((v == type_id) as u64) << bit_idx)
         })
 }
 
@@ -1941,15 +1959,14 @@ mod tests {
 
         let array = UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
 
-        let result = array.logical_nulls();
+        let expected = BooleanBuffer::from(vec![true, true, true, false, false, false]);
 
-        let expected = NullBuffer::from(vec![true, true, true, false, false, false]);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
     }
 
     #[test]
     fn test_sparse_union_logical_nulls_mask_all_nulls_skip_one() {
-        // If we used union_fields() (3 fields with nulls), the choosen strategy would be Gather on x86 without any specified target feature e.g CI runtime
         let fields: UnionFields = [
             (1, Arc::new(Field::new("A", DataType::Int32, true))),
             (3, Arc::new(Field::new("B", DataType::Float64, true))),
@@ -1966,10 +1983,13 @@ mod tests {
 
         let array = UnionArray::try_new(fields.clone(), type_ids, None, children).unwrap();
 
-        let result = array.logical_nulls();
+        let expected = BooleanBuffer::from(vec![false, false, true, false]);
 
-        let expected = NullBuffer::from(vec![false, false, true, false]);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
+        );
 
         //like above, but repeated to genereate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
@@ -1986,12 +2006,15 @@ mod tests {
         )
         .unwrap();
 
-        let result = array.logical_nulls();
-
         let expected =
-            NullBuffer::from_iter([false, false, true, false].into_iter().cycle().take(len));
+            BooleanBuffer::from_iter([false, false, true, false].into_iter().cycle().take(len));
+
         assert_eq!(array.len(), len);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
+        );
     }
 
     #[test]
@@ -2010,10 +2033,13 @@ mod tests {
 
         let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
-        let result = array.logical_nulls();
+        let expected = BooleanBuffer::from(vec![true, true, true, true, false, false]);
 
-        let expected = NullBuffer::from(vec![true, true, true, true, false, false]);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
+        );
 
         //like above, but repeated to genereate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
@@ -2031,16 +2057,19 @@ mod tests {
 
         let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
-        let result = array.logical_nulls();
-
-        let expected = NullBuffer::from_iter(
+        let expected = BooleanBuffer::from_iter(
             [true, true, true, true, false, true]
                 .into_iter()
                 .cycle()
                 .take(len),
         );
+
         assert_eq!(array.len(), len);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
+        );
     }
 
     #[test]
@@ -2059,10 +2088,13 @@ mod tests {
 
         let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
-        let result = array.logical_nulls();
+        let expected = BooleanBuffer::from(vec![false, false, true, true, false, false]);
 
-        let expected = NullBuffer::from(vec![false, false, true, true, false, false]);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
+        );
 
         //like above, but repeated to genereate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
@@ -2080,16 +2112,19 @@ mod tests {
 
         let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
 
-        let result = array.logical_nulls();
-
-        let expected = NullBuffer::from_iter(
+        let expected = BooleanBuffer::from_iter(
             [false, false, true, true, false, false]
                 .into_iter()
                 .cycle()
                 .take(len),
         );
+
         assert_eq!(array.len(), len);
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(
+            expected,
+            array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
+        );
     }
 
     #[test]
@@ -2125,11 +2160,10 @@ mod tests {
         )
         .unwrap();
 
-        let result = array.logical_nulls();
+        let expected = BooleanBuffer::from(vec![true, false, true, false]);
 
-        let expected = NullBuffer::from(vec![true, false, true, false]);
-
-        assert_eq!(Some(expected), result);
+        assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
+        assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
     }
 
     fn union_fields() -> UnionFields {

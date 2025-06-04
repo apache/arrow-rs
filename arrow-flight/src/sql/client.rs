@@ -228,8 +228,8 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -274,8 +274,8 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -309,7 +309,7 @@ impl FlightSqlServiceClient<Channel> {
         let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream.map_err(FlightError::Tonic),
+            response_stream.map_err(|status| status.into()),
         )
         .with_headers(md)
         .with_trailers(trailers))
@@ -593,8 +593,8 @@ impl PreparedStatement<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any = Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -721,7 +721,7 @@ pub fn arrow_data_from_flight_data(
 
             let dictionaries_by_field = HashMap::new();
             let record_batch = read_record_batch(
-                &Buffer::from_bytes(flight_data.data_body.into()),
+                &Buffer::from(flight_data.data_body),
                 ipc_record_batch,
                 arrow_schema_ref.clone(),
                 &dictionaries_by_field,

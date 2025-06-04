@@ -418,7 +418,7 @@ pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 ///
 /// ```
 /// # use arrow_array::Decimal128Array;
-/// // Create from Vec<Option<i18>>
+/// // Create from Vec<Option<i128>>
 /// let arr = Decimal128Array::from(vec![Some(1), None, Some(2)]);
 /// // Create from Vec<i128>
 /// let arr = Decimal128Array::from(vec![1, 2, 3]);
@@ -729,10 +729,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
-        unsafe {
-            let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            Self::new(val_buf.into(), None)
-        }
+        let val_buf: Vec<_> = vec![value; count];
+        Self::new(val_buf.into(), None)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -827,13 +825,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+        let values = self.values().into_iter().map(|v| op(*v));
+        let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
@@ -1035,13 +1028,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: FnMut(U::Item) -> T::Native,
     {
         let nulls = left.logical_nulls();
-        let buffer = unsafe {
+        let buffer: Vec<_> = (0..left.len())
             // SAFETY: i in range 0..left.len()
-            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
-            // SAFETY: upper bound is trusted because `iter` is over a range
-            Buffer::from_trusted_len_iter(iter)
-        };
-
+            .map(|i| op(unsafe { left.value_unchecked(i) }))
+            .collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
@@ -1150,6 +1140,13 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn is_empty(&self) -> bool {
         self.values.is_empty()
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.values.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
     }
 
     fn offset(&self) -> usize {
@@ -1480,24 +1477,6 @@ def_numeric_from_vec!(TimestampMicrosecondType);
 def_numeric_from_vec!(TimestampNanosecondType);
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
-    /// Construct a timestamp array from a vec of i64 values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_vec(data: Vec<i64>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<i64>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
-    /// Construct a timestamp array from a vec of `Option<i64>` values and an optional timezone
-    #[deprecated(note = "Use with_timezone_opt instead")]
-    pub fn from_opt_vec(data: Vec<Option<i64>>, timezone: Option<String>) -> Self
-    where
-        Self: From<Vec<Option<i64>>>,
-    {
-        Self::from(data).with_timezone_opt(timezone)
-    }
-
     /// Returns the timezone of this array if any
     pub fn timezone(&self) -> Option<&str> {
         match self.data_type() {
@@ -2296,7 +2275,7 @@ mod tests {
         ];
         let array_data = ArrayData::builder(DataType::Decimal128(38, 6))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let decimal_array = Decimal128Array::from(array_data);

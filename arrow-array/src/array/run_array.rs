@@ -330,6 +330,11 @@ impl<T: RunEndIndexType> Array for RunArray<T> {
         self.run_ends.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.run_ends.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.run_ends.offset()
     }
@@ -596,6 +601,10 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
         self.run_array.logical_nulls()
     }
 
+    fn logical_null_count(&self) -> usize {
+        self.run_array.logical_null_count()
+    }
+
     fn is_nullable(&self) -> bool {
         self.run_array.is_nullable()
     }
@@ -653,8 +662,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rand::rng;
     use rand::seq::SliceRandom;
-    use rand::thread_rng;
     use rand::Rng;
 
     use super::*;
@@ -682,7 +691,7 @@ mod tests {
         ];
         let mut result: Vec<Option<i32>> = Vec::with_capacity(size);
         let mut ix = 0;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         // run length can go up to 8. Cap the max run length for smaller arrays to size / 2.
         let max_run_length = 8_usize.min(1_usize.max(size / 2));
         while result.len() < size {
@@ -691,7 +700,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rng.random_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -991,7 +1000,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             let physical_indices = run_array.get_physical_indices(&logical_indices).unwrap();
@@ -1027,7 +1036,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(slice_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             // test for offset = 0 and slice length = slice_len

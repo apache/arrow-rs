@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_ord"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-array = { workspace = true }
@@ -39,8 +41,7 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
-num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false, features = ["num-traits"] }
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+half = { version = "2.1", default-features = false, features = ["num-traits"] }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }

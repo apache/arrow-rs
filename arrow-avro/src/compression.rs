@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use flate2::read;
 use std::io;
 use std::io::Read;
 
@@ -24,9 +23,16 @@ use std::io::Read;
 pub const CODEC_METADATA_KEY: &str = "avro.codec";
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+/// Supported compression codecs for Avro data
+///
+/// Avro supports multiple compression formats for data blocks.
+/// This enum represents the compression codecs available in this implementation.
 pub enum CompressionCodec {
+    /// Deflate compression (RFC 1951)
     Deflate,
+    /// Snappy compression
     Snappy,
+    /// ZStandard compression
     ZStandard,
 }
 
@@ -35,7 +41,7 @@ impl CompressionCodec {
         match self {
             #[cfg(feature = "deflate")]
             CompressionCodec::Deflate => {
-                let mut decoder = read::DeflateDecoder::new(block);
+                let mut decoder = flate2::read::DeflateDecoder::new(block);
                 let mut out = Vec::new();
                 decoder.read_to_end(&mut out)?;
                 Ok(out)

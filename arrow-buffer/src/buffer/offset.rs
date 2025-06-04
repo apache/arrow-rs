@@ -55,7 +55,7 @@ use std::ops::Deref;
 ///  (offsets[i],
 ///   offsets[i+1])
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
 impl<O: ArrowNativeType> OffsetBuffer<O> {
@@ -133,6 +133,43 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(out.into())
     }
 
+    /// Get an Iterator over the lengths of this [`OffsetBuffer`]
+    ///
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    /// let offsets = OffsetBuffer::<_>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+    /// assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![1, 3, 5]);
+    /// ```
+    ///
+    /// Empty [`OffsetBuffer`] will return an empty iterator
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::new_empty();
+    /// assert_eq!(offsets.lengths().count(), 0);
+    /// ```
+    ///
+    /// This can be used to merge multiple [`OffsetBuffer`]s to one
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    ///
+    /// let buffer1 = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
+    /// let buffer2 = OffsetBuffer::<i32>::from_lengths([1, 3, 5, 7, 9]);
+    ///
+    /// let merged = OffsetBuffer::<i32>::from_lengths(
+    ///     vec![buffer1, buffer2].iter().flat_map(|x| x.lengths())
+    /// );
+    ///
+    /// assert_eq!(merged.lengths().collect::<Vec<_>>(), &[2, 6, 3, 7, 2, 1, 3, 5, 7, 9]);
+    /// ```
+    pub fn lengths(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.0.windows(2).map(|x| x[1].as_usize() - x[0].as_usize())
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.0.shrink_to_fit();
+    }
+
     /// Returns the inner [`ScalarBuffer`]
     pub fn inner(&self) -> &ScalarBuffer<O> {
         &self.0
@@ -176,6 +213,12 @@ impl<T: ArrowNativeType> AsRef<[T]> for OffsetBuffer<T> {
 impl<O: ArrowNativeType> From<OffsetBufferBuilder<O>> for OffsetBuffer<O> {
     fn from(value: OffsetBufferBuilder<O>) -> Self {
         value.finish()
+    }
+}
+
+impl<O: ArrowNativeType> Default for OffsetBuffer<O> {
+    fn default() -> Self {
+        Self::new_empty()
     }
 }
 
@@ -238,5 +281,46 @@ mod tests {
     #[should_panic(expected = "usize overflow")]
     fn from_lengths_usize_overflow() {
         OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
+    }
+
+    #[test]
+    fn get_lengths() {
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+        assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn get_lengths_should_be_with_fixed_size() {
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+        let iter = offsets.lengths();
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        assert_eq!(iter.len(), 3);
+    }
+
+    #[test]
+    fn get_lengths_from_empty_offset_buffer_should_be_empty_iterator() {
+        let offsets = OffsetBuffer::<i32>::new_empty();
+        assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![]);
+    }
+
+    #[test]
+    fn impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9])),
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]))
+            ),
+            "OffsetBuffer should implement Eq."
+        );
+    }
+
+    #[test]
+    fn impl_default() {
+        let default = OffsetBuffer::<i32>::default();
+        assert_eq!(default.as_ref(), &[0]);
     }
 }

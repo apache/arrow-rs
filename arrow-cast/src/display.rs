@@ -72,6 +72,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// Show types in visual representation batches
+    types_info: bool,
 }
 
 impl Default for FormatOptions<'_> {
@@ -92,6 +94,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: None,
             time_format: None,
             duration_format: DurationFormat::ISO8601,
+            types_info: false,
         }
     }
 
@@ -157,6 +160,18 @@ impl<'a> FormatOptions<'a> {
             duration_format,
             ..self
         }
+    }
+
+    /// Overrides if types should be shown
+    ///
+    /// Defaults to [`false`]
+    pub const fn with_types_info(self, types_info: bool) -> Self {
+        Self { types_info, ..self }
+    }
+
+    /// Returns true if type info should be included in visual representation of batches
+    pub const fn types_info(&self) -> bool {
+        self.types_info
     }
 }
 
@@ -575,6 +590,12 @@ temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
 temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
+/// Derive [`DisplayIndexState`] for `PrimitiveArray<$t>`
+///
+/// Arguments
+/// * `$convert` - function to convert the value to an `Duration`
+/// * `$t` - [`ArrowPrimitiveType`] of the array
+/// * `$scale` - scale of the duration (passed to `duration_fmt`)
 macro_rules! duration_display {
     ($convert:ident, $t:ty, $scale:tt) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
@@ -589,6 +610,34 @@ macro_rules! duration_display {
                 match fmt {
                     DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
                     DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+/// Similar to [`duration_display`] but `$convert` returns an `Option`
+macro_rules! duration_option_display {
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = DurationFormat;
+
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                Ok(options.duration_format)
+            }
+
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    DurationFormat::ISO8601 => match $convert(v) {
+                        Some(td) => write!(f, "{}", td)?,
+                        None => write!(f, "<invalid>")?,
+                    },
+                    DurationFormat::Pretty => match $convert(v) {
+                        Some(_) => duration_fmt!(f, v, $scale)?,
+                        None => write!(f, "<invalid>")?,
+                    },
                 }
                 Ok(())
             }
@@ -642,8 +691,8 @@ macro_rules! duration_fmt {
     }};
 }
 
-duration_display!(duration_s_to_duration, DurationSecondType, 0);
-duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
+duration_option_display!(try_duration_s_to_duration, DurationSecondType, 0);
+duration_option_display!(try_duration_ms_to_duration, DurationMillisecondType, 3);
 duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
 duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
@@ -1056,9 +1105,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::StringRunBuilder;
-
     use super::*;
+    use arrow_array::builder::StringRunBuilder;
 
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()

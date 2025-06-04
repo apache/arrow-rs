@@ -243,6 +243,10 @@
 //! let batch = RecordBatch::try_from_iter([("col1", col_1), ("col_2", col_2)]).unwrap();
 //! ```
 //!
+//! # Pretty Printing
+//!
+//! See the [`util::pretty`] module (requires the `prettyprint` crate feature)
+//!
 //! # IO
 //!
 //! This crate provides readers and writers for various formats to/from [`RecordBatch`]
@@ -336,7 +340,7 @@
 //!
 //! If you think you have found an instance where this is possible, please file
 //! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/master/arrow#safety).
+//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! # Higher-level Processing
 //!
@@ -362,6 +366,11 @@
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]

@@ -136,7 +136,7 @@ use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
 
 use crate::map_csv_error;
@@ -221,6 +221,8 @@ impl InferredDataType {
             } else {
                 1 << m
             }
+        } else if string == "NaN" || string == "nan" || string == "inf" || string == "-inf" {
+            1 << 2 // Float64
         } else {
             1 << 8 // Utf8
         }
@@ -241,7 +243,7 @@ pub struct Format {
 }
 
 impl Format {
-    /// Specify whether the CSV file has a header, defaults to `true`
+    /// Specify whether the CSV file has a header, defaults to `false`
     ///
     /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
@@ -397,51 +399,6 @@ impl Format {
         }
         builder.build()
     }
-}
-
-/// Infer the schema of a CSV file by reading through the first n records of the file,
-/// with `max_read_records` controlling the maximum number of records to read.
-///
-/// If `max_read_records` is not set, the whole file is read to infer its schema.
-///
-/// Return inferred schema and number of records used for inference. This function does not change
-/// reader cursor offset.
-///
-/// The inferred schema will always have each field set as nullable.
-#[deprecated(note = "Use Format::infer_schema")]
-#[allow(deprecated)]
-pub fn infer_file_schema<R: Read + Seek>(
-    mut reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.stream_position()?;
-    let r = infer_reader_schema(&mut reader, delimiter, max_read_records, has_header)?;
-    // return the reader seek back to the start
-    reader.seek(SeekFrom::Start(saved_offset))?;
-    Ok(r)
-}
-
-/// Infer schema of CSV records provided by struct that implements `Read` trait.
-///
-/// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
-/// not set, all records are read to infer the schema.
-///
-/// Return inferred schema and number of records used for inference.
-#[deprecated(note = "Use Format::infer_schema")]
-pub fn infer_reader_schema<R: Read>(
-    reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let format = Format {
-        delimiter: Some(delimiter),
-        header: has_header,
-        ..Default::default()
-    };
-    format.infer_schema(reader, max_read_records)
 }
 
 /// Infer schema from a list of CSV files by reading through first n records
@@ -824,42 +781,66 @@ fn parse(
                     match key_type.as_ref() {
                         DataType::Int8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int8Type>>(),
                         ) as ArrayRef),
                         DataType::Int16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int16Type>>(),
                         ) as ArrayRef),
                         DataType::Int32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int32Type>>(),
                         ) as ArrayRef),
                         DataType::Int64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int64Type>>(),
                         ) as ArrayRef),
                         DataType::UInt8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt8Type>>(),
                         ) as ArrayRef),
                         DataType::UInt16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt16Type>>(),
                         ) as ArrayRef),
                         DataType::UInt32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt32Type>>(),
                         ) as ArrayRef),
                         DataType::UInt64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt64Type>>(),
                         ) as ArrayRef),
                         _ => Err(ArrowError::ParseError(format!(
@@ -955,10 +936,12 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    T::DATA_TYPE,
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1041,10 +1024,12 @@ fn build_boolean_array(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    "Boolean",
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1099,14 +1084,6 @@ impl ReaderBuilder {
             bounds: None,
             projection: None,
         }
-    }
-
-    /// Set whether the CSV file has headers
-    #[deprecated(note = "Use with_header")]
-    #[doc(hidden)]
-    pub fn has_header(mut self, has_header: bool) -> Self {
-        self.format.header = has_header;
-        self
     }
 
     /// Set whether the CSV file has a header
@@ -1236,7 +1213,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
@@ -1529,6 +1506,40 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_with_nullable_dictionary() {
+        let offset_type = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ];
+        for data_type in offset_type {
+            let file = File::open("test/data/dictionary_nullable_test.csv").unwrap();
+            let dictionary_type =
+                DataType::Dictionary(Box::new(data_type), Box::new(DataType::Utf8));
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("name", dictionary_type.clone(), true),
+            ]));
+
+            let mut csv = ReaderBuilder::new(schema)
+                .build(file.try_clone().unwrap())
+                .unwrap();
+
+            let batch = csv.next().unwrap().unwrap();
+            assert_eq!(3, batch.num_rows());
+            assert_eq!(2, batch.num_columns());
+
+            let names = arrow_cast::cast(batch.column(1), &dictionary_type).unwrap();
+            assert!(!names.is_null(2));
+            assert!(names.is_null(1));
+        }
+    }
+    #[test]
     fn test_nulls() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
@@ -1654,7 +1665,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_rows());
+        assert_eq!(10, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1753,10 +1764,8 @@ mod tests {
         assert_eq!(&DataType::Float64, schema.field(0).data_type());
     }
 
-    #[test]
-    fn test_parse_invalid_csv() {
-        let file = File::open("test/data/various_types_invalid.csv").unwrap();
-
+    fn invalid_csv_helper(file_name: &str) -> String {
+        let file = File::open(file_name).unwrap();
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, false),
@@ -1771,16 +1780,32 @@ mod tests {
             .with_projection(vec![0, 1, 2, 3]);
 
         let mut csv = builder.build(file).unwrap();
-        match csv.next() {
-            Some(e) => match e {
-                Err(e) => assert_eq!(
-                    "ParseError(\"Error while parsing value 4.x4 for column 1 at line 4\")",
-                    format!("{e:?}")
-                ),
-                Ok(_) => panic!("should have failed"),
-            },
-            None => panic!("should have failed"),
-        }
+
+        csv.next().unwrap().unwrap_err().to_string()
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_float() {
+        let file_name = "test/data/various_invalid_types/invalid_float.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'", error);
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_int() {
+        let file_name = "test/data/various_invalid_types/invalid_int.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'", error);
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_bool() {
+        let file_name = "test/data/various_invalid_types/invalid_bool.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'", error);
     }
 
     /// Infer the data type of a record
@@ -1798,6 +1823,10 @@ mod tests {
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
+        assert_eq!(infer_field_schema("NaN"), DataType::Float64);
+        assert_eq!(infer_field_schema("nan"), DataType::Float64);
+        assert_eq!(infer_field_schema("inf"), DataType::Float64);
+        assert_eq!(infer_field_schema("-inf"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("trUe"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
@@ -2367,7 +2396,7 @@ mod tests {
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
-            ("test/data/various_types.csv", true, 7),
+            ("test/data/various_types.csv", true, 10),
             ("test/data/decimal_test.csv", false, 10),
         ];
 
@@ -2589,6 +2618,22 @@ mod tests {
             }
             assert_eq!(&t.get(), expected, "{values:?}")
         }
+    }
+
+    #[test]
+    fn test_record_length_mismatch() {
+        let csv = "\
+        a,b,c\n\
+        1,2,3\n\
+        4,5\n\
+        6,7,8";
+        let mut read = Cursor::new(csv.as_bytes());
+        let result = Format::default()
+            .with_header(true)
+            .infer_schema(&mut read, None);
+        assert!(result.is_err());
+        // Include line number in the error message to help locate and fix the issue
+        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 2 records, found 3 records at line 3");
     }
 
     #[test]

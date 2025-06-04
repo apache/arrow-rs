@@ -21,12 +21,13 @@ use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
-use rand::distributions::uniform::SampleUniform;
-use rand::thread_rng;
+use half::f16;
+use rand::distr::uniform::SampleUniform;
+use rand::rng;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::{
-    distributions::{Alphanumeric, Distribution, Standard},
+    distr::{Alphanumeric, Distribution, StandardUniform},
     prelude::StdRng,
 };
 use std::ops::Range;
@@ -35,16 +36,16 @@ use std::ops::Range;
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut rng = seedable_rng();
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                Some(rng.gen())
+                Some(rng.random())
             }
         })
         .collect()
@@ -59,16 +60,16 @@ pub fn create_primitive_array_with_seed<T>(
 ) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut rng = StdRng::seed_from_u64(seed);
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                Some(rng.gen())
+                Some(rng.random())
             }
         })
         .collect()
@@ -85,10 +86,14 @@ pub fn create_month_day_nano_array_with_seed(
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                Some(IntervalMonthDayNano::new(rng.gen(), rng.gen(), rng.gen()))
+                Some(IntervalMonthDayNano::new(
+                    rng.random(),
+                    rng.random(),
+                    rng.random(),
+                ))
             }
         })
         .collect()
@@ -97,15 +102,15 @@ pub fn create_month_day_nano_array_with_seed(
 /// Creates a random (but fixed-seeded) array of a given size and null density
 pub fn create_boolean_array(size: usize, null_density: f32, true_density: f32) -> BooleanArray
 where
-    Standard: Distribution<bool>,
+    StandardUniform: Distribution<bool>,
 {
     let mut rng = seedable_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                let value = rng.gen::<f32>() < true_density;
+                let value = rng.random::<f32>() < true_density;
                 Some(value)
             }
         })
@@ -124,6 +129,104 @@ pub fn create_string_array<Offset: OffsetSizeTrait>(
     create_string_array_with_max_len(size, null_density, 400)
 }
 
+/// Creates longer string array with same prefix, the prefix should be larger than 4 bytes,
+/// and the string length should be larger than 12 bytes
+/// so that we can compare the performance with StringViewArray, because StringViewArray has 4 bytes inline for view
+pub fn create_longer_string_array_with_same_prefix<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+) -> GenericStringArray<Offset> {
+    create_string_array_with_len_range_and_prefix(size, null_density, 13, 100, "prefix_")
+}
+
+/// Creates longer string view array with same prefix, the prefix should be larger than 4 bytes,
+/// and the string length should be larger than 12 bytes
+/// so that we can compare the StringArray performance with StringViewArray, because StringViewArray has 4 bytes inline for view
+pub fn create_longer_string_view_array_with_same_prefix(
+    size: usize,
+    null_density: f32,
+) -> StringViewArray {
+    create_string_view_array_with_len_range_and_prefix(size, null_density, 13, 100, "prefix_")
+}
+
+fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+) -> GenericStringArray<Offset> {
+    assert!(
+        min_str_len <= max_str_len,
+        "min_str_len must be <= max_str_len"
+    );
+    assert!(
+        prefix.len() <= max_str_len,
+        "Prefix length must be <= max_str_len"
+    );
+
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng.random_range(
+                    min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
+                );
+
+                let mut value = prefix.to_string();
+                value.extend(
+                    rng.sample_iter(&Alphanumeric)
+                        .take(remaining_len)
+                        .map(char::from),
+                );
+
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+fn create_string_view_array_with_len_range_and_prefix(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+) -> StringViewArray {
+    assert!(
+        min_str_len <= max_str_len,
+        "min_str_len must be <= max_str_len"
+    );
+    assert!(
+        prefix.len() <= max_str_len,
+        "Prefix length must be <= max_str_len"
+    );
+
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng.random_range(
+                    min_str_len.saturating_sub(prefix.len())..=(max_str_len - prefix.len()),
+                );
+
+                let mut value = prefix.to_string();
+                value.extend(
+                    rng.sample_iter(&Alphanumeric)
+                        .take(remaining_len)
+                        .map(char::from),
+                );
+
+                Some(value)
+            }
+        })
+        .collect()
+}
+
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
 fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
@@ -133,10 +236,10 @@ fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     let rng = &mut seedable_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                let str_len = rng.gen_range(0..max_str_len);
+                let str_len = rng.random_range(0..max_str_len);
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
@@ -155,7 +258,7 @@ pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
@@ -182,10 +285,10 @@ fn create_string_view_array_with_max_len(
     let rng = &mut seedable_rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
-                let str_len = rng.gen_range(0..max_str_len);
+                let str_len = rng.random_range(0..max_str_len);
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
@@ -208,10 +311,10 @@ pub fn create_string_view_array_with_len(
     // if mixed, we creates first half that string length small than 12 bytes and second half large than 12 bytes
     if mixed {
         for _ in 0..size / 2 {
-            lengths.push(rng.gen_range(1..12));
+            lengths.push(rng.random_range(1..12));
         }
         for _ in size / 2..size {
-            lengths.push(rng.gen_range(12..=std::cmp::max(30, str_len)));
+            lengths.push(rng.random_range(12..=std::cmp::max(30, str_len)));
         }
     } else {
         lengths.resize(size, str_len);
@@ -220,7 +323,7 @@ pub fn create_string_view_array_with_len(
     lengths
         .into_iter()
         .map(|len| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 let value: Vec<u8> = rng.sample_iter(&Alphanumeric).take(len).collect();
@@ -241,7 +344,7 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
 
     let data: Vec<_> = (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
@@ -295,7 +398,7 @@ pub fn create_string_array_for_runs(
     string_len: usize,
 ) -> Vec<String> {
     assert!(logical_array_len >= physical_array_len);
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     // typical length of each run
     let run_len = logical_array_len / physical_array_len;
@@ -304,7 +407,7 @@ pub fn create_string_array_for_runs(
     let mut run_len_extra = logical_array_len % physical_array_len;
 
     let mut values: Vec<String> = (0..physical_array_len)
-        .map(|_| (0..string_len).map(|_| rng.gen::<char>()).collect())
+        .map(|_| (0..string_len).map(|_| rng.random::<char>()).collect())
         .flat_map(|s| {
             let mut take_len = run_len;
             if run_len_extra > 0 {
@@ -331,12 +434,12 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 let value = rng
-                    .sample_iter::<u8, _>(Standard)
-                    .take(range_rng.gen_range(0..8))
+                    .sample_iter::<u8, _>(StandardUniform)
+                    .take(range_rng.random_range(0..8))
                     .collect::<Vec<u8>>();
                 Some(value)
             }
@@ -350,11 +453,11 @@ pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> Fix
 
     FixedSizeBinaryArray::try_from_sparse_iter_with_size(
         (0..size).map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 let value = rng
-                    .sample_iter::<u8, _>(Standard)
+                    .sample_iter::<u8, _>(StandardUniform)
                     .take(value_len)
                     .collect::<Vec<u8>>();
                 Some(value)
@@ -374,7 +477,7 @@ pub fn create_dict_from_values<K>(
 ) -> DictionaryArray<K>
 where
     K: ArrowDictionaryKeyType,
-    Standard: Distribution<K::Native>,
+    StandardUniform: Distribution<K::Native>,
     K::Native: SampleUniform,
 {
     let min_key = K::Native::from_usize(0).unwrap();
@@ -392,7 +495,7 @@ pub fn create_sparse_dict_from_values<K>(
 ) -> DictionaryArray<K>
 where
     K: ArrowDictionaryKeyType,
-    Standard: Distribution<K::Native>,
+    StandardUniform: Distribution<K::Native>,
     K::Native: SampleUniform,
 {
     let mut rng = seedable_rng();
@@ -400,11 +503,14 @@ where
         DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(values.data_type().clone()));
 
     let keys: Buffer = (0..size)
-        .map(|_| rng.gen_range(key_range.clone()))
+        .map(|_| rng.random_range(key_range.clone()))
         .collect();
 
-    let nulls: Option<Buffer> =
-        (null_density != 0.).then(|| (0..size).map(|_| rng.gen_bool(null_density as _)).collect());
+    let nulls: Option<Buffer> = (null_density != 0.).then(|| {
+        (0..size)
+            .map(|_| rng.random_bool(null_density as _))
+            .collect()
+    });
 
     let data = ArrayDataBuilder::new(data_type)
         .len(size)
@@ -415,4 +521,49 @@ where
         .unwrap();
 
     DictionaryArray::from(data)
+}
+
+/// Creates a random (but fixed-seeded) f16 array of a given size and nan-value density
+pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < nan_density {
+                Some(f16::NAN)
+            } else {
+                Some(f16::from_f32(rng.random()))
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) f32 array of a given size and nan-value density
+pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < nan_density {
+                Some(f32::NAN)
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) f64 array of a given size and nan-value density
+pub fn create_f64_array(size: usize, nan_density: f32) -> Float64Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < nan_density {
+                Some(f64::NAN)
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
 }

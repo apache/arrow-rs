@@ -19,32 +19,30 @@
 
 # Native Rust implementation of Apache Arrow and Apache Parquet
 
-[![Coverage Status](https://codecov.io/gh/apache/arrow-rs/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-rs?branch=master)
-
 Welcome to the [Rust][rust] implementation of [Apache Arrow], the popular in-memory columnar format.
 
-This repo contains the following main components:
+This repository contains the following crates:
 
 | Crate              | Description                                                                  | Latest API Docs                                  | README                            |
 | ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------- |
 | [`arrow`]          | Core functionality (memory layout, arrays, low level computations)           | [docs.rs](https://docs.rs/arrow/latest)          | [(README)][arrow-readme]          |
 | [`arrow-flight`]   | Support for Arrow-Flight IPC protocol                                        | [docs.rs](https://docs.rs/arrow-flight/latest)   | [(README)][flight-readme]         |
-| [`object-store`]   | Support for object store interactions (aws, azure, gcp, local, in-memory)    | [docs.rs](https://docs.rs/object_store/latest)   | [(README)][objectstore-readme]    |
 | [`parquet`]        | Support for Parquet columnar file format                                     | [docs.rs](https://docs.rs/parquet/latest)        | [(README)][parquet-readme]        |
 | [`parquet_derive`] | A crate for deriving RecordWriter/RecordReader for arbitrary, simple structs | [docs.rs](https://docs.rs/parquet-derive/latest) | [(README)][parquet-derive-readme] |
 
 The current development version the API documentation in this repo can be found [here](https://arrow.apache.org/rust).
+
+Note: previously the [`object_store`] crate was also part of this repository,
+but it has been moved to the [arrow-rs-object-store repository]
 
 [apache arrow]: https://arrow.apache.org/
 [`arrow`]: https://crates.io/crates/arrow
 [`parquet`]: https://crates.io/crates/parquet
 [`parquet_derive`]: https://crates.io/crates/parquet-derive
 [`arrow-flight`]: https://crates.io/crates/arrow-flight
-[`object-store`]: https://crates.io/crates/object-store
+[arrow-rs-object-store repository]: https://github.com/apache/arrow-rs-object-store
 
 ## Release Versioning and Schedule
-
-### `arrow` and `parquet` crates
 
 The Arrow Rust project releases approximately monthly and follows [Semantic
 Versioning].
@@ -55,53 +53,93 @@ as the [`parquet`] and [`parquet-derive`] crates.
 
 This crate releases every month. We release new major versions (with potentially
 breaking API changes) at most once a quarter, and release incremental minor
-versions in the intervening months. See [this ticket] for more details.
+versions in the intervening months. See [ticket #5368] for more details.
 
 To keep our maintenance burden down, we do regularly scheduled releases (major
-and minor) from the `master` branch. How we handle PRs with breaking API changes
+and minor) from the `main` branch. How we handle PRs with breaking API changes
 is described in the [contributing] guide.
 
 [contributing]: CONTRIBUTING.md#breaking-changes
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Sep 2024         | `53.0.0` | Major, potentially breaking API changes |
-| Oct 2024         | `53.1.0` | Minor, NO breaking API changes          |
-| Oct 2024         | `53.2.0` | Minor, NO breaking API changes          |
-| Nov 2024         | `53.3.0` | Minor, NO breaking API changes          |
-| Dec 2024         | `54.0.0` | Major, potentially breaking API changes |
+| Approximate Date | Version    | Notes                                   |
+| ---------------- | ---------- | --------------------------------------- |
+| Apr 2025         | [`55.0.0`] | Major, potentially breaking API changes |
+| May 2025         | [`55.1.0`] | Minor, NO breaking API changes          |
+| June 2025        | [`55.2.0`] | Minor, NO breaking API changes          |
+| July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
 
-[this ticket]: https://github.com/apache/arrow-rs/issues/5368
+[`55.0.0`]: https://github.com/apache/arrow-rs/issues/7084
+[`55.1.0`]: https://github.com/apache/arrow-rs/issues/7393
+[`55.2.0`]: https://github.com/apache/arrow-rs/issues/7394
+[`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
+[ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
-### `object_store` crate
+### Rust Version Compatibility Policy
 
-The [`object_store`] crate is released independently of the `arrow` and
-`parquet` crates and follows [Semantic Versioning]. We aim to release new
-versions approximately every 2 months.
+arrow-rs, parquet and object_store are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on a need by basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
 
-[`object_store`]: https://crates.io/crates/object_store
+Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
+
+E.g.
+
+in Apr 2025 we will release version 55.0.0 which might have a version bump. But the Rust version selected in this case will be at most version 1.81.
+
+### Guidelines for `panic` vs `Result`
+
+In general, use panics for bad states that are unreachable, unrecoverable or harmful.
+For those caused by invalid user input, however, we prefer to report that invalidity
+gracefully as an error result instead of panicking. In general, invalid input should result
+in an `Error` as soon as possible. It _is_ ok for code paths after validation to assume
+validation has already occurred and panic if not. See [ticket #6737] for more nuances.
+
+[ticket #6737]: https://github.com/apache/arrow-rs/issues/6737
+
+### Deprecation Guidelines
+
+Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
+downstream Rust programs to still compile, but generate compiler warnings. This
+gives downstream crates time to migrate prior to API removal.
+
+To deprecate an API:
+
+- Mark the API as deprecated using `#[deprecated]` and specify the exact arrow-rs version in which it was deprecated
+- Concisely describe the preferred API to help the user transition
+
+The deprecated version is the next version which will be released (please
+consult the list above). To mark the API as deprecated, use the
+`#[deprecated(since = "...", note = "...")]` attribute.
+
+Foe example
+
+```rust
+#[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
+```
+
+In general, deprecated APIs will remain in the codebase for at least two major releases after
+they were deprecated (typically between 6 - 9 months later). For example, an API
+deprecated in `51.3.0` can be removed in `54.0.0` (or later). Deprecated APIs
+may be removed earlier or later than these guidelines at the discretion of the
+maintainers.
 
 ## Related Projects
 
 There are several related crates in different repositories
 
-| Crate                    | Description                                 | Documentation                           |
-| ------------------------ | ------------------------------------------- | --------------------------------------- |
-| [`datafusion`]           | In-memory query engine with SQL support     | [(README)][datafusion-readme]           |
-| [`ballista`]             | Distributed query execution                 | [(README)][ballista-readme]             |
-| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
-| [`parquet_opendal`]      | Use [`opendal`] for [`parquet`] Arrow IO    | [(README)][parquet_opendal-readme]      |
+| Crate               | Description                                                  | Documentation                      |
+| ------------------- | ------------------------------------------------------------ | ---------------------------------- |
+| [`object_store`]    | Object Storage (aws, azure, gcp, local, in-memory) interface | [(README)](object_store-readme)    |
+| [`datafusion`]      | In-memory query engine with SQL support                      | [(README)][datafusion-readme]      |
+| [`ballista`]        | Distributed query execution                                  | [(README)][ballista-readme]        |
+| [`parquet_opendal`] | Use [`opendal`] for [`parquet`] Arrow IO                     | [(README)][parquet_opendal-readme] |
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
-[`object_store_opendal`]: https://crates.io/crates/object_store_opendal
-[`opendal`]: https://crates.io/crates/opendal
-[object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
 [`parquet_opendal`]: https://crates.io/crates/parquet_opendal
 [parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
+[object_store-readme]: https://github.com/apache/arrow-rs-object-store/blob/main/README.md
 
 Collectively, these crates support a wider array of functionality for analytic computations in Rust.
 
@@ -130,18 +168,18 @@ a great place to meet other contributors and get guidance on where to contribute
 The Rust implementation uses [GitHub issues][issues] as the system of record for new features and bug fixes and
 this plays a critical role in the release process.
 
-For design discussions we generally collaborate on Google documents and file a GitHub issue linking to the document.
+For design discussions we generally use GitHub issues.
 
 There is more information in the [contributing] guide.
 
 [rust]: https://www.rust-lang.org/
+[`object_store`]: https://crates.io/crates/object-store
 [arrow-readme]: arrow/README.md
 [contributing]: CONTRIBUTING.md
 [parquet-readme]: parquet/README.md
 [flight-readme]: arrow-flight/README.md
 [datafusion-readme]: https://github.com/apache/datafusion/blob/main/README.md
 [ballista-readme]: https://github.com/apache/datafusion-ballista/blob/main/README.md
-[objectstore-readme]: object_store/README.md
 [parquet-derive-readme]: parquet_derive/README.md
 [issues]: https://github.com/apache/arrow-rs/issues
 [discussions]: https://github.com/apache/arrow-rs/discussions

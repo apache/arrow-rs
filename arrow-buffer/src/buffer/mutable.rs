@@ -118,13 +118,6 @@ impl MutableBuffer {
         Self { data, len, layout }
     }
 
-    /// Create a [`MutableBuffer`] from the provided [`Vec`] without copying
-    #[inline]
-    #[deprecated(note = "Use From<Vec<T>>")]
-    pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        Self::from(vec)
-    }
-
     /// Allocates a new [MutableBuffer] from given `Bytes`.
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {
@@ -295,7 +288,8 @@ impl MutableBuffer {
         self.len
     }
 
-    /// Returns the total capacity in this buffer.
+    /// Returns the total capacity in this buffer, in bytes.
+    ///
     /// The invariant `buffer.len() <= buffer.capacity()` is always upheld.
     #[inline]
     pub const fn capacity(&self) -> usize {
@@ -331,20 +325,11 @@ impl MutableBuffer {
         self.data.as_ptr()
     }
 
-    #[deprecated(
-        since = "2.0.0",
-        note = "This method is deprecated in favour of `into` from the trait `Into`."
-    )]
-    /// Freezes this buffer and return an immutable version of it.
-    pub fn freeze(self) -> Buffer {
-        self.into_buffer()
-    }
-
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         std::mem::forget(self);
-        Buffer::from_bytes(bytes)
+        Buffer::from(bytes)
     }
 
     /// View this buffer as a mutable slice of a specific type.
@@ -483,10 +468,13 @@ impl MutableBuffer {
     }
 }
 
+/// Creates a non-null pointer with alignment of [`ALIGNMENT`]
+///
+/// This is similar to [`NonNull::dangling`]
 #[inline]
-fn dangling_ptr() -> NonNull<u8> {
-    // SAFETY: ALIGNMENT is a non-zero usize which is then casted
-    // to a *mut T. Therefore, `ptr` is not null and the conditions for
+pub(crate) fn dangling_ptr() -> NonNull<u8> {
+    // SAFETY: ALIGNMENT is a non-zero usize which is then cast
+    // to a *mut u8. Therefore, `ptr` is not null and the conditions for
     // calling new_unchecked() are respected.
     #[cfg(miri)]
     {

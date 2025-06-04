@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
-use crate::{ArrayRef, BooleanArray};
+use crate::{Array, ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -123,6 +123,13 @@ impl BooleanBuilder {
         self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
+    /// Appends n `additional` bits of value `v` into the buffer
+    #[inline]
+    pub fn append_n(&mut self, additional: usize, v: bool) {
+        self.values_builder.append_n(additional, v);
+        self.null_buffer_builder.append_n_non_nulls(additional);
+    }
+
     /// Appends values from a slice of type `T` and a validity boolean slice.
     ///
     /// Returns an error if the slices are of different lengths
@@ -136,6 +143,18 @@ impl BooleanBuilder {
             self.null_buffer_builder.append_slice(is_valid);
             self.values_builder.append_slice(values);
             Ok(())
+        }
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    #[inline]
+    pub fn append_array(&mut self, array: &BooleanArray) {
+        self.values_builder.append_buffer(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
         }
     }
 
@@ -225,6 +244,7 @@ impl Extend<Option<bool>> for BooleanBuilder {
 mod tests {
     use super::*;
     use crate::Array;
+    use arrow_buffer::{BooleanBuffer, NullBuffer};
 
     #[test]
     fn test_boolean_array_builder() {
@@ -324,5 +344,65 @@ mod tests {
             &values,
             &[false, false, true, false, false, true, true, false]
         )
+    }
+
+    #[test]
+    fn test_boolean_array_builder_append_n() {
+        let mut builder = BooleanBuilder::new();
+        builder.append_n(3, true);
+        builder.append_n(2, false);
+        let array = builder.finish();
+        assert_eq!(3, array.true_count());
+        assert_eq!(2, array.false_count());
+        assert_eq!(0, array.null_count());
+
+        let values = array.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
+        assert_eq!(&values, &[true, true, true, false, false])
+    }
+
+    #[test]
+    fn test_append_array() {
+        let input = vec![
+            Some(true),
+            None,
+            Some(true),
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+        ];
+        let arr1 = BooleanArray::from(input[..5].to_vec());
+        let arr2 = BooleanArray::from(input[5..8].to_vec());
+        let arr3 = BooleanArray::from(input[8..].to_vec());
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = BooleanArray::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = BooleanArray::new(
+            BooleanBuffer::from(vec![true, false, true, false]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
     }
 }

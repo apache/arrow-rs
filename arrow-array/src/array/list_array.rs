@@ -42,20 +42,26 @@ pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     const IS_LARGE: bool;
     /// Prefix for the offset size
     const PREFIX: &'static str;
+    /// The max `usize` offset
+    const MAX_OFFSET: usize;
 }
 
 impl OffsetSizeTrait for i32 {
     const IS_LARGE: bool = false;
     const PREFIX: &'static str = "";
+    const MAX_OFFSET: usize = i32::MAX as usize;
 }
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
     const PREFIX: &'static str = "Large";
+    const MAX_OFFSET: usize = i64::MAX as usize;
 }
 
 /// An array of [variable length lists], similar to JSON arrays
-/// (e.g. `["A", "B", "C"]`).
+/// (e.g. `["A", "B", "C"]`). This struct specifically represents
+/// the [list layout]. Refer to [`GenericListViewArray`] for the
+/// [list-view layout].
 ///
 /// Lists are represented using `offsets` into a `values` child
 /// array. Offsets are stored in two adjacent entries of an
@@ -118,12 +124,48 @@ impl OffsetSizeTrait for i64 {
 ///                 (offsets[i],            │   ListArray               (Array)
 ///                offsets[i+1])                                    └ ─ ─ ─ ─ ─ ─ ┘    │
 ///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
 ///
+/// # Slicing
 ///
+/// Slicing a `ListArray` creates a new `ListArray` without copying any data,
+/// but this means the [`Self::values`] and [`Self::offsets`] may have "unused" data
+///
+/// For example, calling `slice(1, 3)` on the `ListArray` in the above example
+/// would result in the following. Note
+///
+/// 1. `Values` array is unchanged
+/// 2. `Offsets` do not start at `0`, nor cover all values in the Values array.
+///
+/// ```text
+///                                 ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │  ╔═══╗
+///                                 │                         ╔═══╗ ╔═══╗         ║   ║  Not used
+///                                                         │ ║ 1 ║ ║ A ║ │ 0  │  ╚═══╝
+///  ┌─────────────┐  ┌───────┐     │     ┌───┐   ┌───┐       ╠═══╣ ╠═══╣
+///  │ [] (empty)  │  │ (3,3) │           │ 1 │   │ 3 │     │ ║ 1 ║ ║ B ║ │ 1  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠═══╣ ╠═══╣
+///  │    NULL     │  │ (3,4) │           │ 0 │   │ 3 │     │ ║ 1 ║ ║ C ║ │ 2  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠───╣ ╠───╣
+///  │     [D]     │  │ (4,5) │           │ 1 │   │ 4 │     │ │ 0 │ │ ? │ │ 3  │
+///  └─────────────┘  └───────┘     │     └───┘   ├───┤       ├───┤ ├───┤
+///                                               │ 5 │     │ │ 1 │ │ D │ │ 4  │
+///                                 │             └───┘       ├───┤ ├───┤
+///                                                         │ │ 0 │ │ ? │ │ 5  │
+///                                 │  Validity               ╠═══╣ ╠═══╣
+///     Logical       Logical          (nulls)   Offsets    │ ║ 1 ║ ║ F ║ │ 6  │
+///      Values       Offsets       │                         ╚═══╝ ╚═══╝
+///                                                         │    Values   │    │
+///                 (offsets[i],    │   ListArray               (Array)
+///                offsets[i+1])                            └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
+/// [`GenericListViewArray`]: crate::array::GenericListViewArray
 /// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
+/// [list layout]: https://arrow.apache.org/docs/format/Columnar.html#list-layout
+/// [list-view layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -258,13 +300,22 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns a reference to the offsets of this list
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning.
+    ///
+    /// Notes: The `offsets` may not start at 0 and may not cover all values in
+    /// [`Self::values`]. This can happen when the list array was sliced via
+    /// [`Self::slice`]. See documentation for [`Self`] for more details.
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
         &self.value_offsets
     }
 
     /// Returns a reference to the values of this list
+    ///
+    /// Note: The list array may not refer to all values in the `values` array.
+    /// For example if the list array was sliced via [`Self::slice`] values will
+    /// still contain values both before and after the slice. See documentation
+    /// for [`Self`] for more details.
     #[inline]
     pub fn values(&self) -> &ArrayRef {
         &self.values
@@ -291,7 +342,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         self.values.slice(start, end - start)
     }
 
-    /// Returns the offset values in the offsets buffer
+    /// Returns the offset values in the offsets buffer.
+    ///
+    /// See [`Self::offsets`] for more details.
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
         &self.value_offsets
@@ -320,6 +373,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// Notes: this method does *NOT* slice the underlying values array or modify
+    /// the values in the offsets buffer. See [`Self::values`] and
+    /// [`Self::offsets`] for more information.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -485,12 +542,25 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -538,12 +608,12 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
 ///
-// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
+/// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
 pub type ListArray = GenericListArray<i32>;
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
 ///
-// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
+/// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]
@@ -560,7 +630,7 @@ mod tests {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         ListArray::new(field, offsets, Arc::new(values), None)
     }
 
@@ -590,7 +660,8 @@ mod tests {
         let value_offsets = Buffer::from([]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(0)
             .add_buffer(value_offsets)
@@ -616,7 +687,8 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -761,7 +833,8 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list array from the above two
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -912,7 +985,8 @@ mod tests {
                 .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7]))
                 .build_unchecked()
         };
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -929,7 +1003,8 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -959,7 +1034,8 @@ mod tests {
 
         let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
 
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -1005,7 +1081,8 @@ mod tests {
                 .build_unchecked()
         };
 
-        let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(buf2)

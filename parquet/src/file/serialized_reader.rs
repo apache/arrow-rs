@@ -18,14 +18,12 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use std::collections::VecDeque;
-use std::iter;
-use std::{fs::File, io::Read, path::Path, sync::Arc};
-
 use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -40,6 +38,9 @@ use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use bytes::Bytes;
+use std::collections::VecDeque;
+use std::iter;
+use std::{fs::File, io::Read, path::Path, sync::Arc};
 use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
@@ -287,7 +288,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
             metadata
                 .columns()
                 .iter()
-                .map(|col| Sbbf::read_from_column_chunk(col, chunk_reader.clone()))
+                .map(|col| Sbbf::read_from_column_chunk(col, &*chunk_reader))
                 .collect::<Result<Vec<_>>>()?
         } else {
             iter::repeat(None).take(metadata.columns().len()).collect()
@@ -321,7 +322,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
         Ok(Box::new(SerializedPageReader::new_with_properties(
             Arc::clone(&self.chunk_reader),
             col,
-            self.metadata.num_rows() as usize,
+            usize::try_from(self.metadata.num_rows())?,
             page_locations,
             props,
         )?))
@@ -340,11 +341,58 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 /// Reads a [`PageHeader`] from the provided [`Read`]
 pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
     let mut prot = TCompactInputProtocol::new(input);
-    let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-    Ok(page_header)
+    Ok(PageHeader::read_from_in_protocol(&mut prot)?)
 }
 
-/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read
+#[cfg(feature = "encryption")]
+pub(crate) fn read_encrypted_page_header<T: Read>(
+    input: &mut T,
+    crypto_context: Arc<CryptoContext>,
+) -> Result<PageHeader> {
+    let data_decryptor = crypto_context.data_decryptor();
+    let aad = crypto_context.create_page_header_aad()?;
+
+    let buf = read_and_decrypt(data_decryptor, input, aad.as_ref()).map_err(|_| {
+        ParquetError::General(format!(
+            "Error decrypting column {}, decryptor may be wrong or missing",
+            crypto_context.column_ordinal
+        ))
+    })?;
+
+    let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
+    Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+}
+
+/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read.
+/// If the page header is encrypted [`CryptoContext`] must be provided.
+#[cfg(feature = "encryption")]
+fn read_encrypted_page_header_len<T: Read>(
+    input: &mut T,
+    crypto_context: Option<Arc<CryptoContext>>,
+) -> Result<(usize, PageHeader)> {
+    /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
+    struct TrackedRead<R> {
+        inner: R,
+        bytes_read: usize,
+    }
+
+    impl<R: Read> Read for TrackedRead<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let v = self.inner.read(buf)?;
+            self.bytes_read += v;
+            Ok(v)
+        }
+    }
+
+    let mut tracked = TrackedRead {
+        inner: input,
+        bytes_read: 0,
+    };
+    let header = read_encrypted_page_header(&mut tracked, crypto_context.unwrap())?;
+    Ok((tracked.bytes_read, header))
+}
+
+/// Reads a [`PageHeader`] from the provided [`Read`] returning the number of bytes read.
 fn read_page_header_len<T: Read>(input: &mut T) -> Result<(usize, PageHeader)> {
     /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
     struct TrackedRead<R> {
@@ -394,8 +442,24 @@ pub(crate) fn decode_page(
     let mut can_decompress = true;
 
     if let Some(ref header_v2) = page_header.data_page_header_v2 {
-        offset = (header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length)
-            as usize;
+        if header_v2.definition_levels_byte_length < 0
+            || header_v2.repetition_levels_byte_length < 0
+            || header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length
+                > page_header.uncompressed_page_size
+        {
+            return Err(general_err!(
+                "DataPage v2 header contains implausible values \
+                    for definition_levels_byte_length ({}) \
+                    and repetition_levels_byte_length ({}) \
+                    given DataPage header provides uncompressed_page_size ({})",
+                header_v2.definition_levels_byte_length,
+                header_v2.repetition_levels_byte_length,
+                page_header.uncompressed_page_size
+            ));
+        }
+        offset = usize::try_from(
+            header_v2.definition_levels_byte_length + header_v2.repetition_levels_byte_length,
+        )?;
         // When is_compressed flag is missing the page is considered compressed
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
@@ -404,21 +468,20 @@ pub(crate) fn decode_page(
     // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
-            let uncompressed_size = page_header.uncompressed_page_size as usize;
-            let mut decompressed = Vec::with_capacity(uncompressed_size);
-            let compressed = &buffer.as_ref()[offset..];
+            let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
+            let decompressed_size = uncompressed_page_size - offset;
+            let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
-            decompressor.decompress(
-                compressed,
-                &mut decompressed,
-                Some(uncompressed_size - offset),
-            )?;
+            if decompressed_size > 0 {
+                let compressed = &buffer.as_ref()[offset..];
+                decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
+            }
 
-            if decompressed.len() != uncompressed_size {
+            if decompressed.len() != uncompressed_page_size {
                 return Err(general_err!(
                     "Actual decompressed size doesn't match the expected one ({} vs {})",
                     decompressed.len(),
-                    uncompressed_size
+                    uncompressed_page_size
                 ));
             }
 
@@ -435,7 +498,7 @@ pub(crate) fn decode_page(
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
             Page::DictionaryPage {
                 buf: buffer,
-                num_values: dict_header.num_values as u32,
+                num_values: dict_header.num_values.try_into()?,
                 encoding: Encoding::try_from(dict_header.encoding)?,
                 is_sorted,
             }
@@ -446,7 +509,7 @@ pub(crate) fn decode_page(
                 .ok_or_else(|| ParquetError::General("Missing V1 data page header".to_string()))?;
             Page::DataPage {
                 buf: buffer,
-                num_values: header.num_values as u32,
+                num_values: header.num_values.try_into()?,
                 encoding: Encoding::try_from(header.encoding)?,
                 def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
                 rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
@@ -460,12 +523,12 @@ pub(crate) fn decode_page(
             let is_compressed = header.is_compressed.unwrap_or(true);
             Page::DataPageV2 {
                 buf: buffer,
-                num_values: header.num_values as u32,
+                num_values: header.num_values.try_into()?,
                 encoding: Encoding::try_from(header.encoding)?,
-                num_nulls: header.num_nulls as u32,
-                num_rows: header.num_rows as u32,
-                def_levels_byte_len: header.definition_levels_byte_length as u32,
-                rep_levels_byte_len: header.repetition_levels_byte_length as u32,
+                num_nulls: header.num_nulls.try_into()?,
+                num_rows: header.num_rows.try_into()?,
+                def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
+                rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
                 statistics: statistics::from_thrift(physical_type, header.statistics)?,
             }
@@ -489,6 +552,12 @@ enum SerializedPageReaderState {
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
         next_page_header: Option<Box<PageHeader>>,
+
+        /// The index of the data page within this column chunk
+        page_ordinal: usize,
+
+        /// Whether the next page is expected to be a dictionary page
+        require_dictionary: bool,
     },
     Pages {
         /// Remaining page locations
@@ -512,18 +581,61 @@ pub struct SerializedPageReader<R: ChunkReader> {
     physical_type: Type,
 
     state: SerializedPageReaderState,
+
+    /// Crypto context carrying objects required for decryption
+    #[cfg(feature = "encryption")]
+    crypto_context: Option<Arc<CryptoContext>>,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
     /// Creates a new serialized page reader from a chunk reader and metadata
     pub fn new(
         reader: Arc<R>,
-        meta: &ColumnChunkMetaData,
+        column_chunk_metadata: &ColumnChunkMetaData,
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
     ) -> Result<Self> {
         let props = Arc::new(ReaderProperties::builder().build());
-        SerializedPageReader::new_with_properties(reader, meta, total_rows, page_locations, props)
+        SerializedPageReader::new_with_properties(
+            reader,
+            column_chunk_metadata,
+            total_rows,
+            page_locations,
+            props,
+        )
+    }
+
+    /// Stub No-op implementation when encryption is disabled.
+    #[cfg(all(feature = "arrow", not(feature = "encryption")))]
+    pub(crate) fn add_crypto_context(
+        self,
+        _rg_idx: usize,
+        _column_idx: usize,
+        _parquet_meta_data: &ParquetMetaData,
+        _column_chunk_metadata: &ColumnChunkMetaData,
+    ) -> Result<SerializedPageReader<R>> {
+        Ok(self)
+    }
+
+    /// Adds any necessary crypto context to this page reader, if encryption is enabled.
+    #[cfg(feature = "encryption")]
+    pub(crate) fn add_crypto_context(
+        mut self,
+        rg_idx: usize,
+        column_idx: usize,
+        parquet_meta_data: &ParquetMetaData,
+        column_chunk_metadata: &ColumnChunkMetaData,
+    ) -> Result<SerializedPageReader<R>> {
+        let Some(file_decryptor) = parquet_meta_data.file_decryptor() else {
+            return Ok(self);
+        };
+        let Some(crypto_metadata) = column_chunk_metadata.crypto_metadata() else {
+            return Ok(self);
+        };
+        let crypto_context =
+            CryptoContext::for_column(file_decryptor, crypto_metadata, rg_idx, column_idx)?;
+        self.crypto_context = Some(Arc::new(crypto_context));
+        Ok(self)
     }
 
     /// Creates a new serialized page with custom options.
@@ -555,18 +667,79 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 }
             }
             None => SerializedPageReaderState::Values {
-                offset: start as usize,
-                remaining_bytes: len as usize,
+                offset: usize::try_from(start)?,
+                remaining_bytes: usize::try_from(len)?,
                 next_page_header: None,
+                page_ordinal: 0,
+                require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
-
         Ok(Self {
             reader,
             decompressor,
             state,
             physical_type: meta.column_type(),
+            #[cfg(feature = "encryption")]
+            crypto_context: None,
         })
+    }
+
+    /// Similar to `peek_next_page`, but returns the offset of the next page instead of the page metadata.
+    /// Unlike page metadata, an offset can uniquely identify a page.
+    ///
+    /// This is used when we need to read parquet with row-filter, and we don't want to decompress the page twice.
+    /// This function allows us to check if the next page is being cached or read previously.
+    #[cfg(test)]
+    fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+        match &mut self.state {
+            SerializedPageReaderState::Values {
+                offset,
+                remaining_bytes,
+                next_page_header,
+                ..
+            } => {
+                loop {
+                    if *remaining_bytes == 0 {
+                        return Ok(None);
+                    }
+                    return if let Some(header) = next_page_header.as_ref() {
+                        if let Ok(_page_meta) = PageMetadata::try_from(&**header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            *next_page_header = None;
+                            continue;
+                        }
+                    } else {
+                        let mut read = self.reader.get_read(*offset as u64)?;
+                        let (header_len, header) = read_page_header_len(&mut read)?;
+                        *offset += header_len;
+                        *remaining_bytes -= header_len;
+                        let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
+                            Ok(Some(*offset))
+                        } else {
+                            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                            continue;
+                        };
+                        *next_page_header = Some(Box::new(header));
+                        page_meta
+                    };
+                }
+            }
+            SerializedPageReaderState::Pages {
+                page_locations,
+                dictionary_page,
+                ..
+            } => {
+                if let Some(page) = dictionary_page {
+                    Ok(Some(usize::try_from(page.offset)?))
+                } else if let Some(page) = page_locations.front() {
+                    Ok(Some(usize::try_from(page.offset)?))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
     }
 }
 
@@ -578,6 +751,27 @@ impl<R: ChunkReader> Iterator for SerializedPageReader<R> {
     }
 }
 
+fn verify_page_header_len(header_len: usize, remaining_bytes: usize) -> Result<()> {
+    if header_len > remaining_bytes {
+        return Err(eof_err!("Invalid page header"));
+    }
+    Ok(())
+}
+
+fn verify_page_size(
+    compressed_size: i32,
+    uncompressed_size: i32,
+    remaining_bytes: usize,
+) -> Result<()> {
+    // The page's compressed size should not exceed the remaining bytes that are
+    // available to read. The page's uncompressed size is the expected size
+    // after decompression, which can never be negative.
+    if compressed_size < 0 || compressed_size as usize > remaining_bytes || uncompressed_size < 0 {
+        return Err(eof_err!("Invalid page header"));
+    }
+    Ok(())
+}
+
 impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         loop {
@@ -586,6 +780,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     offset,
                     remaining_bytes: remaining,
                     next_page_header,
+                    page_ordinal,
+                    require_dictionary,
                 } => {
                     if *remaining == 0 {
                         return Ok(None);
@@ -595,11 +791,31 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
+                        #[cfg(feature = "encryption")]
+                        let (header_len, header) = if self.crypto_context.is_some() {
+                            let crypto_context = page_crypto_context(
+                                &self.crypto_context,
+                                *page_ordinal,
+                                *require_dictionary,
+                            )?;
+                            read_encrypted_page_header_len(&mut read, crypto_context)?
+                        } else {
+                            read_page_header_len(&mut read)?
+                        };
+
+                        #[cfg(not(feature = "encryption"))]
                         let (header_len, header) = read_page_header_len(&mut read)?;
+
+                        verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len;
                         *remaining -= header_len;
                         header
                     };
+                    verify_page_size(
+                        header.compressed_page_size,
+                        header.uncompressed_page_size,
+                        *remaining,
+                    )?;
                     let data_len = header.compressed_page_size as usize;
                     *offset += data_len;
                     *remaining -= data_len;
@@ -619,12 +835,33 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         ));
                     }
 
-                    decode_page(
+                    #[cfg(feature = "encryption")]
+                    let crypto_context = page_crypto_context(
+                        &self.crypto_context,
+                        *page_ordinal,
+                        *require_dictionary,
+                    )?;
+                    #[cfg(feature = "encryption")]
+                    let buffer: Vec<u8> = if let Some(crypto_context) = crypto_context {
+                        let decryptor = crypto_context.data_decryptor();
+                        let aad = crypto_context.create_page_aad()?;
+                        decryptor.decrypt(buffer.as_ref(), &aad)?
+                    } else {
+                        buffer
+                    };
+
+                    let page = decode_page(
                         header,
                         Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
-                    )?
+                    )?;
+                    if page.is_data_page() {
+                        *page_ordinal += 1;
+                    } else if page.is_dictionary_page() {
+                        *require_dictionary = false;
+                    }
+                    page
                 }
                 SerializedPageReaderState::Pages {
                     page_locations,
@@ -639,7 +876,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         None => return Ok(None),
                     };
 
-                    let page_len = front.compressed_page_size as usize;
+                    let page_len = usize::try_from(front.compressed_page_size)?;
 
                     let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
@@ -667,6 +904,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 offset,
                 remaining_bytes,
                 next_page_header,
+                ..
             } => {
                 loop {
                     if *remaining_bytes == 0 {
@@ -683,6 +921,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     } else {
                         let mut read = self.reader.get_read(*offset as u64)?;
                         let (header_len, header) = read_page_header_len(&mut read)?;
+                        verify_page_header_len(header_len, *remaining_bytes)?;
                         *offset += header_len;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(page_meta) = (&header).try_into() {
@@ -731,22 +970,44 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 offset,
                 remaining_bytes,
                 next_page_header,
+                ..
             } => {
                 if let Some(buffered_header) = next_page_header.take() {
+                    verify_page_size(
+                        buffered_header.compressed_page_size,
+                        buffered_header.uncompressed_page_size,
+                        *remaining_bytes,
+                    )?;
                     // The next page header has already been peeked, so just advance the offset
                     *offset += buffered_header.compressed_page_size as usize;
                     *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
                     let mut read = self.reader.get_read(*offset as u64)?;
                     let (header_len, header) = read_page_header_len(&mut read)?;
+                    verify_page_header_len(header_len, *remaining_bytes)?;
+                    verify_page_size(
+                        header.compressed_page_size,
+                        header.uncompressed_page_size,
+                        *remaining_bytes,
+                    )?;
                     let data_page_size = header.compressed_page_size as usize;
                     *offset += header_len + data_page_size;
                     *remaining_bytes -= header_len + data_page_size;
                 }
                 Ok(())
             }
-            SerializedPageReaderState::Pages { page_locations, .. } => {
-                page_locations.pop_front();
+            SerializedPageReaderState::Pages {
+                page_locations,
+                dictionary_page,
+                ..
+            } => {
+                if dictionary_page.is_some() {
+                    // If a dictionary page exists, consume it by taking it (sets to None)
+                    dictionary_page.take();
+                } else {
+                    // If no dictionary page exists, simply pop the data page from page_locations
+                    page_locations.pop_front();
+                }
 
                 Ok(())
             }
@@ -761,14 +1022,31 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     }
 }
 
+#[cfg(feature = "encryption")]
+fn page_crypto_context(
+    crypto_context: &Option<Arc<CryptoContext>>,
+    page_ordinal: usize,
+    dictionary_page: bool,
+) -> Result<Option<Arc<CryptoContext>>> {
+    Ok(crypto_context.as_ref().map(|c| {
+        Arc::new(if dictionary_page {
+            c.for_dictionary_page()
+        } else {
+            c.with_page_ordinal(page_ordinal)
+        })
+    }))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use bytes::Buf;
 
     use crate::file::properties::{EnabledStatistics, WriterProperties};
     use crate::format::BoundaryOrder;
 
-    use crate::basic::{self, ColumnOrder};
+    use crate::basic::{self, ColumnOrder, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
@@ -930,7 +1208,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DictionaryPage {
                     buf,
@@ -1024,7 +1302,7 @@ mod tests {
         assert!(page_reader_0_result.is_ok());
         let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
         let mut page_count = 0;
-        while let Ok(Some(page)) = page_reader_0.get_next_page() {
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
             let is_expected_page = match page {
                 Page::DictionaryPage {
                     buf,
@@ -1066,6 +1344,281 @@ mod tests {
             page_count += 1;
         }
         assert_eq!(page_count, 2);
+    }
+
+    #[test]
+    fn test_file_reader_empty_compressed_datapage_v2() {
+        // this file has a compressed datapage that un-compresses to 0 bytes
+        let test_file = get_test_file("page_v2_empty_compressed.parquet");
+        let reader_result = SerializedFileReader::new(test_file);
+        assert!(reader_result.is_ok());
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        // Test contents in file metadata
+        let file_metadata = metadata.file_metadata();
+        assert!(file_metadata.created_by().is_some());
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-cpp-arrow version 14.0.2"
+        );
+        assert!(file_metadata.key_value_metadata().is_some());
+        assert_eq!(
+            file_metadata.key_value_metadata().to_owned().unwrap().len(),
+            1
+        );
+
+        assert_eq!(file_metadata.num_rows(), 10);
+        assert_eq!(file_metadata.version(), 2);
+        let expected_order = ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED);
+        assert_eq!(
+            file_metadata.column_orders(),
+            Some(vec![expected_order].as_ref())
+        );
+
+        let row_group_metadata = metadata.row_group(0);
+
+        // Check each column order
+        for i in 0..row_group_metadata.num_columns() {
+            assert_eq!(file_metadata.column_order(i), expected_order);
+        }
+
+        // Test row group reader
+        let row_group_reader_result = reader.get_row_group(0);
+        assert!(row_group_reader_result.is_ok());
+        let row_group_reader: Box<dyn RowGroupReader> = row_group_reader_result.unwrap();
+        assert_eq!(
+            row_group_reader.num_columns(),
+            row_group_metadata.num_columns()
+        );
+        assert_eq!(
+            row_group_reader.metadata().total_byte_size(),
+            row_group_metadata.total_byte_size()
+        );
+
+        // Test page readers
+        let page_reader_0_result = row_group_reader.get_column_page_reader(0);
+        assert!(page_reader_0_result.is_ok());
+        let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
+        let mut page_count = 0;
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
+            let is_expected_page = match page {
+                Page::DictionaryPage {
+                    buf,
+                    num_values,
+                    encoding,
+                    is_sorted,
+                } => {
+                    assert_eq!(buf.len(), 0);
+                    assert_eq!(num_values, 0);
+                    assert_eq!(encoding, Encoding::PLAIN);
+                    assert!(!is_sorted);
+                    true
+                }
+                Page::DataPageV2 {
+                    buf,
+                    num_values,
+                    encoding,
+                    num_nulls,
+                    num_rows,
+                    def_levels_byte_len,
+                    rep_levels_byte_len,
+                    is_compressed,
+                    statistics,
+                } => {
+                    assert_eq!(buf.len(), 3);
+                    assert_eq!(num_values, 10);
+                    assert_eq!(encoding, Encoding::RLE_DICTIONARY);
+                    assert_eq!(num_nulls, 10);
+                    assert_eq!(num_rows, 10);
+                    assert_eq!(def_levels_byte_len, 2);
+                    assert_eq!(rep_levels_byte_len, 0);
+                    assert!(is_compressed);
+                    assert!(statistics.is_some());
+                    true
+                }
+                _ => false,
+            };
+            assert!(is_expected_page);
+            page_count += 1;
+        }
+        assert_eq!(page_count, 2);
+    }
+
+    #[test]
+    fn test_file_reader_empty_datapage_v2() {
+        // this file has 0 bytes compressed datapage that un-compresses to 0 bytes
+        let test_file = get_test_file("datapage_v2_empty_datapage.snappy.parquet");
+        let reader_result = SerializedFileReader::new(test_file);
+        assert!(reader_result.is_ok());
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        // Test contents in file metadata
+        let file_metadata = metadata.file_metadata();
+        assert!(file_metadata.created_by().is_some());
+        assert_eq!(
+            file_metadata.created_by().unwrap(),
+            "parquet-mr version 1.13.1 (build db4183109d5b734ec5930d870cdae161e408ddba)"
+        );
+        assert!(file_metadata.key_value_metadata().is_some());
+        assert_eq!(
+            file_metadata.key_value_metadata().to_owned().unwrap().len(),
+            2
+        );
+
+        assert_eq!(file_metadata.num_rows(), 1);
+        assert_eq!(file_metadata.version(), 1);
+        let expected_order = ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED);
+        assert_eq!(
+            file_metadata.column_orders(),
+            Some(vec![expected_order].as_ref())
+        );
+
+        let row_group_metadata = metadata.row_group(0);
+
+        // Check each column order
+        for i in 0..row_group_metadata.num_columns() {
+            assert_eq!(file_metadata.column_order(i), expected_order);
+        }
+
+        // Test row group reader
+        let row_group_reader_result = reader.get_row_group(0);
+        assert!(row_group_reader_result.is_ok());
+        let row_group_reader: Box<dyn RowGroupReader> = row_group_reader_result.unwrap();
+        assert_eq!(
+            row_group_reader.num_columns(),
+            row_group_metadata.num_columns()
+        );
+        assert_eq!(
+            row_group_reader.metadata().total_byte_size(),
+            row_group_metadata.total_byte_size()
+        );
+
+        // Test page readers
+        let page_reader_0_result = row_group_reader.get_column_page_reader(0);
+        assert!(page_reader_0_result.is_ok());
+        let mut page_reader_0: Box<dyn PageReader> = page_reader_0_result.unwrap();
+        let mut page_count = 0;
+        while let Some(page) = page_reader_0.get_next_page().unwrap() {
+            let is_expected_page = match page {
+                Page::DataPageV2 {
+                    buf,
+                    num_values,
+                    encoding,
+                    num_nulls,
+                    num_rows,
+                    def_levels_byte_len,
+                    rep_levels_byte_len,
+                    is_compressed,
+                    statistics,
+                } => {
+                    assert_eq!(buf.len(), 2);
+                    assert_eq!(num_values, 1);
+                    assert_eq!(encoding, Encoding::PLAIN);
+                    assert_eq!(num_nulls, 1);
+                    assert_eq!(num_rows, 1);
+                    assert_eq!(def_levels_byte_len, 2);
+                    assert_eq!(rep_levels_byte_len, 0);
+                    assert!(is_compressed);
+                    assert!(statistics.is_none());
+                    true
+                }
+                _ => false,
+            };
+            assert!(is_expected_page);
+            page_count += 1;
+        }
+        assert_eq!(page_count, 1);
+    }
+
+    fn get_serialized_page_reader<R: ChunkReader>(
+        file_reader: &SerializedFileReader<R>,
+        row_group: usize,
+        column: usize,
+    ) -> Result<SerializedPageReader<R>> {
+        let row_group = {
+            let row_group_metadata = file_reader.metadata.row_group(row_group);
+            let props = Arc::clone(&file_reader.props);
+            let f = Arc::clone(&file_reader.chunk_reader);
+            SerializedRowGroupReader::new(
+                f,
+                row_group_metadata,
+                file_reader
+                    .metadata
+                    .offset_index()
+                    .map(|x| x[row_group].as_slice()),
+                props,
+            )?
+        };
+
+        let col = row_group.metadata.column(column);
+
+        let page_locations = row_group
+            .offset_index
+            .map(|x| x[column].page_locations.clone());
+
+        let props = Arc::clone(&row_group.props);
+        SerializedPageReader::new_with_properties(
+            Arc::clone(&row_group.chunk_reader),
+            col,
+            usize::try_from(row_group.metadata.num_rows())?,
+            page_locations,
+            props,
+        )
+    }
+
+    #[test]
+    fn test_peek_next_page_offset_matches_actual() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let reader = SerializedFileReader::new(test_file)?;
+
+        let mut offset_set = HashSet::new();
+        let num_row_groups = reader.metadata.num_row_groups();
+        for row_group in 0..num_row_groups {
+            let num_columns = reader.metadata.row_group(row_group).num_columns();
+            for column in 0..num_columns {
+                let mut page_reader = get_serialized_page_reader(&reader, row_group, column)?;
+
+                while let Ok(Some(page_offset)) = page_reader.peek_next_page_offset() {
+                    match &page_reader.state {
+                        SerializedPageReaderState::Pages {
+                            page_locations,
+                            dictionary_page,
+                            ..
+                        } => {
+                            if let Some(page) = dictionary_page {
+                                assert_eq!(page.offset as usize, page_offset);
+                            } else if let Some(page) = page_locations.front() {
+                                assert_eq!(page.offset as usize, page_offset);
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        SerializedPageReaderState::Values {
+                            offset,
+                            next_page_header,
+                            ..
+                        } => {
+                            assert!(next_page_header.is_some());
+                            assert_eq!(*offset, page_offset);
+                        }
+                    }
+                    let page = page_reader.get_next_page()?;
+                    assert!(page.is_some());
+                    let newly_inserted = offset_set.insert(page_offset);
+                    assert!(newly_inserted);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -1223,8 +1776,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, true predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1236,8 +1789,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
 
         // false, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1249,8 +1802,8 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
-        assert_eq!(metadata.column_index().unwrap().len(), 0);
-        assert_eq!(metadata.offset_index().unwrap().len(), 0);
+        assert!(metadata.column_index().is_none());
+        assert!(metadata.offset_index().is_none());
         Ok(())
     }
 
@@ -1340,13 +1893,15 @@ mod tests {
         let columns = metadata.row_group(0).columns();
         let reversed: Vec<_> = columns.iter().cloned().rev().collect();
 
-        let a = read_columns_indexes(&test_file, columns).unwrap();
-        let mut b = read_columns_indexes(&test_file, &reversed).unwrap();
+        let a = read_columns_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_columns_indexes(&test_file, &reversed)
+            .unwrap()
+            .unwrap();
         b.reverse();
         assert_eq!(a, b);
 
-        let a = read_offset_indexes(&test_file, columns).unwrap();
-        let mut b = read_offset_indexes(&test_file, &reversed).unwrap();
+        let a = read_offset_indexes(&test_file, columns).unwrap().unwrap();
+        let mut b = read_offset_indexes(&test_file, &reversed).unwrap().unwrap();
         b.reverse();
         assert_eq!(a, b);
     }
@@ -1555,6 +2110,52 @@ mod tests {
             statistics.min_bytes_opt().unwrap_or_default(),
             statistics.max_bytes_opt().unwrap_or_default(),
         )
+    }
+
+    #[test]
+    fn test_skip_next_page_with_dictionary_page() {
+        let test_file = get_test_file("alltypes_tiny_pages.parquet");
+        let builder = ReadOptionsBuilder::new();
+        // enable read page index
+        let options = builder.with_page_index().build();
+        let reader_result = SerializedFileReader::new_with_options(test_file, options);
+        let reader = reader_result.unwrap();
+
+        let row_group_reader = reader.get_row_group(0).unwrap();
+
+        // use 'string_col', Boundary order: UNORDERED, total 352 data pages and 1 dictionary page.
+        let mut column_page_reader = row_group_reader.get_column_page_reader(9).unwrap();
+
+        let mut vec = vec![];
+
+        // Step 1: Peek and ensure dictionary page is correctly identified
+        let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+        assert!(meta.is_dict);
+
+        // Step 2: Call skip_next_page to skip the dictionary page
+        column_page_reader.skip_next_page().unwrap();
+
+        // Step 3: Read the next data page after skipping the dictionary page
+        let page = column_page_reader.get_next_page().unwrap().unwrap();
+        assert!(matches!(page.page_type(), basic::PageType::DATA_PAGE));
+
+        // Step 4: Continue reading remaining data pages and verify correctness
+        for _i in 0..351 {
+            // 352 total pages, 1 dictionary page is skipped
+            let meta = column_page_reader.peek_next_page().unwrap().unwrap();
+            assert!(!meta.is_dict); // Verify no dictionary page here
+            vec.push(meta);
+
+            let page = column_page_reader.get_next_page().unwrap().unwrap();
+            assert!(matches!(page.page_type(), basic::PageType::DATA_PAGE));
+        }
+
+        // Step 5: Check if all pages are read
+        assert!(column_page_reader.peek_next_page().unwrap().is_none());
+        assert!(column_page_reader.get_next_page().unwrap().is_none());
+
+        // Step 6: Verify the number of data pages read (should be 351 data pages)
+        assert_eq!(vec.len(), 351);
     }
 
     #[test]

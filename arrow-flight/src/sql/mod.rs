@@ -45,7 +45,6 @@ use prost::Message;
 
 #[allow(clippy::all)]
 mod gen {
-    #![allow(rustdoc::unportable_markdown)]
     // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.sql.rs");
@@ -113,6 +112,8 @@ pub use gen::XdbcDatetimeSubcode;
 pub mod client;
 pub mod metadata;
 pub mod server;
+
+pub use crate::streams::FallibleRequestStream;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {

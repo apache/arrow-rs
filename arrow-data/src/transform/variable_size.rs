@@ -34,7 +34,7 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     len: usize,
 ) {
     let start_values = offsets[start].as_();
-    let end_values = offsets[start + len].as_();
+    let end_values: usize = offsets[start + len].as_();
     let new_values = &values[start_values..end_values];
     buffer.extend_from_slice(new_values);
 }

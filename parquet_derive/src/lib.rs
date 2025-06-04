@@ -18,6 +18,11 @@
 //! This crate provides a procedural macro to derive
 //! implementations of a RecordWriter and RecordReader
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 #![recursion_limit = "128"]
 
@@ -109,7 +114,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
       fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
-      ) -> Result<(), ::parquet::errors::ParquetError> {
+      ) -> ::std::result::Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::writer::ColumnWriter;
 
         let mut row_group_writer = row_group_writer;
@@ -130,7 +135,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Ok(())
       }
 
-      fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
+      fn schema(&self) -> ::std::result::Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
         use ::parquet::schema::types::Type as ParquetType;
         use ::parquet::schema::types::TypePtr;
         use ::parquet::basic::LogicalType;
@@ -206,7 +211,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
         &mut self,
         row_group_reader: &mut dyn ::parquet::file::reader::RowGroupReader,
         num_records: usize,
-      ) -> Result<(), ::parquet::errors::ParquetError> {
+      ) -> ::std::result::Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::reader::ColumnReader;
 
         let mut row_group_reader = row_group_reader;

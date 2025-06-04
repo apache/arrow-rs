@@ -23,17 +23,18 @@ use arrow::util::bench_util::*;
 
 use arrow::array::*;
 use arrow::compute::filter;
-use arrow::datatypes::{Field, Float32Type, Int32Type, Schema, UInt8Type};
+use arrow::datatypes::{Field, Float32Type, Int32Type, Int64Type, Schema, UInt8Type};
 
 use arrow_array::types::Decimal128Type;
 use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint;
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
-    criterion::black_box(filter(data_array, filter_array).unwrap());
+    hint::black_box(filter(data_array, filter_array).unwrap());
 }
 
 fn bench_built_filter(filter: &FilterPredicate, array: &dyn Array) {
-    criterion::black_box(filter.filter(array).unwrap());
+    hint::black_box(filter.filter(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -283,6 +284,17 @@ fn add_benchmark(c: &mut Criterion) {
         "filter context mixed string view low selectivity (kept 1/1024)",
         |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
     );
+
+    let data_array = create_primitive_run_array::<Int32Type, Int64Type>(size, size);
+    c.bench_function("filter run array (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter run array high selectivity (kept 1023/1024)", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter run array low selectivity (kept 1/1024)", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
 }
 
 criterion_group!(benches, add_benchmark);

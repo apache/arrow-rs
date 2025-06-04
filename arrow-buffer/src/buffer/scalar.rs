@@ -41,7 +41,7 @@ use std::ops::Deref;
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
@@ -70,6 +70,11 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         let byte_offset = offset.checked_mul(size).expect("offset overflow");
         let byte_len = len.checked_mul(size).expect("length overflow");
         buffer.slice_with_length(byte_offset, byte_len).into()
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.buffer.shrink_to_fit();
     }
 
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
@@ -177,6 +182,7 @@ impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
 }
 
 impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
+    #[inline]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         iter.into_iter().collect::<Vec<_>>().into()
     }
@@ -214,6 +220,9 @@ impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
         self.as_slice().eq(other.as_ref())
     }
 }
+
+/// If T implements Eq, then so does ScalarBuffer.
+impl<T: ArrowNativeType + Eq> Eq for ScalarBuffer<T> {}
 
 #[cfg(test)]
 mod tests {
@@ -335,5 +344,20 @@ mod tests {
         let vec = Vec::from(scalar_buffer);
         assert_eq!(vec, input.as_slice());
         assert_ne!(vec.as_ptr(), input.as_ptr());
+    }
+
+    #[test]
+    fn scalar_buffer_impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &ScalarBuffer::<i16>::from(vec![23]),
+                &ScalarBuffer::<i16>::from(vec![23])
+            ),
+            "ScalarBuffer should implement Eq if the inner type does"
+        );
     }
 }

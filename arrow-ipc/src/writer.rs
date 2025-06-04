@@ -17,12 +17,17 @@
 
 //! Arrow IPC File and Stream Writers
 //!
-//! The `FileWriter` and `StreamWriter` have similar interfaces,
-//! however the `FileWriter` expects a reader that supports `Seek`ing
+//! # Notes
+//!
+//! [`FileWriter`] and [`StreamWriter`] have similar interfaces,
+//! however the [`FileWriter`] expects a reader that supports [`Seek`]ing
+//!
+//! [`Seek`]: std::io::Seek
 
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
@@ -63,7 +68,11 @@ pub struct IpcWriteOptions {
     /// Flag indicating whether the writer should preserve the dictionary IDs defined in the
     /// schema or generate unique dictionary IDs internally during encoding.
     ///
-    /// Defaults to `true`
+    /// Defaults to `false`
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -107,12 +116,13 @@ impl IpcWriteOptions {
             | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
+            #[allow(deprecated)]
             crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
-                preserve_dict_id: true,
+                preserve_dict_id: false,
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -120,12 +130,13 @@ impl IpcWriteOptions {
                         "Legacy IPC format only supported on metadata version 4".to_string(),
                     ))
                 } else {
+                    #[allow(deprecated)]
                     Ok(Self {
                         alignment,
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
-                        preserve_dict_id: true,
+                        preserve_dict_id: false,
                     })
                 }
             }
@@ -137,7 +148,12 @@ impl IpcWriteOptions {
 
     /// Return whether the writer is configured to preserve the dictionary IDs
     /// defined in the schema
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn preserve_dict_id(&self) -> bool {
+        #[allow(deprecated)]
         self.preserve_dict_id
     }
 
@@ -148,6 +164,11 @@ impl IpcWriteOptions {
     /// to the dictionary batches in order to encode them correctly
     ///
     /// The default will change to `false`  in future releases
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
+    #[allow(deprecated)]
     pub fn with_preserve_dict_id(mut self, preserve_dict_id: bool) -> Self {
         self.preserve_dict_id = preserve_dict_id;
         self
@@ -156,12 +177,13 @@ impl IpcWriteOptions {
 
 impl Default for IpcWriteOptions {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self {
             alignment: 64,
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 }
@@ -170,7 +192,7 @@ impl Default for IpcWriteOptions {
 /// Handles low level details of encoding [`Array`] and [`Schema`] into the
 /// [Arrow IPC Format].
 ///
-/// # Example:
+/// # Example
 /// ```
 /// # fn run() {
 /// # use std::sync::Arc;
@@ -419,6 +441,7 @@ impl IpcDataGenerator {
                 // It's importnat to only take the dict_id at this point, because the dict ID
                 // sequence is assigned depth-first, so we need to first encode children and have
                 // them take their assigned dict IDs before we take the dict ID for this field.
+                #[allow(deprecated)]
                 let dict_id = dict_id_seq
                     .next()
                     .or_else(|| field.dict_id())
@@ -766,6 +789,10 @@ pub struct DictionaryTracker {
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all fields related to it."
+    )]
     preserve_dict_id: bool,
 }
 
@@ -781,11 +808,12 @@ impl DictionaryTracker {
     /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
     /// seen)
     pub fn new(error_on_replacement: bool) -> Self {
+        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
             error_on_replacement,
-            preserve_dict_id: true,
+            preserve_dict_id: false,
         }
     }
 
@@ -794,7 +822,12 @@ impl DictionaryTracker {
     /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn new_with_preserve_dict_id(error_on_replacement: bool, preserve_dict_id: bool) -> Self {
+        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -810,8 +843,14 @@ impl DictionaryTracker {
     ///
     /// If `preserve_dict_id` is false, this will return the value of the last `dict_id` assigned incremented by 1
     /// or 0 in the case where no dictionary IDs have yet been assigned
+    #[deprecated(
+        since = "54.0.0",
+        note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
+    )]
     pub fn set_dict_id(&mut self, field: &Field) -> i64 {
+        #[allow(deprecated)]
         let next = if self.preserve_dict_id {
+            #[allow(deprecated)]
             field.dict_id().expect("no dict_id in field")
         } else {
             self.dict_ids
@@ -870,7 +909,28 @@ impl DictionaryTracker {
     }
 }
 
-/// Writer for an IPC file
+/// Arrow File Writer
+///
+/// Writes Arrow [`RecordBatch`]es in the [IPC File Format].
+///
+/// # See Also
+///
+/// * [`StreamWriter`] for writing IPC Streams
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::FileWriter;
+/// # let mut file = vec![]; // mimic a file for the example
+/// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// // create a new writer, the schema must be known in advance
+/// let mut writer = FileWriter::try_new(&mut file, &batch.schema()).unwrap();
+/// // write each batch to the underlying writer
+/// writer.write(&batch).unwrap();
+/// // When all batches are written, call finish to flush all buffers
+/// writer.finish().unwrap();
+/// ```
+/// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 pub struct FileWriter<W> {
     /// The object to write to
     writer: W,
@@ -935,7 +995,9 @@ impl<W: Write> FileWriter<W> {
         writer.write_all(&super::ARROW_MAGIC)?;
         writer.write_all(&PADDING[..pad_len])?;
         // write the schema, set the written bytes to the schema + header
+        #[allow(deprecated)]
         let preserve_dict_id = write_options.preserve_dict_id;
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
         let encoded_message = data_gen.schema_to_bytes_with_dictionary_tracker(
@@ -1012,8 +1074,13 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
+        #[allow(deprecated)]
+        let preserve_dict_id = self.write_options.preserve_dict_id;
+        #[allow(deprecated)]
+        let mut dictionary_tracker =
+            DictionaryTracker::new_with_preserve_dict_id(true, preserve_dict_id);
         let schema = IpcSchemaEncoder::new()
-            .with_dictionary_tracker(&mut self.dictionary_tracker)
+            .with_dictionary_tracker(&mut dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
@@ -1066,7 +1133,7 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
-    /// Unwraps the the underlying writer.
+    /// Unwraps the underlying writer.
     ///
     /// The writer is flushed and the FileWriter is finished before returning.
     ///
@@ -1093,7 +1160,29 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
     }
 }
 
-/// Writer for an IPC stream
+/// Arrow Stream Writer
+///
+/// Writes Arrow [`RecordBatch`]es to bytes using the [IPC Streaming Format].
+///
+/// # See Also
+///
+/// * [`FileWriter`] for writing IPC Files
+///
+/// # Example
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::StreamWriter;
+/// # let mut stream = vec![]; // mimic a stream for the example
+/// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// // create a new writer, the schema must be known in advance
+/// let mut writer = StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+/// // write each batch to the underlying stream
+/// writer.write(&batch).unwrap();
+/// // When all batches are written, call finish to flush all buffers
+/// writer.finish().unwrap();
+/// ```
+///
+/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamWriter<W> {
     /// The object to write to
     writer: W,
@@ -1140,7 +1229,9 @@ impl<W: Write> StreamWriter<W> {
         write_options: IpcWriteOptions,
     ) -> Result<Self, ArrowError> {
         let data_gen = IpcDataGenerator::default();
+        #[allow(deprecated)]
         let preserve_dict_id = write_options.preserve_dict_id;
+        #[allow(deprecated)]
         let mut dictionary_tracker =
             DictionaryTracker::new_with_preserve_dict_id(false, preserve_dict_id);
 
@@ -1427,7 +1518,10 @@ fn reencode_offsets<O: OffsetSizeTrait>(
     let end_offset = offset_slice.last().unwrap();
 
     let offsets = match start_offset.as_usize() {
-        0 => offsets.clone(),
+        0 => {
+            let size = size_of::<O>();
+            offsets.slice_with_length(data.offset() * size, (data.len() + 1) * size)
+        }
         _ => offset_slice.iter().map(|x| *x - *start_offset).collect(),
     };
 
@@ -1633,6 +1727,26 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
+    } else if let DataType::FixedSizeList(_, fixed_size) = data_type {
+        assert_eq!(array_data.child_data().len(), 1);
+        let fixed_size = *fixed_size as usize;
+
+        let child_offset = array_data.offset() * fixed_size;
+        let child_length = array_data.len() * fixed_size;
+        let child_data = array_data.child_data()[0].slice(child_offset, child_length);
+
+        offset = write_array_data(
+            &child_data,
+            buffers,
+            arrow_data,
+            nodes,
+            offset,
+            child_data.len(),
+            child_data.null_count(),
+            compression_codec,
+            write_options,
+        )?;
+        return Ok(offset);
     } else {
         for buffer in array_data.buffers() {
             offset = write_buffer(
@@ -1740,12 +1854,16 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hasher;
     use std::io::Cursor;
     use std::io::Seek;
 
-    use arrow_array::builder::GenericListBuilder;
+    use arrow_array::builder::FixedSizeListBuilder;
+    use arrow_array::builder::Float32Builder;
+    use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
+    use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
@@ -2022,6 +2140,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
+        #[allow(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 2, false);
         let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
 
@@ -2039,6 +2158,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
+        #[allow(deprecated)]
         let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2055,6 +2175,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
+        #[allow(deprecated)]
         let dctfield = Arc::new(Field::new_dict(
             "dict",
             array.data_type().clone(),
@@ -2075,6 +2196,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
+        #[allow(deprecated)]
         let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
         gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2380,6 +2502,126 @@ mod tests {
     }
 
     #[test]
+    fn test_large_slice_uint32() {
+        ensure_roundtrip(Arc::new(UInt32Array::from_iter((0..8000).map(|i| {
+            if i % 2 == 0 {
+                Some(i)
+            } else {
+                None
+            }
+        }))));
+    }
+
+    #[test]
+    fn test_large_slice_string() {
+        let strings: Vec<_> = (0..8000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    Some(format!("value{}", i))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        ensure_roundtrip(Arc::new(StringArray::from(strings)));
+    }
+
+    #[test]
+    fn test_large_slice_string_list() {
+        let mut ls = ListBuilder::new(StringBuilder::new());
+
+        let mut s = String::new();
+        for row_number in 0..8000 {
+            if row_number % 2 == 0 {
+                for list_element in 0..1000 {
+                    s.clear();
+                    use std::fmt::Write;
+                    write!(&mut s, "value{row_number}-{list_element}").unwrap();
+                    ls.values().append_value(&s);
+                }
+                ls.append(true)
+            } else {
+                ls.append(false); // null
+            }
+        }
+
+        ensure_roundtrip(Arc::new(ls.finish()));
+    }
+
+    #[test]
+    fn test_large_slice_string_list_of_lists() {
+        // The reason for the special test is to verify reencode_offsets which looks both at
+        // the starting offset and the data offset.  So need a dataset where the starting_offset
+        // is zero but the data offset is not.
+        let mut ls = ListBuilder::new(ListBuilder::new(StringBuilder::new()));
+
+        for _ in 0..4000 {
+            ls.values().append(true);
+            ls.append(true)
+        }
+
+        let mut s = String::new();
+        for row_number in 0..4000 {
+            if row_number % 2 == 0 {
+                for list_element in 0..1000 {
+                    s.clear();
+                    use std::fmt::Write;
+                    write!(&mut s, "value{row_number}-{list_element}").unwrap();
+                    ls.values().values().append_value(&s);
+                }
+                ls.values().append(true);
+                ls.append(true)
+            } else {
+                ls.append(false); // null
+            }
+        }
+
+        ensure_roundtrip(Arc::new(ls.finish()));
+    }
+
+    /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
+    fn ensure_roundtrip(array: ArrayRef) {
+        let num_rows = array.len();
+        let orig_batch = RecordBatch::try_from_iter(vec![("a", array)]).unwrap();
+        // take off the first element
+        let sliced_batch = orig_batch.slice(1, num_rows - 1);
+
+        let schema = orig_batch.schema();
+        let stream_data = {
+            let mut writer = StreamWriter::try_new(vec![], &schema).unwrap();
+            writer.write(&sliced_batch).unwrap();
+            writer.into_inner().unwrap()
+        };
+        let read_batch = {
+            let projection = None;
+            let mut reader = StreamReader::try_new(Cursor::new(stream_data), projection).unwrap();
+            reader
+                .next()
+                .expect("expect no errors reading batch")
+                .expect("expect batch")
+        };
+        assert_eq!(sliced_batch, read_batch);
+
+        let file_data = {
+            let mut writer = FileWriter::try_new_buffered(vec![], &schema).unwrap();
+            writer.write(&sliced_batch).unwrap();
+            writer.into_inner().unwrap().into_inner().unwrap()
+        };
+        let read_batch = {
+            let projection = None;
+            let mut reader = FileReader::try_new(Cursor::new(file_data), projection).unwrap();
+            reader
+                .next()
+                .expect("expect no errors reading batch")
+                .expect("expect batch")
+        };
+        assert_eq!(sliced_batch, read_batch);
+
+        // TODO test file writer/reader
+    }
+
+    #[test]
     fn encode_bools_slice() {
         // Test case for https://github.com/apache/arrow-rs/issues/3496
         assert_bool_roundtrip([true, false], 1, 1);
@@ -2514,6 +2756,36 @@ mod tests {
         ls.finish()
     }
 
+    fn generate_nested_list_data_starting_at_zero<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls =
+            GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(UInt32Builder::new()));
+
+        for _i in 0..999 {
+            ls.values().append(true);
+            ls.append(true);
+        }
+
+        for j in 0..10 {
+            for value in [j, j, j, j] {
+                ls.values().values().append_value(value);
+            }
+            ls.values().append(true)
+        }
+        ls.append(true);
+
+        for i in 0..9_000 {
+            for j in 0..10 {
+                for value in [i + j, i + j, i + j, i + j] {
+                    ls.values().values().append_value(value);
+                }
+                ls.values().append(true)
+            }
+            ls.append(true);
+        }
+
+        ls.finish()
+    }
+
     fn generate_map_array_data() -> MapArray {
         let keys_builder = UInt32Builder::new();
         let values_builder = UInt32Builder::new();
@@ -2529,6 +2801,40 @@ mod tests {
         }
 
         builder.finish()
+    }
+
+    #[test]
+    fn reencode_offsets_when_first_offset_is_not_zero() {
+        let original_list = generate_list_data::<i32>();
+        let original_data = original_list.into_data();
+        let slice_data = original_data.slice(75, 7);
+        let (new_offsets, original_start, length) =
+            reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
+        assert_eq!(
+            vec![0, 3, 6, 9, 12, 15, 18, 21],
+            new_offsets.typed_data::<i32>()
+        );
+        assert_eq!(225, original_start);
+        assert_eq!(21, length);
+    }
+
+    #[test]
+    fn reencode_offsets_when_first_offset_is_zero() {
+        let mut ls = GenericListBuilder::<i32, _>::new(UInt32Builder::new());
+        // ls = [[], [35, 42]
+        ls.append(true);
+        ls.values().append_value(35);
+        ls.values().append_value(42);
+        ls.append(true);
+        let original_list = ls.finish();
+        let original_data = original_list.into_data();
+
+        let slice_data = original_data.slice(1, 1);
+        let (new_offsets, original_start, length) =
+            reencode_offsets::<i32>(&slice_data.buffers()[0], &slice_data);
+        assert_eq!(vec![0, 2], new_offsets.typed_data::<i32>());
+        assert_eq!(0, original_start);
+        assert_eq!(2, length);
     }
 
     /// Ensure when serde full & sliced versions they are equal to original input.
@@ -2553,7 +2859,7 @@ mod tests {
 
     #[test]
     fn encode_lists() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2565,7 +2871,7 @@ mod tests {
 
     #[test]
     fn encode_empty_list() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2580,7 +2886,7 @@ mod tests {
 
     #[test]
     fn encode_large_lists() {
-        let val_inner = Field::new("item", DataType::UInt32, true);
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
         let schema = Arc::new(Schema::new(vec![val_list_field]));
 
@@ -2594,8 +2900,8 @@ mod tests {
 
     #[test]
     fn encode_nested_lists() {
-        let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
-        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
+        let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new_list_field(DataType::List(inner_int), true));
         let list_field = Field::new("val", DataType::List(inner_list_field), true);
         let schema = Arc::new(Schema::new(vec![list_field]));
 
@@ -2603,6 +2909,19 @@ mod tests {
 
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    #[test]
+    fn encode_nested_lists_starting_at_zero() {
+        let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
+        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
+        let list_field = Field::new("val", DataType::List(inner_list_field), true);
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let values = Arc::new(generate_nested_list_data_starting_at_zero::<i32>());
+
+        let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+        roundtrip_ensure_sliced_smaller(in_batch, 1);
     }
 
     #[test]
@@ -2779,5 +3098,257 @@ mod tests {
         );
         assert_eq!(stream_bytes_written_on_flush, expected_stream_flushed_bytes);
         assert_eq!(file_bytes_written_on_flush, expected_file_flushed_bytes);
+    }
+
+    #[test]
+    fn test_roundtrip_list_of_fixed_list() -> Result<(), ArrowError> {
+        let l1_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 3);
+        let l2_type = DataType::List(Arc::new(Field::new("item", l1_type.clone(), false)));
+
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3).with_field(Arc::new(Field::new(
+            "item",
+            DataType::Float32,
+            false,
+        )));
+        let mut l2_builder =
+            ListBuilder::new(l1_builder).with_field(Arc::new(Field::new("item", l1_type, false)));
+
+        for point in [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]] {
+            l2_builder.values().values().append_value(point[0]);
+            l2_builder.values().values().append_value(point[1]);
+            l2_builder.values().values().append_value(point[2]);
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let point = [10., 11., 12.];
+        l2_builder.values().values().append_value(point[0]);
+        l2_builder.values().values().append_value(point[1]);
+        l2_builder.values().values().append_value(point[2]);
+
+        l2_builder.values().append(true);
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("points", l2_type, false)],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_list_of_fixed_list_w_nulls() -> Result<(), ArrowError> {
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3);
+        let mut l2_builder = ListBuilder::new(l1_builder);
+
+        for point in [
+            [Some(1.0), Some(2.0), None],
+            [Some(4.0), Some(5.0), Some(6.0)],
+            [None, Some(8.0), Some(9.0)],
+        ] {
+            for p in point {
+                match p {
+                    Some(p) => l2_builder.values().values().append_value(p),
+                    None => l2_builder.values().values().append_null(),
+                }
+            }
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let point = [Some(10.), None, None];
+        for p in point {
+            match p {
+                Some(p) => l2_builder.values().values().append_value(p),
+                None => l2_builder.values().values().append_null(),
+            }
+        }
+
+        l2_builder.values().append(true);
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Float32, true)),
+                        3,
+                    ),
+                    true,
+                ))),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
+
+        Ok(())
+    }
+
+    fn test_slices(
+        parent_array: &ArrayRef,
+        schema: &SchemaRef,
+        offset: usize,
+        length: usize,
+    ) -> Result<(), ArrowError> {
+        let subarray = parent_array.slice(offset, length);
+        let original_batch = RecordBatch::try_new(schema.clone(), vec![subarray])?;
+
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
+        writer.write(&original_batch)?;
+        writer.finish()?;
+
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut reader = StreamReader::try_new(&mut cursor, None)?;
+        let returned_batch = reader.next().unwrap()?;
+
+        assert_eq!(original_batch, returned_batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_fixed_list() -> Result<(), ArrowError> {
+        let int_builder = Int64Builder::new();
+        let mut fixed_list_builder = FixedSizeListBuilder::new(int_builder, 3)
+            .with_field(Arc::new(Field::new("item", DataType::Int64, false)));
+
+        for point in [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]] {
+            fixed_list_builder.values().append_value(point[0]);
+            fixed_list_builder.values().append_value(point[1]);
+            fixed_list_builder.values().append_value(point[2]);
+
+            fixed_list_builder.append(true);
+        }
+
+        let array = Arc::new(fixed_list_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 3),
+                false,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 4)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 3)?;
+        test_slices(&array, &schema, 2, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_fixed_list_w_nulls() -> Result<(), ArrowError> {
+        let int_builder = Int64Builder::new();
+        let mut fixed_list_builder = FixedSizeListBuilder::new(int_builder, 3);
+
+        for point in [
+            [Some(1), Some(2), None],
+            [Some(4), Some(5), Some(6)],
+            [None, Some(8), Some(9)],
+            [Some(10), None, None],
+        ] {
+            for p in point {
+                match p {
+                    Some(p) => fixed_list_builder.values().append_value(p),
+                    None => fixed_list_builder.values().append_null(),
+                }
+            }
+
+            fixed_list_builder.append(true);
+        }
+
+        let array = Arc::new(fixed_list_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 3),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 4)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 3)?;
+        test_slices(&array, &schema, 2, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_metadata_encoding_ordering() {
+        fn create_hash() -> u64 {
+            let metadata: HashMap<String, String> = [
+                ("a", "1"), //
+                ("b", "2"), //
+                ("c", "3"), //
+                ("d", "4"), //
+                ("e", "5"), //
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+
+            // Set metadata on both the schema and a field within it.
+            let schema = Arc::new(
+                Schema::new(vec![
+                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone())
+                ])
+                .with_metadata(metadata)
+                .clone(),
+            );
+            let batch = RecordBatch::new_empty(schema.clone());
+
+            let mut bytes = Vec::new();
+            let mut w = StreamWriter::try_new(&mut bytes, batch.schema_ref()).unwrap();
+            w.write(&batch).unwrap();
+            w.finish().unwrap();
+
+            let mut h = std::hash::DefaultHasher::new();
+            h.write(&bytes);
+            h.finish()
+        }
+
+        let expected = create_hash();
+
+        // Since there is randomness in the HashMap and we cannot specify our
+        // own Hasher for the implementation used for metadata, run the above
+        // code 20x and verify it does not change. This is not perfect but it
+        // should be good enough.
+        let all_passed = (0..20).all(|_| create_hash() == expected);
+        assert!(all_passed);
     }
 }

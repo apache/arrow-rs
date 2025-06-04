@@ -77,7 +77,7 @@ impl ArrayReader for FixedSizeListArrayReader {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let next_batch_array = self.item_reader.consume_batch()?;
-        if next_batch_array.len() == 0 {
+        if next_batch_array.is_empty() {
             return Ok(new_empty_array(&self.data_type));
         }
 
@@ -277,7 +277,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             3,
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 3),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 3),
             2,
             1,
             true,
@@ -323,7 +323,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             2,
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2),
             1,
             1,
             false,
@@ -347,9 +347,9 @@ mod tests {
         //   [[null, null]],
         // ]
         let l2_type =
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2);
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2);
         let l1_type =
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", l2_type.clone(), false)), 1);
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(l2_type.clone(), false)), 1);
 
         let array = PrimitiveArray::<Int32Type>::from(vec![
             None,
@@ -436,7 +436,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             0,
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 0),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 0),
             2,
             1,
             true,
@@ -481,9 +481,9 @@ mod tests {
             None,
         ]));
 
-        let inner_type = ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true)));
+        let inner_type = ArrowType::List(Arc::new(Field::new_list_field(ArrowType::Int32, true)));
         let list_type =
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", inner_type.clone(), true)), 2);
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(inner_type.clone(), true)), 2);
 
         let item_array_reader = InMemoryArrayReader::new(
             ArrowType::Int32,
@@ -534,7 +534,10 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "list",
-                ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 4),
+                ArrowType::FixedSizeList(
+                    Arc::new(Field::new_list_field(ArrowType::Int32, true)),
+                    4,
+                ),
                 true,
             ),
             Field::new("primitive", ArrowType::Int32, true),
@@ -599,7 +602,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 4),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 4),
             true,
         )]));
 

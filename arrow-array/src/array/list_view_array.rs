@@ -32,16 +32,81 @@ pub type ListViewArray = GenericListViewArray<i32>;
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i64`.
 pub type LargeListViewArray = GenericListViewArray<i64>;
 
+/// An array of [variable length lists], specifically in the [list-view layout].
 ///
-/// Different from [`crate::GenericListArray`] as it stores both an offset and length
-/// meaning that take / filter operations can be implemented without copying the underlying data.
+/// Differs from [`GenericListArray`] (which represents the [list layout]) in that
+/// the sizes of the child arrays are explicitly encoded in a separate buffer, instead
+/// of being derived from the difference between subsequent offsets in the offset buffer.
 ///
-/// [Variable-size List Layout: ListView Layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
+/// This allows the offsets (and subsequently child data) to be out of order. It also
+/// allows take / filter operations to be implemented without copying the underlying data.
+///
+/// # Representation
+///
+/// Given the same example array from [`GenericListArray`], it would be represented
+/// as such via a list-view layout array:
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │   │ 3 │     │ │ 1 │ │ A │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │      []     │  │ (3,0) │                   │ 1 │   │ 3 │   │ 0 │     │ │ 1 │ │ B │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (?,?) │                   │ 0 │   │ ? │   │ ? │     │ │ 1 │ │ C │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (4,1) │                   │ 1 │   │ 4 │   │ 1 │     │ │ ? │ │ ? │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (5,2) │                   │ 1 │   │ 5 │   │ 2 │     │ │ 1 │ │ D │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   └───┘   └───┘       ├───┤ ├───┤
+///                                                                         │ │ 0 │ │ ? │ │ 5  │
+///     Logical       Logical               │  Validity  Offsets  Sizes       ├───┤ ├───┤
+///      Values       Offset                   (nulls)                      │ │ 1 │ │ F │ │ 6  │
+///                   & Size                │                                 └───┘ └───┘
+///                                                                         │    Values   │    │
+///                 (offsets[i],            │   ListViewArray                   (Array)
+///                  sizes[i])                                              └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// Another way of representing the same array but taking advantage of the offsets being out of order:
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (2,3) │                   │ 1 │   │ 2 │   │ 3 │     │ │ 0 │ │ ? │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │      []     │  │ (0,0) │                   │ 1 │   │ 0 │   │ 0 │     │ │ 1 │ │ F │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (?,?) │                   │ 0 │   │ ? │   │ ? │     │ │ 1 │ │ A │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (5,1) │                   │ 1 │   │ 5 │   │ 1 │     │ │ 1 │ │ B │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (0,2) │                   │ 1 │   │ 0 │   │ 2 │     │ │ 1 │ │ C │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   └───┘   └───┘       ├───┤ ├───┤
+///                                                                         │ │ 1 │ │ D │ │ 5  │
+///     Logical       Logical               │  Validity  Offsets  Sizes       └───┘ └───┘
+///      Values       Offset                   (nulls)                      │    Values   │    │
+///                   & Size                │                                   (Array)  
+///                                                                         └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],            │   ListViewArray                          
+///                  sizes[i])                                                                 │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// [`GenericListArray`]: crate::array::GenericListArray
+/// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
+/// [list layout]: https://arrow.apache.org/docs/format/Columnar.html#list-layout
+/// [list-view layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
 #[derive(Clone)]
 pub struct GenericListViewArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
     values: ArrayRef,
+    // Unlike GenericListArray, we do not use OffsetBuffer here as offsets are not
+    // guaranteed to be monotonically increasing.
     value_offsets: ScalarBuffer<OffsetSize>,
     value_sizes: ScalarBuffer<OffsetSize>,
 }
@@ -326,12 +391,26 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
         self.value_sizes.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+        self.value_sizes.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -485,7 +564,7 @@ mod tests {
     fn test_empty_list_view_array() {
         // Construct an empty value array
         let vec: Vec<i32> = vec![];
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![]);
         let offsets = ScalarBuffer::from(vec![]);
         let values = Int32Array::from(vec);
@@ -503,7 +582,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![3i32, 3, 2]);
         let offsets = ScalarBuffer::from(vec![0i32, 3, 6]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -539,7 +618,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![3i64, 3, 2]);
         let offsets = ScalarBuffer::from(vec![0i64, 3, 6]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -585,7 +664,7 @@ mod tests {
         let buffer = BooleanBuffer::new(Buffer::from(null_bits), 0, 9);
         let null_buffer = NullBuffer::new(buffer);
 
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -651,7 +730,7 @@ mod tests {
         let null_buffer = NullBuffer::new(buffer);
 
         // Construct a large list view array from the above two
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2i64, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0i64, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -713,7 +792,7 @@ mod tests {
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1], null, null, [2, 3], [4, 5], null, [6, 7, 8], null, [9]]
         // Construct a list array from the above two
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![2i32, 0, 0, 2, 2, 0, 3, 0, 1]);
         let offsets = ScalarBuffer::from(vec![0i32, 2, 2, 2, 4, 6, 6, 9, 9]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -736,7 +815,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -754,7 +833,7 @@ mod tests {
     fn test_list_view_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -766,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_list_view_array_offsets_need_not_start_at_zero() {
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let sizes = ScalarBuffer::from(vec![0i32, 0, 3]);
         let offsets = ScalarBuffer::from(vec![2i32, 2, 5]);
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
@@ -795,7 +874,7 @@ mod tests {
         };
 
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(offset_buf2)
@@ -816,8 +895,8 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i32; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i32; 0]);
 
         let string = LargeListViewArray::from(
             ArrayData::builder(DataType::LargeListView(f))
@@ -827,8 +906,8 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(string.len(), 0);
-        assert_eq!(string.value_offsets(), &[]);
-        assert_eq!(string.value_sizes(), &[]);
+        assert_eq!(string.value_offsets(), &[] as &[i64; 0]);
+        assert_eq!(string.value_sizes(), &[] as &[i64; 0]);
     }
 
     #[test]
@@ -937,7 +1016,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(2)
@@ -971,7 +1050,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -1010,7 +1089,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)

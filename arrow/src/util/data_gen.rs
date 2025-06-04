@@ -19,8 +19,10 @@
 
 use std::sync::Arc;
 
-use rand::distributions::uniform::SampleRange;
-use rand::{distributions::uniform::SampleUniform, Rng};
+use rand::{
+    distr::uniform::{SampleRange, SampleUniform},
+    Rng,
+};
 
 use crate::array::*;
 use crate::error::{ArrowError, Result};
@@ -53,6 +55,14 @@ pub fn create_random_batch(
 
 /// Create a random [ArrayRef] from a [DataType] with a length,
 /// null density and true density (for [BooleanArray]).
+///
+/// # Arguments
+///
+/// * `field` - The field containing the data type for which to create a random array
+/// * `size` - The number of elements in the generated array
+/// * `null_density` - The approximate fraction of null values in the resulting array (0.0 to 1.0)
+/// * `true_density` - The approximate fraction of true values in boolean arrays (0.0 to 1.0)
+///
 pub fn create_random_array(
     field: &Field,
     size: usize,
@@ -118,23 +128,33 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Timestamp(unit, _) => {
-            match unit {
-                TimeUnit::Second => Arc::new(create_random_temporal_array::<TimestampSecondType>(
+        Timestamp(unit, tz) => match unit {
+            TimeUnit::Second => Arc::new(
+                create_random_temporal_array::<TimestampSecondType>(size, primitive_null_density)
+                    .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Millisecond => Arc::new(
+                create_random_temporal_array::<TimestampMillisecondType>(
                     size,
                     primitive_null_density,
-                )),
-                TimeUnit::Millisecond => Arc::new(create_random_temporal_array::<
-                    TimestampMillisecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Microsecond => Arc::new(create_random_temporal_array::<
-                    TimestampMicrosecondType,
-                >(size, primitive_null_density)),
-                TimeUnit::Nanosecond => Arc::new(create_random_temporal_array::<
-                    TimestampNanosecondType,
-                >(size, primitive_null_density)),
-            }
-        }
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Microsecond => Arc::new(
+                create_random_temporal_array::<TimestampMicrosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+            TimeUnit::Nanosecond => Arc::new(
+                create_random_temporal_array::<TimestampNanosecondType>(
+                    size,
+                    primitive_null_density,
+                )
+                .with_timezone_opt(tz.clone()),
+            ),
+        },
         Date32 => Arc::new(create_random_temporal_array::<Date32Type>(
             size,
             primitive_null_density,
@@ -203,12 +223,53 @@ pub fn create_random_array(
             crate::compute::cast(&v, d)?
         }
         Map(_, _) => create_random_map_array(field, size, null_density, true_density)?,
+        Decimal128(_, _) => create_random_decimal_array(field, size, null_density)?,
+        Decimal256(_, _) => create_random_decimal_array(field, size, null_density)?,
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {other:?}"
             )))
         }
     })
+}
+
+#[inline]
+fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) -> Result<ArrayRef> {
+    let mut rng = seedable_rng();
+
+    match field.data_type() {
+        DataType::Decimal128(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random::<i128>())
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal128Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal256(precision, scale) => {
+            let values = (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(i256::from_parts(rng.random::<u128>(), rng.random::<i128>()))
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(
+                Decimal256Array::from(values).with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create decimal array for field {field:?}"
+        ))),
+    }
 }
 
 #[inline]
@@ -370,7 +431,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     offsets.push(current_offset);
 
     (0..size).for_each(|_| {
-        current_offset += rng.gen_range(min..max);
+        current_offset += rng.random_range(min..max);
         offsets.push(current_offset);
     });
 
@@ -383,7 +444,7 @@ fn create_random_null_buffer(size: usize, null_density: f32) -> Buffer {
     {
         let mut_slice = mut_buf.as_slice_mut();
         (0..size).for_each(|i| {
-            if rng.gen::<f32>() >= null_density {
+            if rng.random::<f32>() >= null_density {
                 bit_util::set_bit(mut_slice, i)
             }
         })
@@ -402,7 +463,7 @@ pub trait RandomTemporalValue: ArrowTemporalType {
     where
         Self::Native: SampleUniform,
     {
-        rng.gen_range(Self::value_range())
+        rng.random_range(Self::value_range())
     }
 
     /// Generate a random value of the type
@@ -503,7 +564,7 @@ where
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 Some(T::random(&mut rng))
@@ -519,7 +580,19 @@ mod tests {
     #[test]
     fn test_create_batch() {
         let size = 32;
-        let fields = vec![Field::new("a", DataType::Int32, true)];
+        let fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new(
+                "timestamp_without_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+            Field::new(
+                "timestamp_with_timezone",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+        ];
         let schema = Schema::new(fields);
         let schema_ref = Arc::new(schema);
         let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
@@ -538,7 +611,7 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, false))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::LargeUtf8, false))),
                 false,
             ),
             Field::new("a", DataType::Int32, false),
@@ -569,10 +642,8 @@ mod tests {
             Field::new("b", DataType::Boolean, true),
             Field::new(
                 "c",
-                DataType::LargeList(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new(
-                        "item",
+                DataType::LargeList(Arc::new(Field::new_list_field(
+                    DataType::List(Arc::new(Field::new_list_field(
                         DataType::FixedSizeBinary(6),
                         true,
                     ))),
@@ -722,5 +793,23 @@ mod tests {
 
         assert_eq!(array.as_map().keys().data_type(), &DataType::Utf8);
         assert_eq!(array.as_map().values().data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_create_decimal_array() {
+        let size = 10;
+        let fields = vec![
+            Field::new("a", DataType::Decimal128(10, -2), true),
+            Field::new("b", DataType::Decimal256(10, -2), true),
+        ];
+        let schema = Schema::new(fields);
+        let schema_ref = Arc::new(schema);
+        let batch = create_random_batch(schema_ref.clone(), size, 0.35, 0.7).unwrap();
+
+        assert_eq!(batch.schema(), schema_ref);
+        assert_eq!(batch.num_columns(), schema_ref.fields().len());
+        for array in batch.columns() {
+            assert_eq!(array.len(), size);
+        }
     }
 }

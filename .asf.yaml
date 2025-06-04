@@ -16,12 +16,13 @@
 # under the License.
 
 # Documentation can be found here:
-# https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=127405038
+# https://github.com/apache/infrastructure-asfyaml/blob/main/README.md
 
 notifications:
   commits:      commits@arrow.apache.org
   issues:       github@arrow.apache.org
   pullrequests: github@arrow.apache.org
+  discussions: github@arrow.apache.org
   jira_options: link label worklog
 github:
   description: "Official Rust implementation of Apache Arrow"
@@ -29,16 +30,17 @@ github:
   labels:
     - arrow
     - parquet
-    - object-store
     - rust
   enabled_merge_buttons:
     squash: true
+    squash_commit_message: PR_TITLE_AND_DESC
     merge: false
     rebase: false
   features:
     issues: true
+    discussions: true
   protected_branches:
-    master:
+    main:
       required_status_checks:
         # require branches to be up-to-date before merging
         strict: true

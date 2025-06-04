@@ -29,6 +29,7 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_select::interleave::interleave;
+use std::hint;
 
 fn do_bench(
     c: &mut Criterion,
@@ -54,14 +55,14 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     let mut rng = seedable_rng();
     let indices: Vec<_> = (0..len)
         .map(|_| {
-            let array_idx = rng.gen_range(0..values.len());
-            let value_idx = rng.gen_range(0..values[array_idx].len());
+            let array_idx = rng.random_range(0..values.len());
+            let value_idx = rng.random_range(0..values[array_idx].len());
             (array_idx, value_idx)
         })
         .collect();
 
     c.bench_function(name, |b| {
-        b.iter(|| criterion::black_box(interleave(values, &indices).unwrap()))
+        b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
 }
 

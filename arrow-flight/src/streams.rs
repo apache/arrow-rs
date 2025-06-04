@@ -32,7 +32,7 @@ use std::task::{ready, Poll};
 ///
 /// This can be used to accept a stream of `Result<_>` from a client API and send
 /// them to the remote server that wants only the successful results.
-pub(crate) struct FallibleRequestStream<T, E> {
+pub struct FallibleRequestStream<T, E> {
     /// sender to notify error
     sender: Option<Sender<E>>,
     /// fallible stream
@@ -40,7 +40,8 @@ pub(crate) struct FallibleRequestStream<T, E> {
 }
 
 impl<T, E> FallibleRequestStream<T, E> {
-    pub(crate) fn new(
+    /// Create a FallibleRequestStream
+    pub fn new(
         sender: Sender<E>,
         fallible_stream: Pin<Box<dyn Stream<Item = std::result::Result<T, E>> + Send + 'static>>,
     ) -> Self {
@@ -127,7 +128,7 @@ impl<T> Stream for FallibleTonicResponseStream<T> {
 
         match ready!(pinned.response_stream.poll_next_unpin(cx)) {
             Some(Ok(res)) => Poll::Ready(Some(Ok(res))),
-            Some(Err(status)) => Poll::Ready(Some(Err(FlightError::Tonic(status)))),
+            Some(Err(status)) => Poll::Ready(Some(Err(status.into()))),
             None => Poll::Ready(None),
         }
     }

@@ -463,20 +463,11 @@ impl Parser for Float64Type {
     }
 }
 
-/// This API is only stable since 1.70 so can't use it when current MSRV is lower
-#[inline(always)]
-fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
-    match opt {
-        None => false,
-        Some(x) => f(x),
-    }
-}
-
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if !is_some_and(string.as_bytes().last(), |x| x.is_ascii_digit()) {
+                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
@@ -497,6 +488,10 @@ parser_primitive!(Int64Type);
 parser_primitive!(Int32Type);
 parser_primitive!(Int16Type);
 parser_primitive!(Int8Type);
+parser_primitive!(DurationNanosecondType);
+parser_primitive!(DurationMicrosecondType);
+parser_primitive!(DurationMillisecondType);
+parser_primitive!(DurationSecondType);
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
@@ -591,6 +586,32 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 fn parse_date(string: &str) -> Option<NaiveDate> {
+    // If the date has an extended (signed) year such as "+10999-12-31" or "-0012-05-06"
+    //
+    // According to [ISO 8601], years have:
+    //  Four digits or more for the year. Years in the range 0000 to 9999 will be pre-padded by
+    //  zero to ensure four digits. Years outside that range will have a prefixed positive or negative symbol.
+    //
+    // [ISO 8601]: https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/time/format/DateTimeFormatter.html#ISO_LOCAL_DATE
+    if string.starts_with('+') || string.starts_with('-') {
+        // Skip the sign and look for the hyphen that terminates the year digits.
+        // According to ISO 8601 the unsigned part must be at least 4 digits.
+        let rest = &string[1..];
+        let hyphen = rest.find('-')?;
+        if hyphen < 4 {
+            return None;
+        }
+        // The year substring is the sign and the digits (but not the separator)
+        // e.g. for "+10999-12-31", hyphen is 5 and s[..6] is "+10999"
+        let year: i32 = string[..hyphen + 1].parse().ok()?;
+        // The remainder should begin with a '-' which we strip off, leaving the month-day part.
+        let remainder = string[hyphen + 1..].strip_prefix('-')?;
+        let mut parts = remainder.splitn(2, '-');
+        let month: u32 = parts.next()?.parse().ok()?;
+        let day: u32 = parts.next()?.parse().ok()?;
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
     if string.len() > 10 {
         // Try to parse as datetime and return just the date part
         return string_to_datetime(&Utc, string)
@@ -841,19 +862,20 @@ pub fn parse_decimal<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
-    let (bs, negative) = match bs.first() {
-        Some(b'-') => (&bs[1..], true),
-        Some(b'+') => (&bs[1..], false),
-        _ => (bs, false),
+    let (signed, negative) = match bs.first() {
+        Some(b'-') => (true, true),
+        Some(b'+') => (true, false),
+        _ => (false, false),
     };
 
-    if bs.is_empty() {
+    if bs.is_empty() || signed && bs.len() == 1 {
         return Err(ArrowError::ParseError(format!(
             "can't parse the string value {s} to decimal"
         )));
     }
 
-    let mut bs = bs.iter().enumerate();
+    // Iterate over the raw input bytes, skipping the sign if any
+    let mut bs = bs.iter().enumerate().skip(signed as usize);
 
     let mut is_e_notation = false;
 
@@ -876,7 +898,7 @@ pub fn parse_decimal<T: DecimalType>(
                 for (_, b) in bs.by_ref() {
                     if !b.is_ascii_digit() {
                         if *b == b'e' || *b == b'E' {
-                            result = match parse_e_notation::<T>(
+                            result = parse_e_notation::<T>(
                                 s,
                                 digits as u16,
                                 fractionals as i16,
@@ -884,10 +906,7 @@ pub fn parse_decimal<T: DecimalType>(
                                 point_index,
                                 precision as u16,
                                 scale as i16,
-                            ) {
-                                Err(e) => return Err(e),
-                                Ok(v) => v,
-                            };
+                            )?;
 
                             is_e_notation = true;
 
@@ -921,7 +940,7 @@ pub fn parse_decimal<T: DecimalType>(
                 }
             }
             b'e' | b'E' => {
-                result = match parse_e_notation::<T>(
+                result = parse_e_notation::<T>(
                     s,
                     digits as u16,
                     fractionals as i16,
@@ -929,10 +948,7 @@ pub fn parse_decimal<T: DecimalType>(
                     index,
                     precision as u16,
                     scale as i16,
-                ) {
-                    Err(e) => return Err(e),
-                    Ok(v) => v,
-                };
+                )?;
 
                 is_e_notation = true;
 
@@ -2678,6 +2694,21 @@ mod tests {
                 "1.016744e-320",
                 0i128,
                 15,
+            ),
+            (
+                "-1e3",
+                -1000000000i128,
+                6,
+            ),
+            (
+                "+1e3",
+                1000000000i128,
+                6,
+            ),
+            (
+                "-1e31",
+                -10000000000000000000000000000000000000i128,
+                6,
             ),
         ];
         for (s, i, scale) in edge_tests_128 {

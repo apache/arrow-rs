@@ -37,8 +37,18 @@ pub const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
 pub const MICROSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MICROSECONDS;
 /// Number of nanoseconds in a day
 pub const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
-/// Number of days between 0001-01-01 and 1970-01-01
-pub const EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
+/// Constant from chrono crate
+///
+/// Number of days between Januari 1, 1970 and December 31, 1 BCE which we define to be day 0.
+/// 4 full leap year cycles until December 31, 1600     4 * 146097 = 584388
+/// 1 day until January 1, 1601                                           1
+/// 369 years until Januari 1, 1970                      369 * 365 = 134685
+/// of which floor(369 / 4) are leap years          floor(369 / 4) =     92
+/// except for 1700, 1800 and 1900                                       -3 +
+///                                                                  --------
+///                                                                  719163
+pub const UNIX_EPOCH_DAY: i64 = 719_163;
 
 /// converts a `i32` representing a `date32` to [`NaiveDateTime`]
 #[inline]
@@ -134,6 +144,31 @@ pub fn timestamp_s_to_datetime(v: i64) -> Option<NaiveDateTime> {
     Some(DateTime::from_timestamp(v, 0)?.naive_utc())
 }
 
+/// Similar to timestamp_s_to_datetime but only compute `date`
+#[inline]
+pub fn timestamp_s_to_date(secs: i64) -> Option<NaiveDateTime> {
+    let days = secs.div_euclid(86_400) + UNIX_EPOCH_DAY;
+    if days < i32::MIN as i64 || days > i32::MAX as i64 {
+        return None;
+    }
+    let date = NaiveDate::from_num_days_from_ce_opt(days as i32)?;
+    Some(date.and_time(NaiveTime::default()).and_utc().naive_utc())
+}
+
+/// Similar to timestamp_s_to_datetime but only compute `time`
+#[inline]
+pub fn timestamp_s_to_time(secs: i64) -> Option<NaiveDateTime> {
+    let secs = secs.rem_euclid(86_400);
+    let time = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, 0)?;
+    Some(
+        DateTime::<Utc>::from_naive_utc_and_offset(
+            NaiveDateTime::new(NaiveDate::default(), time),
+            Utc,
+        )
+        .naive_utc(),
+    )
+}
+
 /// converts a `i64` representing a `timestamp(ms)` to [`NaiveDateTime`]
 #[inline]
 pub fn timestamp_ms_to_datetime(v: i64) -> Option<NaiveDateTime> {
@@ -182,14 +217,28 @@ pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
 
 /// converts a `i64` representing a `duration(s)` to [`Duration`]
 #[inline]
+#[deprecated(since = "55.2.0", note = "Use `try_duration_s_to_duration` instead")]
 pub fn duration_s_to_duration(v: i64) -> Duration {
     Duration::try_seconds(v).unwrap()
 }
 
+/// converts a `i64` representing a `duration(s)` to [`Option<Duration>`]
+#[inline]
+pub fn try_duration_s_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_seconds(v)
+}
+
 /// converts a `i64` representing a `duration(ms)` to [`Duration`]
 #[inline]
+#[deprecated(since = "55.2.0", note = "Use `try_duration_ms_to_duration` instead")]
 pub fn duration_ms_to_duration(v: i64) -> Duration {
-    Duration::try_milliseconds(v).unwrap()
+    Duration::try_seconds(v).unwrap()
+}
+
+/// converts a `i64` representing a `duration(ms)` to [`Option<Duration>`]
+#[inline]
+pub fn try_duration_ms_to_duration(v: i64) -> Option<Duration> {
+    Duration::try_milliseconds(v)
 }
 
 /// converts a `i64` representing a `duration(us)` to [`Duration`]
@@ -261,8 +310,8 @@ pub fn as_time<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveTime> {
 pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
     match T::DATA_TYPE {
         DataType::Duration(unit) => match unit {
-            TimeUnit::Second => Some(duration_s_to_duration(v)),
-            TimeUnit::Millisecond => Some(duration_ms_to_duration(v)),
+            TimeUnit::Second => try_duration_s_to_duration(v),
+            TimeUnit::Millisecond => try_duration_ms_to_duration(v),
             TimeUnit::Microsecond => Some(duration_us_to_duration(v)),
             TimeUnit::Nanosecond => Some(duration_ns_to_duration(v)),
         },
@@ -274,9 +323,27 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
 mod tests {
     use crate::temporal_conversions::{
         date64_to_datetime, split_second, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+        timestamp_s_to_date, timestamp_s_to_datetime, timestamp_s_to_time,
         timestamp_us_to_datetime, NANOSECONDS,
     };
     use chrono::DateTime;
+
+    #[test]
+    fn test_timestamp_func() {
+        let timestamp = 1234;
+        let datetime = timestamp_s_to_datetime(timestamp).unwrap();
+        let expected_date = datetime.date();
+        let expected_time = datetime.time();
+
+        assert_eq!(
+            timestamp_s_to_date(timestamp).unwrap().date(),
+            expected_date
+        );
+        assert_eq!(
+            timestamp_s_to_time(timestamp).unwrap().time(),
+            expected_time
+        );
+    }
 
     #[test]
     fn negative_input_timestamp_ns_to_datetime() {

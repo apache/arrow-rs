@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::print_long_array;
 use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -92,6 +93,28 @@ impl StructArray {
 
     /// Create a new [`StructArray`] from the provided parts, returning an error on failure
     ///
+    /// The length will be inferred from the length of the child arrays.  Returns an error if
+    /// there are no child arrays.  Consider using [`Self::try_new_with_length`] if the length
+    /// is known to avoid this.
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    ///
+    /// * `fields.len() == 0`
+    /// * Any reason that [`Self::try_new_with_length`] would error
+    pub fn try_new(
+        fields: Fields,
+        arrays: Vec<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Result<Self, ArrowError> {
+        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty to create a struct array with no fields so that the length can be set correctly".to_string()))?;
+
+        Self::try_new_with_length(fields, arrays, nulls, len)
+    }
+
+    /// Create a new [`StructArray`] from the provided parts, returning an error on failure
+    ///
     /// # Errors
     ///
     /// Errors if
@@ -101,10 +124,11 @@ impl StructArray {
     /// * `arrays[i].len() != arrays[j].len()`
     /// * `arrays[i].len() != nulls.len()`
     /// * `!fields[i].is_nullable() && !nulls.contains(arrays[i].nulls())`
-    pub fn try_new(
+    pub fn try_new_with_length(
         fields: Fields,
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
+        len: usize,
     ) -> Result<Self, ArrowError> {
         if fields.len() != arrays.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -113,7 +137,6 @@ impl StructArray {
                 arrays.len()
             )));
         }
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
 
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
@@ -145,7 +168,9 @@ impl StructArray {
 
             if !f.is_nullable() {
                 if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default() {
+                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
+                        && a.null_count() > 0
+                    {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Found unmasked nulls for non-nullable StructArray field {:?}",
                             f.name()
@@ -180,6 +205,10 @@ impl StructArray {
 
     /// Create a new [`StructArray`] from the provided parts without validation
     ///
+    /// The length will be inferred from the length of the child arrays.  Panics if there are no
+    /// child arrays.  Consider using [`Self::new_unchecked_with_length`] if the length is known
+    /// to avoid this.
+    ///
     /// # Safety
     ///
     /// Safe if [`Self::new`] would not panic with the given arguments
@@ -188,7 +217,36 @@ impl StructArray {
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
-        let len = arrays.first().map(|x| x.len()).unwrap_or_default();
+        if cfg!(feature = "force_validate") {
+            return Self::new(fields, arrays, nulls);
+        }
+
+        let len = arrays.first().map(|x| x.len()).expect(
+            "cannot use StructArray::new_unchecked if there are no fields, length is unknown",
+        );
+        Self {
+            len,
+            data_type: DataType::Struct(fields),
+            nulls,
+            fields: arrays,
+        }
+    }
+
+    /// Create a new [`StructArray`] from the provided parts without validation
+    ///
+    /// # Safety
+    ///
+    /// Safe if [`Self::new`] would not panic with the given arguments
+    pub unsafe fn new_unchecked_with_length(
+        fields: Fields,
+        arrays: Vec<ArrayRef>,
+        nulls: Option<NullBuffer>,
+        len: usize,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::try_new_with_length(fields, arrays, nulls, len).unwrap();
+        }
+
         Self {
             len,
             data_type: DataType::Struct(fields),
@@ -236,12 +294,6 @@ impl StructArray {
     /// Returns the fields of the struct array
     pub fn columns(&self) -> &[ArrayRef] {
         &self.fields
-    }
-
-    /// Returns child array refs of the struct array
-    #[deprecated(note = "Use columns().to_vec()")]
-    pub fn columns_ref(&self) -> Vec<ArrayRef> {
-        self.columns().to_vec()
     }
 
     /// Return field names in this struct array
@@ -295,10 +347,19 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
+        let parent_offset = data.offset();
+        let parent_len = data.len();
+
         let fields = data
             .child_data()
             .iter()
-            .map(|cd| make_array(cd.clone()))
+            .map(|cd| {
+                if parent_offset != 0 || parent_len != cd.len() {
+                    make_array(cd.slice(parent_offset, parent_len))
+                } else {
+                    make_array(cd.clone())
+                }
+            })
             .collect();
 
         Self {
@@ -369,12 +430,24 @@ impl Array for StructArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.fields.iter_mut().for_each(|n| n.shrink_to_fit());
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -404,7 +477,11 @@ impl From<Vec<(FieldRef, ArrayRef)>> for StructArray {
 
 impl std::fmt::Debug for StructArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "StructArray\n[\n")?;
+        writeln!(f, "StructArray")?;
+        writeln!(f, "-- validity:")?;
+        writeln!(f, "[")?;
+        print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
+        writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
             writeln!(
@@ -506,6 +583,81 @@ mod tests {
         assert_eq!(4, struct_array.len());
         assert_eq!(0, struct_array.null_count());
         assert_eq!(0, struct_array.offset());
+    }
+
+    #[test]
+    fn test_struct_array_from_data_with_offset_and_length() {
+        // Various ways to make the struct array:
+        //
+        // [{x: 2}, {x: 3}, None]
+        //
+        // from slicing larger buffers/arrays with offsets and lengths
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        // Case 1: Offset + length, nulls are not sliced
+        let case1 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
+
+        // Case 2: Offset + length, nulls are sliced
+        let struct_nulls =
+            NullBuffer::new(BooleanBuffer::from(vec![true, true, true, false, true]).slice(1, 3));
+        let case2 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(1)
+            .nulls(Some(struct_nulls.clone()))
+            .add_child_data(int_data.clone())
+            .build()
+            .unwrap();
+
+        // Case 3: struct length is smaller than child length but no offset
+        let offset_int_data = int_data.slice(1, 4);
+        let case3 = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .nulls(Some(struct_nulls))
+            .add_child_data(offset_int_data)
+            .build()
+            .unwrap();
+
+        let expected = StructArray::new(
+            Fields::from(vec![int_field.clone()]),
+            vec![Arc::new(int_arr)],
+            Some(NullBuffer::new(BooleanBuffer::from(vec![
+                true, true, true, false, true,
+            ]))),
+        )
+        .slice(1, 3);
+
+        for case in [case1, case2, case3] {
+            let struct_arr_from_data = StructArray::from(case);
+            assert_eq!(struct_arr_from_data, expected);
+            assert_eq!(struct_arr_from_data.column(0), expected.column(0));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
+    fn test_struct_array_from_data_with_offset_and_length_error() {
+        let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let int_field = Field::new("x", DataType::Int32, false);
+        let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
+        let int_data = int_arr.to_data();
+        // If parent offset is 3 and len is 3 then child must have 6 items
+        let struct_data =
+            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+                .len(3)
+                .offset(3)
+                .nulls(Some(struct_nulls))
+                .add_child_data(int_data)
+                .build()
+                .unwrap();
+        let _ = StructArray::from(struct_data);
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
@@ -718,9 +870,38 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "use StructArray::try_new_with_length")]
     fn test_struct_array_from_empty() {
-        let sa = StructArray::from(vec![]);
-        assert!(sa.is_empty())
+        // This can't work because we don't know how many rows the array should have.  Previously we inferred 0 but
+        // that often led to bugs.
+        let _ = StructArray::from(vec![]);
+    }
+
+    #[test]
+    fn test_empty_struct_array() {
+        assert!(StructArray::try_new(Fields::empty(), vec![], None).is_err());
+
+        let arr = StructArray::new_empty_fields(10, None);
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 0);
+        assert_eq!(arr.num_columns(), 0);
+
+        let arr2 = StructArray::try_new_with_length(Fields::empty(), vec![], None, 10).unwrap();
+        assert_eq!(arr2.len(), 10);
+
+        let arr = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        assert_eq!(arr.len(), 10);
+        assert_eq!(arr.null_count(), 10);
+        assert_eq!(arr.num_columns(), 0);
+
+        let arr2 = StructArray::try_new_with_length(
+            Fields::empty(),
+            vec![],
+            Some(NullBuffer::new_null(10)),
+            10,
+        )
+        .unwrap();
+        assert_eq!(arr2.len(), 10);
     }
 
     #[test]
@@ -730,5 +911,36 @@ mod tests {
             Arc::new(Field::new("c", DataType::Int32, false)),
             Arc::new(Int32Array::from(vec![Some(42), None, Some(19)])) as ArrayRef,
         )]));
+    }
+
+    #[test]
+    fn test_struct_array_fmt_debug() {
+        let arr: StructArray = StructArray::new(
+            vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
+            vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
+            Some(NullBuffer::new(BooleanBuffer::from(
+                (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
+            ))),
+        );
+        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
+    }
+
+    #[test]
+    fn test_struct_array_logical_nulls() {
+        // Field is non-nullable
+        let field = Field::new("a", DataType::Int32, false);
+        let values = vec![1, 2, 3];
+        // Create a NullBuffer with all bits set to valid (true)
+        let nulls = NullBuffer::from(vec![true, true, true]);
+        let array = Int32Array::new(values.into(), Some(nulls));
+        let child = Arc::new(array) as ArrayRef;
+        assert!(child.logical_nulls().is_some());
+        assert_eq!(child.logical_nulls().unwrap().null_count(), 0);
+
+        let fields = Fields::from(vec![field]);
+        let arrays = vec![child];
+        let nulls = None;
+
+        StructArray::try_new(fields, arrays, nulls).expect("should not error");
     }
 }

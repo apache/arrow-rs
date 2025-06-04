@@ -31,20 +31,22 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-arrow-flight = "53.2.0"
+arrow-flight = "54.0.0"
 ```
 
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
 
 This crate provides a Rust implementation of the
 [Flight.proto](../format/Flight.proto) gRPC protocol and
-[examples](https://github.com/apache/arrow-rs/tree/master/arrow-flight/examples)
+[examples](https://github.com/apache/arrow-rs/tree/main/arrow-flight/examples)
 that demonstrate how to build a Flight server implemented with [tonic](https://docs.rs/crate/tonic/latest).
 
 ## Feature Flags
 
-- `flight-sql-experimental`: Enables experimental support for
+- `flight-sql`: Enables experimental support for
   [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+
+- `flight-sql-experimental` : Deprecated feature and will be removed in next release
 
 - `tls`: Enables `tls` on `tonic`
 
@@ -55,7 +57,7 @@ This crates offers a basic [Apache Arrow FlightSQL] command line interface.
 The client can be installed from the repository:
 
 ```console
-$ cargo install --features=cli,flight-sql-experimental,tls --bin=flight_sql_client --path=. --locked
+$ cargo install --features=cli,flight-sql,tls --bin=flight_sql_client --path=. --locked
 ```
 
 The client comes with extensive help text:
