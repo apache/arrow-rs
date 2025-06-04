@@ -162,6 +162,12 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "coalesce_kernels"
+harness = false
+required-features = ["test_utils"]
+
+
+[[bench]]
 name = "take_kernels"
 harness = false
 required-features = ["test_utils"]
