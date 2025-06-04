@@ -145,7 +145,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .apply_row_group_encryption(self.row_groups)?;
 
         let (encryption_algorithm, footer_signing_key_metadata) =
-            self.object_writer.get_plaintext_footer_metadata();
+            self.object_writer.get_plaintext_footer_crypto_metadata();
         let mut file_metadata = FileMetaData {
             num_rows,
             row_groups,
@@ -480,7 +480,9 @@ impl MetadataObjectWriter {
         get_file_magic()
     }
 
-    fn get_plaintext_footer_metadata(&self) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
+    fn get_plaintext_footer_crypto_metadata(
+        &self,
+    ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
         (None, None)
     }
 }
@@ -636,7 +638,10 @@ impl MetadataObjectWriter {
         }
     }
 
-    fn get_plaintext_footer_metadata(&self) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
+    fn get_plaintext_footer_crypto_metadata(
+        &self,
+    ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
+        // Only plaintext footers may contain encryption algorithm and footer key metadata.
         if let Some(file_encryptor) = self.file_encryptor.as_ref() {
             let encryption_properties = file_encryptor.properties();
             if !encryption_properties.encrypt_footer() {
