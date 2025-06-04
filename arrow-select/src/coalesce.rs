@@ -59,23 +59,23 @@ use std::sync::Arc;
 /// // push the batches
 /// coalescer.push_batch(batch1).unwrap();
 /// // only pushed 3 rows (not yet 4, enough to produce a batch)
-/// assert!(coalescer.next_batch().is_none());
+/// assert!(coalescer.next_completed_batch().is_none());
 /// coalescer.push_batch(batch2).unwrap();
 /// // now we have 5 rows, so we can produce a batch
-/// let finished = coalescer.next_batch().unwrap();
+/// let finished = coalescer.next_completed_batch().unwrap();
 /// // 4 rows came out (target batch size is 4)
 /// let expected = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
 /// assert_eq!(finished, expected);
 ///
 /// // Have no more input, but still have an in-progress batch
-/// assert!(coalescer.next_batch().is_none());
+/// assert!(coalescer.next_completed_batch().is_none());
 /// // We can finish the batch, which will produce the remaining rows
-/// coalescer.finish_batch().unwrap();
+/// coalescer.finish_buffered_batch().unwrap();
 /// let expected = record_batch!(("a", Int32, [5])).unwrap();
-/// assert_eq!(coalescer.next_batch().unwrap(), expected);
+/// assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
 ///
 /// // The coalescer is now empty
-/// assert!(coalescer.next_batch().is_none());
+/// assert!(coalescer.next_completed_batch().is_none());
 /// ```
 ///
 /// # Background
@@ -157,7 +157,7 @@ impl BatchCoalescer {
 
     /// Push next batch into the Coalescer
     ///
-    /// See [`Self::next_batch()`] to retrieve any completed batches.
+    /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
     pub fn push_batch(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
         if batch.num_rows() == 0 {
             // If the batch is empty, we don't need to do anything
@@ -175,7 +175,7 @@ impl BatchCoalescer {
             batch = batch.slice(remaining_rows, batch.num_rows() - remaining_rows);
             self.buffered_rows += head_batch.num_rows();
             self.buffer.push(head_batch);
-            self.finish_batch()?;
+            self.finish_buffered_batch()?;
         }
         // Add the remaining rows to the buffer
         self.buffered_rows += batch.num_rows();
@@ -189,8 +189,11 @@ impl BatchCoalescer {
     /// Normally this is called when the input stream is exhausted, and
     /// we want to finalize the last batch of rows.
     ///
-    /// See [`Self::next_batch()`] for the completed batches.
-    pub fn finish_batch(&mut self) -> Result<(), ArrowError> {
+    /// See [`Self::next_completed_batch()`] for the completed batches.
+    pub fn finish_buffered_batch(&mut self) -> Result<(), ArrowError> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
         let batch = concat_batches(&self.schema, &self.buffer)?;
         self.buffer.clear();
         self.buffered_rows = 0;
@@ -198,8 +201,18 @@ impl BatchCoalescer {
         Ok(())
     }
 
+    /// Returns true if there is any buffered data
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty() && self.completed.is_empty()
+    }
+
+    /// Returns true if there are any completed batches
+    pub fn has_completed_batch(&self) -> bool {
+        !self.completed.is_empty()
+    }
+
     /// Returns the next completed batch, if any
-    pub fn next_batch(&mut self) -> Option<RecordBatch> {
+    pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
 }
@@ -298,20 +311,13 @@ mod tests {
 
     #[test]
     fn test_coalesce_empty() {
-        let arrays: Vec<ArrayRef> = vec![Arc::new(UInt32Array::from(vec![] as Vec<u32>))];
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
-        let batch = RecordBatch::try_new_with_options(
-            schema,
-            arrays,
-            &RecordBatchOptions::new().with_row_count(Some(0)),
-        )
-        .unwrap();
 
         Test::new()
             .with_batches(vec![])
-            .with_batch(batch)
+            .with_schema(schema)
             .with_batch_size(21)
-            .with_expected_output_sizes(vec![0])
+            .with_expected_output_sizes(vec![])
             .run()
     }
 
@@ -368,6 +374,10 @@ mod tests {
         /// Batches to feed to the coalescer. Tests must have at least one
         /// schema
         input_batches: Vec<RecordBatch>,
+
+        /// The schema. If not provided, the first batch's schema is used.
+        schema: Option<SchemaRef>,
+
         /// Expected output sizes of the resulting batches
         expected_output_sizes: Vec<usize>,
         /// target batch size
@@ -397,6 +407,12 @@ mod tests {
             self
         }
 
+        /// Specifies the schema for the test
+        fn with_schema(mut self, schema: SchemaRef) -> Self {
+            self.schema = Some(schema);
+            self
+        }
+
         /// Extends `sizes` to expected output sizes
         fn with_expected_output_sizes(mut self, sizes: impl IntoIterator<Item = usize>) -> Self {
             self.expected_output_sizes.extend(sizes);
@@ -407,11 +423,12 @@ mod tests {
         fn run(self) {
             let Self {
                 input_batches,
+                schema,
                 target_batch_size,
                 expected_output_sizes,
             } = self;
 
-            let schema = input_batches[0].schema();
+            let schema = schema.unwrap_or_else(|| input_batches[0].schema());
 
             // create a single large input batch for output comparison
             let single_input_batch = concat_batches(&schema, &input_batches).unwrap();
@@ -421,9 +438,9 @@ mod tests {
             for batch in input_batches {
                 coalescer.push_batch(batch).unwrap();
             }
-            coalescer.finish_batch().unwrap();
+            coalescer.finish_buffered_batch().unwrap();
             let mut output_batches = vec![];
-            while let Some(batch) = coalescer.next_batch() {
+            while let Some(batch) = coalescer.next_completed_batch() {
                 output_batches.push(batch);
             }
 
