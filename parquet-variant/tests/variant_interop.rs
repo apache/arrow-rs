@@ -23,8 +23,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::variant::{Variant, VariantMetadata};
 use arrow_schema::ArrowError;
+use parquet_variant::{Variant, VariantMetadata};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
