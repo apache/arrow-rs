@@ -93,6 +93,14 @@ impl FixedSizeBinaryBuilder {
         self.null_buffer_builder.append_null();
     }
 
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.values_builder
+            .append_slice(&vec![0u8; self.value_length as usize * n][..]);
+        self.null_buffer_builder.append_n_nulls(n);
+    }
+
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[u8] {
         self.values_builder.as_slice()
@@ -169,17 +177,20 @@ mod tests {
     fn test_fixed_size_binary_builder() {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 
-        //  [b"hello", null, "arrow"]
+        //  [b"hello", null, "arrow", null, null]
         builder.append_value(b"hello").unwrap();
         builder.append_null();
         builder.append_value(b"arrow").unwrap();
+        builder.append_nulls(2);
         let array: FixedSizeBinaryArray = builder.finish();
 
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
-        assert_eq!(3, array.len());
-        assert_eq!(1, array.null_count());
+        assert_eq!(5, array.len());
+        assert_eq!(3, array.null_count());
         assert_eq!(10, array.value_offset(2));
         assert_eq!(5, array.value_length());
+        assert!(array.is_null(3));
+        assert!(array.is_null(4));
     }
 
     #[test]
