@@ -19,10 +19,7 @@ use crate::decoder::{
 };
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 use arrow_schema::ArrowError;
-use std::{
-    num::TryFromIntError,
-    ops::{Range},
-};
+use std::{num::TryFromIntError, ops::Range};
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum OffsetSizeBytes {
