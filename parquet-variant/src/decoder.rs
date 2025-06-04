@@ -124,12 +124,12 @@ mod tests {
     fn test_short_string() -> Result<(), ArrowError> {
         let value = [
             1 | 5 << 2, // Basic type for short string | length of short string
-            'H' as u8,
-            'e' as u8,
-            'l' as u8,
-            'l' as u8,
-            'o' as u8,
-            'o' as u8,
+            b'H',
+            b'e',
+            b'l',
+            b'l',
+            b'o',
+            b'o',
         ];
         let result = decode_short_string(&value)?;
         assert_eq!(result, "Hello");
@@ -144,12 +144,12 @@ mod tests {
             0,
             0,
             0, // Length of string
-            'H' as u8,
-            'e' as u8,
-            'l' as u8,
-            'l' as u8,
-            'o' as u8,
-            'o' as u8,
+            b'H',
+            b'e',
+            b'l',
+            b'l',
+            b'o',
+            b'o',
         ];
         let result = decode_long_string(&value)?;
         assert_eq!(result, "Hello");
