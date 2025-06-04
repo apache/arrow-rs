@@ -180,6 +180,11 @@ impl BatchCoalescer {
         // Add the remaining rows to the buffer
         self.buffered_rows += batch.num_rows();
         self.buffer.push(batch);
+
+        // If we have reached the target batch size, finalize the buffered batch
+        if self.buffered_rows >= self.batch_size {
+            self.finish_buffered_batch()?;
+        }
         Ok(())
     }
 
@@ -303,9 +308,20 @@ mod tests {
         let batch = uint32_batch(0..8);
         Test::new()
             .with_batches(std::iter::repeat_n(batch, 10))
-            // expected output is exactly 20 rows (except for the final batch)
+            // expected output is exactly 21 rows (except for the final batch)
             .with_batch_size(21)
             .with_expected_output_sizes(vec![21, 21, 21, 17])
+            .run()
+    }
+
+    #[test]
+    fn test_coalesce_one_by_one() {
+        let batch = uint32_batch(0..1); // single row input
+        Test::new()
+            .with_batches(std::iter::repeat_n(batch, 97))
+            // expected output is exactly 20 rows (except for the final batch)
+            .with_batch_size(20)
+            .with_expected_output_sizes(vec![20, 20, 20, 20, 17])
             .run()
     }
 
