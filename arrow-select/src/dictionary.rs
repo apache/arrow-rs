@@ -18,12 +18,13 @@
 use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, LargeBinaryType,
+    LargeUtf8Type, Utf8Type,
 };
-use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer};
+use arrow_array::{cast::AsArray, downcast_primitive};
+use arrow_array::{Array, ArrayRef, DictionaryArray, GenericByteArray, PrimitiveArray};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 
 /// A best effort interner that maintains a fixed number of buckets
@@ -102,7 +103,7 @@ fn bytes_ptr_eq<T: ByteArrayType>(a: &dyn Array, b: &dyn Array) -> bool {
 }
 
 /// A type-erased function that compares two array for pointer equality
-type PtrEq = dyn Fn(&dyn Array, &dyn Array) -> bool;
+type PtrEq = fn(&dyn Array, &dyn Array) -> bool;
 
 /// A weak heuristic of whether to merge dictionary values that aims to only
 /// perform the expensive merge computation when it is likely to yield at least
@@ -115,12 +116,17 @@ pub fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
 ) -> bool {
     use DataType::*;
     let first_values = dictionaries[0].values().as_ref();
-    let ptr_eq: Box<PtrEq> = match first_values.data_type() {
-        Utf8 => Box::new(bytes_ptr_eq::<Utf8Type>),
-        LargeUtf8 => Box::new(bytes_ptr_eq::<LargeUtf8Type>),
-        Binary => Box::new(bytes_ptr_eq::<BinaryType>),
-        LargeBinary => Box::new(bytes_ptr_eq::<LargeBinaryType>),
-        _ => return false,
+    let ptr_eq: PtrEq = match first_values.data_type() {
+        Utf8 => bytes_ptr_eq::<Utf8Type>,
+        LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
+        Binary => bytes_ptr_eq::<BinaryType>,
+        LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
+        dt => {
+            if !dt.is_primitive() {
+                return false;
+            }
+            |a, b| a.to_data().ptr_eq(&b.to_data())
+        }
     };
 
     let mut single_dictionary = true;
@@ -233,17 +239,43 @@ fn compute_values_mask<K: ArrowNativeType>(
     builder.finish()
 }
 
+/// Process primitive array values to bytes
+fn masked_primitives_to_bytes<'a, T: ArrowPrimitiveType>(
+    array: &'a PrimitiveArray<T>,
+    mask: &BooleanBuffer,
+) -> Vec<(usize, Option<&'a [u8]>)>
+where
+    T::Native: ToByteSlice,
+{
+    let mut out = Vec::with_capacity(mask.count_set_bits());
+    let values = array.values();
+    for idx in mask.set_indices() {
+        out.push((
+            idx,
+            array.is_valid(idx).then_some(values[idx].to_byte_slice()),
+        ))
+    }
+    out
+}
+
+macro_rules! masked_primitive_to_bytes_helper {
+    ($t:ty, $array:expr, $mask:expr) => {
+        masked_primitives_to_bytes::<$t>($array.as_primitive(), $mask)
+    };
+}
+
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
 fn get_masked_values<'a>(
     array: &'a dyn Array,
     mask: &BooleanBuffer,
 ) -> Vec<(usize, Option<&'a [u8]>)> {
-    match array.data_type() {
+    downcast_primitive! {
+        array.data_type() => (masked_primitive_to_bytes_helper, array, mask),
         DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
         DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
         DataType::Binary => masked_bytes(array.as_binary::<i32>(), mask),
         DataType::LargeBinary => masked_bytes(array.as_binary::<i64>(), mask),
-        _ => unimplemented!(),
+        _ => unimplemented!("Dictionary merging for type {} is not implemented", array.data_type()),
     }
 }
 
