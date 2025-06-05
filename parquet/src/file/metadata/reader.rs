@@ -287,6 +287,10 @@ impl ParquetMetaDataReader {
     /// let metadata = reader.finish().unwrap();
     /// ```
     pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: u64) -> Result<()> {
+        self.try_parse_sized_with_columns(reader, file_size, None)
+    }
+
+    pub fn try_parse_sized_with_columns<R: ChunkReader>(&mut self, reader: &R, file_size: u64, column_ids: Option<&[usize]>) -> Result<()> {
         self.metadata = match self.parse_metadata(reader) {
             Ok(metadata) => Some(metadata),
             Err(ParquetError::NeedMoreData(needed)) => {
@@ -311,7 +315,7 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.read_page_indexes_sized(reader, file_size)
+        self.read_page_indexes_sized(reader, file_size, column_ids)
     }
 
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
@@ -329,6 +333,7 @@ impl ParquetMetaDataReader {
         &mut self,
         reader: &R,
         file_size: u64,
+        column_ids: Option<&[usize]>,
     ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!(
@@ -385,8 +390,8 @@ impl ParquetMetaDataReader {
         let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
         let offset = range.start;
 
-        self.parse_column_index(&bytes, offset)?;
-        self.parse_offset_index(&bytes, offset)?;
+        self.parse_column_index(&bytes, offset, column_ids)?;
+        self.parse_offset_index(&bytes, offset, column_ids)?;
 
         Ok(())
     }
@@ -437,7 +442,7 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index_with_remainder(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, remainder, None).await
     }
 
     /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
