@@ -739,6 +739,14 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.nulls()
     }
 
+    fn is_null(&self, index: usize) -> bool {
+        if self.keys.is_null(index) {
+            return true;
+        }
+        let value_index = self.keys.value(index).as_usize();
+        self.values.is_null(value_index)
+    }
+
     fn logical_nulls(&self) -> Option<NullBuffer> {
         match self.values.logical_nulls() {
             None => self.nulls().cloned(),
@@ -891,6 +899,10 @@ impl<K: ArrowDictionaryKeyType, V: Sync> Array for TypedDictionaryArray<'_, K, V
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.dictionary.nulls()
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        self.dictionary.is_null(index)
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
@@ -1474,6 +1486,22 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(values, &[Some(50), None, None, Some(2)])
+    }
+
+    #[test]
+    fn test_is_null_considers_dictionary_values() {
+        let dict_values = StringArray::from(vec![None, Some("abc")]);
+        let dict_indices = Int32Array::from(vec![0, 0, 1]);
+        let dict = DictionaryArray::new(dict_indices, Arc::new(dict_values));
+
+        assert!(dict.is_null(0));
+        assert!(dict.is_null(1));
+        assert!(!dict.is_null(2));
+
+        let typed = dict.downcast_dict::<StringArray>().unwrap();
+        assert!(typed.is_null(0));
+        assert!(typed.is_null(1));
+        assert!(!typed.is_null(2));
     }
 
     #[test]
