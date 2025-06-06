@@ -205,7 +205,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.null_buffer_builder.append_non_null();
     }
 
-    /// Appends an array
+    /// Appends an array to the builder.
+    /// This will flush any in-progress block and append the data buffers
+    /// and add the (adapted) views.
     pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
         self.flush_in_progress();
         self.completed.extend(array.data_buffers().iter().cloned());
