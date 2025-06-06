@@ -446,7 +446,7 @@ impl<T: ByteViewType + ?Sized> std::fmt::Debug for GenericByteViewBuilder<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}ViewBuilder", T::PREFIX)?;
         f.debug_struct("")
-            .field("views_builder", &self.views_buffer)
+            .field("views_buffer", &self.views_buffer)
             .field("in_progress", &self.in_progress)
             .field("completed", &self.completed)
             .field("null_buffer_builder", &self.null_buffer_builder)
