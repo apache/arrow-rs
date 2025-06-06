@@ -220,7 +220,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             self.views_buffer.extend(array.views().iter().map(|v| {
                 let mut byte_view = ByteView::from(*v);
                 if byte_view.length > 12 {
-                    // If the view is small enough, we can inline it
+                    // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
                 };
 
