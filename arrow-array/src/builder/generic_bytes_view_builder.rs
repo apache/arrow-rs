@@ -210,7 +210,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.flush_in_progress();
         self.completed.extend(array.data_buffers().iter().cloned());
 
-        if self.completed.len() == 0 {
+        if self.completed.is_empty() == 0 {
             self.views_builder.extend_from_slice(array.views());
         } else {
             let starting_buffer = self.completed.len() as u32;
