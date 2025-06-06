@@ -22,7 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::concat::concat_batches;
 use arrow_array::StringViewArray;
-use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, SchemaRef};
 use std::collections::VecDeque;
@@ -312,10 +312,7 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
             }
         })
         .collect();
-    let mut options = RecordBatchOptions::new();
-    options = options.with_row_count(Some(num_rows));
-    RecordBatch::try_new_with_options(schema, new_columns, &options)
-        .expect("Failed to re-create the gc'ed record batch")
+    unsafe { RecordBatch::new_unchecked(schema, new_columns, num_rows) }
 }
 
 #[cfg(test)]
