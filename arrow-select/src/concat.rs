@@ -1102,6 +1102,49 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_dictionary_merge() {
+        // Same value repeated 5 times.
+        let keys = vec![1; 5];
+        let values = (10..20).collect::<Vec<_>>();
+        let dict = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+        let other = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+
+        let result_same_dictionary = concat(&[&dict, &dict]).unwrap();
+        // Verify pointer equality check succeeds, and therefore the
+        // dictionaries are not merged. A single values buffer should be reused
+        // in this case.
+        assert!(dict.values().to_data().ptr_eq(
+            &result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .to_data()
+        ));
+        assert_eq!(
+            result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            values.len(),
+        );
+
+        let result_cloned_dictionary = concat(&[&dict, &other]).unwrap();
+        // Should have only 1 underlying value since all keys reference it.
+        assert_eq!(
+            result_cloned_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn test_concat_string_sizes() {
         let a: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
         let b: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
