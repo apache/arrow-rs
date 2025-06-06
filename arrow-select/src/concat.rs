@@ -32,7 +32,7 @@
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{
-    BinaryViewBuilder, BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, StringViewBuilder,
+    BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -86,18 +86,11 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
     }
 }
 
-fn concat_byte_view(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut builder = BinaryViewBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
+fn concat_byte_view<B: ByteViewType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder =
+        GenericByteViewBuilder::<B>::with_capacity(arrays.iter().map(|a| a.len()).sum());
     for &array in arrays.iter() {
-        builder.append_array(array.as_binary_view());
-    }
-    Ok(Arc::new(builder.finish()))
-}
-
-fn concat_string_view(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
-    let mut builder = StringViewBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
-    for &array in arrays.iter() {
-        builder.append_array(array.as_string_view());
+        builder.append_array(array.as_byte_view());
     }
     Ok(Arc::new(builder.finish()))
 }
@@ -443,8 +436,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
                 _ => unreachable!("Unsupported run end index type: {r:?}"),
             }
         }
-        DataType::Utf8View => concat_string_view(arrays),
-        DataType::BinaryView => concat_byte_view(arrays),
+        DataType::Utf8View => concat_byte_view::<StringViewType>(arrays),
+        DataType::BinaryView => concat_byte_view::<BinaryViewType>(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
