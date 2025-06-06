@@ -339,8 +339,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 Entry::Occupied(occupied) => {
                     // If the string already exists, we will directly use the view
                     let idx = occupied.get();
-                    self.views_builder
-                        .push(self.views_builder[*idx]);
+                    self.views_builder.push(self.views_builder[*idx]);
                     self.null_buffer_builder.append_non_null();
                     self.string_tracker = Some((ht, hasher));
                     return;
