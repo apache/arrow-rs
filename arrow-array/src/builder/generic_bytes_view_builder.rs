@@ -79,7 +79,7 @@ impl BlockSizeGrowthStrategy {
 /// using [`GenericByteViewBuilder::append_block`] and then views into this block appended
 /// using [`GenericByteViewBuilder::try_append_view`]
 pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
-    views_builder: Vec<u128>,
+    views_buffer: Vec<u128>,
     null_buffer_builder: NullBufferBuilder,
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
@@ -99,7 +99,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Creates a new [`GenericByteViewBuilder`] with space for `capacity` string values.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            views_builder: Vec::with_capacity(capacity),
+            views_buffer: Vec::with_capacity(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
             completed: vec![],
             in_progress: vec![],
@@ -148,7 +148,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn with_deduplicate_strings(self) -> Self {
         Self {
             string_tracker: Some((
-                HashTable::with_capacity(self.views_builder.capacity()),
+                HashTable::with_capacity(self.views_buffer.capacity()),
                 Default::default(),
             )),
             ..self
@@ -201,7 +201,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let b = b.get_unchecked(start..end);
 
         let view = make_view(b, block, offset);
-        self.views_builder.push(view);
+        self.views_buffer.push(view);
         self.null_buffer_builder.append_non_null();
     }
 
@@ -211,11 +211,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.completed.extend(array.data_buffers().iter().cloned());
 
         if self.completed.is_empty() {
-            self.views_builder.extend_from_slice(array.views());
+            self.views_buffer.extend_from_slice(array.views());
         } else {
             let starting_buffer = self.completed.len() as u32;
 
-            self.views_builder.extend(array.views().iter().map(|v| {
+            self.views_buffer.extend(array.views().iter().map(|v| {
                 let mut byte_view = ByteView::from(*v);
                 if byte_view.length > 12 {
                     // If the view is small enough, we can inline it
@@ -283,7 +283,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Useful if we want to know what value has been inserted to the builder
     /// The index has to be smaller than `self.len()`, otherwise it will panic
     pub fn get_value(&self, index: usize) -> &[u8] {
-        let view = self.views_builder.as_slice().get(index).unwrap();
+        let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
         if len <= 12 {
             // # Safety
@@ -315,7 +315,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             let mut view_buffer = [0; 16];
             view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
             view_buffer[4..4 + v.len()].copy_from_slice(v);
-            self.views_builder.push(u128::from_le_bytes(view_buffer));
+            self.views_buffer.push(u128::from_le_bytes(view_buffer));
             self.null_buffer_builder.append_non_null();
             return;
         }
@@ -339,7 +339,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 Entry::Occupied(occupied) => {
                     // If the string already exists, we will directly use the view
                     let idx = occupied.get();
-                    self.views_builder.push(self.views_builder[*idx]);
+                    self.views_buffer.push(self.views_buffer[*idx]);
                     self.null_buffer_builder.append_non_null();
                     self.string_tracker = Some((ht, hasher));
                     return;
@@ -347,7 +347,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 Entry::Vacant(vacant) => {
                     // o.w. we insert the (string hash -> view index)
                     // the idx is current length of views_builder, as we are inserting a new view
-                    vacant.insert(self.views_builder.len());
+                    vacant.insert(self.views_buffer.len());
                 }
             }
             self.string_tracker = Some((ht, hasher));
@@ -368,7 +368,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             buffer_index: self.completed.len() as u32,
             offset,
         };
-        self.views_builder.push(view.into());
+        self.views_buffer.push(view.into());
         self.null_buffer_builder.append_non_null();
     }
 
@@ -385,7 +385,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append_null();
-        self.views_builder.push(0);
+        self.views_buffer.push(0);
     }
 
     /// Builds the [`GenericByteViewArray`] and reset this builder
@@ -396,7 +396,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
             ht.clear();
         }
-        let views = std::mem::take(&mut self.views_builder);
+        let views = std::mem::take(&mut self.views_buffer);
         // SAFETY: valid by construction
         unsafe { GenericByteViewArray::new_unchecked(views.into(), completed, nulls) }
     }
@@ -407,8 +407,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         if !self.in_progress.is_empty() {
             completed.push(Buffer::from_slice_ref(&self.in_progress));
         }
-        let len = self.views_builder.len();
-        let views = Buffer::from_slice_ref(self.views_builder.as_slice());
+        let len = self.views_buffer.len();
+        let views = Buffer::from_slice_ref(self.views_buffer.as_slice());
         let views = ScalarBuffer::new(views, 0, len);
         let nulls = self.null_buffer_builder.finish_cloned();
         // SAFETY: valid by construction
@@ -422,7 +422,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Return the allocated size of this builder in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
-        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
+        let views = self.views_buffer.capacity() * std::mem::size_of::<u128>();
         let null = self.null_buffer_builder.allocated_size();
         let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
         let in_progress = self.in_progress.capacity();
@@ -444,7 +444,7 @@ impl<T: ByteViewType + ?Sized> std::fmt::Debug for GenericByteViewBuilder<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}ViewBuilder", T::PREFIX)?;
         f.debug_struct("")
-            .field("views_builder", &self.views_builder)
+            .field("views_builder", &self.views_buffer)
             .field("in_progress", &self.in_progress)
             .field("completed", &self.completed)
             .field("null_buffer_builder", &self.null_buffer_builder)
