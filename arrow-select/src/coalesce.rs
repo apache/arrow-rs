@@ -279,6 +279,7 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
             let gc_string = builder.finish();
 
             debug_assert!(gc_string.data_buffers().len() <= 1); // buffer count can be 0 if the `ideal_buffer_size` is 0
+                                                                // Ensure the new array has the same number of rows as the input
             let new_row_count = gc_string.len();
             assert_eq!(
                 new_row_count, row_count,
@@ -288,7 +289,7 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
         }
     }
 
-    // Safety: RecordBatch was valid, and we validated that the new output array
+    // Safety: the input batch was valid, and we validated that the new output array
     // had the same number of rows as the input.
     unsafe { RecordBatch::new_unchecked(schema, columns, row_count) }
 }
