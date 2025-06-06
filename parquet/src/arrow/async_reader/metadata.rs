@@ -21,9 +21,8 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::FOOTER_SIZE;
+use crate::util::async_util::{BoxFuture, Send};
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use std::future::Future;
 use std::ops::Range;
 
@@ -66,7 +65,7 @@ pub trait MetadataFetch {
     /// Return a future that fetches the specified range of bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
+    /// [futures::future::FutureExt::boxed]. See the trait documentation for an example
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
@@ -82,7 +81,7 @@ pub trait MetadataSuffixFetch: MetadataFetch {
     /// Return a future that fetches the last `n` bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
+    /// [futures::future::FutureExt::boxed]. See the trait documentation for an example
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
 }
 
@@ -267,7 +266,7 @@ where
     Fut: Future<Output = Result<Bytes>> + Send,
 {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range.start.try_into()?..range.end.try_into()?).await }.boxed()
+        Box::pin(async move { self.0(range.start.try_into()?..range.end.try_into()?).await })
     }
 }
 

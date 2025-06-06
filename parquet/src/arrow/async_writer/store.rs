@@ -16,11 +16,11 @@
 // under the License.
 
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use crate::arrow::async_writer::AsyncFileWriter;
 use crate::errors::{ParquetError, Result};
+use crate::util::async_util::BoxFuture;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;

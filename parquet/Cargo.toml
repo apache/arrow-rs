@@ -109,6 +109,8 @@ test_common = ["arrow/test_utils"]
 experimental = []
 # Enable async APIs
 async = ["futures", "tokio"]
+# Enable `!Send` with async APIs
+async-no-send = ["async"]
 # Enable object_store integration
 object_store = ["dep:object_store", "async"]
 # Group Zstd dependencies

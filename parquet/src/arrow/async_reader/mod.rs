@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::FutureExt;
 use futures::ready;
 use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
@@ -54,6 +54,7 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
+use crate::util::async_util::{BoxFuture, Send};
 
 mod metadata;
 pub use metadata::*;
@@ -85,7 +86,7 @@ pub trait AsyncFileReader: Send {
 
     /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
-        async move {
+        Box::pin(async move {
             let mut result = Vec::with_capacity(ranges.len());
 
             for range in ranges.into_iter() {
@@ -94,8 +95,7 @@ pub trait AsyncFileReader: Send {
             }
 
             Ok(result)
-        }
-        .boxed()
+        })
     }
 
     /// Return a future which results in the [`ParquetMetaData`] for this Parquet file.
@@ -140,19 +140,18 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
 
 impl<T: AsyncFileReader + MetadataFetch + AsyncRead + AsyncSeek + Unpin> MetadataSuffixFetch for T {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
-        async move {
+        Box::pin(async move {
             self.seek(SeekFrom::End(-(suffix as i64))).await?;
             let mut buf = Vec::with_capacity(suffix);
             self.take(suffix as _).read_to_end(&mut buf).await?;
             Ok(buf.into())
-        }
-        .boxed()
+        })
     }
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move {
+        Box::pin(async move {
             self.seek(SeekFrom::Start(range.start)).await?;
 
             let to_read = range.end - range.start;
@@ -163,15 +162,14 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             }
 
             Ok(buffer.into())
-        }
-        .boxed()
+        })
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        async move {
+        Box::pin(async move {
             let metadata_reader = ParquetMetaDataReader::new()
                 .with_page_indexes(options.is_some_and(|o| o.page_index));
 
@@ -182,8 +180,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let parquet_metadata = metadata_reader.load_via_suffix_and_finish(self).await?;
             Ok(Arc::new(parquet_metadata))
-        }
-        .boxed()
+        })
     }
 }
 
@@ -844,14 +841,12 @@ where
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
 
-                    let fut = reader
-                        .read_row_group(
-                            row_group_idx,
-                            selection,
-                            self.projection.clone(),
-                            self.batch_size,
-                        )
-                        .boxed();
+                    let fut = Box::pin(reader.read_row_group(
+                        row_group_idx,
+                        selection,
+                        self.projection.clone(),
+                        self.batch_size,
+                    ));
 
                     self.state = StreamState::Reading(fut)
                 }
