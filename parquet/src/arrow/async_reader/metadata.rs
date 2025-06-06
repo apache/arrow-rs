@@ -17,8 +17,8 @@
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::Result;
+use crate::util::async_util::MaybeLocalBoxFuture;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use std::ops::Range;
 
 /// A data source that can be used with [`ParquetMetaDataReader`] to load [`ParquetMetaData`]
@@ -33,9 +33,12 @@ use std::ops::Range;
 /// # use bytes::Bytes;
 /// # use std::ops::Range;
 /// # use std::io::SeekFrom;
-/// # use futures::future::BoxFuture;
 /// # use futures::FutureExt;
 /// # use tokio::io::{AsyncReadExt, AsyncSeekExt};
+/// # #[cfg(feature = "async-no-send")]
+/// # type BoxFuture<'a, T> = futures::future::LocalBoxFuture<'a, T>;
+/// # #[cfg(not(feature = "async-no-send"))]
+/// # type BoxFuture<'a, T> = futures::future::BoxFuture<'a, T>;
 /// // Adapter that implements the API for reading bytes from an async source (in
 /// // this case a tokio::fs::File)
 /// struct TokioFileMetadata {
@@ -52,7 +55,7 @@ use std::ops::Range;
 ///             self.file.read_exact(&mut buf).await?;
 ///             Ok(Bytes::from(buf)) // convert to Bytes
 ///         }
-///             .boxed() // turn into BoxedFuture, using FutureExt::boxed
+///         .boxed() // turn into BoxedFuture, using FutureExt::boxed
 ///     }
 /// }
 ///```
@@ -65,12 +68,12 @@ pub trait MetadataFetch {
     /// Note the returned type is a boxed future, often created by
     /// [`FutureExt::boxed`]. See the trait documentation for an example
     ///
-    /// [`FutureExt::boxed`]: futures::FutureExt::boxed
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
+    /// [`FutureExt::boxed`]: futures::future::FutureExt::boxed
+    fn fetch(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>>;
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
     }
 }
@@ -86,6 +89,6 @@ pub trait MetadataSuffixFetch: MetadataFetch {
     /// Note the returned type is a boxed future, often created by
     /// [`FutureExt::boxed`]. See the trait documentation for an example
     ///
-    /// [`FutureExt::boxed`]: futures::FutureExt::boxed
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+    /// [`FutureExt::boxed`]: futures::future::FutureExt::boxed
+    fn fetch_suffix(&mut self, suffix: usize) -> MaybeLocalBoxFuture<'_, Result<Bytes>>;
 }
