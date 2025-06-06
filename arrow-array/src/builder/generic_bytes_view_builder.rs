@@ -210,9 +210,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// and add the (adapted) views.
     pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
         self.flush_in_progress();
+        // keep original views if the array is empty or if there are no data buffers (all inline views)
+        let keep_views = self.completed.is_empty() || array.data_buffers().is_empty();
+
         self.completed.extend(array.data_buffers().iter().cloned());
 
-        if self.completed.is_empty() {
+        if keep_views {
             self.views_buffer.extend_from_slice(array.views());
         } else {
             let starting_buffer = self.completed.len() as u32;
