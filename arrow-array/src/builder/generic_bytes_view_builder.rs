@@ -28,7 +28,7 @@ use hashbrown::HashTable;
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -203,6 +203,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let view = make_view(b, block, offset);
         self.views_builder.append(view);
         self.null_buffer_builder.append_non_null();
+    }
+
+    /// Appends an array
+    pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
+        self.flush_in_progress();
+        self.completed.extend(array.data_buffers().iter().cloned());
+        self.views_builder.append_slice(array.views());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
     }
 
     /// Try to append a view of the given `block`, `offset` and `length`

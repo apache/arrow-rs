@@ -31,7 +31,9 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
+use arrow_array::builder::{
+    BinaryViewBuilder, BooleanBuilder, GenericByteBuilder, PrimitiveBuilder, StringViewBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -82,6 +84,22 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
     } else {
         unreachable!("illegal data type for fixed size list")
     }
+}
+
+fn concat_byte_view(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = BinaryViewBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    for &array in arrays.iter() {
+        builder.append_array(array.as_binary_view());
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn concat_string_view(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    for &array in arrays.iter() {
+        builder.append_array(array.as_string_view());
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
@@ -425,6 +443,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
                 _ => unreachable!("Unsupported run end index type: {r:?}"),
             }
         }
+        DataType::Utf8View => concat_string_view(arrays),
+        DataType::BinaryView => concat_byte_view(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
