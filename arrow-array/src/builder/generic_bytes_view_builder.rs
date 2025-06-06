@@ -209,7 +209,23 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
         self.flush_in_progress();
         self.completed.extend(array.data_buffers().iter().cloned());
-        self.views_builder.append_slice(array.views());
+
+        if self.completed.len() == 0 {
+            self.views_builder.append_slice(array.views());
+        } else {
+            let starting_buffer = self.completed.len() as u32;
+
+            self.views_builder.extend(array.views().iter().map(|v| {
+                let mut byte_view = ByteView::from(*v);
+                if byte_view.length > 12 {
+                    // If the view is small enough, we can inline it
+                    byte_view.buffer_index += starting_buffer;
+                };
+
+                byte_view.into()
+            }));
+        }
+
         if let Some(null_buffer) = array.nulls() {
             self.null_buffer_builder.append_buffer(null_buffer);
         } else {
