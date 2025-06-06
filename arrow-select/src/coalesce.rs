@@ -319,7 +319,7 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
 mod tests {
     use super::*;
     use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
-    use arrow_array::{StringViewArray, UInt32Array};
+    use arrow_array::{RecordBatchOptions, StringViewArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
     use std::ops::Range;
 
