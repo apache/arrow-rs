@@ -279,7 +279,6 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
                     .iter()
                     .cloned()
                     .map(|v| {
-                        // SAFETY: ByteView has same memory layout as u128
                         let mut b: ByteView = ByteView::from(v);
 
                         if b.length > 12 {
