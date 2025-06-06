@@ -330,13 +330,13 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
     pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
-        let iter = iter.into_iter();
-        let len = iter
-            .size_hint()
-            .1
-            .expect("append_trusted_len_iter expects upper bound");
-        self.reserve(len);
-        self.extend(iter);
+        let starting_buffer_len = self.len;
+        debug_assert_eq!(
+            starting_buffer_len,
+            self.buffer.len() / std::mem::size_of::<T>()
+        );
+        self.buffer.extend_from_trusted_len_iter(iter.into_iter());
+        self.len = self.buffer.len() / std::mem::size_of::<T>();
     }
 
     /// Resets this builder and returns an immutable [Buffer].

@@ -284,14 +284,10 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
     pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T::Native>) {
-        let iter = iter.into_iter();
-        let len = iter
-            .size_hint()
-            .1
-            .expect("append_trusted_len_iter requires an upper bound");
-
-        self.null_buffer_builder.append_n_non_nulls(len);
+        let starting_len = self.len();
         self.values_builder.append_trusted_len_iter(iter);
+        self.null_buffer_builder
+            .append_n_non_nulls(self.len() - starting_len);
     }
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
