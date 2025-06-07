@@ -538,6 +538,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         l_full_data.cmp(r_full_data)
     }
+
+    /// return the total number of bytes required to hold all strings pointed to by views in this array
+    pub fn minimum_buffer_size(&self) -> usize {
+        let mut used = 0;
+        for v in self.views().iter() {
+            let len = (*v as u32) as usize;
+            if len > 12 {
+                used += len;
+            }
+        }
+        used
+    }
 }
 
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
