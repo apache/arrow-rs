@@ -311,14 +311,12 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
                     })
                     .collect();
 
-                let buffers = if buffer.is_empty() {
-                    vec![]
-                } else {
-                    vec![buffer.into()]
-                };
-
                 let gc_string = unsafe {
-                    StringViewArray::new_unchecked(views.into(), buffers, s.nulls().cloned())
+                    StringViewArray::new_unchecked(
+                        views.into(),
+                        vec![buffer.into()],
+                        s.nulls().cloned(),
+                    )
                 };
 
                 Arc::new(gc_string)
