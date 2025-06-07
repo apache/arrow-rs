@@ -21,8 +21,9 @@ use crate::arrow::arrow_reader::ArrowReaderOptions;
 use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::util::async_util::BoxFuture;
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, TryFutureExt};
+use futures::{FutureExt, TryFutureExt};
 use object_store::{path::Path, ObjectStore};
 use object_store::{GetOptions, GetRange};
 use tokio::runtime::Handle;
@@ -59,6 +60,7 @@ pub struct ParquetObjectReader {
     metadata_size_hint: Option<usize>,
     preload_column_index: bool,
     preload_offset_index: bool,
+    #[cfg_attr(feature = "async-no-send", allow(dead_code))]
     runtime: Option<Handle>,
 }
 
@@ -132,6 +134,18 @@ impl ParquetObjectReader {
         }
     }
 
+    #[cfg(feature = "async-no-send")]
+    fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O>>
+    where
+        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
+            + 'static,
+        O: 'static,
+        E: Into<ParquetError> + 'static,
+    {
+        Box::pin(f(&self.store, &self.path).map_err(|e| e.into()))
+    }
+
+    #[cfg(not(feature = "async-no-send"))]
     fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O>>
     where
         F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
@@ -144,18 +158,19 @@ impl ParquetObjectReader {
             Some(handle) => {
                 let path = self.path.clone();
                 let store = Arc::clone(&self.store);
-                handle
-                    .spawn(async move { f(&store, &path).await })
-                    .map_ok_or_else(
-                        |e| match e.try_into_panic() {
-                            Err(e) => Err(ParquetError::External(Box::new(e))),
-                            Ok(p) => std::panic::resume_unwind(p),
-                        },
-                        |res| res.map_err(|e| e.into()),
-                    )
-                    .boxed()
+                Box::pin(
+                    handle
+                        .spawn(async move { f(&store, &path).await })
+                        .map_ok_or_else(
+                            |e| match e.try_into_panic() {
+                                Err(e) => Err(ParquetError::External(Box::new(e))),
+                                Ok(p) => std::panic::resume_unwind(p),
+                            },
+                            |res| res.map_err(|e| e.into()),
+                        ),
+                )
             }
-            None => f(&self.store, &self.path).map_err(|e| e.into()).boxed(),
+            None => Box::pin(f(&self.store, &self.path).map_err(|e| e.into())),
         }
     }
 }
@@ -181,10 +196,7 @@ impl AsyncFileReader for ParquetObjectReader {
         self.spawn(|store, path| store.get_range(path, range))
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
-    where
-        Self: Send,
-    {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 

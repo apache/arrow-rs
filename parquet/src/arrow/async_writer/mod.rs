@@ -66,12 +66,11 @@ use crate::{
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
+    util::async_util::{BoxFuture, Send},
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -103,20 +102,18 @@ impl AsyncFileWriter for Box<dyn AsyncFileWriter + '_> {
 
 impl<T: AsyncWrite + Unpin + Send> AsyncFileWriter for T {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
-        async move {
+        Box::pin(async move {
             self.write_all(&bs).await?;
             Ok(())
-        }
-        .boxed()
+        })
     }
 
     fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
-        async move {
+        Box::pin(async move {
             self.flush().await?;
             self.shutdown().await?;
             Ok(())
-        }
-        .boxed()
+        })
     }
 }
 
