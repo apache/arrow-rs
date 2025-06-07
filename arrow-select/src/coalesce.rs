@@ -269,6 +269,17 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
             // Re-creating the array copies data and can be time consuming.
             // We only do it if the array is sparse
             if actual_buffer_size > (ideal_buffer_size * 2) {
+                if ideal_buffer_size == 0 {
+                    // If the ideal buffer size is 0, all views are inlined
+                    // so just reuse the views
+                    return Arc::new(unsafe {
+                        StringViewArray::new_unchecked(
+                            s.views().clone(),
+                            vec![],
+                            s.nulls().cloned(),
+                        )
+                    });
+                }
                 // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
                 // See https://github.com/apache/arrow-rs/issues/6094 for more details.
                 let mut buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
