@@ -34,11 +34,11 @@ use arrow_array::builder::{
 };
 use arrow_array::{
     new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeBinaryArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, Float16Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -46,12 +46,24 @@ use half::f16;
 use paste::paste;
 use std::sync::Arc;
 
-// Convert the bytes array to i128.
+// Convert the bytes array to i32.
 // The endian of the input bytes array must be big-endian.
-pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
+pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
+    i32::from_be_bytes(sign_extend_be::<4>(b))
+}
+
+// Convert the bytes array to i64.
+// The endian of the input bytes array must be big-endian.
+pub(crate) fn from_bytes_to_i64(b: &[u8]) -> i64 {
+    i64::from_be_bytes(sign_extend_be::<8>(b))
+}
+
+// Convert the bytes array to i128.
+// The endian of the input bytes array must be big-endian.
+pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     i128::from_be_bytes(sign_extend_be::<16>(b))
 }
 
@@ -263,9 +275,10 @@ macro_rules! make_decimal_stats_iterator {
                         ParquetStatistics::Int32(s) => {
                             s.$func().map(|x| $stat_value_type::from(*x))
                         }
-                        ParquetStatistics::Int64(s) => {
-                            s.$func().map(|x| $stat_value_type::from(*x))
-                        }
+                        ParquetStatistics::Int64(s) => s
+                            .$func()
+                            .map(|x| $stat_value_type::try_from(*x).ok())
+                            .flatten(),
                         ParquetStatistics::ByteArray(s) => s.$bytes_func().map($convert_func),
                         ParquetStatistics::FixedLenByteArray(s) => {
                             s.$bytes_func().map($convert_func)
@@ -282,6 +295,34 @@ macro_rules! make_decimal_stats_iterator {
     };
 }
 
+make_decimal_stats_iterator!(
+    MinDecimal32StatsIterator,
+    min_opt,
+    min_bytes_opt,
+    i32,
+    from_bytes_to_i32
+);
+make_decimal_stats_iterator!(
+    MaxDecimal32StatsIterator,
+    max_opt,
+    max_bytes_opt,
+    i32,
+    from_bytes_to_i32
+);
+make_decimal_stats_iterator!(
+    MinDecimal64StatsIterator,
+    min_opt,
+    min_bytes_opt,
+    i64,
+    from_bytes_to_i64
+);
+make_decimal_stats_iterator!(
+    MaxDecimal64StatsIterator,
+    max_opt,
+    max_bytes_opt,
+    i64,
+    from_bytes_to_i64
+);
 make_decimal_stats_iterator!(
     MinDecimal128StatsIterator,
     min_opt,
@@ -475,6 +516,18 @@ macro_rules! get_statistics {
                     builder.append_value(x).expect("ensure to append successfully here, because size have been checked before");
                 }
                 Ok(Arc::new(builder.finish()))
+            },
+            DataType::Decimal32(precision, scale) => {
+                let arr = Decimal32Array::from_iter(
+                    [<$stat_type_prefix Decimal32StatsIterator>]::new($iterator)
+                ).with_precision_and_scale(*precision, *scale)?;
+                Ok(Arc::new(arr))
+            },
+            DataType::Decimal64(precision, scale) => {
+                let arr = Decimal64Array::from_iter(
+                    [<$stat_type_prefix Decimal64StatsIterator>]::new($iterator)
+                ).with_precision_and_scale(*precision, *scale)?;
+                Ok(Arc::new(arr))
             },
             DataType::Decimal128(precision, scale) => {
                 let arr = Decimal128Array::from_iter(
@@ -730,7 +783,7 @@ macro_rules! get_decimal_page_stats_iterator {
                             native_index
                                 .indexes
                                 .iter()
-                                .map(|x| x.$func.and_then(|x| Some($stat_value_type::from(x))))
+                                .map(|x| x.$func.and_then(|x| $stat_value_type::try_from(x).ok()))
                                 .collect::<Vec<_>>(),
                         ),
                         Index::BYTE_ARRAY(native_index) => Some(
@@ -763,6 +816,34 @@ macro_rules! get_decimal_page_stats_iterator {
         }
     };
 }
+
+get_decimal_page_stats_iterator!(
+    MinDecimal32DataPageStatsIterator,
+    min,
+    i32,
+    from_bytes_to_i32
+);
+
+get_decimal_page_stats_iterator!(
+    MaxDecimal32DataPageStatsIterator,
+    max,
+    i32,
+    from_bytes_to_i32
+);
+
+get_decimal_page_stats_iterator!(
+    MinDecimal64DataPageStatsIterator,
+    min,
+    i64,
+    from_bytes_to_i64
+);
+
+get_decimal_page_stats_iterator!(
+    MaxDecimal64DataPageStatsIterator,
+    max,
+    i64,
+    from_bytes_to_i64
+);
 
 get_decimal_page_stats_iterator!(
     MinDecimal128DataPageStatsIterator,
@@ -958,6 +1039,10 @@ macro_rules! get_data_page_statistics {
                     )
                 ),
                 DataType::Date64 if $physical_type == Some(PhysicalType::INT64) => Ok(Arc::new(Date64Array::from_iter([<$stat_type_prefix Int64DataPageStatsIterator>]::new($iterator).flatten()))),
+                DataType::Decimal32(precision, scale) => Ok(Arc::new(
+                    Decimal32Array::from_iter([<$stat_type_prefix Decimal32DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
+                DataType::Decimal64(precision, scale) => Ok(Arc::new(
+                    Decimal64Array::from_iter([<$stat_type_prefix Decimal64DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 DataType::Decimal128(precision, scale) => Ok(Arc::new(
                     Decimal128Array::from_iter([<$stat_type_prefix Decimal128DataPageStatsIterator>]::new($iterator).flatten()).with_precision_and_scale(*precision, *scale)?)),
                 DataType::Decimal256(precision, scale) => Ok(Arc::new(
