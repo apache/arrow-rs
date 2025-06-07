@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CORRECT_VERSION_VALUE"],"enum":["OffsetSizeBytes","Variant"],"struct":["VariantArray","VariantMetadata","VariantMetadataHeader","VariantObject"]};
