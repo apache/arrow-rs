@@ -30,6 +30,7 @@
 //!
 //! [ClickBench]: https://benchmark.clickhouse.com/
 
+use std::collections::HashMap;
 use arrow::compute::kernels::cmp::{eq, neq};
 use arrow::compute::{like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
@@ -46,6 +47,8 @@ use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::reader::Length;
 
 fn async_reader(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -584,7 +587,7 @@ fn hits_1() -> &'static Path {
         current_dir
     );
 
-    let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") else {
+        let Some(hits_output) = find_file_if_exists(current_dir.clone(), "hits_output.parquet") else {
         eprintln!(
             "Could not find hits_1.parquet in directory or parents: {:?}. Download it via",
             current_dir
@@ -594,7 +597,7 @@ fn hits_1() -> &'static Path {
         panic!("Stopping");
     };
 
-    hits_1_path
+        hits_output
     })
 }
 
@@ -704,7 +707,10 @@ impl ReadTest {
             expected_row_count,
         } = query;
 
-        let arrow_reader_metadata = load_metadata(hits_1());
+        let arrow_reader_metadata = load_metadata(hits_1(), filter_columns.clone());
+
+
+        //println!("column_inx: {:?}", arrow_reader_metadata.metadata().column_index());
         let schema_descr = arrow_reader_metadata
             .metadata()
             .file_metadata()
@@ -846,9 +852,11 @@ fn column_indices(schema: &SchemaDescriptor, column_names: &Vec<&str>) -> Vec<us
 }
 
 /// Loads Parquet metadata from the given path, including page indexes
-fn load_metadata(path: &Path) -> ArrowReaderMetadata {
+fn load_metadata(path: &Path, filter_columns: Vec<&str>) -> ArrowReaderMetadata {
     let file = std::fs::File::open(path).unwrap();
-    let options = ArrowReaderOptions::new().with_page_index(true);
+
+    // First load the metadata without page index.
+    let options = ArrowReaderOptions::new().with_page_index(false);
     let orig_metadata =
         ArrowReaderMetadata::load(&file, options.clone()).expect("parquet-metadata loading failed");
 
@@ -876,8 +884,39 @@ fn load_metadata(path: &Path) -> ArrowReaderMetadata {
         })
         .collect::<Vec<_>>();
 
+    // Now load the metadata with page index with filter columns
+    let name_to_index: HashMap<&str, usize> = orig_metadata
+        .schema()
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| (field.name().as_str(), idx))
+        .collect();
+
+
+    // Convert filter_columns to their corresponding indices in the schema
+    let filter_column_ids: Vec<usize> = filter_columns.clone()
+        .iter()
+        .map(|col_name| {
+            *name_to_index
+                .get(col_name)
+                .unwrap_or_else(|| panic!("Schema can't find column: {}", col_name))
+        })
+        .collect();
+
+    //println!("filter columns ids = {:?}", filter_column_ids);
+
+
     let new_arrow_schema = Arc::new(Schema::new(new_fields));
 
-    let new_options = options.with_schema(new_arrow_schema);
-    ArrowReaderMetadata::try_new(Arc::clone(orig_metadata.metadata()), new_options).unwrap()
+    let new_options = options.with_schema(new_arrow_schema).with_page_index(true);
+
+    let mut reader =
+        ParquetMetaDataReader::new_with_metadata(orig_metadata.metadata().as_ref().clone()).with_page_indexes(true);
+
+    reader.read_page_indexes_sized_with_columns(&file, file.len(), Some(filter_column_ids.as_slice()))
+        .expect("Failed to read page indexes");
+
+    ArrowReaderMetadata::try_new(Arc::new(reader.finish().unwrap()), new_options).unwrap()
 }
+

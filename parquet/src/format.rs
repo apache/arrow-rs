@@ -4604,6 +4604,15 @@ pub struct OffsetIndex {
   pub unencoded_byte_array_data_bytes: Option<Vec<i64>>,
 }
 
+impl Default for OffsetIndex {
+  fn default() -> Self {
+    OffsetIndex {
+      page_locations: Vec::new(),
+      unencoded_byte_array_data_bytes: None,
+    }
+  }
+}
+
 impl OffsetIndex {
   pub fn new<F2>(page_locations: Vec<PageLocation>, unencoded_byte_array_data_bytes: F2) -> OffsetIndex where F2: Into<Option<Vec<i64>>> {
     OffsetIndex {
