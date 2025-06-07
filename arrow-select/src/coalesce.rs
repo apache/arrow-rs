@@ -251,6 +251,10 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
             let Some(s) = c.as_string_view_opt() else {
                 return c;
             };
+            if s.data_buffers().is_empty() {
+                // If there are no data buffers, we can just return the array as is
+                return c;
+            }
             let ideal_buffer_size: usize = s
                 .views()
                 .iter()
