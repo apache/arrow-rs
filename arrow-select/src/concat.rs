@@ -649,6 +649,30 @@ mod tests {
     }
 
     #[test]
+    fn test_concat_string_view_arrays() {
+        let arr = concat(&[
+            &StringViewArray::from(vec!["helloxxxxxxxxxxa", "world____________"]),
+            &StringViewArray::from(vec!["helloxxxxxxxxxxy", "3", "4"]),
+            &StringViewArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]),
+        ])
+        .unwrap();
+
+        let expected_output = Arc::new(StringViewArray::from(vec![
+            Some("helloxxxxxxxxxxa"),
+            Some("world____________"),
+            Some("helloxxxxxxxxxxy"),
+            Some("3"),
+            Some("4"),
+            Some("foo"),
+            Some("bar"),
+            None,
+            Some("baz"),
+        ])) as ArrayRef;
+
+        assert_eq!(&arr, &expected_output);
+    }
+
+    #[test]
     fn test_concat_primitive_arrays() {
         let arr = concat(&[
             &PrimitiveArray::<Int64Type>::from(vec![Some(-1), Some(-1), Some(2), None, None]),

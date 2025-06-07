@@ -212,14 +212,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.flush_in_progress();
         // keep original views if this array is the first to be added or if there are no data buffers (all inline views)
         let keep_views = self.completed.is_empty() || array.data_buffers().is_empty();
+        let starting_buffer = self.completed.len() as u32;
 
         self.completed.extend(array.data_buffers().iter().cloned());
 
         if keep_views {
             self.views_buffer.extend_from_slice(array.views());
         } else {
-            let starting_buffer = self.completed.len() as u32;
-
             self.views_buffer.extend(array.views().iter().map(|v| {
                 let mut byte_view = ByteView::from(*v);
                 if byte_view.length > 12 {
