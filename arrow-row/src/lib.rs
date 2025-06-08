@@ -139,7 +139,7 @@ use arrow_array::cast::*;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
@@ -1668,8 +1668,21 @@ unsafe fn decode_column(
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = converter.convert_raw(rows, validate_utf8)?;
 
-            let child_data = children.iter().map(|c| c.to_data()).collect();
-            let builder = ArrayDataBuilder::new(field.data_type.clone())
+            let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
+            // Since RowConverter flattens certian data types (i.e. Dictionary),
+            // we need to use updated data type instead of original field
+            let corrected_fields: Vec<Field> = match &field.data_type {
+                DataType::Struct(struct_fields) => struct_fields
+                    .iter()
+                    .zip(child_data.iter())
+                    .map(|(orig_field, child_array)| {
+                        rebuild_field_with_child_type(orig_field, child_array)
+                    })
+                    .collect(),
+                _ => unreachable!("Only Struct types should be corrected here"),
+            };
+            let corrected_struct_type = DataType::Struct(corrected_fields.into());
+            let builder = ArrayDataBuilder::new(corrected_struct_type)
                 .len(rows.len())
                 .null_count(null_count)
                 .null_bit_buffer(Some(nulls))
@@ -1719,6 +1732,17 @@ unsafe fn decode_column(
         },
     };
     Ok(array)
+}
+
+/// Returns a new `Field` with the same name and nullability as `original_field`,
+/// but uses the data type from `converted_array`, which reflects any transformations
+/// (such as flattening of Dictionary or Struct fields) applied by `RowConverter`.
+fn rebuild_field_with_child_type(original_field: &Arc<Field>, child_data: &ArrayData) -> Field {
+    Field::new(
+        original_field.name(),
+        child_data.data_type().clone(),
+        original_field.is_nullable(),
+    )
 }
 
 #[cfg(test)]
@@ -2149,6 +2173,68 @@ mod tests {
     }
 
     #[test]
+    fn test_dictionary_in_struct() {
+        let ty = DataType::Struct(
+            vec![Field::new_dictionary(
+                "foo",
+                DataType::Int32,
+                DataType::Int32,
+                false,
+            )]
+            .into(),
+        );
+        let s = arrow_array::new_empty_array(&ty);
+
+        let sort_fields = vec![SortField::new(s.data_type().clone())];
+        let converter = RowConverter::new(sort_fields).unwrap();
+        let r = converter.convert_columns(&[Arc::clone(&s)]).unwrap();
+
+        let back = converter.convert_rows(&r).unwrap();
+        let [s2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // s.ty = Struct(foo Dictionary(Int32, Int32)), s2.ty = Struct(foo Int32)
+        assert_ne!(&s.data_type(), &s2.data_type());
+        s2.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_of_primitive_dictionary() {
+        let mut builder =
+            ListBuilder::<PrimitiveDictionaryBuilder<Int32Type, Int32Type>>::default();
+        builder.values().append(2).unwrap();
+        builder.values().append(3).unwrap();
+        builder.values().append(0).unwrap();
+        builder.values().append_null();
+        builder.values().append(5).unwrap();
+        builder.values().append(3).unwrap();
+        builder.values().append(-1).unwrap();
+        builder.append(true);
+        builder.append(false);
+        builder.values().append(7).unwrap();
+        builder.values().append(0).unwrap();
+        builder.values().append(8).unwrap();
+        builder.append(true);
+
+        let a = Arc::new(builder.finish()) as ArrayRef;
+        let data_type = a.data_type().clone();
+
+        let field = SortField::new(data_type.clone());
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        let [a2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // a.ty: List(Dictionary(Int32, Int32)), a2.ty: List(Int32)
+        assert_ne!(&a.data_type(), &a2.data_type());
+
+        a2.to_data().validate_full().unwrap();
+    }
+
+    #[test]
     fn test_primitive_dictionary() {
         let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
         builder.append(2).unwrap();
@@ -2171,6 +2257,12 @@ mod tests {
         assert!(rows.row(3) < rows.row(2));
         assert!(rows.row(6) < rows.row(2));
         assert!(rows.row(3) < rows.row(6));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        let [b2] = back.try_into().unwrap();
+        println!("back.ty = {}", b2.data_type());
     }
 
     #[test]
