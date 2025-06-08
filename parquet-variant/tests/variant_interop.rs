@@ -49,7 +49,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     ("primitive_string", Variant::from("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
     // Using the From<String> trait
     ("short_string", Variant::from("Less than 64 bytes (❤\u{fe0f} with utf8)")), 
-    // TODO Reenable when https://github.com/apache/parquet-testing/issues/81 is fixed
+    // TODO Reenable when https://github.com/apache/parquet-testing/pull/86 is merged
     // ("primitive_null", Variant::Null),
     ]
 }
