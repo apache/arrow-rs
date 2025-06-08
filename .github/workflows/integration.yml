@@ -61,10 +61,10 @@ jobs:
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
-      ARROW_INTEGRATION_GO: ON
-      ARROW_INTEGRATION_JAVA: ON
-      ARROW_INTEGRATION_JS: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_GO: "1"
+      ARCHERY_INTEGRATION_WITH_JAVA: "1"
+      ARCHERY_INTEGRATION_WITH_JS: "1"
       ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: "1"
@@ -97,12 +97,26 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
+      - name: Checkout Arrow Go
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow-go
+          path: go
+      - name: Checkout Arrow Java
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow-java
+          path: java
+      - name: Checkout Arrow JavaScript
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow-js
+          path: js
       - name: Checkout Arrow nanoarrow
         uses: actions/checkout@v4
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
-          fetch-depth: 0
       - name: Build
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
       - name: Run

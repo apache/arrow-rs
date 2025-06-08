@@ -302,11 +302,13 @@ impl WriterProperties {
         self.column_index_truncate_length
     }
 
-    /// Returns the maximum length of truncated min/max values in statistics.
+    /// Returns the maximum length of truncated min/max values in [`Statistics`].
     ///
     /// `None` if truncation is disabled, must be greater than 0 otherwise.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_statistics_truncate_length`]
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn statistics_truncate_length(&self) -> Option<usize> {
         self.statistics_truncate_length
     }
@@ -494,7 +496,8 @@ impl WriterPropertiesBuilder {
     // ----------------------------------------------------------------------
     // Writer properties related to a file
 
-    /// Sets the `WriterVersion` written into the parquet metadata (defaults to [`PARQUET_1_0`])
+    /// Sets the `WriterVersion` written into the parquet metadata (defaults to [`PARQUET_1_0`]
+    /// via [`DEFAULT_WRITER_VERSION`])
     ///
     /// This value can determine what features some readers will support.
     ///
@@ -504,7 +507,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`).
+    /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_PAGE_SIZE`]).
     ///
     /// The parquet writer will attempt to limit the sizes of each
     /// `DataPage` to this many bytes. Reducing this value will result
@@ -518,7 +522,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum number of rows in a data page (defaults to `20_000`).
+    /// Sets best effort maximum number of rows in a data page (defaults to `20_000`
+    /// via [`DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT`]).
     ///
     /// The parquet writer will attempt to limit the number of rows in
     /// each `DataPage` to this value. Reducing this value will result
@@ -532,7 +537,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`).
+    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
     ///
     /// The parquet writer will attempt to limit the size of each
     /// `DataPage` used to store dictionaries to this many
@@ -547,7 +553,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets write batch size (defaults to 1024).
+    /// Sets write batch size (defaults to 1024 via [`DEFAULT_WRITE_BATCH_SIZE`]).
     ///
     /// For performance reasons, data for each column is written in
     /// batches of this size.
@@ -561,7 +567,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`).
+    /// Sets maximum number of rows in a row group (defaults to `1024 * 1024`
+    /// via [`DEFAULT_MAX_ROW_GROUP_SIZE`]).
     ///
     /// # Panics
     /// If the value is set to 0.
@@ -571,7 +578,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets where in the final file Bloom Filters are written (defaults to  [`AfterRowGroup`])
+    /// Sets where in the final file Bloom Filters are written (defaults to  [`AfterRowGroup`]
+    /// via [`DEFAULT_BLOOM_FILTER_POSITION`])
     ///
     /// [`AfterRowGroup`]: BloomFilterPosition::AfterRowGroup
     pub fn set_bloom_filter_position(mut self, value: BloomFilterPosition) -> Self {
@@ -579,7 +587,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets "created by" property (defaults to `parquet-rs version <VERSION>`).
+    /// Sets "created by" property (defaults to `parquet-rs version <VERSION>` via
+    /// [`DEFAULT_CREATED_BY`]).
     ///
     /// This is a string that will be written into the file metadata
     pub fn set_created_by(mut self, value: String) -> Self {
@@ -587,7 +596,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets whether the writing of offset indexes is disabled (defaults to `false`).
+    /// Sets whether the writing of offset indexes is disabled (defaults to `false` via
+    /// [`DEFAULT_OFFSET_INDEX_DISABLED`]).
     ///
     /// If statistics level is set to [`Page`] this setting will be overridden with `false`.
     ///
@@ -614,6 +624,90 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the max length of min/max value fields when writing the column
+    /// [`Index`] (defaults to `Some(64)` via [`DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH`]).
+    ///
+    /// This can be used to prevent columns with very long values (hundreds of
+    /// bytes long) from causing the parquet metadata to become huge.
+    ///
+    /// # Notes
+    ///
+    /// The column [`Index`] is written when [`Self::set_statistics_enabled`] is
+    /// set to [`EnabledStatistics::Page`].
+    ///
+    /// * If `Some`, must be greater than 0, otherwise will panic
+    /// * If `None`, there's no effective limit.
+    ///
+    /// [`Index`]: crate::file::page_index::index::Index
+    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.column_index_truncate_length = max_length;
+        self
+    }
+
+    /// Sets the max length of min/max value fields in row group and data page header
+    /// [`Statistics`] (defaults to `None` (no limit) via [`DEFAULT_STATISTICS_TRUNCATE_LENGTH`]).
+    ///
+    /// # Notes
+    /// Row group [`Statistics`] are written when [`Self::set_statistics_enabled`] is
+    /// set to [`EnabledStatistics::Chunk`] or [`EnabledStatistics::Page`]. Data page header
+    /// [`Statistics`] are written when [`Self::set_statistics_enabled`] is set to
+    /// [`EnabledStatistics::Page`].
+    ///
+    /// * If `Some`, must be greater than 0, otherwise will panic
+    /// * If `None`, there's no effective limit.
+    ///
+    /// # See also
+    /// Truncation of Page Index statistics is controlled separately via
+    /// [`WriterPropertiesBuilder::set_column_index_truncate_length`]
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
+        if let Some(value) = max_length {
+            assert!(value > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+        }
+
+        self.statistics_truncate_length = max_length;
+        self
+    }
+
+    /// Should the writer coerce types to parquet native types (defaults to `false` via
+    /// [`DEFAULT_COERCE_TYPES`]).
+    ///
+    /// Leaving this option the default `false` will ensure the exact same data
+    /// written to parquet using this library will be read.
+    ///
+    /// Setting this option to `true` will result in parquet files that can be
+    /// read by more readers, but potentially lose information in the process.
+    ///
+    /// * Types such as [`DataType::Date64`], which have no direct corresponding
+    ///   Parquet type, may be stored with lower precision.
+    ///
+    /// * The internal field names of `List` and `Map` types will be renamed if
+    ///   necessary to match what is required by the newest Parquet specification.
+    ///
+    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
+    ///
+    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
+    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
+    pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
+        self
+    }
+
+    /// Sets FileEncryptionProperties (defaults to `None`)
+    #[cfg(feature = "encryption")]
+    pub fn with_file_encryption_properties(
+        mut self,
+        file_encryption_properties: FileEncryptionProperties,
+    ) -> Self {
+        self.file_encryption_properties = Some(file_encryption_properties);
+        self
+    }
+
     // ----------------------------------------------------------------------
     // Setters for any column (global)
 
@@ -632,7 +726,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default compression codec for all columns (default to [`UNCOMPRESSED`]).
+    /// Sets default compression codec for all columns (default to [`UNCOMPRESSED`] via
+    /// [`DEFAULT_COMPRESSION`]).
     ///
     /// [`UNCOMPRESSED`]: Compression::UNCOMPRESSED
     pub fn set_compression(mut self, value: Compression) -> Self {
@@ -640,7 +735,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default flag to enable/disable dictionary encoding for all columns (defaults to `true`).
+    /// Sets default flag to enable/disable dictionary encoding for all columns (defaults to `true`
+    /// via [`DEFAULT_DICTIONARY_ENABLED`]).
     ///
     /// Use this method to set dictionary encoding, instead of explicitly specifying
     /// encoding in `set_encoding` method.
@@ -649,7 +745,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default statistics level for all columns (defaults to [`Page`]).
+    /// Sets default statistics level for all columns (defaults to [`Page`] via
+    /// [`DEFAULT_STATISTICS_ENABLED`]).
     ///
     /// [`Page`]: EnabledStatistics::Page
     pub fn set_statistics_enabled(mut self, value: EnabledStatistics) -> Self {
@@ -657,7 +754,8 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default max statistics size for all columns (defaults to `4096`).
+    /// Sets default max statistics size for all columns (defaults to `4096` via
+    /// [`DEFAULT_MAX_STATISTICS_SIZE`]).
     ///
     /// Applicable only if statistics are enabled.
     #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
@@ -687,7 +785,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the default target bloom filter false positive probability (fpp)
-    /// for all columns (defaults to `0.05`).
+    /// for all columns (defaults to `0.05` via [`DEFAULT_BLOOM_FILTER_FPP`]).
     ///
     /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had
     /// been called.
@@ -699,7 +797,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets default number of distinct values (ndv) for bloom filter for all
-    /// columns (defaults to `1_000_000`).
+    /// columns (defaults to `1_000_000` via [`DEFAULT_BLOOM_FILTER_NDV`]).
     ///
     /// Implicitly enables bloom writing, as if [`set_bloom_filter_enabled`] had
     /// been called.
@@ -795,83 +893,6 @@ impl WriterPropertiesBuilder {
     /// Takes precedence over [`Self::set_bloom_filter_ndv`].
     pub fn set_column_bloom_filter_ndv(mut self, col: ColumnPath, value: u64) -> Self {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
-        self
-    }
-
-    /// Sets the max length of min/max value fields when writing the column
-    /// [`Index`] (defaults to `Some(64)`).
-    ///
-    /// This can be used to prevent columns with very long values (hundreds of
-    /// bytes long) from causing the parquet metadata to become huge.
-    ///
-    /// # Notes
-    ///
-    /// The column [`Index`] is written when [`Self::set_statistics_enabled`] is
-    /// set to [`EnabledStatistics::Page`].
-    ///
-    /// * If `Some`, must be greater than 0, otherwise will panic
-    /// * If `None`, there's no effective limit.
-    ///
-    /// [`Index`]: crate::file::page_index::index::Index
-    pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
-        if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
-        }
-
-        self.column_index_truncate_length = max_length;
-        self
-    }
-
-    /// Sets the max length of min/max value fields in row group level
-    /// [`Statistics`] (defaults to `None` (no limit)).
-    ///
-    /// # Notes
-    /// Row group level [`Statistics`] are written when [`Self::set_statistics_enabled`] is
-    /// set to [`EnabledStatistics::Chunk`] or [`EnabledStatistics::Page`].
-    ///
-    /// * If `Some`, must be greater than 0, otherwise will panic
-    /// * If `None`, there's no effective limit.
-    ///
-    /// [`Statistics`]: crate::file::statistics::Statistics
-    pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
-        if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
-        }
-
-        self.statistics_truncate_length = max_length;
-        self
-    }
-
-    /// Should the writer coerce types to parquet native types (defaults to `false`).
-    ///
-    /// Leaving this option the default `false` will ensure the exact same data
-    /// written to parquet using this library will be read.
-    ///
-    /// Setting this option to `true` will result in parquet files that can be
-    /// read by more readers, but potentially lose information in the process.
-    ///
-    /// * Types such as [`DataType::Date64`], which have no direct corresponding
-    ///   Parquet type, may be stored with lower precision.
-    ///
-    /// * The internal field names of `List` and `Map` types will be renamed if
-    ///   necessary to match what is required by the newest Parquet specification.
-    ///
-    /// See [`ArrowToParquetSchemaConverter::with_coerce_types`] for more details
-    ///
-    /// [`DataType::Date64`]: arrow_schema::DataType::Date64
-    /// [`ArrowToParquetSchemaConverter::with_coerce_types`]: crate::arrow::ArrowSchemaConverter::with_coerce_types
-    pub fn set_coerce_types(mut self, coerce_types: bool) -> Self {
-        self.coerce_types = coerce_types;
-        self
-    }
-
-    /// Sets FileEncryptionProperties (defaults to `None`)
-    #[cfg(feature = "encryption")]
-    pub fn with_file_encryption_properties(
-        mut self,
-        file_encryption_properties: FileEncryptionProperties,
-    ) -> Self {
-        self.file_encryption_properties = Some(file_encryption_properties);
         self
     }
 }

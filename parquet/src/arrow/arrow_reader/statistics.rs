@@ -1403,6 +1403,48 @@ impl<'a> StatisticsConverter<'a> {
         max_statistics(data_type, iter, self.physical_type)
     }
 
+    /// Extract the `is_max_value_exact` flags from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_maxes`] for details
+    pub fn row_group_is_max_value_exact<I>(&self, metadatas: I) -> Result<BooleanArray>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(BooleanArray::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
+        };
+
+        let is_max_value_exact = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s.map(|s| s.max_is_exact()));
+        Ok(BooleanArray::from_iter(is_max_value_exact))
+    }
+
+    /// Extract the `is_min_value_exact` flags from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_is_min_value_exact<I>(&self, metadatas: I) -> Result<BooleanArray>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(BooleanArray::from_iter(
+                std::iter::repeat(None).take(num_row_groups),
+            ));
+        };
+
+        let is_min_value_exact = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s.map(|s| s.min_is_exact()));
+        Ok(BooleanArray::from_iter(is_min_value_exact))
+    }
+
     /// Extract the null counts from row group statistics in [`RowGroupMetaData`]
     ///
     /// See docs on [`Self::row_group_mins`] for details

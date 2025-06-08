@@ -2158,6 +2158,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_read_dict_fixed_size_binary() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Dictionary(
+                Box::new(ArrowDataType::UInt8),
+                Box::new(ArrowDataType::FixedSizeBinary(8)),
+            ),
+            true,
+        )]));
+        let keys = UInt8Array::from_iter_values(vec![0, 0, 1]);
+        let values = FixedSizeBinaryArray::try_from_iter(
+            vec![
+                (0u8..8u8).collect::<Vec<u8>>(),
+                (24u8..32u8).collect::<Vec<u8>>(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let arr = UInt8DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(arr)]).unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(&batch, &read[0])
+    }
+
     /// Parameters for single_column_reader_test
     #[derive(Clone)]
     struct TestOptions {
