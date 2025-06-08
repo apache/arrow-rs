@@ -510,17 +510,21 @@ mod tests {
 
     #[test]
     fn test_string_view_mixed() {
-        let large_view_batch = stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
+        let large_view_batch =
+            stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
         let small_view_batch = stringview_batch_repeated(1000, [Some("SmallString")]);
-        let mixed_batch = stringview_batch_repeated(1000, [
-            Some("This string is longer than 12 bytes"),
-            Some("Small"),
-        ]);
-        let mixed_batch_nulls = stringview_batch_repeated(1000, [
-            Some("This string is longer than 12 bytes"),
-            Some("Small"),
-            None,
-        ]);
+        let mixed_batch = stringview_batch_repeated(
+            1000,
+            [Some("This string is longer than 12 bytes"), Some("Small")],
+        );
+        let mixed_batch_nulls = stringview_batch_repeated(
+            1000,
+            [
+                Some("This string is longer than 12 bytes"),
+                Some("Small"),
+                None,
+            ],
+        );
 
         // Several batches with mixed inline / non inline
         // 4k rows in
@@ -538,9 +542,8 @@ mod tests {
 
         let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
 
-        assert_eq!(gc_array.data_buffers().len(), 5); 
+        assert_eq!(gc_array.data_buffers().len(), 5);
     }
-
 
     /// Test for [`BatchCoalescer`]
     ///
@@ -717,10 +720,10 @@ mod tests {
     }
 
     /// Returns the named column as a StringViewArray
-    fn col_as_string_view<'a, 'b>(name: &'a str, batch: &'b RecordBatch) -> &'b StringViewArray {
+    fn col_as_string_view<'b>(name: &str, batch: &'b RecordBatch) -> &'b StringViewArray {
         batch
             .column_by_name(name)
-            .expect(format!("Column '{}' not found", name).as_str())
+            .expect("column not found")
             .as_string_view_opt()
             .expect("column is not a string view")
     }
