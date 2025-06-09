@@ -42,15 +42,14 @@ fn load_case(name: &str) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
 
 fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     vec![
-    ("primitive_boolean_false", Variant::BooleanFalse),
-    ("primitive_boolean_true", Variant::BooleanTrue),
-    ("primitive_int8", Variant::Int8(42)),
-    // Using the From<String> trait
-    ("primitive_string", Variant::from("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
-    // Using the From<String> trait
-    ("short_string", Variant::from("Less than 64 bytes (❤\u{fe0f} with utf8)")), 
-    // TODO Reenable when https://github.com/apache/parquet-testing/pull/86 is merged
-    // ("primitive_null", Variant::Null),
+        ("primitive_null", Variant::Null),
+        ("primitive_boolean_false", Variant::BooleanFalse),
+        ("primitive_boolean_true", Variant::BooleanTrue),
+        ("primitive_int8", Variant::Int8(42)),
+        // Using the From<String> trait
+        ("primitive_string", Variant::from("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
+        // Using the From<String> trait
+        ("short_string", Variant::from("Less than 64 bytes (❤\u{fe0f} with utf8)")), 
     ]
 }
 
