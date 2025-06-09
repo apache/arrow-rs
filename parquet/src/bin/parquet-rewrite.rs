@@ -243,22 +243,22 @@ struct Args {
     #[clap(long)]
     data_page_size_limit: Option<usize>,
 
-    /// Sets the max length of min/max value fields in row group and page
-    /// statistics for all columns.
+    /// Sets the max length of min/max statistics in row group and data page
+    /// header statistics for all columns.
     ///
     /// Applicable only if statistics are enabled.
     #[clap(long)]
     statistics_truncate_length: Option<usize>,
 
-    /// Sets the max length of min/max value fields in the column index.
+    /// Sets the max length of min/max statistics in the column index.
     ///
     /// Applicable only if statistics are enabled.
     #[clap(long)]
     column_index_truncate_length: Option<usize>,
 
-    /// Sets whether to write statistics to the page headers.
+    /// Write statistics to the data page headers?
     ///
-    /// Setting this true implies page level statistics.
+    /// Setting this true will also enable page level statistics.
     #[clap(long)]
     write_page_header_statistics: Option<bool>,
 

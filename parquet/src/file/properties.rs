@@ -772,7 +772,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default flag to enable/disable writing the [`Statistics`] in the page header
+    /// enable/disable writing [`Statistics`] in the page header
     /// (defaults to `false` via [`DEFAULT_WRITE_PAGE_HEADER_STATISTICS`]).
     ///
     /// Only applicable if [`Page`] level statistics are gathered.
@@ -782,9 +782,17 @@ impl WriterPropertiesBuilder {
     /// will use the min/max values stored in the [`ParquetColumnIndex`] rather than
     /// those in the page header.
     ///
+    /// # Note
+    ///
+    /// Prior to version 55.0.0, the `parquet` crate always wrote these
+    /// statistics (the equivalent of setting this option to `true`). This was
+    /// changed in 55.0.0 to follow the recommendation in the Parquet
+    /// specification. See [issue #7580] for more details.
+    ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
     /// [`Page`]: EnabledStatistics::Page
+    /// [issue #7580]: https://github.com/apache/arrow-rs/issues/7580
     pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
         self.default_column_properties
             .set_write_page_header_statistics(value);

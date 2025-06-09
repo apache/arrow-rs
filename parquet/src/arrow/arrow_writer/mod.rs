@@ -3771,7 +3771,7 @@ mod tests {
     }
 
     #[test]
-    fn test_page_stats_not_written() {
+    fn test_page_stats_not_written_by_default() {
         let string_field = Field::new("a", DataType::Utf8, false);
         let schema = Schema::new(vec![string_field]);
         let raw_string_values = vec!["Blart Versenwald III"];
@@ -3801,6 +3801,45 @@ mod tests {
         let stats = hdr.data_page_header.unwrap().statistics;
 
         assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_page_stats_when_enabled() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III", "Andrew Lamb"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        let stats = stats.unwrap();
+        // check that min/max were actually written to the page
+        assert!(stats.is_max_value_exact.unwrap());
+        assert!(stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
     }
 
     #[test]
