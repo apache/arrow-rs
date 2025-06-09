@@ -17,7 +17,7 @@
 use arrow_schema::ArrowError;
 use std::array::TryFromSliceError;
 
-use crate::utils::{array_from_slice, first_byte_from_slice, string_from_slice};
+use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum VariantBasicType {
@@ -34,6 +34,7 @@ pub enum VariantPrimitiveType {
     BooleanFalse = 2,
     Int8 = 3,
     // TODO: Add types for the rest of primitives, once API is agreed upon
+    Binary = 15,
     String = 16,
 }
 
@@ -65,6 +66,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             2 => Ok(VariantPrimitiveType::BooleanFalse),
             3 => Ok(VariantPrimitiveType::Int8),
             // TODO: Add types for the rest, once API is agreed upon
+            15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "unknown primitive type: {}",
@@ -87,6 +89,13 @@ fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
     let value = i8::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
+}
+
+/// Decodes a Binary from the value section of a variant.
+pub(crate) fn decode_binary(value: &[u8]) -> Result<&[u8], ArrowError> {
+    let len = u32::from_le_bytes(array_from_slice(value, 1)?) as usize;
+    let value = slice_from_slice(value, 5..5 + len)?;
     Ok(value)
 }
 
@@ -117,6 +126,32 @@ mod tests {
         ];
         let result = decode_int8(&value)?;
         assert_eq!(result, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_binary() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Binary as u8) << 2, // Basic type
+            9,
+            0,
+            0,
+            0, // Length of binary data, 4-byte little-endian
+            0x03,
+            0x13,
+            0x37,
+            0xde,
+            0xad,
+            0xbe,
+            0xef,
+            0xca,
+            0xfe, // Data
+        ];
+        let result = decode_binary(&value)?;
+        assert_eq!(
+            result,
+            [0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]
+        );
         Ok(())
     }
 

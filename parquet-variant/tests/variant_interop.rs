@@ -46,7 +46,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     // Cases are commented out
     // Enabling is tracked in  https://github.com/apache/arrow-rs/issues/7630
     vec![
-        // ("primitive_binary", Variant::Binary),
+        ("primitive_binary", Variant::Binary(&[0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe])),
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
         // ("primitive_date", Variant::Null),

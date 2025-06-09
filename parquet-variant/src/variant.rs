@@ -407,6 +407,7 @@ pub enum Variant<'m, 'v> {
     BooleanFalse,
 
     // Note: only need the *value* buffer
+    Binary(&'v [u8]),
     String(&'v str),
     ShortString(&'v str),
 
@@ -426,6 +427,7 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
+                VariantPrimitiveType::Binary => Variant::Binary(decoder::decode_binary(value)?),
                 VariantPrimitiveType::String => {
                     Variant::String(decoder::decode_long_string(value)?)
                 }
@@ -448,6 +450,14 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::BooleanTrue => Some(true),
             Variant::BooleanFalse => Some(false),
             _ => None,
+        }
+    }
+
+    pub fn as_u8_slice(&'v self) -> Option<&'v [u8]> {
+        if let Variant::Binary(d) = self {
+            Some(d)
+        } else {
+            None
         }
     }
 
@@ -489,6 +499,12 @@ impl<'m, 'v> From<bool> for Variant<'m, 'v> {
             true => Variant::BooleanTrue,
             false => Variant::BooleanFalse,
         }
+    }
+}
+
+impl<'m, 'v> From<&'v [u8]> for Variant<'m, 'v> {
+    fn from(value: &'v [u8]) -> Self {
+        Variant::Binary(value)
     }
 }
 
