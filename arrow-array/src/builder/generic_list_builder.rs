@@ -414,7 +414,7 @@ mod tests {
         let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7], null, null]
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7], null, null, [8]]
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -428,13 +428,16 @@ mod tests {
         builder.values().append_value(7);
         builder.append(true);
         builder.append_nulls(2);
+        builder.values().append_value(8);
+        builder.append(true);
 
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(6, list_array.len());
+        assert_eq!(7, list_array.len());
         assert_eq!(3, list_array.null_count());
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(9).unwrap(), list_array.value_offsets()[7]);
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_length(2));
         assert!(list_array.is_null(4));
         assert!(list_array.is_null(5));

@@ -182,12 +182,14 @@ mod tests {
         builder.append_null();
         builder.append_value(b"arrow").unwrap();
         builder.append_nulls(2);
+        builder.append_value(b"world").unwrap();
         let array: FixedSizeBinaryArray = builder.finish();
 
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
-        assert_eq!(5, array.len());
+        assert_eq!(6, array.len());
         assert_eq!(3, array.null_count());
         assert_eq!(10, array.value_offset(2));
+        assert_eq!(15, array.value_offset(3));
         assert_eq!(5, array.value_length());
         assert!(array.is_null(3));
         assert!(array.is_null(4));

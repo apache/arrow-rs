@@ -272,11 +272,21 @@ mod tests {
         assert_eq!(b.append(values[1]).unwrap(), 1);
         assert_eq!(b.append(values[0]).unwrap(), 0);
         b.append_nulls(2);
+        assert_eq!(b.append(values[0]).unwrap(), 0);
         let array = b.finish();
 
         assert_eq!(
             array.keys(),
-            &Int8Array::from(vec![Some(0), None, Some(1), Some(1), Some(0), None, None]),
+            &Int8Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+                Some(0)
+            ]),
         );
 
         // Values are polymorphic and so require a downcast.

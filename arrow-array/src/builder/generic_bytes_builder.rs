@@ -487,9 +487,10 @@ mod tests {
         builder.append_value(b"arrow");
         builder.append_value(b"");
         builder.append_nulls(2);
+        builder.append_value(b"hi");
         let array = builder.finish();
 
-        assert_eq!(6, array.len());
+        assert_eq!(7, array.len());
         assert_eq!(3, array.null_count());
         assert_eq!(b"parquet", array.value(0));
         assert!(array.is_null(1));
@@ -497,9 +498,11 @@ mod tests {
         assert!(array.is_null(5));
         assert_eq!(b"arrow", array.value(2));
         assert_eq!(b"", array.value(1));
+        assert_eq!(b"hi", array.value(6));
 
         assert_eq!(O::zero(), array.value_offsets()[0]);
         assert_eq!(O::from_usize(7).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(14).unwrap(), array.value_offsets()[7]);
         assert_eq!(O::from_usize(5).unwrap(), array.value_length(2));
     }
 
@@ -525,7 +528,8 @@ mod tests {
         builder.append_option(None::<&str>);
         builder.append_option(None::<String>);
         builder.append_nulls(2);
-        assert_eq!(9, builder.len());
+        builder.append_value("parquet");
+        assert_eq!(10, builder.len());
 
         assert_eq!(
             GenericStringArray::<O>::from(vec![
@@ -538,6 +542,7 @@ mod tests {
                 None,
                 None,
                 None,
+                Some("parquet")
             ]),
             builder.finish()
         );
