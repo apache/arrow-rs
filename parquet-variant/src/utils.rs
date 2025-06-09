@@ -22,7 +22,6 @@ use std::fmt::Debug;
 use std::slice::SliceIndex;
 
 #[inline]
-
 pub(crate) fn slice_from_slice<I: SliceIndex<[u8]> + Clone + Debug>(
     bytes: &[u8],
     index: I,
@@ -49,7 +48,7 @@ pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 
 pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<&u8, ArrowError> {
     slice
-        .get(0)
+        .first()
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 

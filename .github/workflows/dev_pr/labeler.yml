@@ -44,7 +44,9 @@ arrow-flight:
 
 parquet:
   - changed-files:
-    - any-glob-to-any-file: [ 'parquet/**/*' ]
+    - any-glob-to-any-file:
+      - 'parquet/**/*'
+      - 'parquet-variant/**/*'
 
 parquet-derive:
   - changed-files:

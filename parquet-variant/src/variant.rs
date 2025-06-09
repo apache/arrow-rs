@@ -19,10 +19,7 @@ use crate::decoder::{
 };
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 use arrow_schema::ArrowError;
-use std::{
-    num::TryFromIntError,
-    ops::{Index, Range},
-};
+use std::{num::TryFromIntError, ops::Range};
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum OffsetSizeBytes {
@@ -251,7 +248,7 @@ impl<'m> VariantMetadata<'m> {
 
         // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
         let unpack = |i| self.header.offset_size.unpack_usize(self.bytes, 1, i + 1);
-        Ok(unpack(index)?)
+        unpack(index)
     }
 
     /// Get the key-name by index
@@ -278,7 +275,7 @@ impl<'m> VariantMetadata<'m> {
         let offset_size = self.header.offset_size; // `Copy`
         let bytes = self.bytes;
 
-        let iterator = (0..self.dict_size).map(move |i| {
+        (0..self.dict_size).map(move |i| {
             // This wont be out of bounds as long as dict_size and offsets have been validated
             // during construction via `try_new`, as it calls unpack_usize for the
             // indices `1..dict_size+1` already.
@@ -289,9 +286,7 @@ impl<'m> VariantMetadata<'m> {
                 (Ok(s), Ok(e)) => Ok(s..e),
                 (Err(e), _) | (_, Err(e)) => Err(e),
             }
-        });
-
-        iterator
+        })
     }
 
     /// Get all key-names as an Iterator of strings
@@ -547,13 +542,13 @@ mod tests {
             OffsetSizeBytes::Three
                 .unpack_usize(&buf_three, 0, 0)
                 .unwrap(),
-            0x0302_01
+            0x030201
         );
         assert_eq!(
             OffsetSizeBytes::Three
                 .unpack_usize(&buf_three, 0, 1)
                 .unwrap(),
-            0x0000_FF
+            0x0000FF
         );
 
         // Four-byte offsets (0x12345678, 0x90ABCDEF)

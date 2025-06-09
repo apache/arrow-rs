@@ -277,7 +277,7 @@ pub fn create_string_view_array(size: usize, null_density: f32) -> StringViewArr
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-fn create_string_view_array_with_max_len(
+pub fn create_string_view_array_with_max_len(
     size: usize,
     null_density: f32,
     max_str_len: usize,
