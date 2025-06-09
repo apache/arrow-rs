@@ -24,6 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use arrow_schema::ArrowError;
+use chrono::NaiveDate;
 use parquet_variant::{Variant, VariantMetadata};
 
 fn cases_dir() -> PathBuf {
@@ -49,7 +50,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_binary", Variant::Binary(&[0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe])),
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
-        // ("primitive_date", Variant::Null),
+        ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
         //("primitive_decimal4", Variant::Null),
         //("primitive_decimal8", Variant::Null),
         //("primitive_decimal16", Variant::Null),

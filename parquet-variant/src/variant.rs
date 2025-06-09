@@ -19,6 +19,7 @@ use crate::decoder::{
 };
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 use arrow_schema::ArrowError;
+use chrono::NaiveDate;
 use std::{num::TryFromIntError, ops::Range};
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -402,6 +403,7 @@ pub enum Variant<'m, 'v> {
     // TODO: Add types for the rest of the primitive types, once API is agreed upon
     Null,
     Int8(i8),
+    Date(NaiveDate),
 
     BooleanTrue,
     BooleanFalse,
@@ -427,6 +429,7 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
+                VariantPrimitiveType::Date => Variant::Date(decoder::decode_date(value)?),
                 VariantPrimitiveType::Binary => Variant::Binary(decoder::decode_binary(value)?),
                 VariantPrimitiveType::String => {
                     Variant::String(decoder::decode_long_string(value)?)
@@ -450,6 +453,14 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::BooleanTrue => Some(true),
             Variant::BooleanFalse => Some(false),
             _ => None,
+        }
+    }
+
+    pub fn as_naive_date(self) -> Option<NaiveDate> {
+        if let Variant::Date(d) = self {
+            Some(d)
+        } else {
+            None
         }
     }
 
@@ -499,6 +510,12 @@ impl<'m, 'v> From<bool> for Variant<'m, 'v> {
             true => Variant::BooleanTrue,
             false => Variant::BooleanFalse,
         }
+    }
+}
+
+impl<'m, 'v> From<NaiveDate> for Variant<'m, 'v> {
+    fn from(value: NaiveDate) -> Self {
+        Variant::Date(value)
     }
 }
 

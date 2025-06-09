@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow_schema::ArrowError;
+use chrono::{DateTime, Duration, NaiveDate};
 use std::array::TryFromSliceError;
 
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
@@ -34,6 +35,7 @@ pub enum VariantPrimitiveType {
     BooleanFalse = 2,
     Int8 = 3,
     // TODO: Add types for the rest of primitives, once API is agreed upon
+    Date = 11,
     Binary = 15,
     String = 16,
 }
@@ -66,6 +68,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             2 => Ok(VariantPrimitiveType::BooleanFalse),
             3 => Ok(VariantPrimitiveType::Int8),
             // TODO: Add types for the rest, once API is agreed upon
+            11 => Ok(VariantPrimitiveType::Date),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
             _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -89,6 +92,13 @@ fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
     let value = i8::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
+}
+
+/// Decodes a Date from the value section of a variant.
+pub(crate) fn decode_date(value: &[u8]) -> Result<NaiveDate, ArrowError> {
+    let days_since_epoch = i32::from_le_bytes(array_from_slice(value, 1)?);
+    let value = (DateTime::UNIX_EPOCH + Duration::days(days_since_epoch as i64)).date_naive();
     Ok(value)
 }
 
@@ -126,6 +136,20 @@ mod tests {
         ];
         let result = decode_int8(&value)?;
         assert_eq!(result, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_date() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Date as u8) << 2, // Basic type
+            0xe2,
+            0x4e,
+            0x0,
+            0x0, // Data
+        ];
+        let result = decode_date(&value)?;
+        assert_eq!(result, NaiveDate::from_ymd_opt(2025, 4, 16).unwrap());
         Ok(())
     }
 
