@@ -23,8 +23,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::variant::{Variant, VariantMetadata};
 use arrow_schema::ArrowError;
+use parquet_variant::{Variant, VariantMetadata};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -40,17 +40,29 @@ fn load_case(name: &str) -> Result<(Vec<u8>, Vec<u8>), ArrowError> {
     Ok((meta, val))
 }
 
+/// Return a list of the values from the parquet testing repository:
+/// <https://github.com/apache/parquet-testing/tree/master/variant>
 fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
+    // Cases are commented out
+    // Enabling is tracked in  https://github.com/apache/arrow-rs/issues/7630
     vec![
-    ("primitive_boolean_false", Variant::BooleanFalse),
-    ("primitive_boolean_true", Variant::BooleanTrue),
-    ("primitive_int8", Variant::Int8(42)),
-    // Using the From<String> trait
-    ("primitive_string", Variant::from("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
-    // Using the From<String> trait
-    ("short_string", Variant::from("Less than 64 bytes (❤\u{fe0f} with utf8)")), 
-    // TODO Reenable when https://github.com/apache/parquet-testing/issues/81 is fixed
-    // ("primitive_null", Variant::Null),
+        // ("primitive_binary", Variant::Binary),
+        ("primitive_boolean_false", Variant::BooleanFalse),
+        ("primitive_boolean_true", Variant::BooleanTrue),
+        // ("primitive_date", Variant::Null),
+        //("primitive_decimal4", Variant::Null),
+        //("primitive_decimal8", Variant::Null),
+        //("primitive_decimal16", Variant::Null),
+        //("primitive_float", Variant::Null),
+        ("primitive_int8", Variant::Int8(42)),
+        //("primitive_int16", Variant::Null),
+        //("primitive_int32", Variant::Null),
+        //("primitive_int64", Variant::Null),
+        ("primitive_null", Variant::Null),
+        ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
+        //("primitive_timestamp", Variant::Null),
+        //("primitive_timestampntz", Variant::Null),
+        ("short_string", Variant::ShortString("Less than 64 bytes (❤\u{fe0f} with utf8)")),
     ]
 }
 

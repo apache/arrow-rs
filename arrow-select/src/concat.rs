@@ -31,7 +31,9 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -82,6 +84,15 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
     } else {
         unreachable!("illegal data type for fixed size list")
     }
+}
+
+fn concat_byte_view<B: ByteViewType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder =
+        GenericByteViewBuilder::<B>::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    for &array in arrays.iter() {
+        builder.append_array(array.as_byte_view());
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
@@ -425,6 +436,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
                 _ => unreachable!("Unsupported run end index type: {r:?}"),
             }
         }
+        DataType::Utf8View => concat_byte_view::<StringViewType>(arrays),
+        DataType::BinaryView => concat_byte_view::<BinaryViewType>(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
@@ -624,6 +637,30 @@ mod tests {
             Some("hello"),
             Some("world"),
             Some("2"),
+            Some("3"),
+            Some("4"),
+            Some("foo"),
+            Some("bar"),
+            None,
+            Some("baz"),
+        ])) as ArrayRef;
+
+        assert_eq!(&arr, &expected_output);
+    }
+
+    #[test]
+    fn test_concat_string_view_arrays() {
+        let arr = concat(&[
+            &StringViewArray::from(vec!["helloxxxxxxxxxxa", "world____________"]),
+            &StringViewArray::from(vec!["helloxxxxxxxxxxy", "3", "4"]),
+            &StringViewArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]),
+        ])
+        .unwrap();
+
+        let expected_output = Arc::new(StringViewArray::from(vec![
+            Some("helloxxxxxxxxxxa"),
+            Some("world____________"),
+            Some("helloxxxxxxxxxxy"),
             Some("3"),
             Some("4"),
             Some("foo"),
@@ -1079,6 +1116,49 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_primitive_dictionary_merge() {
+        // Same value repeated 5 times.
+        let keys = vec![1; 5];
+        let values = (10..20).collect::<Vec<_>>();
+        let dict = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+        let other = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+
+        let result_same_dictionary = concat(&[&dict, &dict]).unwrap();
+        // Verify pointer equality check succeeds, and therefore the
+        // dictionaries are not merged. A single values buffer should be reused
+        // in this case.
+        assert!(dict.values().to_data().ptr_eq(
+            &result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .to_data()
+        ));
+        assert_eq!(
+            result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            values.len(),
+        );
+
+        let result_cloned_dictionary = concat(&[&dict, &other]).unwrap();
+        // Should have only 1 underlying value since all keys reference it.
+        assert_eq!(
+            result_cloned_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            1
+        );
     }
 
     #[test]
