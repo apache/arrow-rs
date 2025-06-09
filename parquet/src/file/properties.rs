@@ -784,9 +784,9 @@ impl WriterPropertiesBuilder {
     ///
     /// # Note
     ///
-    /// Prior to version 55.0.0, the `parquet` crate always wrote these
+    /// Prior to version 56.0.0, the `parquet` crate always wrote these
     /// statistics (the equivalent of setting this option to `true`). This was
-    /// changed in 55.0.0 to follow the recommendation in the Parquet
+    /// changed in 56.0.0 to follow the recommendation in the Parquet
     /// specification. See [issue #7580] for more details.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
