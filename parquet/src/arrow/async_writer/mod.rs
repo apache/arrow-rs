@@ -262,6 +262,16 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
         self.finish().await
     }
 
+    /// Consumes the [`AsyncArrowWriter`] and returns the underlying [`AsyncFileWriter`]
+    ///
+    /// # Notes
+    ///
+    /// This method does **not** flush or finalize the writer, so buffered data
+    /// will be lost if you have not called [`Self::finish`].
+    pub fn into_inner(self) -> W {
+        self.async_writer
+    }
+
     /// Flush the data written by `sync_writer` into the `async_writer`
     ///
     /// # Notes
