@@ -88,7 +88,7 @@ impl OffsetSizeBytes {
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
-pub(crate) struct VariantMetadataHeader {
+pub struct VariantMetadataHeader {
     version: u8,
     is_sorted: bool,
     /// Note: This is `offset_size_minus_one` + 1
@@ -323,8 +323,14 @@ pub struct VariantArray<'m, 'v> {
 }
 
 impl<'m, 'v> VariantArray<'m, 'v> {
+    /// Return the length of this array
     pub fn len(&self) -> usize {
         todo!()
+    }
+
+    /// Is the array of zero length
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
