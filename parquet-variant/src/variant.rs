@@ -19,7 +19,7 @@ use crate::decoder::{
 };
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
 use arrow_schema::ArrowError;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use std::{num::TryFromIntError, ops::Range};
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -404,6 +404,8 @@ pub enum Variant<'m, 'v> {
     Null,
     Int8(i8),
     Date(NaiveDate),
+    TimestampMicros(DateTime<Utc>),
+    TimestampNTZMicros(NaiveDateTime),
 
     BooleanTrue,
     BooleanFalse,
@@ -430,6 +432,12 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
                 VariantPrimitiveType::Date => Variant::Date(decoder::decode_date(value)?),
+                VariantPrimitiveType::TimestampMicros => {
+                    Variant::TimestampMicros(decoder::decode_timestamp_micros(value)?)
+                }
+                VariantPrimitiveType::TimestampNTZMicros => {
+                    Variant::TimestampNTZMicros(decoder::decode_timestampntz_micros(value)?)
+                }
                 VariantPrimitiveType::Binary => Variant::Binary(decoder::decode_binary(value)?),
                 VariantPrimitiveType::String => {
                     Variant::String(decoder::decode_long_string(value)?)
@@ -458,6 +466,21 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     pub fn as_naive_date(self) -> Option<NaiveDate> {
         if let Variant::Date(d) = self {
+            Some(d)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_datetime_utc(self) -> Option<DateTime<Utc>> {
+        if let Variant::TimestampMicros(d) = self {
+            Some(d)
+        } else {
+            None
+        }
+    }
+    pub fn as_naive_datetime(self) -> Option<NaiveDateTime> {
+        if let Variant::TimestampNTZMicros(d) = self {
             Some(d)
         } else {
             None
@@ -516,6 +539,17 @@ impl<'m, 'v> From<bool> for Variant<'m, 'v> {
 impl<'m, 'v> From<NaiveDate> for Variant<'m, 'v> {
     fn from(value: NaiveDate) -> Self {
         Variant::Date(value)
+    }
+}
+
+impl<'m, 'v> From<DateTime<Utc>> for Variant<'m, 'v> {
+    fn from(value: DateTime<Utc>) -> Self {
+        Variant::TimestampMicros(value)
+    }
+}
+impl<'m, 'v> From<NaiveDateTime> for Variant<'m, 'v> {
+    fn from(value: NaiveDateTime) -> Self {
+        Variant::TimestampNTZMicros(value)
     }
 }
 

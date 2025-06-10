@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow_schema::ArrowError;
-use chrono::{DateTime, Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use std::array::TryFromSliceError;
 
 use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
@@ -36,6 +36,8 @@ pub enum VariantPrimitiveType {
     Int8 = 3,
     // TODO: Add types for the rest of primitives, once API is agreed upon
     Date = 11,
+    TimestampMicros = 12,
+    TimestampNTZMicros = 13,
     Binary = 15,
     String = 16,
 }
@@ -69,6 +71,8 @@ impl TryFrom<u8> for VariantPrimitiveType {
             3 => Ok(VariantPrimitiveType::Int8),
             // TODO: Add types for the rest, once API is agreed upon
             11 => Ok(VariantPrimitiveType::Date),
+            12 => Ok(VariantPrimitiveType::TimestampMicros),
+            13 => Ok(VariantPrimitiveType::TimestampNTZMicros),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
             _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -100,6 +104,30 @@ pub(crate) fn decode_date(value: &[u8]) -> Result<NaiveDate, ArrowError> {
     let days_since_epoch = i32::from_le_bytes(array_from_slice(value, 1)?);
     let value = (DateTime::UNIX_EPOCH + Duration::days(days_since_epoch as i64)).date_naive();
     Ok(value)
+}
+
+/// Decodes a TimestampMicros from the value section of a variant.
+pub(crate) fn decode_timestamp_micros(value: &[u8]) -> Result<DateTime<Utc>, ArrowError> {
+    let micros_since_epoch = i64::from_le_bytes(array_from_slice(value, 1)?);
+    if let Some(value) = DateTime::from_timestamp_micros(micros_since_epoch) {
+        Ok(value)
+    } else {
+        Err(ArrowError::CastError(format!(
+            "Could not cast `{micros_since_epoch}` microseconds into a DateTime<Utc>"
+        )))
+    }
+}
+
+/// Decodes a TimestampNTZMicros from the value section of a variant.
+pub(crate) fn decode_timestampntz_micros(value: &[u8]) -> Result<NaiveDateTime, ArrowError> {
+    let micros_since_epoch = i64::from_le_bytes(array_from_slice(value, 1)?);
+    if let Some(value) = DateTime::from_timestamp_micros(micros_since_epoch) {
+        Ok(value.naive_utc())
+    } else {
+        Err(ArrowError::CastError(format!(
+            "Could not cast `{micros_since_epoch}` microseconds into a NaiveDateTime"
+        )))
+    }
 }
 
 /// Decodes a Binary from the value section of a variant.
@@ -150,6 +178,55 @@ mod tests {
         ];
         let result = decode_date(&value)?;
         assert_eq!(result, NaiveDate::from_ymd_opt(2025, 4, 16).unwrap());
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_micros() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::TimestampMicros as u8) << 2, // Basic type
+            0xe0,
+            0x52,
+            0x97,
+            0xdd,
+            0xe7,
+            0x32,
+            0x06,
+            0x00, // Data
+        ];
+        let result = decode_timestamp_micros(&value)?;
+        assert_eq!(
+            result,
+            NaiveDate::from_ymd_opt(2025, 4, 16)
+                .unwrap()
+                .and_hms_milli_opt(16, 34, 56, 780)
+                .unwrap()
+                .and_utc()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestampntz_micros() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::TimestampNTZMicros as u8) << 2, // Basic type
+            0xe0,
+            0x52,
+            0x97,
+            0xdd,
+            0xe7,
+            0x32,
+            0x06,
+            0x00, // Data
+        ];
+        let result = decode_timestampntz_micros(&value)?;
+        assert_eq!(
+            result,
+            NaiveDate::from_ymd_opt(2025, 4, 16)
+                .unwrap()
+                .and_hms_milli_opt(16, 34, 56, 780)
+                .unwrap()
+        );
         Ok(())
     }
 
