@@ -397,6 +397,28 @@ fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
 
 #[test]
 fn test_uniform_encryption_roundtrip() {
+    uniform_encryption_roundtrip(false, false).unwrap();
+}
+
+#[test]
+fn test_uniform_encryption_roundtrip_with_dictionary() {
+    uniform_encryption_roundtrip(false, true).unwrap();
+}
+
+#[test]
+fn test_uniform_encryption_roundtrip_with_page_index() {
+    uniform_encryption_roundtrip(true, false).unwrap();
+}
+
+#[test]
+fn test_uniform_encryption_roundtrip_with_page_index_and_dictionary() {
+    uniform_encryption_roundtrip(true, true).unwrap();
+}
+
+fn uniform_encryption_roundtrip(
+    page_index: bool,
+    dictionary_encoding: bool,
+) -> parquet::errors::Result<()> {
     let x0_arrays = [
         Int32Array::from((0..100).collect::<Vec<_>>()),
         Int32Array::from((100..150).collect::<Vec<_>>()),
@@ -411,12 +433,11 @@ fn test_uniform_encryption_roundtrip() {
         Field::new("x1", ArrowDataType::Int32, false),
     ]));
 
-    let file = tempfile::tempfile().unwrap();
+    let file = tempfile::tempfile()?;
 
     let footer_key = b"0123456789012345";
-    let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
-        .build()
-        .unwrap();
+    let file_encryption_properties =
+        FileEncryptionProperties::builder(footer_key.to_vec()).build()?;
 
     let props = WriterProperties::builder()
         // Ensure multiple row groups
@@ -424,34 +445,32 @@ fn test_uniform_encryption_roundtrip() {
         // Ensure multiple pages per row group
         .set_write_batch_size(20)
         .set_data_page_row_count_limit(20)
+        .set_dictionary_enabled(dictionary_encoding)
         .with_file_encryption_properties(file_encryption_properties)
         .build();
 
-    let mut writer =
-        ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props))?;
 
     for (x0, x1) in x0_arrays.into_iter().zip(x1_arrays.into_iter()) {
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(x0), Arc::new(x1)]).unwrap();
-        writer.write(&batch).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(x0), Arc::new(x1)])?;
+        writer.write(&batch)?;
     }
 
-    writer.close().unwrap();
+    writer.close()?;
 
-    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-        .build()
-        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec()).build()?;
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(decryption_properties)
+        .with_page_index(page_index);
 
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
     assert_eq!(&row_group_sizes(builder.metadata()), &[50, 50, 50]);
 
     let batches = builder
         .with_batch_size(100)
-        .build()
-        .unwrap()
-        .collect::<ArrowResult<Vec<_>>>()
-        .unwrap();
+        .build()?
+        .collect::<ArrowResult<Vec<_>>>()?;
 
     assert_eq!(batches.len(), 2);
     assert!(batches.iter().all(|x| x.num_columns() == 2));
@@ -491,6 +510,7 @@ fn test_uniform_encryption_roundtrip() {
 
     let expected_x1_values: Vec<_> = [100..200, 200..250].into_iter().flatten().collect();
     assert_eq!(&x1_values, &expected_x1_values);
+    Ok(())
 }
 
 #[test]

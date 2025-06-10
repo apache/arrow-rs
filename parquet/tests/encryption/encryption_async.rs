@@ -427,26 +427,6 @@ async fn test_decrypt_page_index_non_uniform() {
         .unwrap();
 }
 
-#[tokio::test]
-async fn test_read_with_page_index() {
-    let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/uniform_encryption.parquet.encrypted");
-    let mut file = File::open(&path).await.unwrap();
-
-    let key_code: &[u8] = "0123456789012345".as_bytes();
-    let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
-        .build()
-        .unwrap();
-
-    let options = ArrowReaderOptions::new()
-        .with_file_decryption_properties(decryption_properties)
-        .with_page_index(true);
-
-    verify_encryption_test_file_read_async(&mut file, options)
-        .await
-        .unwrap();
-}
-
 async fn test_decrypt_page_index(
     path: &str,
     decryption_properties: FileDecryptionProperties,
