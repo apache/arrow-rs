@@ -30,6 +30,7 @@
 // TODO: dead code removal
 #[allow(dead_code)]
 mod decoder;
+mod encoder;
 mod variant;
 // TODO: dead code removal
 mod builder;
@@ -38,3 +39,4 @@ mod utils;
 
 pub use builder::*;
 pub use variant::*;
+pub use encoder::json::{variant_to_json, variant_to_json_string, variant_to_json_value};

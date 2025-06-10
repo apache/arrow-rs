@@ -35,5 +35,6 @@ rust-version = "1.83"
 [dependencies]
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
+serde_json = "1.0"
 
 [lib]
