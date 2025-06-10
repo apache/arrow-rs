@@ -25,7 +25,8 @@ use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema};
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
+    RowSelector,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
@@ -505,10 +506,122 @@ fn uniform_encryption_roundtrip(
         })
         .collect();
 
-    let expected_x0_values: Vec<_> = [0..100, 100..150].into_iter().flatten().collect();
+    let expected_x0_values: Vec<_> = (0..150).collect();
     assert_eq!(&x0_values, &expected_x0_values);
 
-    let expected_x1_values: Vec<_> = [100..200, 200..250].into_iter().flatten().collect();
+    let expected_x1_values: Vec<_> = (100..250).collect();
+    assert_eq!(&x1_values, &expected_x1_values);
+    Ok(())
+}
+
+#[test]
+fn test_uniform_encryption_page_skipping() {
+    uniform_encryption_page_skipping(false).unwrap();
+}
+
+#[test]
+fn test_uniform_encryption_page_skipping_with_page_index() {
+    uniform_encryption_page_skipping(true).unwrap();
+}
+
+fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result<()> {
+    let x0_arrays = [
+        Int32Array::from((0..100).collect::<Vec<_>>()),
+        Int32Array::from((100..150).collect::<Vec<_>>()),
+    ];
+    let x1_arrays = [
+        Int32Array::from((100..200).collect::<Vec<_>>()),
+        Int32Array::from((200..250).collect::<Vec<_>>()),
+    ];
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x0", ArrowDataType::Int32, false),
+        Field::new("x1", ArrowDataType::Int32, false),
+    ]));
+
+    let file = tempfile::tempfile()?;
+
+    let footer_key = b"0123456789012345";
+    let file_encryption_properties =
+        FileEncryptionProperties::builder(footer_key.to_vec()).build()?;
+
+    let props = WriterProperties::builder()
+        // Ensure multiple row groups
+        .set_max_row_group_size(50)
+        // Ensure multiple pages per row group
+        .set_write_batch_size(20)
+        .set_data_page_row_count_limit(20)
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props))?;
+
+    for (x0, x1) in x0_arrays.into_iter().zip(x1_arrays.into_iter()) {
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(x0), Arc::new(x1)])?;
+        writer.write(&batch)?;
+    }
+
+    writer.close()?;
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec()).build()?;
+
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(decryption_properties)
+        .with_page_index(page_index);
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)?;
+
+    let selection = RowSelection::from(vec![
+        RowSelector::skip(25),
+        RowSelector::select(50),
+        RowSelector::skip(25),
+        RowSelector::select(25),
+        RowSelector::skip(25),
+    ]);
+
+    let batches = builder
+        .with_row_selection(selection)
+        .with_batch_size(100)
+        .build()?
+        .collect::<ArrowResult<Vec<_>>>()?;
+
+    assert_eq!(batches.len(), 1);
+    assert!(batches.iter().all(|x| x.num_columns() == 2));
+
+    let batch_sizes: Vec<_> = batches.iter().map(|x| x.num_rows()).collect();
+
+    assert_eq!(&batch_sizes, &[75]);
+
+    let x0_values: Vec<_> = batches
+        .iter()
+        .flat_map(|x| {
+            x.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .cloned()
+        })
+        .collect();
+
+    let x1_values: Vec<_> = batches
+        .iter()
+        .flat_map(|x| {
+            x.column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .cloned()
+        })
+        .collect();
+
+    let expected_x0_values: Vec<_> = [25..75, 100..125].into_iter().flatten().collect();
+    assert_eq!(&x0_values, &expected_x0_values);
+
+    let expected_x1_values: Vec<_> = [125..175, 200..225].into_iter().flatten().collect();
     assert_eq!(&x1_values, &expected_x1_values);
     Ok(())
 }

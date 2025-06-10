@@ -580,6 +580,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
         let state = match page_locations {
             Some(locations) => {
+                // If the offset of the first page doesn't match the start of the column chunk
+                // then the preceding space must contain a dictionary page.
                 let dictionary_page = match locations.first() {
                     Some(dict_offset) if dict_offset.offset as u64 != start => Some(PageLocation {
                         offset: start as i64,
@@ -965,7 +967,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?;
-                    if page.is_data_page() {
+                    if !is_dictionary_page {
                         *page_index += 1;
                     }
                     page
@@ -1083,11 +1085,17 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += header_len + data_page_size;
                     *remaining_bytes -= header_len + data_page_size;
                 }
+                if *require_dictionary {
+                    *require_dictionary = false;
+                } else {
+                    *page_index += 1;
+                }
                 Ok(())
             }
             SerializedPageReaderState::Pages {
                 page_locations,
                 dictionary_page,
+                page_index,
                 ..
             } => {
                 if dictionary_page.is_some() {
@@ -1095,7 +1103,10 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     dictionary_page.take();
                 } else {
                     // If no dictionary page exists, simply pop the data page from page_locations
-                    page_locations.pop_front();
+                    let popped = page_locations.pop_front();
+                    if popped.is_some() {
+                        *page_index += 1;
+                    }
                 }
 
                 Ok(())
