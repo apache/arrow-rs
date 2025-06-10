@@ -409,7 +409,9 @@ pub enum Variant<'m, 'v> {
     Date(NaiveDate),
     TimestampMicros(DateTime<Utc>),
     TimestampNTZMicros(NaiveDateTime),
-
+    Decimal4 { integer: i32, scale: u8 },
+    Decimal8 { integer: i64, scale: u8 },
+    Decimal16 { integer: i128, scale: u8 },
     BooleanTrue,
     BooleanFalse,
 
@@ -434,6 +436,18 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int16 => Variant::Int16(decoder::decode_int16(value)?),
                 VariantPrimitiveType::Int32 => Variant::Int32(decoder::decode_int32(value)?),
                 VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value)?),
+                VariantPrimitiveType::Decimal4 => {
+                    let (integer, scale) = decoder::decode_decimal4(value)?;
+                    Variant::Decimal4 { integer, scale }
+                }
+                VariantPrimitiveType::Decimal8 => {
+                    let (integer, scale) = decoder::decode_decimal8(value)?;
+                    Variant::Decimal8 { integer, scale }
+                }
+                VariantPrimitiveType::Decimal16 => {
+                    let (integer, scale) = decoder::decode_decimal16(value)?;
+                    Variant::Decimal16 { integer, scale }
+                }
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
@@ -546,6 +560,51 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
+        match *self {
+            Variant::Decimal4 { integer, scale } => Some((integer, scale)),
+            Variant::Decimal8 { integer, scale } => {
+                if let Ok(converted_integer) = integer.try_into() {
+                    Some((converted_integer, scale))
+                } else {
+                    None
+                }
+            }
+            Variant::Decimal16 { integer, scale } => {
+                if let Ok(converted_integer) = integer.try_into() {
+                    Some((converted_integer, scale))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
+        match *self {
+            Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
+            Variant::Decimal8 { integer, scale } => Some((integer, scale)),
+            Variant::Decimal16 { integer, scale } => {
+                if let Ok(converted_integer) = integer.try_into() {
+                    Some((converted_integer, scale))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
+        match *self {
+            Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
+            Variant::Decimal8 { integer, scale } => Some((integer.into(), scale)),
+            Variant::Decimal16 { integer, scale } => Some((integer, scale)),
+            _ => None,
+        }
+    }
+
     pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
@@ -576,6 +635,33 @@ impl<'m, 'v> From<i32> for Variant<'m, 'v> {
 impl<'m, 'v> From<i64> for Variant<'m, 'v> {
     fn from(value: i64) -> Self {
         Variant::Int64(value)
+    }
+}
+
+impl<'m, 'v> From<(i32, u8)> for Variant<'m, 'v> {
+    fn from(value: (i32, u8)) -> Self {
+        Variant::Decimal4 {
+            integer: value.0,
+            scale: value.1,
+        }
+    }
+}
+
+impl<'m, 'v> From<(i64, u8)> for Variant<'m, 'v> {
+    fn from(value: (i64, u8)) -> Self {
+        Variant::Decimal8 {
+            integer: value.0,
+            scale: value.1,
+        }
+    }
+}
+
+impl<'m, 'v> From<(i128, u8)> for Variant<'m, 'v> {
+    fn from(value: (i128, u8)) -> Self {
+        Variant::Decimal16 {
+            integer: value.0,
+            scale: value.1,
+        }
     }
 }
 

@@ -37,6 +37,9 @@ pub enum VariantPrimitiveType {
     Int16 = 4,
     Int32 = 5,
     Int64 = 6,
+    Decimal4 = 8,
+    Decimal8 = 9,
+    Decimal16 = 10,
     // TODO: Add types for the rest of primitives, once API is agreed upon
     Date = 11,
     TimestampMicros = 12,
@@ -76,6 +79,9 @@ impl TryFrom<u8> for VariantPrimitiveType {
             5 => Ok(VariantPrimitiveType::Int32),
             6 => Ok(VariantPrimitiveType::Int64),
             // TODO: Add types for the rest, once API is agreed upon
+            8 => Ok(VariantPrimitiveType::Decimal4),
+            9 => Ok(VariantPrimitiveType::Decimal8),
+            10 => Ok(VariantPrimitiveType::Decimal16),
             11 => Ok(VariantPrimitiveType::Date),
             12 => Ok(VariantPrimitiveType::TimestampMicros),
             13 => Ok(VariantPrimitiveType::TimestampNTZMicros),
@@ -120,6 +126,27 @@ pub(crate) fn decode_int32(value: &[u8]) -> Result<i32, ArrowError> {
 pub(crate) fn decode_int64(value: &[u8]) -> Result<i64, ArrowError> {
     let value = i64::from_le_bytes(array_from_slice(value, 1)?);
     Ok(value)
+}
+
+/// Decodes a Decimal4 from the value section of a variant.
+pub(crate) fn decode_decimal4(value: &[u8]) -> Result<(i32, u8), ArrowError> {
+    let scale = u8::from_le_bytes(array_from_slice(value, 1)?);
+    let integer = i32::from_le_bytes(array_from_slice(value, 2)?);
+    Ok((integer, scale))
+}
+
+/// Decodes a Decimal8 from the value section of a variant.
+pub(crate) fn decode_decimal8(value: &[u8]) -> Result<(i64, u8), ArrowError> {
+    let scale = u8::from_le_bytes(array_from_slice(value, 1)?);
+    let integer = i64::from_le_bytes(array_from_slice(value, 2)?);
+    Ok((integer, scale))
+}
+
+/// Decodes a Decimal16 from the value section of a variant.
+pub(crate) fn decode_decimal16(value: &[u8]) -> Result<(i128, u8), ArrowError> {
+    let scale = u8::from_le_bytes(array_from_slice(value, 1)?);
+    let integer = i128::from_le_bytes(array_from_slice(value, 2)?);
+    Ok((integer, scale))
 }
 
 /// Decodes a Date from the value section of a variant.
@@ -231,6 +258,67 @@ mod tests {
         ];
         let result = decode_int64(&value)?;
         assert_eq!(result, 1234567890123456789);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal4() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Decimal4 as u8) << 2, // Basic type
+            0x02,                                        // Scale
+            0xd2,
+            0x04,
+            0x00,
+            0x00, // Integer
+        ];
+        let result = decode_decimal4(&value)?;
+        assert_eq!(result, (1234, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal8() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Decimal8 as u8) << 2, // Basic type
+            0x02,                                        // Scale
+            0xd2,
+            0x02,
+            0x96,
+            0x49,
+            0x00,
+            0x00,
+            0x00,
+            0x00, // Integer
+        ];
+        let result = decode_decimal8(&value)?;
+        assert_eq!(result, (1234567890, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal16() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Decimal16 as u8) << 2, // Basic type
+            0x02,                                         // Scale
+            0xd2,
+            0xb6,
+            0x23,
+            0xc0,
+            0xf4,
+            0x10,
+            0x22,
+            0x11,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00, // Integer
+        ];
+        let result = decode_decimal16(&value)?;
+        assert_eq!(result, (1234567891234567890, 2));
         Ok(())
     }
 
