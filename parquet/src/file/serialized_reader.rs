@@ -36,7 +36,9 @@ use crate::format::{PageHeader, PageLocation, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+#[cfg(feature = "encryption")]
+use crate::thrift::TCompactSliceInputProtocol;
+use crate::thrift::TSerializable;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::iter;
@@ -722,7 +724,6 @@ impl<R: ChunkReader> SerializedPageReader<R> {
 
 #[cfg(not(feature = "encryption"))]
 impl SerializedPageReaderContext {
-    #[cfg(not(feature = "encryption"))]
     fn read_page_header<T: Read>(
         &self,
         input: &mut T,
