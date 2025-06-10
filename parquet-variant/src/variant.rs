@@ -413,6 +413,18 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let field_list = self.parse_field_list()?;
         Ok(field_list.into_iter())
     }
+    
+    pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
+        let len = self.len();
+        let mut values = Vec::new();
+        
+        for i in 0..len {
+            let element = self.get(i)?;
+            values.push(element);
+        }
+        
+        Ok(values.into_iter())
+    }
 
     pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
         // Binary search through the field IDs of this object to find the requested field name.
