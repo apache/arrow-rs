@@ -50,8 +50,7 @@ async fn test_non_uniform_encryption_plaintext_footer() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -91,9 +90,7 @@ async fn test_misspecified_encryption_keys() {
 
         let decryption_properties = decryption_properties.build().unwrap();
 
-        let options =
-            ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-        match verify_encryption_test_file_read_async(&mut file, options).await {
+        match verify_encryption_test_file_read_async(&mut file, decryption_properties).await {
             Ok(_) => {
                 panic!("did not get expected error")
             }
@@ -187,8 +184,7 @@ async fn test_non_uniform_encryption() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -204,8 +200,7 @@ async fn test_uniform_encryption() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -344,8 +339,7 @@ async fn test_non_uniform_encryption_plaintext_footer_with_key_retriever() {
             .build()
             .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -366,8 +360,7 @@ async fn test_non_uniform_encryption_with_key_retriever() {
             .build()
             .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -386,8 +379,7 @@ async fn test_uniform_encryption_with_key_retriever() {
             .build()
             .unwrap();
 
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options)
+    verify_encryption_test_file_read_async(&mut file, decryption_properties)
         .await
         .unwrap();
 }
@@ -446,8 +438,10 @@ async fn test_decrypt_page_index(
 
 async fn verify_encryption_test_file_read_async(
     file: &mut tokio::fs::File,
-    options: ArrowReaderOptions,
+    decryption_properties: FileDecryptionProperties,
 ) -> Result<(), ParquetError> {
+    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
+
     let arrow_metadata = ArrowReaderMetadata::load_async(file, options).await?;
     let metadata = arrow_metadata.metadata();
 
@@ -495,6 +489,5 @@ async fn read_and_roundtrip_to_encrypted_file_async(
     writer.close().await.unwrap();
 
     let mut file = tokio::fs::File::from_std(temp_file.try_clone().unwrap());
-    let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
-    verify_encryption_test_file_read_async(&mut file, options).await
+    verify_encryption_test_file_read_async(&mut file, decryption_properties).await
 }
