@@ -961,16 +961,15 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(bytes, *page_index, is_dictionary_page)?;
 
-                    let page = decode_page(
+                    if !is_dictionary_page {
+                        *page_index += 1;
+                    }
+                    decode_page(
                         header,
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
-                    )?;
-                    if !is_dictionary_page {
-                        *page_index += 1;
-                    }
-                    page
+                    )?
                 }
             };
 
@@ -1103,8 +1102,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     dictionary_page.take();
                 } else {
                     // If no dictionary page exists, simply pop the data page from page_locations
-                    let popped = page_locations.pop_front();
-                    if popped.is_some() {
+                    if page_locations.pop_front().is_some() {
                         *page_index += 1;
                     }
                 }

@@ -450,7 +450,7 @@ fn uniform_encryption_roundtrip(
         .with_file_encryption_properties(file_encryption_properties)
         .build();
 
-    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props))?;
+    let mut writer = ArrowWriter::try_new(file.try_clone()?, schema.clone(), Some(props))?;
 
     for (x0, x1) in x0_arrays.into_iter().zip(x1_arrays.into_iter()) {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(x0), Arc::new(x1)])?;
@@ -554,7 +554,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
         .with_file_encryption_properties(file_encryption_properties)
         .build();
 
-    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props))?;
+    let mut writer = ArrowWriter::try_new(file.try_clone()?, schema.clone(), Some(props))?;
 
     for (x0, x1) in x0_arrays.into_iter().zip(x1_arrays.into_iter()) {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(x0), Arc::new(x1)])?;
