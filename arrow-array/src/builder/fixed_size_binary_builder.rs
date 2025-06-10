@@ -177,7 +177,7 @@ mod tests {
     fn test_fixed_size_binary_builder() {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 
-        //  [b"hello", null, "arrow", null, null]
+        //  [b"hello", null, "arrow", null, null, "world"]
         builder.append_value(b"hello").unwrap();
         builder.append_null();
         builder.append_value(b"arrow").unwrap();
