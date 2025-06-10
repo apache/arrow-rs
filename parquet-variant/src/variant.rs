@@ -403,6 +403,9 @@ pub enum Variant<'m, 'v> {
     // TODO: Add types for the rest of the primitive types, once API is agreed upon
     Null,
     Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
     Date(NaiveDate),
     TimestampMicros(DateTime<Utc>),
     TimestampNTZMicros(NaiveDateTime),
@@ -428,6 +431,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             VariantBasicType::Primitive => match get_primitive_type(header)? {
                 VariantPrimitiveType::Null => Variant::Null,
                 VariantPrimitiveType::Int8 => Variant::Int8(decoder::decode_int8(value)?),
+                VariantPrimitiveType::Int16 => Variant::Int16(decoder::decode_int16(value)?),
+                VariantPrimitiveType::Int32 => Variant::Int32(decoder::decode_int32(value)?),
+                VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value)?),
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
@@ -505,9 +511,37 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_int8(&self) -> Option<i8> {
         match *self {
             Variant::Int8(i) => Some(i),
-            // TODO: Add branches for type-widening/shortening when implemting rest of primitives for int
-            // Variant::Int16(i) => i.try_into().ok(),
-            // ...
+            Variant::Int16(i) => i.try_into().ok(),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn as_int16(&self) -> Option<i16> {
+        match *self {
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            _ => None,
+        }
+    }
+    pub fn as_int32(&self) -> Option<i32> {
+        match *self {
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) => Some(i),
+            Variant::Int64(i) => i.try_into().ok(),
+            _ => None,
+        }
+    }
+    pub fn as_int64(&self) -> Option<i64> {
+        match *self {
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) => Some(i.into()),
+            Variant::Int64(i) => Some(i),
             _ => None,
         }
     }
@@ -524,6 +558,24 @@ impl<'m, 'v> Variant<'m, 'v> {
 impl<'m, 'v> From<i8> for Variant<'m, 'v> {
     fn from(value: i8) -> Self {
         Variant::Int8(value)
+    }
+}
+
+impl<'m, 'v> From<i16> for Variant<'m, 'v> {
+    fn from(value: i16) -> Self {
+        Variant::Int16(value)
+    }
+}
+
+impl<'m, 'v> From<i32> for Variant<'m, 'v> {
+    fn from(value: i32) -> Self {
+        Variant::Int32(value)
+    }
+}
+
+impl<'m, 'v> From<i64> for Variant<'m, 'v> {
+    fn from(value: i64) -> Self {
+        Variant::Int64(value)
     }
 }
 

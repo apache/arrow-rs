@@ -34,6 +34,9 @@ pub enum VariantPrimitiveType {
     BooleanTrue = 1,
     BooleanFalse = 2,
     Int8 = 3,
+    Int16 = 4,
+    Int32 = 5,
+    Int64 = 6,
     // TODO: Add types for the rest of primitives, once API is agreed upon
     Date = 11,
     TimestampMicros = 12,
@@ -69,6 +72,9 @@ impl TryFrom<u8> for VariantPrimitiveType {
             1 => Ok(VariantPrimitiveType::BooleanTrue),
             2 => Ok(VariantPrimitiveType::BooleanFalse),
             3 => Ok(VariantPrimitiveType::Int8),
+            4 => Ok(VariantPrimitiveType::Int16),
+            5 => Ok(VariantPrimitiveType::Int32),
+            6 => Ok(VariantPrimitiveType::Int64),
             // TODO: Add types for the rest, once API is agreed upon
             11 => Ok(VariantPrimitiveType::Date),
             12 => Ok(VariantPrimitiveType::TimestampMicros),
@@ -96,6 +102,23 @@ fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
     let value = i8::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
+}
+/// Decodes an Int16 from the value section of a variant.
+pub(crate) fn decode_int16(value: &[u8]) -> Result<i16, ArrowError> {
+    let value = i16::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
+}
+
+/// Decodes an Int32 from the value section of a variant.
+pub(crate) fn decode_int32(value: &[u8]) -> Result<i32, ArrowError> {
+    let value = i32::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
+}
+
+/// Decodes an Int64 from the value section of a variant.
+pub(crate) fn decode_int64(value: &[u8]) -> Result<i64, ArrowError> {
+    let value = i64::from_le_bytes(array_from_slice(value, 1)?);
     Ok(value)
 }
 
@@ -159,11 +182,55 @@ mod tests {
     #[test]
     fn test_i8() -> Result<(), ArrowError> {
         let value = [
-            3 << 2, // Primitive type for i8
-            42,
+            (VariantPrimitiveType::Int8 as u8) << 2, // Basic type
+            0x2a,                                    // Data
         ];
         let result = decode_int8(&value)?;
         assert_eq!(result, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_i16() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Int16 as u8) << 2, // Basic type
+            0xd2,
+            0x04, // Data
+        ];
+        let result = decode_int16(&value)?;
+        assert_eq!(result, 1234);
+        Ok(())
+    }
+
+    #[test]
+    fn test_i32() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Int32 as u8) << 2, // Basic type
+            0x40,
+            0xe2,
+            0x01,
+            0x00, // Data
+        ];
+        let result = decode_int32(&value)?;
+        assert_eq!(result, 123456);
+        Ok(())
+    }
+
+    #[test]
+    fn test_i64() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Int64 as u8) << 2, // Basic type
+            0x15,
+            0x81,
+            0xe9,
+            0x7d,
+            0xf4,
+            0x10,
+            0x22,
+            0x11, // Data
+        ];
+        let result = decode_int64(&value)?;
+        assert_eq!(result, 1234567890123456789);
         Ok(())
     }
 
