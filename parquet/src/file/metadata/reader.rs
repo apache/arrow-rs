@@ -849,7 +849,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
-    #[deprecated(note = "use decode_footer_tail instead")]
+    #[deprecated(since = "54.3.0", note = "Use decode_footer_tail instead")]
     pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
