@@ -993,6 +993,8 @@ mod tests {
 
     #[cfg(feature = "arrow")]
     use arrow_array::RecordBatchReader;
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::{Field, Schema};
     use bytes::Bytes;
     use std::fs::File;
 
@@ -2401,30 +2403,21 @@ mod tests {
 
     #[test]
     fn test_page_encoding_statistics_roundtrip() {
-        let message_type = "
-            message test_schema {
-                REQUIRED BYTE_ARRAY a (UTF8);
-            }
-        ";
-        let schema = Arc::new(parse_message_type(message_type).unwrap());
-        let data = ByteArrayType::gen_vec(32, 7);
-        let file: File = tempfile::tempfile().unwrap();
-        let props = Arc::new(
-            WriterProperties::builder()
-                .set_statistics_enabled(EnabledStatistics::Page)
-                .build(),
-        );
+        let batch_schema = Schema::new(vec![Field::new(
+            "int32",
+            arrow_schema::DataType::Int32,
+            false,
+        )]);
 
-        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
 
-        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
-        col_writer
-            .typed::<ByteArrayType>()
-            .write_batch(&data, None, None)
-            .unwrap();
-        col_writer.close().unwrap();
-        row_group_writer.close().unwrap();
+        let mut file: File = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&mut file, Arc::new(batch_schema), None).unwrap();
+        writer.write(&batch).unwrap();
         let file_metadata = writer.close().unwrap();
 
         assert_eq!(file_metadata.row_groups.len(), 1);
