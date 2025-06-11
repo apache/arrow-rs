@@ -42,9 +42,6 @@ pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
-/// Default value for [`WriterProperties::max_statistics_size`]
-#[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 /// Default value for [`WriterProperties::max_row_group_size`]
 pub const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// Default value for [`WriterProperties::bloom_filter_position`]
@@ -384,19 +381,6 @@ impl WriterProperties {
             .and_then(|c| c.statistics_enabled())
             .or_else(|| self.default_column_properties.statistics_enabled())
             .unwrap_or(DEFAULT_STATISTICS_ENABLED)
-    }
-
-    /// Returns max size for statistics.
-    ///
-    /// UNUSED
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
-        #[allow(deprecated)]
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.max_statistics_size())
-            .or_else(|| self.default_column_properties.max_statistics_size())
-            .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
     }
 
     /// Returns the [`BloomFilterProperties`] for the given column
@@ -754,18 +738,6 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default max statistics size for all columns (defaults to `4096` via
-    /// [`DEFAULT_MAX_STATISTICS_SIZE`]).
-    ///
-    /// Applicable only if statistics are enabled.
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    pub fn set_max_statistics_size(mut self, value: usize) -> Self {
-        #[allow(deprecated)]
-        self.default_column_properties
-            .set_max_statistics_size(value);
-        self
-    }
-
     /// Sets if bloom filter should be written for all columns (defaults to `false`).
     ///
     /// # Notes
@@ -859,16 +831,6 @@ impl WriterPropertiesBuilder {
         value: EnabledStatistics,
     ) -> Self {
         self.get_mut_props(col).set_statistics_enabled(value);
-        self
-    }
-
-    /// Sets max size for statistics for a specific column.
-    ///
-    /// Takes precedence over [`Self::set_max_statistics_size`].
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    pub fn set_column_max_statistics_size(mut self, col: ColumnPath, value: usize) -> Self {
-        #[allow(deprecated)]
-        self.get_mut_props(col).set_max_statistics_size(value);
         self
     }
 
@@ -990,8 +952,6 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    max_statistics_size: Option<usize>,
     /// bloom filter related properties
     bloom_filter_properties: Option<BloomFilterProperties>,
 }
@@ -1026,13 +986,6 @@ impl ColumnProperties {
     /// Sets the statistics level for this column.
     fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
-    }
-
-    /// Sets max size for statistics for this column.
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    #[allow(deprecated)]
-    fn set_max_statistics_size(&mut self, value: usize) {
-        self.max_statistics_size = Some(value);
     }
 
     /// If `value` is `true`, sets bloom filter properties to default values if not previously set,
@@ -1092,13 +1045,6 @@ impl ColumnProperties {
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
-    }
-
-    /// Returns optional max size in bytes for statistics.
-    #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
-    fn max_statistics_size(&self) -> Option<usize> {
-        #[allow(deprecated)]
-        self.max_statistics_size
     }
 
     /// Returns the bloom filter properties, or `None` if not enabled

@@ -202,9 +202,6 @@ pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
-// continue to export deprecated methods until they are removed
-#[allow(deprecated)]
-pub use self::schema::arrow_to_parquet_schema;
 
 pub use self::schema::{
     add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,

@@ -421,32 +421,8 @@ impl Statistics {
 
     /// Returns optional value of number of distinct values occurring.
     /// When it is `None`, the value should be ignored.
-    #[deprecated(since = "53.0.0", note = "Use `distinct_count_opt` method instead")]
-    pub fn distinct_count(&self) -> Option<u64> {
-        self.distinct_count_opt()
-    }
-
-    /// Returns optional value of number of distinct values occurring.
-    /// When it is `None`, the value should be ignored.
     pub fn distinct_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, distinct_count]
-    }
-
-    /// Returns number of null values for the column.
-    /// Note that this includes all nulls when column is part of the complex type.
-    ///
-    /// Note this API returns 0 if the null count is not available.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    pub fn null_count(&self) -> u64 {
-        // 0 to remain consistent behavior prior to `null_count_opt`
-        self.null_count_opt().unwrap_or(0)
-    }
-
-    /// Returns `true` if statistics collected any null values, `false` otherwise.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    #[allow(deprecated)]
-    pub fn has_nulls(&self) -> bool {
-        self.null_count() > 0
     }
 
     /// Returns number of null values for the column, if known.
@@ -457,16 +433,6 @@ impl Statistics {
     /// See <https://github.com/apache/arrow-rs/pull/6216/files>
     pub fn null_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, null_count_opt]
-    }
-
-    /// Whether or not min and max values are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    #[deprecated(
-        since = "53.0.0",
-        note = "Use `min_bytes_opt` and `max_bytes_opt` methods instead"
-    )]
-    pub fn has_min_max_set(&self) -> bool {
-        statistics_enum_func![self, _internal_has_min_max_set]
     }
 
     /// Returns `true` if the min value is set, and is an exact min value.
@@ -484,23 +450,9 @@ impl Statistics {
         statistics_enum_func![self, min_bytes_opt]
     }
 
-    /// Returns slice of bytes that represent min value.
-    /// Panics if min value is not set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn min_bytes(&self) -> &[u8] {
-        self.min_bytes_opt().unwrap()
-    }
-
     /// Returns slice of bytes that represent max value, if max value is known.
     pub fn max_bytes_opt(&self) -> Option<&[u8]> {
         statistics_enum_func![self, max_bytes_opt]
-    }
-
-    /// Returns slice of bytes that represent max value.
-    /// Panics if max value is not set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn max_bytes(&self) -> &[u8] {
-        self.max_bytes_opt().unwrap()
     }
 
     /// Returns physical type associated with statistics.
@@ -615,27 +567,9 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         }
     }
 
-    /// Returns min value of the statistics.
-    ///
-    /// Panics if min value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    #[deprecated(since = "53.0.0", note = "Use `min_opt` instead")]
-    pub fn min(&self) -> &T {
-        self.min.as_ref().unwrap()
-    }
-
     /// Returns min value of the statistics, if known.
     pub fn min_opt(&self) -> Option<&T> {
         self.min.as_ref()
-    }
-
-    /// Returns max value of the statistics.
-    ///
-    /// Panics if max value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    #[deprecated(since = "53.0.0", note = "Use `max_opt` instead")]
-    pub fn max(&self) -> &T {
-        self.max.as_ref().unwrap()
     }
 
     /// Returns max value of the statistics, if known.
@@ -648,34 +582,9 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.min_opt().map(AsBytes::as_bytes)
     }
 
-    /// Returns min value as bytes of the statistics.
-    ///
-    /// Panics if min value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    #[deprecated(since = "53.0.0", note = "Use `min_bytes_opt` instead")]
-    pub fn min_bytes(&self) -> &[u8] {
-        self.min_bytes_opt().unwrap()
-    }
-
     /// Returns max value as bytes of the statistics, if max value is known.
     pub fn max_bytes_opt(&self) -> Option<&[u8]> {
         self.max_opt().map(AsBytes::as_bytes)
-    }
-
-    /// Returns max value as bytes of the statistics.
-    ///
-    /// Panics if max value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    #[deprecated(since = "53.0.0", note = "Use `max_bytes_opt` instead")]
-    pub fn max_bytes(&self) -> &[u8] {
-        self.max_bytes_opt().unwrap()
-    }
-
-    /// Whether or not min and max values are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    #[deprecated(since = "53.0.0", note = "Use `min_opt` and `max_opt` methods instead")]
-    pub fn has_min_max_set(&self) -> bool {
-        self._internal_has_min_max_set()
     }
 
     /// Whether or not min and max values are set.
@@ -697,14 +606,6 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// Returns optional value of number of distinct values occurring.
     pub fn distinct_count(&self) -> Option<u64> {
         self.distinct_count
-    }
-
-    /// Returns number of null values for the column.
-    /// Note that this includes all nulls when column is part of the complex type.
-    #[deprecated(since = "53.0.0", note = "Use `null_count_opt` method instead")]
-    pub fn null_count(&self) -> u64 {
-        // 0 to remain consistent behavior prior to `null_count_opt`
-        self.null_count_opt().unwrap_or(0)
     }
 
     /// Returns null count.

@@ -243,12 +243,6 @@ struct Args {
     #[clap(long)]
     data_page_size_limit: Option<usize>,
 
-    /// Sets max statistics size for all columns.
-    ///
-    /// Applicable only if statistics are enabled.
-    #[clap(long)]
-    max_statistics_size: Option<usize>,
-
     /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
     bloom_filter_enabled: Option<bool>,
@@ -323,10 +317,6 @@ fn main() {
     }
     if let Some(value) = args.data_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_data_page_size_limit(value);
-    }
-    #[allow(deprecated)]
-    if let Some(value) = args.max_statistics_size {
-        writer_properties_builder = writer_properties_builder.set_max_statistics_size(value);
     }
     if let Some(value) = args.bloom_filter_enabled {
         writer_properties_builder = writer_properties_builder.set_bloom_filter_enabled(value);
