@@ -1345,7 +1345,6 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::page_index::index::Index;
-    use crate::file::page_index::index_reader::read_offset_indexes;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
     };
@@ -2026,7 +2025,9 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader =
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
 
         let column = reader.metadata().row_group(0).columns();
 
@@ -2039,7 +2040,8 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
 
         let page_locations = offset_indexes[0].page_locations.clone();
 
@@ -2048,7 +2050,7 @@ mod tests {
         assert_eq!(
             page_locations.len(),
             10,
-            "Expected 9 pages but got {page_locations:#?}"
+            "Expected 10 pages but got {page_locations:#?}"
         );
     }
 

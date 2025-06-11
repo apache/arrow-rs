@@ -48,6 +48,10 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+#[deprecated(
+    since = "55.2.0",
+    note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
+)]
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
@@ -128,6 +132,10 @@ pub fn read_pages_locations<R: ChunkReader>(
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+#[deprecated(
+    since = "55.2.0",
+    note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
+)]
 pub fn read_offset_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
