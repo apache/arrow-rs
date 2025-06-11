@@ -1108,6 +1108,7 @@ mod tests {
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
     use crate::file::page_index::index::{Index, NativeIndex};
+    #[allow(deprecated)]
     use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
     use crate::record::RowAccessor;
@@ -1940,6 +1941,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_page_index_reader_out_of_order() {
         let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
         let options = ReadOptionsBuilder::new().with_page_index().build();
