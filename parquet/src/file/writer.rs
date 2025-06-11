@@ -1007,6 +1007,7 @@ mod tests {
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
+    use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -2396,5 +2397,58 @@ mod tests {
             };
             start += 1;
         }
+    }
+
+    #[test]
+    fn test_page_encoding_statistics_roundtrip() {
+        let message_type = "
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let data = ByteArrayType::gen_vec(32, 7);
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&data, None, None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        let chunk_meta = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .expect("column metadata missing");
+        assert!(chunk_meta.encoding_stats.is_some());
+        let chunk_page_stats = chunk_meta.encoding_stats.as_ref().unwrap();
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rowgroup = reader.get_row_group(0).expect("row group missing");
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.page_encoding_stats().is_some());
+        let file_page_stats = column.page_encoding_stats().unwrap();
+        let chunk_stats: Vec<PageEncodingStats> = chunk_page_stats
+            .iter()
+            .map(|x| crate::file::page_encoding_stats::try_from_thrift(x).unwrap())
+            .collect();
+        assert_eq!(&chunk_stats, file_page_stats);
     }
 }
