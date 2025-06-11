@@ -44,6 +44,7 @@ pub enum VariantPrimitiveType {
     Date = 11,
     TimestampMicros = 12,
     TimestampNTZMicros = 13,
+    Float = 14,
     Binary = 15,
     String = 16,
 }
@@ -85,6 +86,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             11 => Ok(VariantPrimitiveType::Date),
             12 => Ok(VariantPrimitiveType::TimestampMicros),
             13 => Ok(VariantPrimitiveType::TimestampNTZMicros),
+            14 => Ok(VariantPrimitiveType::Float),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
             _ => Err(ArrowError::InvalidArgumentError(format!(
@@ -110,6 +112,7 @@ pub(crate) fn decode_int8(value: &[u8]) -> Result<i8, ArrowError> {
     let value = i8::from_le_bytes(array_from_slice(value, 1)?);
     Ok(value)
 }
+
 /// Decodes an Int16 from the value section of a variant.
 pub(crate) fn decode_int16(value: &[u8]) -> Result<i16, ArrowError> {
     let value = i16::from_le_bytes(array_from_slice(value, 1)?);
@@ -147,6 +150,12 @@ pub(crate) fn decode_decimal16(value: &[u8]) -> Result<(i128, u8), ArrowError> {
     let scale = u8::from_le_bytes(array_from_slice(value, 1)?);
     let integer = i128::from_le_bytes(array_from_slice(value, 2)?);
     Ok((integer, scale))
+}
+
+/// Decodes a Float from the value section of a variant.
+pub(crate) fn decode_float(value: &[u8]) -> Result<f32, ArrowError> {
+    let value = f32::from_le_bytes(array_from_slice(value, 1)?);
+    Ok(value)
 }
 
 /// Decodes a Date from the value section of a variant.
@@ -319,6 +328,20 @@ mod tests {
         ];
         let result = decode_decimal16(&value)?;
         assert_eq!(result, (1234567891234567890, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn test_float() -> Result<(), ArrowError> {
+        let value = [
+            (VariantPrimitiveType::Float as u8) << 2, // Basic type
+            0x06,
+            0x2c,
+            0x93,
+            0x4e, // Data
+        ];
+        let result = decode_float(&value)?;
+        assert_eq!(result, 1234567890.1234);
         Ok(())
     }
 
