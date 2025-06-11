@@ -171,7 +171,11 @@ pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<(), ArrowEr
 }
 
 /// Convert a series of record batches into a table
-fn create_table(schema_opt: Option<SchemaRef>, results: &[RecordBatch], options: &FormatOptions) -> Result<Table, ArrowError> {
+fn create_table(
+    schema_opt: Option<SchemaRef>,
+    results: &[RecordBatch],
+    options: &FormatOptions,
+) -> Result<Table, ArrowError> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
 
