@@ -499,9 +499,29 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    pub fn as_naive_date(self) -> Option<NaiveDate> {
+    /// Converts this variant to a `NaiveDate` if possible.
+    ///
+    /// Returns `Some(NaiveDate)` for date variants,
+    /// `None` for non-date variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract a NaiveDate from a date variant
+    /// let date = NaiveDate::from_ymd_opt(2025, 4, 12).unwrap();
+    /// let v1 = Variant::from(date);
+    /// assert_eq!(v1.as_naive_date(), Some(date));
+    ///
+    /// // but not from other variants
+    /// let v2 = Variant::from("hello!");
+    /// assert_eq!(v2.as_naive_date(), None);
+    /// ```
+    pub fn as_naive_date(&self) -> Option<NaiveDate> {
         if let Variant::Date(d) = self {
-            Some(d)
+            Some(*d)
         } else {
             None
         }
@@ -514,6 +534,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             None
         }
     }
+
     pub fn as_naive_datetime(self) -> Option<NaiveDateTime> {
         if let Variant::TimestampNTZMicros(d) = self {
             Some(d)
