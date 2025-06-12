@@ -23,11 +23,11 @@
 use crate::concat::concat;
 use arrow_array::StringViewArray;
 use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
+use arrow_buffer::{Buffer, NullBufferBuilder};
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
-
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
@@ -363,10 +363,8 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
     match data_type {
-        DataType::Utf8View => {
-            Box::new(InProgressStringViewArray::new(batch_size))
-        }
-        _ => Box::new(GenericInProgressArray::new())
+        DataType::Utf8View => Box::new(InProgressStringViewArray::new(batch_size)),
+        _ => Box::new(GenericInProgressArray::new()),
     }
 }
 
@@ -429,65 +427,167 @@ impl InProgressArray for GenericInProgressArray {
 struct InProgressStringViewArray {
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
-    buffered_arrays: Vec<StringViewArray>,
-    block_size: BlockSize,
+    /// The in progress vies
+    views: Vec<u128>,
+    /// In progress nulls
+    nulls: NullBufferBuilder,
+    /// current buffer
+    current: Option<Vec<u8>>,
+    /// completed buffers
+    completed: Vec<Buffer>,
+    /// Where to get the next buffer
+    buffer_source: BufferSource,
 }
 
 impl InProgressStringViewArray {
     fn new(batch_size: usize) -> Self {
+        let buffer_source = BufferSource::new();
+
         Self {
             batch_size,
-            buffered_arrays: vec![],
-            block_size: BlockSize::new()
+            views: Vec::with_capacity(batch_size),
+            nulls: NullBufferBuilder::new(batch_size),
+            current: None,
+            completed: vec![],
+            buffer_source,
         }
+    }
+
+    /// Update self.nulls with the nulls from the StringViewArray
+    fn push_nulls(&mut self, s: &StringViewArray) {
+        if let Some(nulls) = s.nulls().as_ref() {
+            self.nulls.append_buffer(nulls);
+        } else {
+            self.nulls.append_n_nulls(s.len());
+        }
+    }
+
+    /// Finishes the currently inprogress block, if any
+    fn finish_current(&mut self) {
+        let Some(next_buffer) = self.current.take() else {
+            return;
+        };
+        self.completed.push(next_buffer.into());
+    }
+
+    /// return true if there are any in-progress views
+    fn current_is_empty(&self) -> bool {
+        let Some(b) = self.current.as_ref() else {
+            return true;
+        };
+        b.is_empty()
+    }
+
+    /// Append views to self.views, updating the buffer index if necessary
+    fn append_views_and_update_buffer_index(&mut self, views: &[u128]) {
+        self.finish_current();
+        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
+
+        if starting_buffer == 0 {
+            // If there are no buffers, we can just use the views as is
+            self.views.extend_from_slice(views);
+        } else {
+            // If there are buffers, we need to update the buffer index
+            let updated_views = views.iter().map(|v| {
+                let mut byte_view = ByteView::from(*v);
+                if byte_view.length > 12 {
+                    // Small views (<=12 bytes) are inlined, so only need to update large views
+                    byte_view.buffer_index += starting_buffer;
+                };
+                byte_view.as_u128()
+            });
+
+            self.views.extend(updated_views);
+        }
+    }
+
+    /// Append views to self.views, copying data from the buffers into
+    /// self.buffers
+    fn append_views_and_copy_strings(&mut self, views: &[u128], buffers: &[Buffer]) {
+        todo!()
     }
 }
 
 impl InProgressArray for InProgressStringViewArray {
     fn push_array(&mut self, array: ArrayRef) {
-        let string_view_array = array
-            .as_string_view();
+        let s = array.as_string_view();
 
-        todo!()
+        // add any nulls, as necessary
+        self.push_nulls(s);
+
+        // If there are no data buffers (all inlined views), append the
+        // views/nulls and done
+        if s.data_buffers().is_empty() {
+            self.views.extend_from_slice(s.views().as_ref());
+            return;
+        }
+
+        // TODO make this a method on StringViewArray
+        let ideal_buffer_size: usize = s
+            .views()
+            .iter()
+            .map(|v| {
+                let len = (*v as u32) as usize;
+                if len > 12 {
+                    len
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        let actual_buffer_size = s.get_buffer_memory_size();
+        let buffers = s.data_buffers();
+
+        // Copying the strings into a buffer can be time-consuming so
+        // only do it if the array is sparse
+        if actual_buffer_size > (ideal_buffer_size * 2) {
+            self.append_views_and_copy_strings(s.views(), buffers);
+        } else {
+            // buffers are not sparse, so use them as is
+            self.append_views_and_update_buffer_index(s.views());
+            self.completed.extend_from_slice(buffers);
+        }
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-       todo!()
+        todo!()
     }
 }
 
-
-
-
-
 // Copied/pasted from StringViewBuilder -- todo maybe customize this
-const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
-const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
+const STARTING_BLOCK_SIZE: usize = 8 * 1024; // 8KiB
+const MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024; // 2MiB
 
+/// Manages allocating new buffers for `StringViewArray`
+///
+/// TODO: explore reusing buffers
 #[derive(Debug)]
-struct BlockSize {
-    current_size: u32 ,
+struct BufferSource {
+    current_size: usize,
 }
 
-impl BlockSize {
+impl BufferSource {
     fn new() -> Self {
         Self {
             current_size: STARTING_BLOCK_SIZE,
         }
     }
 
-    fn next_size(&mut self) -> u32 {
+    fn next_buffer(&mut self) -> Vec<u8> {
+        Vec::with_capacity(self.next_size())
+    }
+
+    fn next_size(&mut self) -> usize {
         if self.current_size < MAX_BLOCK_SIZE {
             // we have fixed start/end block sizes, so we can't overflow
             self.current_size = self.current_size.saturating_mul(2);
             self.current_size
         } else {
-            MAX_BLOCK_SIZE
+            MAX_BLOCK_SIZE as usize
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
