@@ -503,10 +503,59 @@ impl InProgressStringViewArray {
 
     /// Append views to self.views, copying data from the buffers into
     /// self.buffers
-    fn append_views_and_copy_strings(&mut self, views: &[u128], buffers: &[Buffer]) {
-        todo!()
+    /// 
+    /// # Arguments
+    /// - `views` - the views to append
+    /// - `actual_buffer_size` - the size of the bytes pointed to by the views
+    /// - `buffers` - the buffers the reviews point to
+    fn append_views_and_copy_strings(&mut self, 
+                                     views: &[u128],
+                                     actual_buffer_size: usize,
+                                     buffers: &[Buffer]) {
+        let mut current = match self.current.take() {
+            Some(current) => {
+                // If the current buffer is not large enough, allocate a new one
+                // TODO maybe copy as many views that will fit?
+                if current.len() + actual_buffer_size > current.capacity() {
+                    self.finish_current();
+                    self.buffer_source.next_buffer(actual_buffer_size)
+                } else {
+                    current
+                }
+            },
+            None => {
+                // If there is no current buffer, allocate a new one
+                self.buffer_source.next_buffer(actual_buffer_size)
+            }
+        };
+        
+        let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
+
+        // Copy the views, updating the buffer index and copying the data as needed
+        let new_views = views.iter()
+            .map(|v| {
+                let mut b: ByteView = ByteView::from(*v);
+                if b.length > 12 {
+                    // TODO optimize (we know there is enough space, in bounds, etc...)
+                    let buffer_index = b.buffer_index as usize;
+                    let buffer_offset = b.offset as usize;
+                    let str_len = b.length as usize;
+                    current.extend_from_slice(
+                        buffers[buffer_index]
+                            .get(buffer_offset..buffer_offset + str_len)
+                            .expect("Invalid buffer slice"),
+                    );
+                    b.buffer_index = new_buffer_index;
+                }
+                b.as_u128()
+            });
+        self.views.extend(new_views);
+        self.current = Some(current);
+        return;
     }
 }
+
+
 
 impl InProgressArray for InProgressStringViewArray {
     fn push_array(&mut self, array: ArrayRef) {
@@ -522,27 +571,14 @@ impl InProgressArray for InProgressStringViewArray {
             return;
         }
 
-        // TODO make this a method on StringViewArray
-        let ideal_buffer_size: usize = s
-            .views()
-            .iter()
-            .map(|v| {
-                let len = (*v as u32) as usize;
-                if len > 12 {
-                    len
-                } else {
-                    0
-                }
-            })
-            .sum();
-
+        let ideal_buffer_size = s.total_buffer_bytes_used();
         let actual_buffer_size = s.get_buffer_memory_size();
         let buffers = s.data_buffers();
 
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
         if actual_buffer_size > (ideal_buffer_size * 2) {
-            self.append_views_and_copy_strings(s.views(), buffers);
+            self.append_views_and_copy_strings(s.views(), actual_buffer_size, buffers);
         } else {
             // buffers are not sparse, so use them as is
             self.append_views_and_update_buffer_index(s.views());
@@ -574,11 +610,14 @@ impl BufferSource {
         }
     }
 
-    fn next_buffer(&mut self) -> Vec<u8> {
-        Vec::with_capacity(self.next_size())
+    /// Return a new buffer, with a capacity of at least `min_size`
+    fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
+        Vec::with_capacity(self.next_size(min_size))
     }
 
-    fn next_size(&mut self) -> usize {
+    
+    fn next_size(&mut self, min_size: usize) -> usize {
+        todo!("Implement next_size for BufferSource");
         if self.current_size < MAX_BLOCK_SIZE {
             // we have fixed start/end block sizes, so we can't overflow
             self.current_size = self.current_size.saturating_mul(2);
