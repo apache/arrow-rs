@@ -512,7 +512,7 @@ impl InProgressStringViewArray {
         let mut current = match self.current.take() {
             Some(current) => {
                 // If the current buffer is not large enough, allocate a new one
-                // TODO maybe copy as many views that will fit?
+                // TODO copy as many views that will fit into the current buffer?
                 if current.len() + actual_buffer_size > current.capacity() {
                     self.completed.push(current.into());
                     self.buffer_source.next_buffer(actual_buffer_size)
@@ -540,11 +540,13 @@ impl InProgressStringViewArray {
                 b.offset = current.len() as u32;
                 b.buffer_index = new_buffer_index;
 
-                current.extend_from_slice(
-                    buffers[buffer_index]
-                        .get(buffer_offset..buffer_offset + str_len)
-                        .expect("Invalid buffer slice"),
-                );
+                // safety: input views are validly constructed
+                let src = unsafe {
+                    buffers
+                        .get_unchecked(buffer_index)
+                        .get_unchecked(buffer_offset..buffer_offset + str_len)
+                };
+                current.extend_from_slice(src);
             }
             b.as_u128()
         });
