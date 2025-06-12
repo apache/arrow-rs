@@ -410,7 +410,7 @@ pub enum Variant<'m, 'v> {
     Int64(i64),
     Date(NaiveDate),
     TimestampMicros(DateTime<Utc>),
-    TimestampNTZMicros(NaiveDateTime),
+    TimestampNtzMicros(NaiveDateTime),
     Decimal4 { integer: i32, scale: u8 },
     Decimal8 { integer: i64, scale: u8 },
     Decimal16 { integer: i128, scale: u8 },
@@ -464,8 +464,8 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::TimestampMicros => {
                     Variant::TimestampMicros(decoder::decode_timestamp_micros(value_data)?)
                 }
-                VariantPrimitiveType::TimestampNTZMicros => {
-                    Variant::TimestampNTZMicros(decoder::decode_timestampntz_micros(value_data)?)
+                VariantPrimitiveType::TimestampNtzMicros => {
+                    Variant::TimestampNtzMicros(decoder::decode_timestampntz_micros(value_data)?)
                 }
                 VariantPrimitiveType::Binary => {
                     Variant::Binary(decoder::decode_binary(value_data)?)
@@ -599,7 +599,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_datetime_utc(&self) -> Option<DateTime<Utc>> {
         match *self {
             Variant::TimestampMicros(d) => Some(d),
-            Variant::TimestampNTZMicros(d) => Some(d.and_utc()),
+            Variant::TimestampNtzMicros(d) => Some(d.and_utc()),
             _ => None,
         }
     }
@@ -631,7 +631,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_naive_datetime(&self) -> Option<NaiveDateTime> {
         match *self {
-            Variant::TimestampNTZMicros(d) => Some(d),
+            Variant::TimestampNtzMicros(d) => Some(d),
             Variant::TimestampMicros(d) => Some(d.naive_utc()),
             _ => None,
         }
@@ -953,6 +953,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v3 = Variant::from("hello!");
     /// assert_eq!(v3.as_f32(), None);
     /// ```
+    #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
@@ -1000,37 +1001,37 @@ impl<'m, 'v> Variant<'m, 'v> {
     }
 }
 
-impl<'m, 'v> From<()> for Variant<'m, 'v> {
-    fn from(_: ()) -> Self {
+impl From<()> for Variant<'_, '_> {
+    fn from((): ()) -> Self {
         Variant::Null
     }
 }
 
-impl<'m, 'v> From<i8> for Variant<'m, 'v> {
+impl From<i8> for Variant<'_, '_> {
     fn from(value: i8) -> Self {
         Variant::Int8(value)
     }
 }
 
-impl<'m, 'v> From<i16> for Variant<'m, 'v> {
+impl From<i16> for Variant<'_, '_> {
     fn from(value: i16) -> Self {
         Variant::Int16(value)
     }
 }
 
-impl<'m, 'v> From<i32> for Variant<'m, 'v> {
+impl From<i32> for Variant<'_, '_> {
     fn from(value: i32) -> Self {
         Variant::Int32(value)
     }
 }
 
-impl<'m, 'v> From<i64> for Variant<'m, 'v> {
+impl From<i64> for Variant<'_, '_> {
     fn from(value: i64) -> Self {
         Variant::Int64(value)
     }
 }
 
-impl<'m, 'v> From<(i32, u8)> for Variant<'m, 'v> {
+impl From<(i32, u8)> for Variant<'_, '_> {
     fn from(value: (i32, u8)) -> Self {
         Variant::Decimal4 {
             integer: value.0,
@@ -1039,7 +1040,7 @@ impl<'m, 'v> From<(i32, u8)> for Variant<'m, 'v> {
     }
 }
 
-impl<'m, 'v> From<(i64, u8)> for Variant<'m, 'v> {
+impl From<(i64, u8)> for Variant<'_, '_> {
     fn from(value: (i64, u8)) -> Self {
         Variant::Decimal8 {
             integer: value.0,
@@ -1048,7 +1049,7 @@ impl<'m, 'v> From<(i64, u8)> for Variant<'m, 'v> {
     }
 }
 
-impl<'m, 'v> From<(i128, u8)> for Variant<'m, 'v> {
+impl From<(i128, u8)> for Variant<'_, '_> {
     fn from(value: (i128, u8)) -> Self {
         Variant::Decimal16 {
             integer: value.0,
@@ -1057,51 +1058,52 @@ impl<'m, 'v> From<(i128, u8)> for Variant<'m, 'v> {
     }
 }
 
-impl<'m, 'v> From<f32> for Variant<'m, 'v> {
+impl From<f32> for Variant<'_, '_> {
     fn from(value: f32) -> Self {
         Variant::Float(value)
     }
 }
 
-impl<'m, 'v> From<f64> for Variant<'m, 'v> {
+impl From<f64> for Variant<'_, '_> {
     fn from(value: f64) -> Self {
         Variant::Double(value)
     }
 }
 
-impl<'m, 'v> From<bool> for Variant<'m, 'v> {
+impl From<bool> for Variant<'_, '_> {
     fn from(value: bool) -> Self {
-        match value {
-            true => Variant::BooleanTrue,
-            false => Variant::BooleanFalse,
+        if value {
+            Variant::BooleanTrue
+        } else {
+            Variant::BooleanFalse
         }
     }
 }
 
-impl<'m, 'v> From<NaiveDate> for Variant<'m, 'v> {
+impl From<NaiveDate> for Variant<'_, '_> {
     fn from(value: NaiveDate) -> Self {
         Variant::Date(value)
     }
 }
 
-impl<'m, 'v> From<DateTime<Utc>> for Variant<'m, 'v> {
+impl From<DateTime<Utc>> for Variant<'_, '_> {
     fn from(value: DateTime<Utc>) -> Self {
         Variant::TimestampMicros(value)
     }
 }
-impl<'m, 'v> From<NaiveDateTime> for Variant<'m, 'v> {
+impl From<NaiveDateTime> for Variant<'_, '_> {
     fn from(value: NaiveDateTime) -> Self {
-        Variant::TimestampNTZMicros(value)
+        Variant::TimestampNtzMicros(value)
     }
 }
 
-impl<'m, 'v> From<&'v [u8]> for Variant<'m, 'v> {
+impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
     fn from(value: &'v [u8]) -> Self {
         Variant::Binary(value)
     }
 }
 
-impl<'m, 'v> From<&'v str> for Variant<'m, 'v> {
+impl<'v> From<&'v str> for Variant<'_, 'v> {
     fn from(value: &'v str) -> Self {
         if value.len() < 64 {
             Variant::ShortString(value)

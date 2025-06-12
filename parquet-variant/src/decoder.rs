@@ -43,7 +43,7 @@ pub enum VariantPrimitiveType {
     Decimal16 = 10,
     Date = 11,
     TimestampMicros = 12,
-    TimestampNTZMicros = 13,
+    TimestampNtzMicros = 13,
     Float = 14,
     Binary = 15,
     String = 16,
@@ -85,7 +85,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             10 => Ok(VariantPrimitiveType::Decimal16),
             11 => Ok(VariantPrimitiveType::Date),
             12 => Ok(VariantPrimitiveType::TimestampMicros),
-            13 => Ok(VariantPrimitiveType::TimestampNTZMicros),
+            13 => Ok(VariantPrimitiveType::TimestampNtzMicros),
             14 => Ok(VariantPrimitiveType::Float),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
@@ -109,26 +109,22 @@ fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
 
 /// Decodes an Int8 from the value section of a variant.
 pub(crate) fn decode_int8(data: &[u8]) -> Result<i8, ArrowError> {
-    let value = i8::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(i8::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes an Int16 from the value section of a variant.
 pub(crate) fn decode_int16(data: &[u8]) -> Result<i16, ArrowError> {
-    let value = i16::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(i16::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes an Int32 from the value section of a variant.
 pub(crate) fn decode_int32(data: &[u8]) -> Result<i32, ArrowError> {
-    let value = i32::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(i32::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes an Int64 from the value section of a variant.
 pub(crate) fn decode_int64(data: &[u8]) -> Result<i64, ArrowError> {
-    let value = i64::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(i64::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes a Decimal4 from the value section of a variant.
@@ -154,45 +150,41 @@ pub(crate) fn decode_decimal16(data: &[u8]) -> Result<(i128, u8), ArrowError> {
 
 /// Decodes a Float from the value section of a variant.
 pub(crate) fn decode_float(data: &[u8]) -> Result<f32, ArrowError> {
-    let value = f32::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(f32::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes a Double from the value section of a variant.
 pub(crate) fn decode_double(data: &[u8]) -> Result<f64, ArrowError> {
-    let value = f64::from_le_bytes(array_from_slice(data, 0)?);
-    Ok(value)
+    Ok(f64::from_le_bytes(array_from_slice(data, 0)?))
 }
 
 /// Decodes a Date from the value section of a variant.
 pub(crate) fn decode_date(data: &[u8]) -> Result<NaiveDate, ArrowError> {
     let days_since_epoch = i32::from_le_bytes(array_from_slice(data, 0)?);
-    let value = (DateTime::UNIX_EPOCH + Duration::days(days_since_epoch as i64)).date_naive();
-    Ok(value)
+    let value = DateTime::UNIX_EPOCH + Duration::days(i64::from(days_since_epoch));
+    Ok(value.date_naive())
 }
 
 /// Decodes a TimestampMicros from the value section of a variant.
 pub(crate) fn decode_timestamp_micros(data: &[u8]) -> Result<DateTime<Utc>, ArrowError> {
     let micros_since_epoch = i64::from_le_bytes(array_from_slice(data, 0)?);
-    if let Some(value) = DateTime::from_timestamp_micros(micros_since_epoch) {
-        Ok(value)
-    } else {
-        Err(ArrowError::CastError(format!(
+    DateTime::from_timestamp_micros(micros_since_epoch).ok_or_else(|| {
+        ArrowError::CastError(format!(
             "Could not cast `{micros_since_epoch}` microseconds into a DateTime<Utc>"
-        )))
-    }
+        ))
+    })
 }
 
-/// Decodes a TimestampNTZMicros from the value section of a variant.
+/// Decodes a TimestampNtzMicros from the value section of a variant.
 pub(crate) fn decode_timestampntz_micros(data: &[u8]) -> Result<NaiveDateTime, ArrowError> {
     let micros_since_epoch = i64::from_le_bytes(array_from_slice(data, 0)?);
-    if let Some(value) = DateTime::from_timestamp_micros(micros_since_epoch) {
-        Ok(value.naive_utc())
-    } else {
-        Err(ArrowError::CastError(format!(
-            "Could not cast `{micros_since_epoch}` microseconds into a NaiveDateTime"
-        )))
-    }
+    DateTime::from_timestamp_micros(micros_since_epoch)
+        .ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Could not cast `{micros_since_epoch}` microseconds into a NaiveDateTime"
+            ))
+        })
+        .map(|v| v.naive_utc())
 }
 
 /// Decodes a Binary from the value section of a variant.
@@ -212,7 +204,6 @@ pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
 /// Decodes a short string from the value section of a variant.
 pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<&str, ArrowError> {
     let len = (metadata >> 2) as usize;
-
     let string = string_from_slice(data, 0..len)?;
     Ok(string)
 }
@@ -343,7 +334,7 @@ mod tests {
     #[test]
     fn test_binary() -> Result<(), ArrowError> {
         let data = [
-            9, 0, 0, 0, // Length of binary data, 4-byte little-endian
+            0x09, 0, 0, 0, // Length of binary data, 4-byte little-endian
             0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
         ];
         let result = decode_binary(&data)?;
@@ -365,7 +356,7 @@ mod tests {
     #[test]
     fn test_string() -> Result<(), ArrowError> {
         let data = [
-            5, 0, 0, 0, // Length of string, 4-byte little-endian
+            0x05, 0, 0, 0, // Length of string, 4-byte little-endian
             b'H', b'e', b'l', b'l', b'o', b'o',
         ];
         let result = decode_long_string(&data)?;
