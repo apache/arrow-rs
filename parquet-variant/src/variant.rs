@@ -931,7 +931,28 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
-
+    /// Converts this variant to an `f32` if possible.
+    ///
+    /// Returns `Some(f32)` for float and double variants,
+    /// `None` for non-floating-point variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract an f32 from a float variant
+    /// let v1 = Variant::from(std::f32::consts::PI);
+    /// assert_eq!(v1.as_f32(), Some(std::f32::consts::PI));
+    ///
+    /// // and from a double variant (with loss of precision to nearest f32)
+    /// let v2 = Variant::from(std::f64::consts::PI);
+    /// assert_eq!(v2.as_f32(), Some(std::f32::consts::PI));
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_f32(), None);
+    /// ```
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
@@ -940,6 +961,28 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to an `f64` if possible.
+    ///
+    /// Returns `Some(f64)` for float and double variants,
+    /// `None` for non-floating-point variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract an f64 from a float variant
+    /// let v1 = Variant::from(std::f32::consts::PI);
+    /// assert_eq!(v1.as_f64(), Some(std::f32::consts::PI as f64));
+    ///
+    /// // and from a double variant
+    /// let v2 = Variant::from(std::f64::consts::PI);
+    /// assert_eq!(v2.as_f64(), Some(std::f64::consts::PI));
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_f64(), None);
+    /// ```
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
             Variant::Float(i) => Some(i.into()),
