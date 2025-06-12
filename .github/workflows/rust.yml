@@ -109,6 +109,20 @@ jobs:
           # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
           cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
 
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Setup cargo deny
+        run: rustup component add deny
+      - name: Run cargo deny
+        run: cargo deny check
+
   msrv:
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
