@@ -37,6 +37,7 @@ pub enum VariantPrimitiveType {
     Int16 = 4,
     Int32 = 5,
     Int64 = 6,
+    Double = 7,
     Decimal4 = 8,
     Decimal8 = 9,
     Decimal16 = 10,
@@ -78,6 +79,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             4 => Ok(VariantPrimitiveType::Int16),
             5 => Ok(VariantPrimitiveType::Int32),
             6 => Ok(VariantPrimitiveType::Int64),
+            7 => Ok(VariantPrimitiveType::Double),
             8 => Ok(VariantPrimitiveType::Decimal4),
             9 => Ok(VariantPrimitiveType::Decimal8),
             10 => Ok(VariantPrimitiveType::Decimal16),
@@ -153,6 +155,12 @@ pub(crate) fn decode_decimal16(data: &[u8]) -> Result<(i128, u8), ArrowError> {
 /// Decodes a Float from the value section of a variant.
 pub(crate) fn decode_float(data: &[u8]) -> Result<f32, ArrowError> {
     let value = f32::from_le_bytes(array_from_slice(data, 0)?);
+    Ok(value)
+}
+
+/// Decodes a Double from the value section of a variant.
+pub(crate) fn decode_double(data: &[u8]) -> Result<f64, ArrowError> {
+    let value = f64::from_le_bytes(array_from_slice(data, 0)?);
     Ok(value)
 }
 
@@ -283,6 +291,14 @@ mod tests {
     fn test_float() -> Result<(), ArrowError> {
         let data = [0x06, 0x2c, 0x93, 0x4e];
         let result = decode_float(&data)?;
+        assert_eq!(result, 1234567890.1234);
+        Ok(())
+    }
+
+    #[test]
+    fn test_double() -> Result<(), ArrowError> {
+        let data = [0xc9, 0xe5, 0x87, 0xb4, 0x80, 0x65, 0xd2, 0x41];
+        let result = decode_double(&data)?;
         assert_eq!(result, 1234567890.1234);
         Ok(())
     }

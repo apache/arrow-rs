@@ -415,6 +415,7 @@ pub enum Variant<'m, 'v> {
     Decimal8 { integer: i64, scale: u8 },
     Decimal16 { integer: i128, scale: u8 },
     Float(f32),
+    Double(f64),
     BooleanTrue,
     BooleanFalse,
 
@@ -453,6 +454,9 @@ impl<'m, 'v> Variant<'m, 'v> {
                     Variant::Decimal16 { integer, scale }
                 }
                 VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
+                VariantPrimitiveType::Double => {
+                    Variant::Double(decoder::decode_double(value_data)?)
+                }
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
@@ -931,9 +935,15 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
-            // TODO Add Variant::Double
-            // TODO Add int variants?
-            // TODO Add decimal variants?
+            Variant::Double(i) => Some(i as f32),
+            _ => None,
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match *self {
+            Variant::Float(i) => Some(i.into()),
+            Variant::Double(i) => Some(i),
             _ => None,
         }
     }
@@ -1007,6 +1017,12 @@ impl<'m, 'v> From<(i128, u8)> for Variant<'m, 'v> {
 impl<'m, 'v> From<f32> for Variant<'m, 'v> {
     fn from(value: f32) -> Self {
         Variant::Float(value)
+    }
+}
+
+impl<'m, 'v> From<f64> for Variant<'m, 'v> {
+    fn from(value: f64) -> Self {
+        Variant::Double(value)
     }
 }
 
