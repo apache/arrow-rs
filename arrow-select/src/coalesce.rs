@@ -20,11 +20,11 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::concat::concat_batches;
+use crate::concat::concat;
 use arrow_array::StringViewArray;
 use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
 use arrow_data::ByteView;
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -123,8 +123,8 @@ pub struct BatchCoalescer {
     schema: SchemaRef,
     /// output batch size
     batch_size: usize,
-    /// In-progress buffered batches
-    buffer: Vec<RecordBatch>,
+    /// In-progress arrays
+    in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -140,10 +140,16 @@ impl BatchCoalescer {
     ///   Typical values are `4096` or `8192` rows.
     ///
     pub fn new(schema: SchemaRef, batch_size: usize) -> Self {
+        let in_progress_arrays = schema
+            .fields()
+            .iter()
+            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .collect::<Vec<_>>();
+
         Self {
             schema,
             batch_size,
-            buffer: vec![],
+            in_progress_arrays,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -174,18 +180,28 @@ impl BatchCoalescer {
             let head_batch = batch.slice(0, remaining_rows);
             batch = batch.slice(remaining_rows, batch.num_rows() - remaining_rows);
             self.buffered_rows += head_batch.num_rows();
-            self.buffer.push(head_batch);
+            self.buffer_batch(head_batch);
             self.finish_buffered_batch()?;
         }
         // Add the remaining rows to the buffer
         self.buffered_rows += batch.num_rows();
-        self.buffer.push(batch);
+        self.buffer_batch(batch);
 
         // If we have reached the target batch size, finalize the buffered batch
         if self.buffered_rows >= self.batch_size {
             self.finish_buffered_batch()?;
         }
         Ok(())
+    }
+
+    /// Appends the rows in `batch` to the in progress arrays
+    fn buffer_batch(&mut self, batch: RecordBatch) {
+        let (_schema, arrays, row_count) = batch.into_parts();
+        debug_assert!(row_count > 0);
+        for (idx, array) in arrays.into_iter().enumerate() {
+            // Push the array to the in-progress array
+            self.in_progress_arrays[idx].push_array(array);
+        }
     }
 
     /// Concatenates any buffered batches into a single `RecordBatch` and
@@ -196,11 +212,25 @@ impl BatchCoalescer {
     ///
     /// See [`Self::next_completed_batch()`] for the completed batches.
     pub fn finish_buffered_batch(&mut self) -> Result<(), ArrowError> {
-        if self.buffer.is_empty() {
+        if self.buffered_rows == 0 {
             return Ok(());
         }
-        let batch = concat_batches(&self.schema, &self.buffer)?;
-        self.buffer.clear();
+        let new_arrays = self
+            .in_progress_arrays
+            .iter_mut()
+            .map(|array| array.finish())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        for (array, field) in new_arrays.iter().zip(self.schema.fields().iter()) {
+            assert_eq!(array.data_type(), field.data_type());
+            assert_eq!(array.len(), self.buffered_rows);
+        }
+
+        // SAFETY: we verified the length and types match above
+        let batch = unsafe {
+            RecordBatch::new_unchecked(Arc::clone(&self.schema), new_arrays, self.buffered_rows)
+        };
+
         self.buffered_rows = 0;
         self.completed.push_back(batch);
         Ok(())
@@ -208,7 +238,7 @@ impl BatchCoalescer {
 
     /// Returns true if there is any buffered data
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty() && self.completed.is_empty()
+        self.buffered_rows == 0 && self.completed.is_empty()
     }
 
     /// Returns true if there are any completed batches
@@ -330,9 +360,67 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
     unsafe { RecordBatch::new_unchecked(schema, new_columns, num_rows) }
 }
 
+fn create_in_progress_array(_data_type: &DataType, _batch_size: usize) -> Box<dyn InProgressArray> {
+    // TODO specialize based on data type
+    Box::new(GenericInProgressArray::new())
+}
+
+/// Incrementally builds in progress arrays
+///
+/// There are different specialized implementations of this trait for different
+/// array types (e.g., [`StringViewArray`], [`UInt32Array`], etc.).
+///
+/// This is a subset of the ArrayBuilder APIs, but specialized for
+/// the incremental usecase
+trait InProgressArray: std::fmt::Debug {
+    /// Push a new array to the in-progress array
+    fn push_array(&mut self, array: ArrayRef);
+
+    /// Finish the currently in-progress array and clear state for the next
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+}
+
+/// Fallback implementation for [`InProgressArray`]
+///
+/// Internally, buffers arrays and calls [`concat`]
+#[derive(Debug)]
+struct GenericInProgressArray {
+    /// The buffered arrays
+    buffered_arrays: Vec<ArrayRef>,
+}
+
+impl GenericInProgressArray {
+    /// Create a new `GenericInProgressArray`
+    pub fn new() -> Self {
+        Self {
+            buffered_arrays: vec![],
+        }
+    }
+}
+impl InProgressArray for GenericInProgressArray {
+    fn push_array(&mut self, array: ArrayRef) {
+        self.buffered_arrays.push(array);
+    }
+
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
+        // Concatenate all buffered arrays into a single array, which uses 2x
+        // peak memory
+        let array = concat(
+            &self
+                .buffered_arrays
+                .iter()
+                .map(|array| array as &dyn Array)
+                .collect::<Vec<_>>(),
+        )?;
+        self.buffered_arrays.clear();
+        Ok(array)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::{RecordBatchOptions, StringViewArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
