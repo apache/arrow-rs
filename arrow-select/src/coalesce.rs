@@ -164,13 +164,11 @@ impl BatchCoalescer {
     /// Push next batch into the Coalescer
     ///
     /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
-    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
+    pub fn push_batch(&mut self, mut batch: RecordBatch) -> Result<(), ArrowError> {
         if batch.num_rows() == 0 {
             // If the batch is empty, we don't need to do anything
             return Ok(());
         }
-
-        let mut batch = gc_string_view_batch(batch);
 
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
@@ -250,114 +248,6 @@ impl BatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
-}
-
-/// Heuristically compact `StringViewArray`s to reduce memory usage, if needed
-///
-/// Decides when to consolidate the StringView into a new buffer to reduce
-/// memory usage and improve string locality for better performance.
-///
-/// This differs from `StringViewArray::gc` because:
-/// 1. It may not compact the array depending on a heuristic.
-/// 2. It uses a precise block size to reduce the number of buffers to track.
-///
-/// # Heuristic
-///
-/// If the average size of each view is larger than 32 bytes, we compact the array.
-///
-/// `StringViewArray` include pointers to buffer that hold the underlying data.
-/// One of the great benefits of `StringViewArray` is that many operations
-/// (e.g., `filter`) can be done without copying the underlying data.
-///
-/// However, after a while (e.g., after `FilterExec` or `HashJoinExec`) the
-/// `StringViewArray` may only refer to a small portion of the buffer,
-/// significantly increasing memory usage.
-fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
-    let (schema, columns, num_rows) = batch.into_parts();
-    let new_columns: Vec<ArrayRef> = columns
-        .into_iter()
-        .map(|c| {
-            // Try to re-create the `StringViewArray` to prevent holding the underlying buffer too long.
-            let Some(s) = c.as_string_view_opt() else {
-                return c;
-            };
-            if s.data_buffers().is_empty() {
-                // If there are no data buffers, we can just return the array as is
-                return c;
-            }
-            let ideal_buffer_size: usize = s
-                .views()
-                .iter()
-                .map(|v| {
-                    let len = (*v as u32) as usize;
-                    if len > 12 {
-                        len
-                    } else {
-                        0
-                    }
-                })
-                .sum();
-            let actual_buffer_size = s.get_buffer_memory_size();
-            let buffers = s.data_buffers();
-
-            // Re-creating the array copies data and can be time consuming.
-            // We only do it if the array is sparse
-            if actual_buffer_size > (ideal_buffer_size * 2) {
-                if ideal_buffer_size == 0 {
-                    // If the ideal buffer size is 0, all views are inlined
-                    // so just reuse the views
-                    return Arc::new(unsafe {
-                        StringViewArray::new_unchecked(
-                            s.views().clone(),
-                            vec![],
-                            s.nulls().cloned(),
-                        )
-                    });
-                }
-                // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
-                // See https://github.com/apache/arrow-rs/issues/6094 for more details.
-                let mut buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
-
-                let views: Vec<u128> = s
-                    .views()
-                    .as_ref()
-                    .iter()
-                    .cloned()
-                    .map(|v| {
-                        let mut b: ByteView = ByteView::from(v);
-
-                        if b.length > 12 {
-                            let offset = buffer.len() as u32;
-                            buffer.extend_from_slice(
-                                buffers[b.buffer_index as usize]
-                                    .get(b.offset as usize..b.offset as usize + b.length as usize)
-                                    .expect("Invalid buffer slice"),
-                            );
-                            b.offset = offset;
-                            b.buffer_index = 0; // Set buffer index to 0, as we only have one buffer
-                        }
-
-                        b.into()
-                    })
-                    .collect();
-
-                let buffers = if buffer.is_empty() {
-                    vec![]
-                } else {
-                    vec![buffer.into()]
-                };
-
-                let gc_string = unsafe {
-                    StringViewArray::new_unchecked(views.into(), buffers, s.nulls().cloned())
-                };
-
-                Arc::new(gc_string)
-            } else {
-                c
-            }
-        })
-        .collect();
-    unsafe { RecordBatch::new_unchecked(schema, new_columns, num_rows) }
 }
 
 /// Return a new `InProgressArray` for the given data type
