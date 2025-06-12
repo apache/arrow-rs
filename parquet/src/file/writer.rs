@@ -689,6 +689,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
+            builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
+        }
         builder = self.set_column_crypto_metadata(builder, &metadata);
         close.metadata = builder.build()?;
 
