@@ -660,6 +660,25 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to a `&str` if possible.
+    ///
+    /// Returns `Some(&str)` for string variants (both regular and short strings),
+    /// `None` for non-string variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a string from string variants
+    /// let s = "hello!";
+    /// let v1 = Variant::ShortString(s);
+    /// assert_eq!(v1.as_string(), Some(s));
+    ///
+    /// // but not from other variants
+    /// let v2 = Variant::from(123i64);
+    /// assert_eq!(v2.as_string(), None);
+    /// ```
     pub fn as_string(&'v self) -> Option<&'v str> {
         match self {
             Variant::String(s) | Variant::ShortString(s) => Some(s),
