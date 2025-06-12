@@ -159,7 +159,7 @@ where
     /// Creates a new `GenericByteDictionaryBuilder` from the existing builder with the same
     /// keys and values, but with a new data type for the keys.
     ///
-    /// # example
+    /// # Example
     /// ```
     /// # use arrow_array::builder::StringDictionaryBuilder;
     /// # use arrow_array::types::{UInt8Type, UInt16Type};
