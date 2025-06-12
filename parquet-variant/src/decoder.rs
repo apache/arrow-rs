@@ -40,7 +40,6 @@ pub enum VariantPrimitiveType {
     Decimal4 = 8,
     Decimal8 = 9,
     Decimal16 = 10,
-    // TODO: Add types for the rest of primitives, once API is agreed upon
     Date = 11,
     TimestampMicros = 12,
     TimestampNTZMicros = 13,
@@ -79,7 +78,6 @@ impl TryFrom<u8> for VariantPrimitiveType {
             4 => Ok(VariantPrimitiveType::Int16),
             5 => Ok(VariantPrimitiveType::Int32),
             6 => Ok(VariantPrimitiveType::Int64),
-            // TODO: Add types for the rest, once API is agreed upon
             8 => Ok(VariantPrimitiveType::Decimal4),
             9 => Ok(VariantPrimitiveType::Decimal8),
             10 => Ok(VariantPrimitiveType::Decimal16),
