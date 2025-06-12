@@ -21,7 +21,6 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::concat::concat;
-use arrow_array::builder::StringViewBuilder;
 use arrow_array::StringViewArray;
 use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
 use arrow_buffer::{Buffer, NullBufferBuilder};
@@ -478,7 +477,6 @@ impl InProgressStringViewArray {
         }
         let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
         self.completed.extend_from_slice(buffers);
-        println!("  ({self:p} appending views and reusing buffers, starting buffer index: {starting_buffer}");
 
         if starting_buffer == 0 {
             // If there are no buffers, we can just use the views as is
@@ -529,7 +527,6 @@ impl InProgressStringViewArray {
         };
 
         let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
-        println!("  ({self:p} New buffer index: {new_buffer_index}");
 
         // Copy the views, updating the buffer index and copying the data as needed
         let new_views = views.iter().map(|v| {
@@ -541,7 +538,7 @@ impl InProgressStringViewArray {
                 let str_len = b.length as usize;
                 // New location of the view data in the current buffer
                 b.offset = current.len() as u32;
-                b.buffer_index = buffer_index as u32;
+                b.buffer_index = new_buffer_index;
 
                 current.extend_from_slice(
                     buffers[buffer_index]
@@ -559,11 +556,6 @@ impl InProgressStringViewArray {
 impl InProgressArray for InProgressStringViewArray {
     fn push_array(&mut self, array: ArrayRef) {
         let s = array.as_string_view();
-        println!(
-            " ({self:p} Push array, rows: {}, buffers: {})",
-            s.len(),
-            s.data_buffers().len()
-        );
 
         // add any nulls, as necessary
         self.push_nulls(s);
@@ -571,7 +563,6 @@ impl InProgressArray for InProgressStringViewArray {
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
         if s.data_buffers().is_empty() {
-            println!("  Buffers were empty, appending views directly");
             self.views.extend_from_slice(s.views().as_ref());
             return;
         }
@@ -580,25 +571,16 @@ impl InProgressArray for InProgressStringViewArray {
         let actual_buffer_size = s.get_buffer_memory_size();
         let buffers = s.data_buffers();
 
-        println!("  ideal buffer size: {ideal_buffer_size}, actual buffer size: {actual_buffer_size}, buffers: {}", buffers.len());
-
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
         if actual_buffer_size > (ideal_buffer_size * 2) {
-            println!("  appending views and copying strings");
             self.append_views_and_copy_strings(s.views(), actual_buffer_size, buffers);
         } else {
-            // buffers are not sparse, so use them as is
-            println!("  reusing existing buffers data");
             self.append_views_and_update_buffer_index(s.views(), buffers);
         }
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        println!(
-            "({self:p} Finish in progress array, buffered rows: {})",
-            self.views.len()
-        );
         self.finish_current();
         assert!(self.current.is_none());
         let buffers = std::mem::take(&mut self.completed);
@@ -611,14 +593,6 @@ impl InProgressArray for InProgressStringViewArray {
 
         // Safety: we created valid views and buffers above
         let new_array = unsafe { StringViewArray::new_unchecked(views.into(), buffers, nulls) };
-        // TOOD remove
-        // verify
-        let mut b = StringViewBuilder::new();
-        for s in new_array.iter() {
-            b.append_option(s)
-        }
-        b.finish();
-        // end TODO
         Ok(Arc::new(new_array))
     }
 }
