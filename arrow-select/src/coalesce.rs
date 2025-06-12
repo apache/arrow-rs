@@ -166,7 +166,6 @@ impl BatchCoalescer {
     /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
     pub fn push_batch(&mut self, mut batch: RecordBatch) -> Result<(), ArrowError> {
         if batch.num_rows() == 0 {
-            // If the batch is empty, we don't need to do anything
             return Ok(());
         }
 
@@ -335,12 +334,17 @@ impl InProgressStringViewArray {
 
         Self {
             batch_size,
-            views: Vec::with_capacity(batch_size),
-            nulls: NullBufferBuilder::new(batch_size),
+            views: Vec::new(),                         // allocate in push
+            nulls: NullBufferBuilder::new(batch_size), // no allocation
             current: None,
             completed: vec![],
             buffer_source,
         }
+    }
+
+    /// Allocate space for output views and nulls if needed
+    fn ensure_capacity(&mut self) {
+        self.views.reserve(self.batch_size);
     }
 
     /// Update self.nulls with the nulls from the StringViewArray
@@ -449,6 +453,7 @@ impl InProgressStringViewArray {
 
 impl InProgressArray for InProgressStringViewArray {
     fn push_array(&mut self, array: ArrayRef) {
+        self.ensure_capacity();
         let s = array.as_string_view();
 
         // add any nulls, as necessary
@@ -484,10 +489,7 @@ impl InProgressArray for InProgressStringViewArray {
         self.finish_current();
         assert!(self.current.is_none());
         let buffers = std::mem::take(&mut self.completed);
-
-        let mut views = Vec::with_capacity(self.batch_size);
-        std::mem::swap(&mut self.views, &mut views);
-
+        let views = std::mem::take(&mut self.views);
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
 
