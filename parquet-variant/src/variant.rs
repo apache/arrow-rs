@@ -537,6 +537,28 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to an `i8` if possible.
+    ///
+    /// Returns `Some(i8)` for integer variants that fit in `i8` range,
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can read an int64 variant into an i8 if it fits
+    /// let v1 = Variant::from(123i64);
+    /// assert_eq!(v1.as_int8(), Some(123i8));
+    ///
+    /// // but not if it would overflow
+    /// let v2 = Variant::from(1234i64);
+    /// assert_eq!(v2.as_int8(), None);
+    ///
+    /// // or if the variant cannot be cast into an integer
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_int8(), None);
+    /// ```
     pub fn as_int8(&self) -> Option<i8> {
         match *self {
             Variant::Int8(i) => Some(i),
@@ -547,6 +569,28 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to an `i16` if possible.
+    ///
+    /// Returns `Some(i16)` for integer variants that fit in `i16` range,
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can read an int64 variant into an i16 if it fits
+    /// let v1 = Variant::from(123i64);
+    /// assert_eq!(v1.as_int16(), Some(123i16));
+    ///
+    /// // but not if it would overflow
+    /// let v2 = Variant::from(123456i64);
+    /// assert_eq!(v2.as_int16(), None);
+    ///
+    /// // or if the variant cannot be cast into an integer
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_int16(), None);
+    /// ```
     pub fn as_int16(&self) -> Option<i16> {
         match *self {
             Variant::Int8(i) => Some(i.into()),
@@ -556,6 +600,29 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Converts this variant to an `i32` if possible.
+    ///
+    /// Returns `Some(i32)` for integer variants that fit in `i32` range,
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can read an int64 variant into an i32 if it fits
+    /// let v1 = Variant::from(123i64);
+    /// assert_eq!(v1.as_int32(), Some(123i32));
+    ///
+    /// // but not if it would overflow
+    /// let v2 = Variant::from(12345678901i64);
+    /// assert_eq!(v2.as_int32(), None);
+    ///
+    /// // or if the variant cannot be cast into an integer
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_int32(), None);
+    /// ```
     pub fn as_int32(&self) -> Option<i32> {
         match *self {
             Variant::Int8(i) => Some(i.into()),
@@ -565,6 +632,25 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Converts this variant to an `i64` if possible.
+    ///
+    /// Returns `Some(i64)` for integer variants that fit in `i64` range,
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can read an int64 variant into an i64
+    /// let v1 = Variant::from(123i64);
+    /// assert_eq!(v1.as_int64(), Some(123i64));
+    ///
+    /// // but not a variant that cannot be cast into an integer
+    /// let v2 = Variant::from("hello!");
+    /// assert_eq!(v2.as_int64(), None);
+    /// ```
     pub fn as_int64(&self) -> Option<i64> {
         match *self {
             Variant::Int8(i) => Some(i.into()),
