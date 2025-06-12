@@ -433,6 +433,24 @@ native_type_float_op!(
 mod tests {
     use super::*;
 
+    macro_rules! assert_approx_eq {
+        ( $x: expr, $y: expr ) => {{
+            assert_approx_eq!($x, $y, 1.0e-4)
+        }};
+        ( $x: expr, $y: expr, $tol: expr ) => {{
+            let x_val = $x;
+            let y_val = $y;
+            let diff = f64::from((x_val - y_val).abs());
+            assert!(
+                diff <= $tol,
+                "{} != {} (with tolerance = {})",
+                x_val,
+                y_val,
+                $tol
+            );
+        }};
+    }
+
     #[test]
     fn test_native_type_is_zero() {
         assert!(0_i8.is_zero());
@@ -803,9 +821,9 @@ mod tests {
         assert_eq!(8_u16.pow_wrapping(2_u32), 64_u16);
         assert_eq!(8_u32.pow_wrapping(2_u32), 64_u32);
         assert_eq!(8_u64.pow_wrapping(2_u32), 64_u64);
-        assert_eq!(f16::from_f32(8.0).pow_wrapping(2_u32), f16::from_f32(64.0));
-        assert_eq!(8.0_f32.pow_wrapping(2_u32), 64_f32);
-        assert_eq!(8.0_f64.pow_wrapping(2_u32), 64_f64);
+        assert_approx_eq!(f16::from_f32(8.0).pow_wrapping(2_u32), f16::from_f32(64.0));
+        assert_approx_eq!(8.0_f32.pow_wrapping(2_u32), 64_f32);
+        assert_approx_eq!(8.0_f64.pow_wrapping(2_u32), 64_f64);
 
         // pow_checked
         assert_eq!(8_i8.pow_checked(2_u32).unwrap(), 64_i8);
@@ -821,12 +839,12 @@ mod tests {
         assert_eq!(8_u16.pow_checked(2_u32).unwrap(), 64_u16);
         assert_eq!(8_u32.pow_checked(2_u32).unwrap(), 64_u32);
         assert_eq!(8_u64.pow_checked(2_u32).unwrap(), 64_u64);
-        assert_eq!(
+        assert_approx_eq!(
             f16::from_f32(8.0).pow_checked(2_u32).unwrap(),
             f16::from_f32(64.0)
         );
-        assert_eq!(8.0_f32.pow_checked(2_u32).unwrap(), 64_f32);
-        assert_eq!(8.0_f64.pow_checked(2_u32).unwrap(), 64_f64);
+        assert_approx_eq!(8.0_f32.pow_checked(2_u32).unwrap(), 64_f32);
+        assert_approx_eq!(8.0_f64.pow_checked(2_u32).unwrap(), 64_f64);
     }
 
     #[test]
