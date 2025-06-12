@@ -360,9 +360,14 @@ fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
     unsafe { RecordBatch::new_unchecked(schema, new_columns, num_rows) }
 }
 
-fn create_in_progress_array(_data_type: &DataType, _batch_size: usize) -> Box<dyn InProgressArray> {
-    // TODO specialize based on data type
-    Box::new(GenericInProgressArray::new())
+/// Return a new `InProgressArray` for the given data type
+fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
+    match data_type {
+        DataType::Utf8View => {
+            Box::new(InProgressStringViewArray::new(batch_size))
+        }
+        _ => Box::new(GenericInProgressArray::new())
+    }
 }
 
 /// Incrementally builds in progress arrays
@@ -416,6 +421,73 @@ impl InProgressArray for GenericInProgressArray {
         Ok(array)
     }
 }
+
+/// InProgressArray for StringViewArray
+///
+/// TODO: genreric for GenericByteView
+#[derive(Debug)]
+struct InProgressStringViewArray {
+    /// the target batch size (and thus size for views allocation)
+    batch_size: usize,
+    buffered_arrays: Vec<StringViewArray>,
+    block_size: BlockSize,
+}
+
+impl InProgressStringViewArray {
+    fn new(batch_size: usize) -> Self {
+        Self {
+            batch_size,
+            buffered_arrays: vec![],
+            block_size: BlockSize::new()
+        }
+    }
+}
+
+impl InProgressArray for InProgressStringViewArray {
+    fn push_array(&mut self, array: ArrayRef) {
+        let string_view_array = array
+            .as_string_view();
+
+        todo!()
+    }
+
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
+       todo!()
+    }
+}
+
+
+
+
+
+// Copied/pasted from StringViewBuilder -- todo maybe customize this
+const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
+const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
+
+#[derive(Debug)]
+struct BlockSize {
+    current_size: u32 ,
+}
+
+impl BlockSize {
+    fn new() -> Self {
+        Self {
+            current_size: STARTING_BLOCK_SIZE,
+        }
+    }
+
+    fn next_size(&mut self) -> u32 {
+        if self.current_size < MAX_BLOCK_SIZE {
+            // we have fixed start/end block sizes, so we can't overflow
+            self.current_size = self.current_size.saturating_mul(2);
+            self.current_size
+        } else {
+            MAX_BLOCK_SIZE
+        }
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
