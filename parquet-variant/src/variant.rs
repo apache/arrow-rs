@@ -304,7 +304,8 @@ impl<'m> VariantMetadata<'m> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: &'m VariantMetadata<'m>,
-    pub value: &'v [u8],
+    pub value_metadata: u8,
+    pub value_data: &'v [u8],
 }
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
@@ -320,7 +321,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantArray<'m, 'v> {
     pub metadata: &'m VariantMetadata<'m>,
-    pub value: &'v [u8],
+    pub value_metadata: u8,
+    pub value_data: &'v [u8],
 }
 
 impl<'m, 'v> VariantArray<'m, 'v> {
@@ -343,7 +345,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
     pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         // The 6 first bits to the left are the value_header and the 2 bits
         // to the right are the basic type, so we shift to get only the value_header
-        let value_header = first_byte_from_slice(self.value)? >> 2;
+        let value_header = self.value_metadata >> 2;
         let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
         let field_offset_size_minus_one = value_header & 0x03; // Last two bits
         let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
@@ -353,11 +355,11 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             true => OffsetSizeBytes::Four,
             false => OffsetSizeBytes::One,
         };
-        // Skip the header byte to read the num_elements
+        // Read the num_elements
         // The size of the num_elements entry in the array value_data is 4 bytes if
         // is_large is true, otherwise 1 byte.
-        let num_elements = num_elements_size.unpack_usize(self.value, 1, 0)?;
-        let first_offset_byte = 1 + num_elements_size as usize;
+        let num_elements = num_elements_size.unpack_usize(self.value_data, 0, 0)?;
+        let first_offset_byte = num_elements_size as usize;
 
         let overflow =
             || ArrowError::InvalidArgumentError("Variant value_byte_length overflow".into());
@@ -375,15 +377,15 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             .checked_add(value_bytes)
             .ok_or_else(overflow)?;
 
-        // Skip header and num_elements bytes to read the offsets
+        // Skip num_elements bytes to read the offsets
         let start_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, first_offset_byte, index)?;
+            offset_size.unpack_usize(self.value_data, first_offset_byte, index)?;
         let end_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, first_offset_byte, index + 1)?;
+            offset_size.unpack_usize(self.value_data, first_offset_byte, index + 1)?;
 
         // Read the value bytes from the offsets
         let variant_value_bytes = slice_from_slice(
-            self.value,
+            self.value_data,
             first_value_byte + start_field_offset_from_first_value_byte
                 ..first_value_byte + end_field_offset_from_first_value_byte,
         )?;
@@ -429,47 +431,58 @@ pub enum Variant<'m, 'v> {
 impl<'m, 'v> Variant<'m, 'v> {
     /// Parse the buffers and return the appropriate variant.
     pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let header = *first_byte_from_slice(value)?;
-        let new_self = match get_basic_type(header)? {
-            VariantBasicType::Primitive => match get_primitive_type(header)? {
+        let value_metadata = *first_byte_from_slice(value)?;
+        let value_data = slice_from_slice(value, 1..)?;
+        let new_self = match get_basic_type(value_metadata)? {
+            VariantBasicType::Primitive => match get_primitive_type(value_metadata)? {
                 VariantPrimitiveType::Null => Variant::Null,
-                VariantPrimitiveType::Int8 => Variant::Int8(decoder::decode_int8(value)?),
-                VariantPrimitiveType::Int16 => Variant::Int16(decoder::decode_int16(value)?),
-                VariantPrimitiveType::Int32 => Variant::Int32(decoder::decode_int32(value)?),
-                VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value)?),
+                VariantPrimitiveType::Int8 => Variant::Int8(decoder::decode_int8(value_data)?),
+                VariantPrimitiveType::Int16 => Variant::Int16(decoder::decode_int16(value_data)?),
+                VariantPrimitiveType::Int32 => Variant::Int32(decoder::decode_int32(value_data)?),
+                VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value_data)?),
                 VariantPrimitiveType::Decimal4 => {
-                    let (integer, scale) = decoder::decode_decimal4(value)?;
+                    let (integer, scale) = decoder::decode_decimal4(value_data)?;
                     Variant::Decimal4 { integer, scale }
                 }
                 VariantPrimitiveType::Decimal8 => {
-                    let (integer, scale) = decoder::decode_decimal8(value)?;
+                    let (integer, scale) = decoder::decode_decimal8(value_data)?;
                     Variant::Decimal8 { integer, scale }
                 }
                 VariantPrimitiveType::Decimal16 => {
-                    let (integer, scale) = decoder::decode_decimal16(value)?;
+                    let (integer, scale) = decoder::decode_decimal16(value_data)?;
                     Variant::Decimal16 { integer, scale }
                 }
-                VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value)?),
+                VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
                 VariantPrimitiveType::BooleanTrue => Variant::BooleanTrue,
                 VariantPrimitiveType::BooleanFalse => Variant::BooleanFalse,
                 // TODO: Add types for the rest, once API is agreed upon
-                VariantPrimitiveType::Date => Variant::Date(decoder::decode_date(value)?),
+                VariantPrimitiveType::Date => Variant::Date(decoder::decode_date(value_data)?),
                 VariantPrimitiveType::TimestampMicros => {
-                    Variant::TimestampMicros(decoder::decode_timestamp_micros(value)?)
+                    Variant::TimestampMicros(decoder::decode_timestamp_micros(value_data)?)
                 }
                 VariantPrimitiveType::TimestampNTZMicros => {
-                    Variant::TimestampNTZMicros(decoder::decode_timestampntz_micros(value)?)
+                    Variant::TimestampNTZMicros(decoder::decode_timestampntz_micros(value_data)?)
                 }
-                VariantPrimitiveType::Binary => Variant::Binary(decoder::decode_binary(value)?),
+                VariantPrimitiveType::Binary => {
+                    Variant::Binary(decoder::decode_binary(value_data)?)
+                }
                 VariantPrimitiveType::String => {
-                    Variant::String(decoder::decode_long_string(value)?)
+                    Variant::String(decoder::decode_long_string(value_data)?)
                 }
             },
             VariantBasicType::ShortString => {
-                Variant::ShortString(decoder::decode_short_string(value)?)
+                Variant::ShortString(decoder::decode_short_string(value_metadata, value_data)?)
             }
-            VariantBasicType::Object => Variant::Object(VariantObject { metadata, value }),
-            VariantBasicType::Array => Variant::Array(VariantArray { metadata, value }),
+            VariantBasicType::Object => Variant::Object(VariantObject {
+                metadata,
+                value_metadata,
+                value_data,
+            }),
+            VariantBasicType::Array => Variant::Array(VariantArray {
+                metadata,
+                value_metadata,
+                value_data,
+            }),
         };
         Ok(new_self)
     }
