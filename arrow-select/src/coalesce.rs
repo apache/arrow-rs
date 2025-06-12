@@ -343,6 +343,9 @@ impl InProgressStringViewArray {
     }
 
     /// Allocate space for output views and nulls if needed
+    ///
+    /// This is done when on write (when we know it is needed) rather than
+    /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
         self.views.reserve(self.batch_size);
     }
