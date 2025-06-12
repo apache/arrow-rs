@@ -491,6 +491,28 @@ impl<'m, 'v> Variant<'m, 'v> {
         matches!(self, Variant::Null).then_some(())
     }
 
+    /// Converts this variant to a `bool` if possible.
+    ///
+    /// Returns `Some(bool)` for boolean variants,
+    /// `None` for non-boolean variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a bool from the true variant
+    /// let v1 = Variant::from(true);
+    /// assert_eq!(v1.as_boolean(), Some(true));
+    ///
+    /// // and the false variant
+    /// let v2 = Variant::from(false);
+    /// assert_eq!(v2.as_boolean(), Some(false));
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_boolean(), None);
+    /// ```
     pub fn as_boolean(&self) -> Option<bool> {
         match self {
             Variant::BooleanTrue => Some(true),
