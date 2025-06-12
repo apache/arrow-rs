@@ -633,6 +633,25 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to a `&[u8]` if possible.
+    ///
+    /// Returns `Some(&[u8])` for binary variants,
+    /// `None` for non-binary variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a byte slice from a binary variant
+    /// let data = b"hello!";
+    /// let v1 = Variant::Binary(data);
+    /// assert_eq!(v1.as_u8_slice(), Some(data.as_slice()));
+    ///
+    /// // but not from other variant types
+    /// let v2 = Variant::from(123i64);
+    /// assert_eq!(v2.as_u8_slice(), None);
+    /// ```
     pub fn as_u8_slice(&'v self) -> Option<&'v [u8]> {
         if let Variant::Binary(d) = self {
             Some(d)
