@@ -532,11 +532,11 @@ impl InProgressStringViewArray {
         let new_views = views.iter().map(|v| {
             let mut b: ByteView = ByteView::from(*v);
             if b.length > 12 {
-                // TODO optimize (we know there is enough space, in bounds, etc...)
                 let buffer_index = b.buffer_index as usize;
                 let buffer_offset = b.offset as usize;
                 let str_len = b.length as usize;
-                // New location of the view data in the current buffer
+
+                // Update view to location in current
                 b.offset = current.len() as u32;
                 b.buffer_index = new_buffer_index;
 
@@ -619,7 +619,10 @@ impl BufferSource {
 
     /// Return a new buffer, with a capacity of at least `min_size`
     fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
-        Vec::with_capacity(self.next_size(min_size))
+        let size = self.next_size(min_size);
+        println!("Allocating buffer of size {size}");
+
+        Vec::with_capacity(size)
     }
 
     fn next_size(&mut self, min_size: usize) -> usize {
