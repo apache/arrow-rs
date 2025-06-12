@@ -465,6 +465,12 @@ impl InProgressArray for InProgressStringViewArray {
         let actual_buffer_size = s.get_buffer_memory_size();
         let buffers = s.data_buffers();
 
+        // None of the views references the buffers (e.g. sliced)
+        if ideal_buffer_size == 0 {
+            self.views.extend_from_slice(s.views().as_ref());
+            return;
+        }
+
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
         if actual_buffer_size > (ideal_buffer_size * 2) {
