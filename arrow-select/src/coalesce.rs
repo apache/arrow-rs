@@ -620,8 +620,6 @@ impl BufferSource {
     /// Return a new buffer, with a capacity of at least `min_size`
     fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
         let size = self.next_size(min_size);
-        println!("Allocating buffer of size {size}");
-
         Vec::with_capacity(size)
     }
 
