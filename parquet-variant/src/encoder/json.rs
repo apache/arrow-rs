@@ -39,11 +39,16 @@ use crate::variant::{Variant, VariantArray, VariantObject};
 ///
 /// ```rust
 /// use parquet_variant::{Variant, variant_to_json};
+/// use arrow_schema::ArrowError;
 /// 
-/// let variant = Variant::Int8(42);
-/// let mut buffer = Vec::new();
-/// variant_to_json(&mut buffer, &variant)?;
-/// assert_eq!(String::from_utf8(buffer)?, "42");
+/// fn example() -> Result<(), ArrowError> {
+///     let variant = Variant::Int8(42);
+///     let mut buffer = Vec::new();
+///     variant_to_json(&mut buffer, &variant)?;
+///     assert_eq!(String::from_utf8(buffer).unwrap(), "42");
+///     Ok(())
+/// }
+/// example().unwrap();
 /// ```
 pub fn variant_to_json<W: Write>(
     json_buffer: &mut W,
@@ -144,10 +149,15 @@ fn convert_array_to_json<W: Write>(
 ///
 /// ```rust
 /// use parquet_variant::{Variant, variant_to_json_string};
+/// use arrow_schema::ArrowError;
 /// 
-/// let variant = Variant::String("hello");
-/// let json = variant_to_json_string(&variant)?;
-/// assert_eq!(json, "\"hello\"");
+/// fn example() -> Result<(), ArrowError> {
+///     let variant = Variant::String("hello");
+///     let json = variant_to_json_string(&variant)?;
+///     assert_eq!(json, "\"hello\"");
+///     Ok(())
+/// }
+/// example().unwrap();
 /// ```
 pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
     let mut buffer = Vec::new();
@@ -172,10 +182,15 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// ```rust
 /// use parquet_variant::{Variant, variant_to_json_value};
 /// use serde_json::Value;
+/// use arrow_schema::ArrowError;
 /// 
-/// let variant = Variant::Int8(42);
-/// let json_value = variant_to_json_value(&variant)?;
-/// assert_eq!(json_value, Value::Number(42.into()));
+/// fn example() -> Result<(), ArrowError> {
+///     let variant = Variant::Int8(42);
+///     let json_value = variant_to_json_value(&variant)?;
+///     assert_eq!(json_value, Value::Number(42.into()));
+///     Ok(())
+/// }
+/// example().unwrap();
 /// ```
 pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
     match variant {
