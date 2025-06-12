@@ -569,6 +569,7 @@ mod test {
         let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
+            .set_write_page_header_statistics(true)
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
