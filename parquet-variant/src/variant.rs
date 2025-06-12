@@ -810,6 +810,33 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to tuple with a 4-byte unscaled value if possible.
+    ///
+    /// Returns `Some((i32, u8))` for decimal variants where the unscaled value
+    /// fits in `i32` range,
+    /// `None` for non-decimal variants or decimal values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract decimal parts from smaller or equally-sized decimal variants
+    /// let v1 = Variant::from((1234_i32, 2));
+    /// assert_eq!(v1.as_decimal_int32(), Some((1234_i32, 2)));
+    ///
+    /// // and from larger decimal variants if they fit
+    /// let v2 = Variant::from((1234_i64, 2));
+    /// assert_eq!(v2.as_decimal_int32(), Some((1234_i32, 2)));
+    ///
+    /// // but not if the value would overflow i32
+    /// let v3 = Variant::from((12345678901i64, 2));
+    /// assert_eq!(v3.as_decimal_int32(), None);
+    ///
+    /// // or if the variant is not a decimal
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_decimal_int32(), None);
+    /// ```
     pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
         match *self {
             Variant::Decimal4 { integer, scale } => Some((integer, scale)),
@@ -831,6 +858,33 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to tuple with an 8-byte unscaled value if possible.
+    ///
+    /// Returns `Some((i64, u8))` for decimal variants where the unscaled value
+    /// fits in `i64` range,
+    /// `None` for non-decimal variants or decimal values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract decimal parts from smaller or equally-sized decimal variants
+    /// let v1 = Variant::from((1234_i64, 2));
+    /// assert_eq!(v1.as_decimal_int64(), Some((1234_i64, 2)));
+    ///
+    /// // and from larger decimal variants if they fit
+    /// let v2 = Variant::from((1234_i128, 2));
+    /// assert_eq!(v2.as_decimal_int64(), Some((1234_i64, 2)));
+    ///
+    /// // but not if the value would overflow i64
+    /// let v3 = Variant::from((2e19 as i128, 2));
+    /// assert_eq!(v3.as_decimal_int64(), None);
+    ///
+    /// // or if the variant is not a decimal
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_decimal_int64(), None);
+    /// ```
     pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
         match *self {
             Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
@@ -846,6 +900,25 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to tuple with a 16-byte unscaled value if possible.
+    ///
+    /// Returns `Some((i128, u8))` for decimal variants where the unscaled value
+    /// fits in `i128` range,
+    /// `None` for non-decimal variants or decimal values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract decimal parts from smaller or equally-sized decimal variants
+    /// let v1 = Variant::from((1234_i128, 2));
+    /// assert_eq!(v1.as_decimal_int128(), Some((1234_i128, 2)));
+    ///
+    /// // but not if the variant is not a decimal
+    /// let v2 = Variant::from("hello!");
+    /// assert_eq!(v2.as_decimal_int128(), None);
+    /// ```
     pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
         match *self {
             Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
