@@ -361,6 +361,7 @@ impl InProgressStringViewArray {
     }
 
     /// Append views to self.views, updating the buffer index if necessary
+    #[inline(never)]
     fn append_views_and_update_buffer_index(&mut self, views: &[u128], buffers: &[Buffer]) {
         if let Some(buffer) = self.current.take() {
             self.completed.push(buffer.into());
@@ -393,6 +394,7 @@ impl InProgressStringViewArray {
     /// - `views` - the views to append
     /// - `actual_buffer_size` - the size of the bytes pointed to by the views
     /// - `buffers` - the buffers the reviews point to
+    #[inline(never)]
     fn append_views_and_copy_strings(
         &mut self,
         views: &[u128],
