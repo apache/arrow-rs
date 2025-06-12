@@ -1328,6 +1328,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::format::PageHeader;
     use crate::thrift::TCompactSliceInputProtocol;
     use arrow::datatypes::ToByteSlice;
@@ -3834,5 +3835,49 @@ mod tests {
         assert!(!stats.is_min_value_exact.unwrap());
         assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
         assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+    }
+
+    #[test]
+    fn test_page_encoding_statistics_roundtrip() {
+        let batch_schema = Schema::new(vec![Field::new(
+            "int32",
+            arrow_schema::DataType::Int32,
+            false,
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let mut file: File = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&mut file, Arc::new(batch_schema), None).unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        let chunk_meta = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .expect("column metadata missing");
+        assert!(chunk_meta.encoding_stats.is_some());
+        let chunk_page_stats = chunk_meta.encoding_stats.as_ref().unwrap();
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rowgroup = reader.get_row_group(0).expect("row group missing");
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.page_encoding_stats().is_some());
+        let file_page_stats = column.page_encoding_stats().unwrap();
+        let chunk_stats: Vec<PageEncodingStats> = chunk_page_stats
+            .iter()
+            .map(|x| crate::file::page_encoding_stats::try_from_thrift(x).unwrap())
+            .collect();
+        assert_eq!(&chunk_stats, file_page_stats);
     }
 }
