@@ -44,9 +44,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let escaped_json = variant_to_json_string(&special_string)?;
     println!("   Original: Line 1\\nLine 2\\tTabbed\\r\\nWith \"quotes\" and \\\\backslashes");
     println!("   JSON:     {}", escaped_json);
-
-    // Example 3: Unicode support
-    println!("\n🌍 3. Unicode Support:");
     
     let unicode_variants = vec![
         Variant::String("Hello 世界 🌍"),
