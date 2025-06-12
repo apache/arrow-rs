@@ -34,5 +34,7 @@ mod variant;
 // TODO: dead code removal
 #[allow(dead_code)]
 mod utils;
+mod builder;
 
 pub use variant::*;
+pub use builder::*;
