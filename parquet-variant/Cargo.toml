@@ -31,7 +31,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-arrow-schema = "55.1.0"
+arrow-schema = { workspace = true }
 
 [lib]
 

@@ -1,0 +1,88 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# https://github.com/EmbarkStudios/cargo-deny
+#
+# cargo-deny checks our dependency tree for copy-left licenses,
+# duplicate dependencies, and rustsec advisories (https://rustsec.org/advisories).
+#
+# Install: `cargo install cargo-deny`
+# Check: `cargo deny check`.
+
+# Note: running just `cargo deny check` without a `--target` can result in
+# false positives due to https://github.com/EmbarkStudios/cargo-deny/issues/324
+[graph]
+targets = [
+  { triple = "aarch64-apple-darwin" },
+  { triple = "i686-pc-windows-gnu" },
+  { triple = "i686-pc-windows-msvc" },
+  { triple = "i686-unknown-linux-gnu" },
+  { triple = "wasm32-unknown-unknown" },
+  { triple = "x86_64-apple-darwin" },
+  { triple = "x86_64-pc-windows-gnu" },
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "x86_64-unknown-linux-gnu" },
+  { triple = "x86_64-unknown-linux-musl" },
+  { triple = "x86_64-unknown-redox" },
+]
+all-features = true
+
+
+[advisories]
+version = 2
+ignore = [
+  "RUSTSEC-2024-0436", # https://rustsec.org/advisories/RUSTSEC-2024-0436 - paste is unmaintained - https://github.com/dtolnay/paste
+]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow" # We use them for examples
+deny = [
+]
+skip = [
+  { name = "getrandom" },    # Blocked by https://github.com/briansmith/ring/issues/2341
+  { name = "twox-hash" },    # Remove once https://github.com/PSeitz/lz4_flex/issues/184 closes
+  { name = "webpki-roots" }, # Remove once tonic releases 0.13.2
+]
+skip-tree = [
+  { name = "windows-sys" },        # Requires hyper-util to update socket2 and tokio update
+  { name = "tracing-subscriber" }, # Remove once https://github.com/tokio-rs/tracing/issues/3282 completes
+  { name = "rand" },               # Remove once https://github.com/rust-phf/rust-phf/issues/331 completes
+]
+
+[licenses]
+version = 2
+private = { ignore = true }
+confidence-threshold = 0.93 # We want really high confidence when inferring licenses from text
+allow = [
+  "Apache-2.0 WITH LLVM-exception", # https://spdx.org/licenses/LLVM-exception.html
+  "Apache-2.0",                     # https://tldrlegal.com/license/apache-license-2.0-(apache-2.0)
+  "BSD-2-Clause",                   # https://tldrlegal.com/license/bsd-2-clause-license-(freebsd)
+  "BSD-3-Clause",                   # https://tldrlegal.com/license/bsd-3-clause-license-(revised)
+  "BSL-1.0",                        # https://tldrlegal.com/license/boost-software-license-1.0-explained
+  "CC0-1.0",                        # https://creativecommons.org/publicdomain/zero/1.0/
+  "CDLA-Permissive-2.0",            # https://cdla.dev/permissive-2-0/
+  "ISC",                            # https://www.tldrlegal.com/license/isc-license
+  "MIT",                            # https://tldrlegal.com/license/mit-license
+  "Unicode-3.0",                    # https://www.unicode.org/license.txt
+  "Zlib",                           # https://tldrlegal.com/license/zlib-libpng-license-(zlib)
+]
+exceptions = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
