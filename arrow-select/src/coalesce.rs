@@ -458,7 +458,7 @@ impl InProgressStringViewArray {
         if let Some(nulls) = s.nulls().as_ref() {
             self.nulls.append_buffer(nulls);
         } else {
-            self.nulls.append_n_nulls(s.len());
+            self.nulls.append_n_non_nulls(s.len());
         }
     }
 
@@ -503,15 +503,17 @@ impl InProgressStringViewArray {
 
     /// Append views to self.views, copying data from the buffers into
     /// self.buffers
-    /// 
+    ///
     /// # Arguments
     /// - `views` - the views to append
     /// - `actual_buffer_size` - the size of the bytes pointed to by the views
     /// - `buffers` - the buffers the reviews point to
-    fn append_views_and_copy_strings(&mut self, 
-                                     views: &[u128],
-                                     actual_buffer_size: usize,
-                                     buffers: &[Buffer]) {
+    fn append_views_and_copy_strings(
+        &mut self,
+        views: &[u128],
+        actual_buffer_size: usize,
+        buffers: &[Buffer],
+    ) {
         let mut current = match self.current.take() {
             Some(current) => {
                 // If the current buffer is not large enough, allocate a new one
@@ -522,40 +524,37 @@ impl InProgressStringViewArray {
                 } else {
                     current
                 }
-            },
+            }
             None => {
                 // If there is no current buffer, allocate a new one
                 self.buffer_source.next_buffer(actual_buffer_size)
             }
         };
-        
+
         let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
 
         // Copy the views, updating the buffer index and copying the data as needed
-        let new_views = views.iter()
-            .map(|v| {
-                let mut b: ByteView = ByteView::from(*v);
-                if b.length > 12 {
-                    // TODO optimize (we know there is enough space, in bounds, etc...)
-                    let buffer_index = b.buffer_index as usize;
-                    let buffer_offset = b.offset as usize;
-                    let str_len = b.length as usize;
-                    current.extend_from_slice(
-                        buffers[buffer_index]
-                            .get(buffer_offset..buffer_offset + str_len)
-                            .expect("Invalid buffer slice"),
-                    );
-                    b.buffer_index = new_buffer_index;
-                }
-                b.as_u128()
-            });
+        let new_views = views.iter().map(|v| {
+            let mut b: ByteView = ByteView::from(*v);
+            if b.length > 12 {
+                // TODO optimize (we know there is enough space, in bounds, etc...)
+                let buffer_index = b.buffer_index as usize;
+                let buffer_offset = b.offset as usize;
+                let str_len = b.length as usize;
+                current.extend_from_slice(
+                    buffers[buffer_index]
+                        .get(buffer_offset..buffer_offset + str_len)
+                        .expect("Invalid buffer slice"),
+                );
+                b.buffer_index = new_buffer_index;
+            }
+            b.as_u128()
+        });
         self.views.extend(new_views);
         self.current = Some(current);
         return;
     }
 }
-
-
 
 impl InProgressArray for InProgressStringViewArray {
     fn push_array(&mut self, array: ArrayRef) {
@@ -587,12 +586,23 @@ impl InProgressArray for InProgressStringViewArray {
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        todo!()
+        self.finish_current();
+        assert!(self.current.is_none());
+        let buffers = std::mem::take(&mut self.completed);
+
+        let mut views = Vec::with_capacity(self.batch_size);
+        std::mem::swap(&mut self.views, &mut views);
+
+        let nulls = self.nulls.finish();
+        self.nulls = NullBufferBuilder::new(self.batch_size);
+
+        // Safety: we created valid views and buffers above
+        let new_array = unsafe { StringViewArray::new_unchecked(views.into(), buffers, nulls) };
+        Ok(Arc::new(new_array))
     }
 }
 
-// Copied/pasted from StringViewBuilder -- todo maybe customize this
-const STARTING_BLOCK_SIZE: usize = 8 * 1024; // 8KiB
+const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
 const MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024; // 2MiB
 
 /// Manages allocating new buffers for `StringViewArray`
@@ -615,15 +625,20 @@ impl BufferSource {
         Vec::with_capacity(self.next_size(min_size))
     }
 
-    
     fn next_size(&mut self, min_size: usize) -> usize {
-        todo!("Implement next_size for BufferSource");
         if self.current_size < MAX_BLOCK_SIZE {
+            // If the current size is less than the max size, we can double it
             // we have fixed start/end block sizes, so we can't overflow
             self.current_size = self.current_size.saturating_mul(2);
+        }
+        if self.current_size >= min_size {
             self.current_size
         } else {
-            MAX_BLOCK_SIZE as usize
+            // increase next size until we hit min_size or max  size
+            while self.current_size <= min_size && self.current_size < MAX_BLOCK_SIZE {
+                self.current_size = self.current_size.saturating_mul(2);
+            }
+            self.current_size.max(min_size)
         }
     }
 }
@@ -636,6 +651,35 @@ mod tests {
     use arrow_array::{RecordBatchOptions, StringViewArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
     use std::ops::Range;
+
+    #[test]
+    fn test_buffer_source() {
+        let mut source = BufferSource::new();
+        assert_eq!(source.next_size(1000), 8192);
+        assert_eq!(source.next_size(1000), 16384);
+        assert_eq!(source.next_size(1000), 32768);
+        assert_eq!(source.next_size(1000), 65536);
+        assert_eq!(source.next_size(1000), 131072);
+        assert_eq!(source.next_size(1000), 262144);
+        assert_eq!(source.next_size(1000), 524288);
+        assert_eq!(source.next_size(1000), 1024 * 1024);
+        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
+        // clamped to max size
+        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
+        // Can override with larger size request
+        assert_eq!(source.next_size(10_000_000), 10_000_000);
+    }
+
+    #[test]
+    fn test_buffer_source_with_min() {
+        let mut source = BufferSource::new();
+        assert_eq!(source.next_size(1_000_000), 1024 * 1024);
+        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
+        // clamped to max size
+        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
+        // Can override with larger size request
+        assert_eq!(source.next_size(10_000_000), 10_000_000);
+    }
 
     #[test]
     fn test_coalesce() {
