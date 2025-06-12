@@ -487,6 +487,24 @@ impl<'m, 'v> Variant<'m, 'v> {
         Ok(new_self)
     }
 
+    /// Converts this variant to `()` if it is null.
+    ///
+    /// Returns `Some(())` for null variants,
+    /// `None` for non-null variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract `()` from a null variant
+    /// let v1 = Variant::from(());
+    /// assert_eq!(v1.as_null(), Some(()));
+    ///
+    /// // but not from other variants
+    /// let v2 = Variant::from("hello!");
+    /// assert_eq!(v2.as_null(), None);
+    /// ```
     pub fn as_null(&self) -> Option<()> {
         matches!(self, Variant::Null).then_some(())
     }
@@ -815,6 +833,12 @@ impl<'m, 'v> Variant<'m, 'v> {
             | Variant::Array(VariantArray { metadata, .. }) => Some(*metadata),
             _ => None,
         }
+    }
+}
+
+impl<'m, 'v> From<()> for Variant<'m, 'v> {
+    fn from(_: ()) -> Self {
+        Variant::Null
     }
 }
 
