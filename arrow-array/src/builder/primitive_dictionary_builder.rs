@@ -793,4 +793,24 @@ mod tests {
         _test_try_new_from_builder_generic_for_value::<Float32Type>(vec![0.1, 0.2, 0.3]);
         _test_try_new_from_builder_generic_for_value::<Float64Type>(vec![-0.1, 0.2, 0.3]);
     }
+
+    #[test]
+    fn test_try_new_from_builder_cast_fails() {
+        let mut source_builder = PrimitiveDictionaryBuilder::<UInt16Type, UInt64Type>::new();
+        for i in 0..257 {
+            source_builder.append_value(i);
+        }
+
+        // there should be too many values that we can't downcast to the underlying type
+        // we have keys that wouldn't fit into UInt8Type
+        let result = PrimitiveDictionaryBuilder::<UInt8Type,UInt64Type>::try_new_from_builder(source_builder);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, ArrowError::CastError(_)));
+            assert_eq!(
+                e.to_string(),
+                "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
+            );
+        }
+    }
 }
