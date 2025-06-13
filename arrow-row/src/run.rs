@@ -161,8 +161,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
     }
 
     // Convert collected values to arrays
-    let mut values_rows = values_data.clone();
-    let values = converter.convert_raw(&mut values_rows, validate_utf8)?;
+    let values = converter.convert_raw(&mut values_data, validate_utf8)?;
 
     // Create run ends array
     // Get the count of elements before we move the vector
