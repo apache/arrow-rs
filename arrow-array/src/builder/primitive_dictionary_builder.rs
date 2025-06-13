@@ -22,6 +22,7 @@ use crate::{
 };
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
+use num::{Num, NumCast};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -169,6 +170,36 @@ where
             map: HashMap::with_capacity(values_capacity),
         }
     }
+
+    /// TODO docs
+    pub fn try_new_from_builder<K2>(
+        mut source: PrimitiveDictionaryBuilder<K2, V>
+    ) -> Result<Self, ArrowError>
+    where
+        K::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast
+    {
+        let map = source.map;
+        let values_builder = source.values_builder;
+
+        let source_keys = source.keys_builder.finish();
+        let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
+            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Can't cast dictionary keys from source type {:?} to type {:?}",
+                    K2::DATA_TYPE,
+                    K::DATA_TYPE
+                ))
+            })
+        })?;
+
+        Ok(Self {
+            map,
+            keys_builder: new_keys.into_builder().expect("underlying buffer has no references"),
+            values_builder
+        })
+    } 
 }
 
 impl<K, V> ArrayBuilder for PrimitiveDictionaryBuilder<K, V>
@@ -432,6 +463,7 @@ mod tests {
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
+    use crate::GenericByteArray;
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -648,5 +680,37 @@ mod tests {
             builder.map.capacity(),
             builder.values_builder.capacity()
         )
+    }
+
+    fn _test_try_new_from_builder_generic_for_key_types<K1, K2, V>(values: Vec<&V::Native>) 
+    where
+        K1: ArrowDictionaryKeyType,
+        K1::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast + From<u8>,
+        V: ArrowPrimitiveType
+    {
+        let mut source = PrimitiveDictionaryBuilder::<K1, V>::new();
+        source.append(*values[0]).unwrap();
+        source.append(*values[1]).unwrap();
+        source.append(*values[2]).unwrap();
+
+        let mut result = PrimitiveDictionaryBuilder::<K2, V>::try_new_from_builder(source).unwrap();
+        let array = result.finish();
+
+        let mut expected_keys_builder = PrimitiveBuilder::<K2>::new();
+        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
+        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
+        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+
+        let av = array.values();
+        // let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<
+    }
+
+    fn _test_try_new_from_builder<T>(values: Vec<&T::Native>)
+    where
+        T: ArrowPrimitiveType
+    {
+
     }
 }
