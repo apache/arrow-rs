@@ -495,7 +495,9 @@ mod tests {
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{
-        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type
+        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int16Type,
+        Int32Type, Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type,
+        UInt64Type, UInt8Type,
     };
 
     #[test]
@@ -803,7 +805,9 @@ mod tests {
 
         // there should be too many values that we can't downcast to the underlying type
         // we have keys that wouldn't fit into UInt8Type
-        let result = PrimitiveDictionaryBuilder::<UInt8Type,UInt64Type>::try_new_from_builder(source_builder);
+        let result = PrimitiveDictionaryBuilder::<UInt8Type, UInt64Type>::try_new_from_builder(
+            source_builder,
+        );
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(matches!(e, ArrowError::CastError(_)));
