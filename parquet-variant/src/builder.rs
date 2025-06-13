@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{Variant, VariantArray, VariantObject};
+use crate::Variant;
+use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const MAX_SHORT_STRING_SIZE: usize = 0x3F;
@@ -15,17 +15,17 @@ pub fn short_string_header(len: usize) -> u8 {
 
 pub fn array_header(large: bool, offset_size: u8) -> u8 {
     let large_bit = if large { 1 } else { 0 };
-    (large_bit << (BASIC_TYPE_BITS + 2)) |
-    ((offset_size - 1) << BASIC_TYPE_BITS) |
-    VariantBasicType::Array as u8
+    (large_bit << (BASIC_TYPE_BITS + 2))
+        | ((offset_size - 1) << BASIC_TYPE_BITS)
+        | VariantBasicType::Array as u8
 }
 
 pub fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
     let large_bit = if large { 1 } else { 0 };
-    (large_bit << (BASIC_TYPE_BITS + 4)) |
-    ((id_size - 1) << (BASIC_TYPE_BITS + 2)) |
-    ((offset_size - 1) << BASIC_TYPE_BITS) |
-    VariantBasicType::Object as u8
+    (large_bit << (BASIC_TYPE_BITS + 4))
+        | ((id_size - 1) << (BASIC_TYPE_BITS + 2))
+        | ((offset_size - 1) << BASIC_TYPE_BITS)
+        | VariantBasicType::Object as u8
 }
 
 fn int_size(v: usize) -> u8 {
@@ -37,10 +37,23 @@ fn int_size(v: usize) -> u8 {
     }
 }
 
+/// Write little-endian integer to buffer
 fn write_offset(buf: &mut [u8], value: usize, nbytes: u8) {
     for i in 0..nbytes {
         buf[i as usize] = ((value >> (i * 8)) & 0xFF) as u8;
     }
+}
+
+/// Helper to make room for header by moving data
+fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usize) {
+    let current_len = buffer.len();
+    buffer.resize(current_len + header_size, 0);
+
+    let src_start = start_pos;
+    let src_end = current_len;
+    let dst_start = start_pos + header_size;
+
+    buffer.copy_within(src_start..src_end, dst_start);
 }
 
 pub struct VariantBuilder {
@@ -58,11 +71,12 @@ impl VariantBuilder {
         }
     }
 
-    pub fn append_null(&mut self) {
-        self.buffer.push(primitive_header(VariantPrimitiveType::Null));
+    fn append_null(&mut self) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Null));
     }
 
-    pub fn append_bool(&mut self, value: bool) {
+    fn append_bool(&mut self, value: bool) {
         let primitive_type = if value {
             VariantPrimitiveType::BooleanTrue
         } else {
@@ -71,108 +85,108 @@ impl VariantBuilder {
         self.buffer.push(primitive_header(primitive_type));
     }
 
-    pub fn append_int8(&mut self, value: i8) {
-        self.buffer.push(primitive_header(VariantPrimitiveType::Int8));
+    fn append_int8(&mut self, value: i8) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Int8));
         self.buffer.push(value as u8);
     }
 
-    pub fn append_string(&mut self, value: &str) {
+    fn append_string(&mut self, value: &str) {
         if value.len() <= MAX_SHORT_STRING_SIZE {
             self.buffer.push(short_string_header(value.len()));
             self.buffer.extend_from_slice(value.as_bytes());
         } else {
-            self.buffer.push(primitive_header(VariantPrimitiveType::String));
-            self.buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            self.buffer
+                .push(primitive_header(VariantPrimitiveType::String));
+            self.buffer
+                .extend_from_slice(&(value.len() as u32).to_le_bytes());
             self.buffer.extend_from_slice(value.as_bytes());
         }
     }
 
-    pub fn add_key(&mut self, key: &str) -> u32 {
-        if let Some(&id) = self.dict.get(key) {
-            return id;
+    /// Add key to dictionary, return its ID
+    fn add_key(&mut self, key: &str) -> u32 {
+        use std::collections::hash_map::Entry;
+        match self.dict.entry(key.to_string()) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let id = self.dict_keys.len() as u32;
+                entry.insert(id);
+                self.dict_keys.push(key.to_string());
+                id
+            }
         }
-        let id = self.dict_keys.len() as u32;
-        self.dict.insert(key.to_string(), id);
-        self.dict_keys.push(key.to_string());
-        id
     }
 
-    pub fn offset(&self) -> usize {
+    fn offset(&self) -> usize {
         self.buffer.len()
     }
 
-    pub fn begin_array(&mut self) -> ArrayBuilder {
+    pub fn new_array(&mut self) -> ArrayBuilder {
         ArrayBuilder::new(self)
     }
 
-    pub fn begin_object(&mut self) -> ObjectBuilder {
+    pub fn new_object(&mut self) -> ObjectBuilder {
         ObjectBuilder::new(self)
-    }
-
-    pub fn build(self) -> Vec<u8> {
-        self.buffer
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         let nkeys = self.dict_keys.len();
-        
-        // Calculate total size needed for metadata
+
+        // Calculate metadata size
         let total_dict_size: usize = self.dict_keys.iter().map(|k| k.len()).sum();
-        let offset_size = 1; // We use 1 byte offsets for now
-        let offset_start = 1 + offset_size; // Skip header and dict size
-        let string_start = offset_start + (nkeys + 1) * offset_size;
+
+        // Determine appropriate offset size based on the larger of dict size or total string size
+        let max_offset = std::cmp::max(total_dict_size, nkeys);
+        let offset_size = int_size(max_offset);
+
+        let offset_start = 1 + offset_size as usize;
+        let string_start = offset_start + (nkeys + 1) * offset_size as usize;
         let metadata_size = string_start + total_dict_size;
-        
-        // Allocate the entire buffer
-        let mut metadata = vec![0u8; metadata_size];
-        
-        // Write header: version=1, not sorted, offset_size=1 (offset_size_minus_one=0)
-        metadata[0] = 0x01;
-        
+
+        // Pre-allocate exact size to avoid reallocations
+        let mut metadata = Vec::with_capacity(metadata_size);
+        metadata.resize(metadata_size, 0);
+
+        // Write header: version=1, not sorted, with calculated offset_size
+        metadata[0] = 0x01 | ((offset_size - 1) << 6);
+
         // Write dictionary size
-        metadata[1] = nkeys as u8;
-        
+        write_offset(&mut metadata[1..], nkeys, offset_size);
+
         // Write offsets and string data
         let mut cur_offset = 0;
         for (i, key) in self.dict_keys.iter().enumerate() {
-            // Write offset
-            metadata[offset_start + i] = cur_offset as u8;
-            // Write string data
+            write_offset(
+                &mut metadata[offset_start + i * offset_size as usize..],
+                cur_offset,
+                offset_size,
+            );
             let start = string_start + cur_offset;
             metadata[start..start + key.len()].copy_from_slice(key.as_bytes());
             cur_offset += key.len();
         }
         // Write final offset
-        metadata[offset_start + nkeys] = cur_offset as u8;
-        
+        write_offset(
+            &mut metadata[offset_start + nkeys * offset_size as usize..],
+            cur_offset,
+            offset_size,
+        );
+
         (metadata, self.buffer)
     }
 
-    pub fn append<'m, 'v>(&mut self, value: &Variant<'m, 'v>) {
-        match value {
+    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, value: T) {
+        let variant = value.into();
+        match variant {
             Variant::Null => self.append_null(),
-            Variant::BooleanFalse => self.append_bool(false),
             Variant::BooleanTrue => self.append_bool(true),
-            Variant::Int8(val) => self.append_int8(*val),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_string(s),
-            Variant::Array(arr) => {
-                let mut array_builder = self.begin_array();
-                for i in 0..arr.len() {
-                    if let Ok(v) = arr.get(i) {
-                        array_builder.append_element(|b| b.append(&v));
-                    }
-                }
-                array_builder.finish();
-            }
-            Variant::Object(obj) => {
-                let mut object_builder = self.begin_object();
-                if let Ok(fields) = obj.fields() {
-                    for (key, value) in fields {
-                        object_builder.append_field(key, |b| b.append(&value));
-                    }
-                }
-                object_builder.finish();
+            Variant::BooleanFalse => self.append_bool(false),
+            Variant::Int8(v) => self.append_int8(v),
+            Variant::String(s) | Variant::ShortString(s) => self.append_string(s),
+            // TODO: Add types for the rest of primitives
+            Variant::Object(_) | Variant::Array(_) => {
+                unreachable!("Object and Array variants cannot be created through Into<Variant>")
             }
         }
     }
@@ -200,10 +214,8 @@ impl<'a> ArrayBuilder<'a> {
         }
     }
 
-    pub fn append_element<F>(&mut self, f: F) 
-    where F: FnOnce(&mut VariantBuilder)
-    {
-        f(self.parent);
+    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, value: T) {
+        self.parent.append_value(value);
         let element_end = self.parent.offset() - self.start_pos;
         self.offsets.push(element_end);
     }
@@ -216,15 +228,9 @@ impl<'a> ArrayBuilder<'a> {
         let offset_size = int_size(data_size);
         let header_size = 1 + size_bytes + (num_elements + 1) * offset_size as usize;
 
-        let current_len = self.parent.buffer.len();
-        self.parent.buffer.resize(current_len + header_size, 0);
-        
-        let src_start = self.start_pos;
-        let src_end = current_len;
-        let dst_start = self.start_pos + header_size;
-        
-        self.parent.buffer.copy_within(src_start..src_end, dst_start);
+        make_room_for_header(&mut self.parent.buffer, self.start_pos, header_size);
 
+        // Write header
         let mut pos = self.start_pos;
         self.parent.buffer[pos] = array_header(is_large, offset_size);
         pos += 1;
@@ -237,8 +243,13 @@ impl<'a> ArrayBuilder<'a> {
             pos += 1;
         }
 
+        // Write offsets
         for offset in &self.offsets {
-            write_offset(&mut self.parent.buffer[pos..pos + offset_size as usize], *offset, offset_size);
+            write_offset(
+                &mut self.parent.buffer[pos..pos + offset_size as usize],
+                *offset,
+                offset_size,
+            );
             pos += offset_size as usize;
         }
     }
@@ -247,7 +258,7 @@ impl<'a> ArrayBuilder<'a> {
 pub struct ObjectBuilder<'a> {
     parent: &'a mut VariantBuilder,
     start_pos: usize,
-    fields: Vec<(u32, usize)>,
+    fields: Vec<(u32, usize)>, // (field_id, offset)
 }
 
 impl<'a> ObjectBuilder<'a> {
@@ -260,38 +271,40 @@ impl<'a> ObjectBuilder<'a> {
         }
     }
 
-    pub fn append_field<F>(&mut self, key: &str, f: F)
-    where F: FnOnce(&mut VariantBuilder)
-    {
+    /// Add a field with key and value to the object
+    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, key: &str, value: T) {
         let id = self.parent.add_key(key);
         let field_start = self.parent.offset() - self.start_pos;
-        f(self.parent);
+        self.parent.append_value(value);
         self.fields.push((id, field_start));
     }
 
+    /// Finalize object with sorted fields
     pub fn finish(mut self) {
-        self.fields.sort_by_key(|&(id, _)| id);
+        // Sort fields by key name
+        self.fields.sort_by(|a, b| {
+            let key_a = &self.parent.dict_keys[a.0 as usize];
+            let key_b = &self.parent.dict_keys[b.0 as usize];
+            key_a.cmp(key_b)
+        });
 
         let data_size = self.parent.offset() - self.start_pos;
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
         let size_bytes = if is_large { 4 } else { 1 };
-        
+
         let max_id = self.fields.iter().map(|&(id, _)| id).max().unwrap_or(0);
         let id_size = int_size(max_id as usize);
         let offset_size = int_size(data_size);
-        
-        let header_size = 1 + size_bytes + num_fields * id_size as usize + (num_fields + 1) * offset_size as usize;
 
-        let current_len = self.parent.buffer.len();
-        self.parent.buffer.resize(current_len + header_size, 0);
-        
-        let src_start = self.start_pos;
-        let src_end = current_len;
-        let dst_start = self.start_pos + header_size;
-        
-        self.parent.buffer.copy_within(src_start..src_end, dst_start);
+        let header_size = 1
+            + size_bytes
+            + num_fields * id_size as usize
+            + (num_fields + 1) * offset_size as usize;
 
+        make_room_for_header(&mut self.parent.buffer, self.start_pos, header_size);
+
+        // Write header
         let mut pos = self.start_pos;
         self.parent.buffer[pos] = object_header(is_large, id_size, offset_size);
         pos += 1;
@@ -304,16 +317,30 @@ impl<'a> ObjectBuilder<'a> {
             pos += 1;
         }
 
+        // Write field IDs (sorted order)
         for &(id, _) in &self.fields {
-            write_offset(&mut self.parent.buffer[pos..pos + id_size as usize], id as usize, id_size);
+            write_offset(
+                &mut self.parent.buffer[pos..pos + id_size as usize],
+                id as usize,
+                id_size,
+            );
             pos += id_size as usize;
         }
 
+        // Write field offsets
         for &(_, offset) in &self.fields {
-            write_offset(&mut self.parent.buffer[pos..pos + offset_size as usize], offset, offset_size);
+            write_offset(
+                &mut self.parent.buffer[pos..pos + offset_size as usize],
+                offset,
+                offset_size,
+            );
             pos += offset_size as usize;
         }
-        write_offset(&mut self.parent.buffer[pos..pos + offset_size as usize], data_size, offset_size);
+        write_offset(
+            &mut self.parent.buffer[pos..pos + offset_size as usize],
+            data_size,
+            offset_size,
+        );
     }
 }
 
@@ -324,117 +351,74 @@ mod tests {
     #[test]
     fn test_simple_usage() {
         let mut builder = VariantBuilder::new();
-        
-        builder.append_null();
-        builder.append_bool(true);
-        builder.append_int8(42);
-        builder.append_string("hello");
-        
-        let result = builder.build();
-        assert!(!result.is_empty());
+
+        builder.append_value(());
+        builder.append_value(true);
+        builder.append_value(42i8);
+        builder.append_value("hello");
+
+        let (metadata, value) = builder.finish();
+        assert!(!metadata.is_empty());
+        assert!(!value.is_empty());
     }
 
     #[test]
     fn test_array() {
         let mut builder = VariantBuilder::new();
-        
+
         {
-            let mut array = builder.begin_array();
-            array.append_element(|b| b.append_int8(1));
-            array.append_element(|b| b.append_int8(2));
-            array.append_element(|b| b.append_string("test"));
+            let mut array = builder.new_array();
+            array.append_value(1i8);
+            array.append_value(2i8);
+            array.append_value("test");
             array.finish();
         }
-        
-        let result = builder.build();
-        assert!(!result.is_empty());
+
+        let (metadata, value) = builder.finish();
+        assert!(!metadata.is_empty());
+        assert!(!value.is_empty());
     }
 
     #[test]
     fn test_object() {
         let mut builder = VariantBuilder::new();
-        
+
         {
-            let mut obj = builder.begin_object();
-            obj.append_field("name", |b| b.append_string("John"));
-            obj.append_field("age", |b| b.append_int8(30));
+            let mut obj = builder.new_object();
+            obj.append_value("name", "John");
+            obj.append_value("age", 42i8);
             obj.finish();
         }
-        
-        let result = builder.build();
-        assert!(!result.is_empty());
+
+        let (metadata, value) = builder.finish();
+        assert!(!metadata.is_empty());
+        assert!(!value.is_empty());
     }
 
     #[test]
-    fn test_compatibility() {
-        use crate::decoder::{decode_int8, decode_short_string, get_basic_type, get_primitive_type};
-        
+    fn test_object_field_ordering() {
         let mut builder = VariantBuilder::new();
-        builder.append_int8(42);
-        let result = builder.build();
-        
-        let header = result[0];
-        assert_eq!(get_basic_type(header).unwrap(), VariantBasicType::Primitive);
-        assert_eq!(get_primitive_type(header).unwrap(), VariantPrimitiveType::Int8);
-        assert_eq!(decode_int8(&result).unwrap(), 42);
-        
-        let mut builder = VariantBuilder::new();
-        builder.append_string("Hello");
-        let result = builder.build();
-        
-        let header = result[0];
-        assert_eq!(get_basic_type(header).unwrap(), VariantBasicType::ShortString);
-        assert_eq!(decode_short_string(&result).unwrap(), "Hello");
-    }
 
-    #[test]
-    fn test_object_structure() {
-        let mut builder = VariantBuilder::new();
-        
         {
-            let mut obj = builder.begin_object();
-            obj.append_field("a", |b| b.append_int8(1));
-            obj.append_field("b", |b| b.append_int8(2));
+            let mut obj = builder.new_object();
+            obj.append_value("zebra", "stripes"); // ID = 0
+            obj.append_value("apple", "red"); // ID = 1
+            obj.append_value("banana", "yellow"); // ID = 2
             obj.finish();
         }
-        
-        let result = builder.build();
-        
-        // Print the byte structure for debugging
-        println!("Object bytes: {:?}", result);
-        
-        // Basic sanity check - should have more than just the header
-        assert!(result.len() > 10, "Object should have substantial size");
-        
-        // Verify it can be parsed by the decoder
-        use crate::decoder::{get_basic_type, VariantBasicType};
-        let header = result[0];
-        assert_eq!(get_basic_type(header).unwrap(), VariantBasicType::Object);
-    }
 
-    #[test]
-    fn test_object_offset_correctness() {
-        // Test with known field sizes to verify offset calculation
-        let mut builder = VariantBuilder::new();
-        
-        {
-            let mut obj = builder.begin_object();
-            // Field "x": int8 = 2 bytes (1 header + 1 value)  
-            obj.append_field("x", |b| b.append_int8(42));
-            // Field "y": string "hi" = 3 bytes (1 header + 2 chars)
-            obj.append_field("y", |b| b.append_string("hi"));
-            obj.finish();
-        }
-        
-        let result = builder.build();
-        println!("Object with known sizes: {:?}", result);
-        
-        // Verify the structure makes sense
-        assert!(result.len() > 5, "Should have reasonable size");
-        
-        // Test that it doesn't crash when parsed
-        use crate::decoder::{get_basic_type, VariantBasicType};
-        let header = result[0];
-        assert_eq!(get_basic_type(header).unwrap(), VariantBasicType::Object);
+        let (_, value) = builder.finish();
+
+        let header = value[0];
+        assert_eq!(header & 0x03, VariantBasicType::Object as u8);
+
+        let field_count = value[1] as usize;
+        assert_eq!(field_count, 3);
+
+        // Get field IDs from the object header
+        let field_ids: Vec<u8> = value[2..5].to_vec();
+
+        // apple(1), banana(2), zebra(0)
+        assert_eq!(field_ids, vec![1, 2, 0]);
     }
 }

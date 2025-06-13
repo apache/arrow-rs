@@ -32,9 +32,9 @@
 mod decoder;
 mod variant;
 // TODO: dead code removal
+mod builder;
 #[allow(dead_code)]
 mod utils;
-mod builder;
 
-pub use variant::*;
 pub use builder::*;
+pub use variant::*;

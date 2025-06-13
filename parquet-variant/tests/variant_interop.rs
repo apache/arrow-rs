@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use arrow_schema::ArrowError;
-use parquet_variant::{Variant, VariantMetadata, VariantBuilder};
+use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -85,26 +85,34 @@ fn variant_primitive() -> Result<(), ArrowError> {
 #[test]
 fn variant_primitive_builder() -> Result<(), ArrowError> {
     let builder_cases: [(&str, fn(&mut VariantBuilder)); 6] = [
-        ("primitive_boolean_false", |b: &mut VariantBuilder| b.append(&Variant::BooleanFalse)),
-        ("primitive_boolean_true", |b: &mut VariantBuilder| b.append(&Variant::BooleanTrue)),
-        ("primitive_int8", |b: &mut VariantBuilder| b.append(&Variant::Int8(42))),
-        ("primitive_null", |b: &mut VariantBuilder| b.append(&Variant::Null)),
-        ("short_string", |b: &mut VariantBuilder| b.append(&Variant::ShortString("Less than 64 bytes (❤\u{fe0f} with utf8)"))),
-        ("primitive_string", |b: &mut VariantBuilder| b.append(&Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!"))),
+        ("primitive_boolean_false", |b: &mut VariantBuilder| {
+            b.append_value(false)
+        }),
+        ("primitive_boolean_true", |b: &mut VariantBuilder| {
+            b.append_value(true)
+        }),
+        ("primitive_int8", |b: &mut VariantBuilder| {
+            b.append_value(42i8)
+        }),
+        ("primitive_null", |b: &mut VariantBuilder| {
+            b.append_value(())
+        }),
+        ("short_string", |b: &mut VariantBuilder| {
+            b.append_value("Less than 64 bytes (❤\u{fe0f} with utf8)")
+        }),
+        ("primitive_string", |b: &mut VariantBuilder| {
+            b.append_value("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")
+        }),
     ];
 
     for (case, build_fn) in builder_cases {
         let mut builder = VariantBuilder::new();
         build_fn(&mut builder);
         let (built_metadata, built_value) = builder.finish();
-        let built_variant_metadata = VariantMetadata::try_new(&built_metadata)?;
-        let built_variant = Variant::try_new(&built_variant_metadata, &built_value)?;
+        let (expected_metadata, expected_value) = load_case(case)?;
 
-        // Load the reference data to compare against
-        let (metadata_bytes, value) = load_case(case)?;
-        let metadata = VariantMetadata::try_new(&metadata_bytes)?;
-        let want = Variant::try_new(&metadata, &value)?;
-        assert_eq!(built_variant, want, "Builder output doesn't match expected for case: {}", case);
+        assert_eq!(built_metadata, expected_metadata);
+        assert_eq!(built_value, expected_value);
     }
     Ok(())
 }
@@ -139,52 +147,21 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
 }
 
 #[test]
-fn variant_non_primitive_builder() -> Result<(), ArrowError> {
-    let builder_cases: [(&str, fn(&mut VariantBuilder)); 2] = [
-        ("object_primitive", |b: &mut VariantBuilder| {
-            let mut obj = b.begin_object();
-            obj.append_field("int_field", |b| b.append(&Variant::Int8(42)));
-            obj.finish();
-        }),
-        ("array_primitive", |b: &mut VariantBuilder| {
-            let mut arr = b.begin_array();
-            arr.append_element(|b| b.append(&Variant::Int8(2)));
-            arr.append_element(|b| b.append(&Variant::Int8(1)));
-            arr.finish();
-        }),
-    ];
+fn variant_array_builder() -> Result<(), ArrowError> {
+    let mut builder = VariantBuilder::new();
 
-    for (case, build_fn) in builder_cases {
-        let mut builder = VariantBuilder::new();
-        build_fn(&mut builder);
-        let (built_metadata, built_value) = builder.finish();
-        let built_variant_metadata = VariantMetadata::try_new(&built_metadata)?;
-        let built_variant = Variant::try_new(&built_variant_metadata, &built_value)?;
+    let mut arr = builder.new_array();
+    arr.append_value(2);
+    arr.append_value(1);
+    arr.append_value(5);
+    arr.append_value(9);
+    arr.finish();
 
-        // Load the reference data to compare against
-        let (metadata, value) = load_case(case)?;
-        let metadata = VariantMetadata::try_new(&metadata)?;
-        let want = Variant::try_new(&metadata, &value)?;
+    let (built_metadata, built_value) = builder.finish();
+    let (expected_metadata, expected_value) = load_case("array_primitive")?;
 
-        match case {
-            "object_primitive" => {
-                assert!(matches!(built_variant, Variant::Object(_)), "Expected object variant for case: {}", case);
-                if let Variant::Object(_obj) = built_variant {
-                    assert!(built_variant_metadata.dictionary_size() > 0, "Built object should have dictionary entries");
-                }
-            }
-            "array_primitive" => {
-                if let Variant::Array(arr) = built_variant {
-                    let v0 = arr.get(0)?;
-                    let v1 = arr.get(1)?;
-                    assert!(matches!(v0, Variant::Int8(2)), "Expected first element to be Int8(2) for case: {}", case);
-                    assert!(matches!(v1, Variant::Int8(1)), "Expected second element to be Int8(1) for case: {}", case);
-                } else {
-                    panic!("Expected an array variant for case: {}", case);
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
+    assert_eq!(built_metadata, expected_metadata);
+    assert_eq!(built_value, expected_value);
+
     Ok(())
 }
