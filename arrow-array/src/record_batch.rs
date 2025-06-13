@@ -378,7 +378,7 @@ impl RecordBatch {
     /// Returns an error if `schema` is not a superset of the current schema
     /// as determined by [`Schema::contains`]
     ///
-    /// See also [`Self::metadata_mut`].
+    /// See also [`Self::schema_metadata_mut`].
     pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         if !schema.contains(self.schema.as_ref()) {
             return Err(ArrowError::SchemaError(format!(
@@ -407,7 +407,7 @@ impl RecordBatch {
     /// Mutable access to the metadata of the schema.
     ///
     /// This allows you to modify [`Schema::metadata`] of [`Self::schema`] in a convenient and fast way.
-    pub fn metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
+    pub fn schema_metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
         let schema = Arc::make_mut(&mut self.schema);
         &mut schema.metadata
     }
