@@ -18,7 +18,7 @@
 use crate::{null_sentinel, RowConverter, Rows, SortField};
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{Array, RunArray};
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, BooleanBufferBuilder};
 use arrow_schema::{ArrowError, SortOptions};
 
 /// Computes the lengths of each row for a RunEndEncodedArray
@@ -101,13 +101,13 @@ pub unsafe fn decode<R: RunEndIndexType>(
     let opts = field.options;
 
     // Track null values and collect row data to avoid borrow issues
-    let mut valid_flags = Vec::with_capacity(rows.len());
+    let mut valid_flags = BooleanBufferBuilder::new(rows.len());
     let mut row_data = Vec::with_capacity(rows.len());
 
     // First pass: collect valid flags and data for each row
     for row in rows.iter() {
         let is_valid = row[0] != null_sentinel(opts);
-        valid_flags.push(is_valid);
+        valid_flags.append(is_valid);
         if is_valid {
             row_data.push(&row[1..]);
         } else {
@@ -115,13 +115,17 @@ pub unsafe fn decode<R: RunEndIndexType>(
         }
     }
 
+    // Build the boolean buffer
+    let valid_buffer = valid_flags.finish();
+
     // Now build run ends and values
     let mut run_ends = Vec::new();
     let mut values_data = Vec::new();
     let mut current_value_idx = 0;
     let mut current_run_end = 0;
 
-    for (idx, is_valid) in valid_flags.iter().enumerate() {
+    for idx in 0..rows.len() {
+        let is_valid = valid_buffer.value(idx);
         current_run_end += 1;
 
         if idx == 0 {
@@ -134,8 +138,8 @@ pub unsafe fn decode<R: RunEndIndexType>(
         // Check if this row is different from the previous one
         let value_changed = if !is_valid {
             // Null value - check if previous was null
-            !valid_flags[idx - 1]
-        } else if !valid_flags[idx - 1] {
+            !valid_buffer.value(idx - 1)
+        } else if !valid_buffer.value(idx - 1) {
             // Previous was null, this is not
             true
         } else {
@@ -171,7 +175,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
 
     // Update rows to consume the data we've processed
     for i in 0..rows.len() {
-        let row_len = if valid_flags[i] {
+        let row_len = if valid_buffer.value(i) {
             1 + row_data[i].len()
         } else {
             1
