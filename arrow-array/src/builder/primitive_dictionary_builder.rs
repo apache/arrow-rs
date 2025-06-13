@@ -171,7 +171,32 @@ where
         }
     }
 
-    /// TODO docs
+    /// Creates a new `PrimitiveDictionaryBuilder` from the existing builder with the same
+    /// keys and values, but with a new data type for the keys.
+    ///
+    /// # Example
+    /// ```
+    /// #
+    /// # use arrow_array::builder::PrimitiveDictionaryBuilder;
+    /// # use arrow_array::types::{UInt8Type, UInt16Type, UInt64Type};
+    /// # use arrow_array::UInt16Array;
+    /// # use arrow_schema::ArrowError;
+    ///
+    /// let mut u8_keyed_builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt64Type>::new();
+    ///
+    /// // appending too many values causes the dictionary to overflow
+    /// for i in 0..256 {
+    ///     u8_keyed_builder.append_value(i);
+    /// }
+    /// let result = u8_keyed_builder.append(256);
+    /// assert!(matches!(result, Err(ArrowError::DictionaryKeyOverflowError{})));
+    ///
+    /// // we need to upgrade to a larger key type
+    /// let mut u16_keyed_builder = PrimitiveDictionaryBuilder::<UInt16Type, UInt64Type>::try_new_from_builder(u8_keyed_builder).unwrap();
+    /// let dictionary_array = u16_keyed_builder.finish();
+    /// let keys = dictionary_array.keys();
+    ///
+    /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
@@ -193,6 +218,11 @@ where
                 ))
             })
         })?;
+
+        // drop source key here because currently source_keys and new_keys are holding reference to
+        // the same underlying null_buffer. Below we want to call new_keys.into_builder() it must
+        // be the only reference holder.
+        drop(source_keys);
 
         Ok(Self {
             map,
@@ -465,9 +495,7 @@ mod tests {
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{
-        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Int16Type, Int32Type,
-        Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
+        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type
     };
 
     #[test]
@@ -697,6 +725,7 @@ mod tests {
     {
         let mut source = PrimitiveDictionaryBuilder::<K1, V>::new();
         source.append(values[0]).unwrap();
+        source.append_null();
         source.append(values[1]).unwrap();
         source.append(values[2]).unwrap();
 
@@ -706,6 +735,7 @@ mod tests {
         let mut expected_keys_builder = PrimitiveBuilder::<K2>::new();
         expected_keys_builder
             .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
+        expected_keys_builder.append_null();
         expected_keys_builder
             .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
         expected_keys_builder
@@ -761,5 +791,6 @@ mod tests {
         _test_try_new_from_builder_generic_for_value::<TimestampNanosecondType>(vec![1, 2, 3]);
         // test some floating point types
         _test_try_new_from_builder_generic_for_value::<Float32Type>(vec![0.1, 0.2, 0.3]);
+        _test_try_new_from_builder_generic_for_value::<Float64Type>(vec![-0.1, 0.2, 0.3]);
     }
 }
