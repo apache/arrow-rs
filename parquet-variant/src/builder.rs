@@ -113,35 +113,36 @@ impl VariantBuilder {
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        // Create metadata buffer with proper header
-        let mut metadata = Vec::new();
+        let nkeys = self.dict_keys.len();
         
-        // Write metadata header: version=1, not sorted, offset_size=1 (offset_size_minus_one=0)
-        // Header format: bits 7-6: offset_size_minus_one (00), bit 5: sorted (0), bits 4-0: version (1)
-        let header = 0x01; // version = 1, sorted = false, offset_size_minus_one = 0
-        metadata.push(header);
+        // Calculate total size needed for metadata
+        let total_dict_size: usize = self.dict_keys.iter().map(|k| k.len()).sum();
+        let offset_size = 1; // We use 1 byte offsets for now
+        let offset_start = 1 + offset_size; // Skip header and dict size
+        let string_start = offset_start + (nkeys + 1) * offset_size;
+        let metadata_size = string_start + total_dict_size;
         
-        // Write dictionary size (4 bytes little endian)
-        metadata.extend_from_slice(&(self.dict_keys.len() as u32).to_le_bytes());
+        // Allocate the entire buffer
+        let mut metadata = vec![0u8; metadata_size];
         
-        // Write dictionary offsets (for empty dict, just write [0])
-        if self.dict_keys.is_empty() {
-            metadata.push(0); // offset 0 for empty dictionary
-        } else {
-            // Write offsets for each dictionary entry plus end offset
-            let mut current_offset = 0u32;
-            metadata.push(current_offset as u8); // start offset
-            
-            for key in &self.dict_keys {
-                current_offset += key.len() as u32;
-                metadata.push(current_offset as u8);
-            }
-            
-            // Write the dictionary string data
-            for key in &self.dict_keys {
-                metadata.extend_from_slice(key.as_bytes());
-            }
+        // Write header: version=1, not sorted, offset_size=1 (offset_size_minus_one=0)
+        metadata[0] = 0x01;
+        
+        // Write dictionary size
+        metadata[1] = nkeys as u8;
+        
+        // Write offsets and string data
+        let mut cur_offset = 0;
+        for (i, key) in self.dict_keys.iter().enumerate() {
+            // Write offset
+            metadata[offset_start + i] = cur_offset as u8;
+            // Write string data
+            let start = string_start + cur_offset;
+            metadata[start..start + key.len()].copy_from_slice(key.as_bytes());
+            cur_offset += key.len();
         }
+        // Write final offset
+        metadata[offset_start + nkeys] = cur_offset as u8;
         
         (metadata, self.buffer)
     }

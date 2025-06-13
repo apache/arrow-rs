@@ -78,9 +78,8 @@ fn variant_primitive() -> Result<(), ArrowError> {
         let (metadata_bytes, value) = load_case(case)?;
         let metadata = VariantMetadata::try_new(&metadata_bytes)?;
         let got = Variant::try_new(&metadata, &value)?;
-        assert_eq!(got, want, "Failed to decode case: {}", case);
+        assert_eq!(got, want);
 
-        // Test that our builder can create equivalent data
         let mut builder = VariantBuilder::new();
         
         match want {
