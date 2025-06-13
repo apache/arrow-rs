@@ -179,3 +179,42 @@ pub unsafe fn decode<R: RunEndIndexType>(
     // Create the RunEndEncodedArray
     RunArray::<R>::try_new(&run_ends_array, &values[0])
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{RowConverter, SortField};
+    use arrow_array::types::Int32Type;
+    use arrow_array::RunArray;
+    use arrow_schema::DataType;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_run_end_encoded_supports_datatype() {
+        // Test that the RowConverter correctly supports run-end encoded arrays
+        assert!(RowConverter::supports_datatype(&DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+        )));
+    }
+
+    #[test]
+    fn test_run_end_encoded_sorting() {
+        // Create two run arrays with different values
+        let run_array1: RunArray<Int32Type> = vec!["b", "b", "a"].into_iter().collect();
+        let run_array2: RunArray<Int32Type> = vec!["a", "a", "b"].into_iter().collect();
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+        ))])
+        .unwrap();
+
+        let rows1 = converter.convert_columns(&[Arc::new(run_array1)]).unwrap();
+        let rows2 = converter.convert_columns(&[Arc::new(run_array2)]).unwrap();
+
+        // Compare rows - the second row should be less than the first
+        assert!(rows2.row(0) < rows1.row(0));
+        assert!(rows2.row(1) < rows1.row(0));
+        assert!(rows1.row(2) < rows2.row(2));
+    }
+}

@@ -1609,9 +1609,6 @@ unsafe fn decode_column(
 }
 
 #[cfg(test)]
-mod run_test;
-
-#[cfg(test)]
 mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
