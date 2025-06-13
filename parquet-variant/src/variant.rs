@@ -303,7 +303,7 @@ impl<'m> VariantMetadata<'m> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
-    pub metadata: &'m VariantMetadata<'m>,
+    pub metadata: VariantMetadata<'m>,
     pub value_metadata: u8,
     pub value_data: &'v [u8],
 }
@@ -320,7 +320,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantArray<'m, 'v> {
-    pub metadata: &'m VariantMetadata<'m>,
+    pub metadata: VariantMetadata<'m>,
     pub value_metadata: u8,
     pub value_data: &'v [u8],
 }
@@ -389,7 +389,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             first_value_byte + start_field_offset_from_first_value_byte
                 ..first_value_byte + end_field_offset_from_first_value_byte,
         )?;
-        let variant = Variant::try_new(self.metadata, variant_value_bytes)?;
+        let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)
     }
 }
@@ -430,8 +430,41 @@ pub enum Variant<'m, 'v> {
 }
 
 impl<'m, 'v> Variant<'m, 'v> {
-    /// Parse the buffers and return the appropriate variant.
-    pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
+    /// Create a new `Variant` from metadata and value.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// assert_eq!(
+    ///   Variant::ShortString("HI"),
+    ///   Variant::try_new(&metadata, &value).unwrap()
+    /// );
+    /// ```
+    pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
+        let metadata = VariantMetadata::try_new(metadata)?;
+        Self::try_new_with_metadata(metadata, value)
+    }
+
+    /// Create a new variant with existing metadata
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// // parse the header metadata first
+    /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+    /// assert_eq!(
+    ///   Variant::ShortString("HI"),
+    ///   Variant::try_new_with_metadata(metadata, &value).unwrap()
+    /// );
+    /// ```
+    pub fn try_new_with_metadata(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+    ) -> Result<Self, ArrowError> {
         let value_metadata = *first_byte_from_slice(value)?;
         let value_data = slice_from_slice(value, 1..)?;
         let new_self = match get_basic_type(value_metadata)? {
@@ -995,7 +1028,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::Array(VariantArray { metadata, .. }) => Some(*metadata),
+            | Variant::Array(VariantArray { metadata, .. }) => Some(metadata),
             _ => None,
         }
     }

@@ -76,8 +76,7 @@ fn get_non_primitive_cases() -> Vec<&'static str> {
 fn variant_primitive() -> Result<(), ArrowError> {
     let cases = get_primitive_cases();
     for (case, want) in cases {
-        let (metadata_bytes, value) = load_case(case)?;
-        let metadata = VariantMetadata::try_new(&metadata_bytes)?;
+        let (metadata, value) = load_case(case)?;
         let got = Variant::try_new(&metadata, &value)?;
         assert_eq!(got, want);
     }
@@ -89,13 +88,13 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
     let cases = get_non_primitive_cases();
     for case in cases {
         let (metadata, value) = load_case(case)?;
-        let metadata = VariantMetadata::try_new(&metadata)?;
+        let variant_metadata = VariantMetadata::try_new(&metadata)?;
         let variant = Variant::try_new(&metadata, &value)?;
         match case {
             "object_primitive" => {
                 assert!(matches!(variant, Variant::Object(_)));
-                assert_eq!(metadata.dictionary_size(), 7);
-                let dict_val = metadata.get_field_by(0)?;
+                assert_eq!(variant_metadata.dictionary_size(), 7);
+                let dict_val = variant_metadata.get_field_by(0)?;
                 assert_eq!(dict_val, "int_field");
             }
             "array_primitive" => match variant {
