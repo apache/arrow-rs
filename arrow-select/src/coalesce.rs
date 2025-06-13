@@ -20,14 +20,14 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::concat::concat_batches;
+use crate::concat::concat;
 use arrow_array::StringViewArray;
 use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
+use arrow_buffer::{Buffer, NullBufferBuilder};
 use arrow_data::ByteView;
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
-
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
@@ -123,8 +123,8 @@ pub struct BatchCoalescer {
     schema: SchemaRef,
     /// output batch size
     batch_size: usize,
-    /// In-progress buffered batches
-    buffer: Vec<RecordBatch>,
+    /// In-progress arrays
+    in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -140,10 +140,16 @@ impl BatchCoalescer {
     ///   Typical values are `4096` or `8192` rows.
     ///
     pub fn new(schema: SchemaRef, batch_size: usize) -> Self {
+        let in_progress_arrays = schema
+            .fields()
+            .iter()
+            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .collect::<Vec<_>>();
+
         Self {
             schema,
             batch_size,
-            buffer: vec![],
+            in_progress_arrays,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -158,13 +164,10 @@ impl BatchCoalescer {
     /// Push next batch into the Coalescer
     ///
     /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
-    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
+    pub fn push_batch(&mut self, mut batch: RecordBatch) -> Result<(), ArrowError> {
         if batch.num_rows() == 0 {
-            // If the batch is empty, we don't need to do anything
             return Ok(());
         }
-
-        let mut batch = gc_string_view_batch(batch);
 
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
@@ -174,18 +177,28 @@ impl BatchCoalescer {
             let head_batch = batch.slice(0, remaining_rows);
             batch = batch.slice(remaining_rows, batch.num_rows() - remaining_rows);
             self.buffered_rows += head_batch.num_rows();
-            self.buffer.push(head_batch);
+            self.buffer_batch(head_batch);
             self.finish_buffered_batch()?;
         }
         // Add the remaining rows to the buffer
         self.buffered_rows += batch.num_rows();
-        self.buffer.push(batch);
+        self.buffer_batch(batch);
 
         // If we have reached the target batch size, finalize the buffered batch
         if self.buffered_rows >= self.batch_size {
             self.finish_buffered_batch()?;
         }
         Ok(())
+    }
+
+    /// Appends the rows in `batch` to the in progress arrays
+    fn buffer_batch(&mut self, batch: RecordBatch) {
+        let (_schema, arrays, row_count) = batch.into_parts();
+        debug_assert!(row_count > 0);
+        for (idx, array) in arrays.into_iter().enumerate() {
+            // Push the array to the in-progress array
+            self.in_progress_arrays[idx].push_array(array);
+        }
     }
 
     /// Concatenates any buffered batches into a single `RecordBatch` and
@@ -196,11 +209,25 @@ impl BatchCoalescer {
     ///
     /// See [`Self::next_completed_batch()`] for the completed batches.
     pub fn finish_buffered_batch(&mut self) -> Result<(), ArrowError> {
-        if self.buffer.is_empty() {
+        if self.buffered_rows == 0 {
             return Ok(());
         }
-        let batch = concat_batches(&self.schema, &self.buffer)?;
-        self.buffer.clear();
+        let new_arrays = self
+            .in_progress_arrays
+            .iter_mut()
+            .map(|array| array.finish())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
+        for (array, field) in new_arrays.iter().zip(self.schema.fields().iter()) {
+            assert_eq!(array.data_type(), field.data_type());
+            assert_eq!(array.len(), self.buffered_rows);
+        }
+
+        // SAFETY: we verified the length and types match above
+        let batch = unsafe {
+            RecordBatch::new_unchecked(Arc::clone(&self.schema), new_arrays, self.buffered_rows)
+        };
+
         self.buffered_rows = 0;
         self.completed.push_back(batch);
         Ok(())
@@ -208,7 +235,7 @@ impl BatchCoalescer {
 
     /// Returns true if there is any buffered data
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty() && self.completed.is_empty()
+        self.buffered_rows == 0 && self.completed.is_empty()
     }
 
     /// Returns true if there are any completed batches
@@ -222,121 +249,338 @@ impl BatchCoalescer {
     }
 }
 
-/// Heuristically compact `StringViewArray`s to reduce memory usage, if needed
+/// Return a new `InProgressArray` for the given data type
+fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
+    match data_type {
+        DataType::Utf8View => Box::new(InProgressStringViewArray::new(batch_size)),
+        _ => Box::new(GenericInProgressArray::new()),
+    }
+}
+
+/// Incrementally builds in progress arrays
 ///
-/// Decides when to consolidate the StringView into a new buffer to reduce
-/// memory usage and improve string locality for better performance.
+/// There are different specialized implementations of this trait for different
+/// array types (e.g., [`StringViewArray`], [`UInt32Array`], etc.).
 ///
-/// This differs from `StringViewArray::gc` because:
-/// 1. It may not compact the array depending on a heuristic.
-/// 2. It uses a precise block size to reduce the number of buffers to track.
+/// This is a subset of the ArrayBuilder APIs, but specialized for
+/// the incremental usecase
+trait InProgressArray: std::fmt::Debug {
+    /// Push a new array to the in-progress array
+    fn push_array(&mut self, array: ArrayRef);
+
+    /// Finish the currently in-progress array and clear state for the next
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+}
+
+/// Fallback implementation for [`InProgressArray`]
 ///
-/// # Heuristic
-///
-/// If the average size of each view is larger than 32 bytes, we compact the array.
-///
-/// `StringViewArray` include pointers to buffer that hold the underlying data.
-/// One of the great benefits of `StringViewArray` is that many operations
-/// (e.g., `filter`) can be done without copying the underlying data.
-///
-/// However, after a while (e.g., after `FilterExec` or `HashJoinExec`) the
-/// `StringViewArray` may only refer to a small portion of the buffer,
-/// significantly increasing memory usage.
-fn gc_string_view_batch(batch: RecordBatch) -> RecordBatch {
-    let (schema, columns, num_rows) = batch.into_parts();
-    let new_columns: Vec<ArrayRef> = columns
-        .into_iter()
-        .map(|c| {
-            // Try to re-create the `StringViewArray` to prevent holding the underlying buffer too long.
-            let Some(s) = c.as_string_view_opt() else {
-                return c;
-            };
-            if s.data_buffers().is_empty() {
-                // If there are no data buffers, we can just return the array as is
-                return c;
-            }
-            let ideal_buffer_size: usize = s
-                .views()
+/// Internally, buffers arrays and calls [`concat`]
+#[derive(Debug)]
+struct GenericInProgressArray {
+    /// The buffered arrays
+    buffered_arrays: Vec<ArrayRef>,
+}
+
+impl GenericInProgressArray {
+    /// Create a new `GenericInProgressArray`
+    pub fn new() -> Self {
+        Self {
+            buffered_arrays: vec![],
+        }
+    }
+}
+impl InProgressArray for GenericInProgressArray {
+    fn push_array(&mut self, array: ArrayRef) {
+        self.buffered_arrays.push(array);
+    }
+
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
+        // Concatenate all buffered arrays into a single array, which uses 2x
+        // peak memory
+        let array = concat(
+            &self
+                .buffered_arrays
                 .iter()
-                .map(|v| {
-                    let len = (*v as u32) as usize;
-                    if len > 12 {
-                        len
-                    } else {
-                        0
-                    }
-                })
-                .sum();
-            let actual_buffer_size = s.get_buffer_memory_size();
-            let buffers = s.data_buffers();
+                .map(|array| array as &dyn Array)
+                .collect::<Vec<_>>(),
+        )?;
+        self.buffered_arrays.clear();
+        Ok(array)
+    }
+}
 
-            // Re-creating the array copies data and can be time consuming.
-            // We only do it if the array is sparse
-            if actual_buffer_size > (ideal_buffer_size * 2) {
-                if ideal_buffer_size == 0 {
-                    // If the ideal buffer size is 0, all views are inlined
-                    // so just reuse the views
-                    return Arc::new(unsafe {
-                        StringViewArray::new_unchecked(
-                            s.views().clone(),
-                            vec![],
-                            s.nulls().cloned(),
-                        )
-                    });
-                }
-                // We set the block size to `ideal_buffer_size` so that the new StringViewArray only has one buffer, which accelerate later concat_batches.
-                // See https://github.com/apache/arrow-rs/issues/6094 for more details.
-                let mut buffer: Vec<u8> = Vec::with_capacity(ideal_buffer_size);
+/// InProgressArray for StringViewArray
+///
+/// TODO: genreric for GenericByteView
+#[derive(Debug)]
+struct InProgressStringViewArray {
+    /// the target batch size (and thus size for views allocation)
+    batch_size: usize,
+    /// The in progress vies
+    views: Vec<u128>,
+    /// In progress nulls
+    nulls: NullBufferBuilder,
+    /// current buffer
+    current: Option<Vec<u8>>,
+    /// completed buffers
+    completed: Vec<Buffer>,
+    /// Where to get the next buffer
+    buffer_source: BufferSource,
+}
 
-                let views: Vec<u128> = s
-                    .views()
-                    .as_ref()
-                    .iter()
-                    .cloned()
-                    .map(|v| {
-                        let mut b: ByteView = ByteView::from(v);
+impl InProgressStringViewArray {
+    fn new(batch_size: usize) -> Self {
+        let buffer_source = BufferSource::new();
 
-                        if b.length > 12 {
-                            let offset = buffer.len() as u32;
-                            buffer.extend_from_slice(
-                                buffers[b.buffer_index as usize]
-                                    .get(b.offset as usize..b.offset as usize + b.length as usize)
-                                    .expect("Invalid buffer slice"),
-                            );
-                            b.offset = offset;
-                            b.buffer_index = 0; // Set buffer index to 0, as we only have one buffer
-                        }
+        Self {
+            batch_size,
+            views: Vec::new(),                         // allocate in push
+            nulls: NullBufferBuilder::new(batch_size), // no allocation
+            current: None,
+            completed: vec![],
+            buffer_source,
+        }
+    }
 
-                        b.into()
-                    })
-                    .collect();
+    /// Allocate space for output views and nulls if needed
+    ///
+    /// This is done when on write (when we know it is needed) rather than
+    /// eagerly to avoid allocations that are not used.
+    fn ensure_capacity(&mut self) {
+        self.views.reserve(self.batch_size);
+    }
 
-                let buffers = if buffer.is_empty() {
-                    vec![]
+    /// Update self.nulls with the nulls from the StringViewArray
+    fn push_nulls(&mut self, s: &StringViewArray) {
+        if let Some(nulls) = s.nulls().as_ref() {
+            self.nulls.append_buffer(nulls);
+        } else {
+            self.nulls.append_n_non_nulls(s.len());
+        }
+    }
+
+    /// Finishes the currently inprogress block, if any
+    fn finish_current(&mut self) {
+        let Some(next_buffer) = self.current.take() else {
+            return;
+        };
+        self.completed.push(next_buffer.into());
+    }
+
+    /// Append views to self.views, updating the buffer index if necessary
+    #[inline(never)]
+    fn append_views_and_update_buffer_index(&mut self, views: &[u128], buffers: &[Buffer]) {
+        if let Some(buffer) = self.current.take() {
+            self.completed.push(buffer.into());
+        }
+        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
+        self.completed.extend_from_slice(buffers);
+
+        if starting_buffer == 0 {
+            // If there are no buffers, we can just use the views as is
+            self.views.extend_from_slice(views);
+        } else {
+            // If there are buffers, we need to update the buffer index
+            let updated_views = views.iter().map(|v| {
+                let mut byte_view = ByteView::from(*v);
+                if byte_view.length > 12 {
+                    // Small views (<=12 bytes) are inlined, so only need to update large views
+                    byte_view.buffer_index += starting_buffer;
+                };
+                byte_view.as_u128()
+            });
+
+            self.views.extend(updated_views);
+        }
+    }
+
+    /// Append views to self.views, copying data from the buffers into
+    /// self.buffers
+    ///
+    /// # Arguments
+    /// - `views` - the views to append
+    /// - `actual_buffer_size` - the size of the bytes pointed to by the views
+    /// - `buffers` - the buffers the reviews point to
+    #[inline(never)]
+    fn append_views_and_copy_strings(
+        &mut self,
+        views: &[u128],
+        actual_buffer_size: usize,
+        buffers: &[Buffer],
+    ) {
+        let mut current = match self.current.take() {
+            Some(current) => {
+                // If the current buffer is not large enough, allocate a new one
+                // TODO copy as many views that will fit into the current buffer?
+                if current.len() + actual_buffer_size > current.capacity() {
+                    self.completed.push(current.into());
+                    self.buffer_source.next_buffer(actual_buffer_size)
                 } else {
-                    vec![buffer.into()]
-                };
-
-                let gc_string = unsafe {
-                    StringViewArray::new_unchecked(views.into(), buffers, s.nulls().cloned())
-                };
-
-                Arc::new(gc_string)
-            } else {
-                c
+                    current
+                }
             }
-        })
-        .collect();
-    unsafe { RecordBatch::new_unchecked(schema, new_columns, num_rows) }
+            None => {
+                // If there is no current buffer, allocate a new one
+                self.buffer_source.next_buffer(actual_buffer_size)
+            }
+        };
+
+        let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
+
+        // Copy the views, updating the buffer index and copying the data as needed
+        let new_views = views.iter().map(|v| {
+            let mut b: ByteView = ByteView::from(*v);
+            if b.length > 12 {
+                let buffer_index = b.buffer_index as usize;
+                let buffer_offset = b.offset as usize;
+                let str_len = b.length as usize;
+
+                // Update view to location in current
+                b.offset = current.len() as u32;
+                b.buffer_index = new_buffer_index;
+
+                // safety: input views are validly constructed
+                let src = unsafe {
+                    buffers
+                        .get_unchecked(buffer_index)
+                        .get_unchecked(buffer_offset..buffer_offset + str_len)
+                };
+                current.extend_from_slice(src);
+            }
+            b.as_u128()
+        });
+        self.views.extend(new_views);
+        self.current = Some(current);
+    }
+}
+
+impl InProgressArray for InProgressStringViewArray {
+    fn push_array(&mut self, array: ArrayRef) {
+        self.ensure_capacity();
+        let s = array.as_string_view();
+
+        // add any nulls, as necessary
+        self.push_nulls(s);
+
+        // If there are no data buffers in s (all inlined views), can append the
+        // views/nulls and done
+        if s.data_buffers().is_empty() {
+            self.views.extend_from_slice(s.views().as_ref());
+            return;
+        }
+
+        let ideal_buffer_size = s.total_buffer_bytes_used();
+        let actual_buffer_size = s.get_buffer_memory_size();
+        let buffers = s.data_buffers();
+
+        // None of the views references the buffers (e.g. sliced)
+        if ideal_buffer_size == 0 {
+            self.views.extend_from_slice(s.views().as_ref());
+            return;
+        }
+
+        // Copying the strings into a buffer can be time-consuming so
+        // only do it if the array is sparse
+        if actual_buffer_size > (ideal_buffer_size * 2) {
+            self.append_views_and_copy_strings(s.views(), actual_buffer_size, buffers);
+        } else {
+            self.append_views_and_update_buffer_index(s.views(), buffers);
+        }
+    }
+
+    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
+        self.finish_current();
+        assert!(self.current.is_none());
+        let buffers = std::mem::take(&mut self.completed);
+        let views = std::mem::take(&mut self.views);
+        let nulls = self.nulls.finish();
+        self.nulls = NullBufferBuilder::new(self.batch_size);
+
+        // Safety: we created valid views and buffers above
+        let new_array = unsafe { StringViewArray::new_unchecked(views.into(), buffers, nulls) };
+        Ok(Arc::new(new_array))
+    }
+}
+
+const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
+const MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024; // 2MiB
+
+/// Manages allocating new buffers for `StringViewArray`
+///
+/// TODO: explore reusing buffers
+#[derive(Debug)]
+struct BufferSource {
+    current_size: usize,
+}
+
+impl BufferSource {
+    fn new() -> Self {
+        Self {
+            current_size: STARTING_BLOCK_SIZE,
+        }
+    }
+
+    /// Return a new buffer, with a capacity of at least `min_size`
+    fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
+        let size = self.next_size(min_size);
+        Vec::with_capacity(size)
+    }
+
+    fn next_size(&mut self, min_size: usize) -> usize {
+        if self.current_size < MAX_BLOCK_SIZE {
+            // If the current size is less than the max size, we can double it
+            // we have fixed start/end block sizes, so we can't overflow
+            self.current_size = self.current_size.saturating_mul(2);
+        }
+        if self.current_size >= min_size {
+            self.current_size
+        } else {
+            // increase next size until we hit min_size or max  size
+            while self.current_size <= min_size && self.current_size < MAX_BLOCK_SIZE {
+                self.current_size = self.current_size.saturating_mul(2);
+            }
+            self.current_size.max(min_size)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::{RecordBatchOptions, StringViewArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
     use std::ops::Range;
+
+    #[test]
+    fn test_buffer_source() {
+        let mut source = BufferSource::new();
+        assert_eq!(source.next_size(1000), 8192);
+        assert_eq!(source.next_size(1000), 16384);
+        assert_eq!(source.next_size(1000), 32768);
+        assert_eq!(source.next_size(1000), 65536);
+        assert_eq!(source.next_size(1000), 131072);
+        assert_eq!(source.next_size(1000), 262144);
+        assert_eq!(source.next_size(1000), 524288);
+        assert_eq!(source.next_size(1000), 1024 * 1024);
+        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
+        // clamped to max size
+        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
+        // Can override with larger size request
+        assert_eq!(source.next_size(10_000_000), 10_000_000);
+    }
+
+    #[test]
+    fn test_buffer_source_with_min() {
+        let mut source = BufferSource::new();
+        assert_eq!(source.next_size(1_000_000), 1024 * 1024);
+        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
+        // clamped to max size
+        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
+        // Can override with larger size request
+        assert_eq!(source.next_size(10_000_000), 10_000_000);
+    }
 
     #[test]
     fn test_coalesce() {
