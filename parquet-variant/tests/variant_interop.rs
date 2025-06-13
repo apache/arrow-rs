@@ -26,6 +26,9 @@ use std::path::{Path, PathBuf};
 use arrow_schema::ArrowError;
 use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 
+/// Type alias for builder test cases to improve readability
+type BuilderTestFn = fn(&mut VariantBuilder);
+
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -84,7 +87,7 @@ fn variant_primitive() -> Result<(), ArrowError> {
 
 #[test]
 fn variant_primitive_builder() -> Result<(), ArrowError> {
-    let builder_cases: [(&str, fn(&mut VariantBuilder)); 6] = [
+    let builder_cases: [(&'static str, BuilderTestFn); 6] = [
         ("primitive_boolean_false", |b: &mut VariantBuilder| {
             b.append_value(false)
         }),
