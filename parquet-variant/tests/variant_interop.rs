@@ -97,7 +97,7 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
                 assert_eq!(dict_val, "int_field");
             }
             "array_primitive" => match variant {
-                Variant::Array(arr) => {
+                Variant::List(arr) => {
                     let v = arr.get(0)?;
                     assert!(matches!(v, Variant::Int8(2)));
                     let v = arr.get(1)?;

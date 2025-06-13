@@ -346,18 +346,24 @@ impl VariantObjectHeader {
         let last_field_offset_byte =
             field_offsets_start_byte + (num_elements + 1) * field_offset_size as usize;
         if last_field_offset_byte > value.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Last field offset array entry is outside the value slice".to_string(),
-            ));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Last field offset array entry at offset {} with length {} is outside the value slice of length {}",
+                last_field_offset_byte,
+                field_offset_size as usize,
+                value.len()
+            )));
         }
 
         // Verify that the value of the last field offset array entry fits inside the value slice
         let last_field_offset =
             field_offset_size.unpack_usize(value, field_offsets_start_byte, num_elements)?;
         if values_start_byte + last_field_offset > value.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Last field offset value is outside the value slice".to_string(),
-            ));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Last field offset value {} at offset {} is outside the value slice of length {}",
+                last_field_offset,
+                values_start_byte,
+                value.len()
+            )));
         }
         Ok(Self {
             field_offset_size,
@@ -482,46 +488,33 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VariantArray<'m, 'v> {
-    pub metadata: &'m VariantMetadata<'m>,
-    pub value: &'v [u8],
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantListHeader {
+    offset_size: OffsetSizeBytes,
+    is_large: bool,
+    num_elements: usize,
+    first_offset_byte: usize,
+    first_value_byte: usize,
 }
 
-impl<'m, 'v> VariantArray<'m, 'v> {
-    /// Return the length of this array
-    pub fn len(&self) -> usize {
-        todo!()
-    }
-
-    /// Is the array of zero length
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
-        todo!();
-        #[allow(unreachable_code)] // Just to infer the return type
-        Ok(vec![].into_iter())
-    }
-
-    pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+impl VariantListHeader {
+    pub fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
         // The 6 first bits to the left are the value_header and the 2 bits
         // to the right are the basic type, so we shift to get only the value_header
-        let value_header = first_byte_from_slice(self.value)? >> 2;
+        let value_header = first_byte_from_slice(value)? >> 2;
         let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
         let field_offset_size_minus_one = value_header & 0x03; // Last two bits
         let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
+
         // The size of the num_elements entry in the array value_data is 4 bytes if
         // is_large is true, otherwise 1 byte.
         let num_elements_size = match is_large {
             true => OffsetSizeBytes::Four,
             false => OffsetSizeBytes::One,
         };
+
         // Skip the header byte to read the num_elements
-        // The size of the num_elements entry in the array value_data is 4 bytes if
-        // is_large is true, otherwise 1 byte.
-        let num_elements = num_elements_size.unpack_usize(self.value, 1, 0)?;
+        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
         let first_offset_byte = 1 + num_elements_size as usize;
 
         let overflow =
@@ -540,27 +533,131 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             .checked_add(value_bytes)
             .ok_or_else(overflow)?;
 
+        // Verify that the last offset array entry is inside the value slice
+        let last_offset_byte = first_offset_byte + n_offsets * offset_size as usize;
+        if last_offset_byte > value.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Last offset array entry at offset {} with length {} is outside the value slice of length {}",
+                last_offset_byte,
+                offset_size as usize,
+                value.len()
+            )));
+        }
+
+        // Verify that the value of the last offset array entry fits inside the value slice
+        let last_offset = offset_size.unpack_usize(value, first_offset_byte, num_elements)?;
+        if first_value_byte + last_offset > value.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Last offset value {} at offset {} is outside the value slice of length {}",
+                last_offset,
+                first_value_byte,
+                value.len()
+            )));
+        }
+
+        Ok(Self {
+            offset_size,
+            is_large,
+            num_elements,
+            first_offset_byte,
+            first_value_byte,
+        })
+    }
+
+    /// Returns the number of elements in this list
+    pub fn num_elements(&self) -> usize {
+        self.num_elements
+    }
+
+    /// Returns the offset size in bytes
+    pub fn offset_size(&self) -> usize {
+        self.offset_size as _
+    }
+
+    /// Returns whether this is a large list
+    pub fn is_large(&self) -> bool {
+        self.is_large
+    }
+
+    /// Returns the byte offset where the offset array starts
+    pub fn first_offset_byte(&self) -> usize {
+        self.first_offset_byte
+    }
+
+    /// Returns the byte offset where the values start
+    pub fn first_value_byte(&self) -> usize {
+        self.first_value_byte
+    }
+}
+
+// NOTE: We differ from the variant spec and call it "list" instead of "array" in order to be
+// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
+// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantList<'m, 'v> {
+    pub metadata: &'m VariantMetadata<'m>,
+    pub value: &'v [u8],
+    header: VariantListHeader,
+}
+
+impl<'m, 'v> VariantList<'m, 'v> {
+    pub fn try_new(metadata: &'m VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        Ok(Self {
+            metadata,
+            value,
+            header: VariantListHeader::try_new(value)?,
+        })
+    }
+
+    /// Return the length of this array
+    pub fn len(&self) -> usize {
+        self.header.num_elements()
+    }
+
+    /// Is the array of zero length
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
+        let len = self.len();
+        let values = (0..len)
+            .map(move |i| self.get(i))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(values.into_iter())
+    }
+
+    pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+        if index >= self.header.num_elements() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {} out of bounds for list of length {}",
+                index,
+                self.header.num_elements()
+            )));
+        }
+
         // Skip header and num_elements bytes to read the offsets
-        let start_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, first_offset_byte, index)?;
-        let end_field_offset_from_first_value_byte =
-            offset_size.unpack_usize(self.value, first_offset_byte, index + 1)?;
+        let start_field_offset_from_first_value_byte = self.header.offset_size.unpack_usize(
+            self.value,
+            self.header.first_offset_byte(),
+            index,
+        )?;
+        let end_field_offset_from_first_value_byte = self.header.offset_size.unpack_usize(
+            self.value,
+            self.header.first_offset_byte(),
+            index + 1,
+        )?;
 
         // Read the value bytes from the offsets
         let variant_value_bytes = slice_from_slice(
             self.value,
-            first_value_byte + start_field_offset_from_first_value_byte
-                ..first_value_byte + end_field_offset_from_first_value_byte,
+            self.header.first_value_byte() + start_field_offset_from_first_value_byte
+                ..self.header.first_value_byte() + end_field_offset_from_first_value_byte,
         )?;
         let variant = Variant::try_new(self.metadata, variant_value_bytes)?;
         Ok(variant)
     }
 }
-
-// impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
-//     type Output = Variant<'m, 'v>;
-//
-// }
 
 /// Variant value. May contain references to metadata and value
 #[derive(Clone, Debug, PartialEq)]
@@ -578,7 +675,7 @@ pub enum Variant<'m, 'v> {
 
     // need both metadata & value
     Object(VariantObject<'m, 'v>),
-    Array(VariantArray<'m, 'v>),
+    List(VariantList<'m, 'v>),
 }
 
 impl<'m, 'v> Variant<'m, 'v> {
@@ -600,7 +697,7 @@ impl<'m, 'v> Variant<'m, 'v> {
                 Variant::ShortString(decoder::decode_short_string(value)?)
             }
             VariantBasicType::Object => Variant::Object(VariantObject::try_new(metadata, value)?),
-            VariantBasicType::Array => Variant::Array(VariantArray { metadata, value }),
+            VariantBasicType::Array => Variant::List(VariantList::try_new(metadata, value)?),
         };
         Ok(new_self)
     }
@@ -637,7 +734,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::Array(VariantArray { metadata, .. }) => Some(*metadata),
+            | Variant::List(VariantList { metadata, .. }) => Some(*metadata),
             _ => None,
         }
     }
@@ -1004,5 +1101,136 @@ mod tests {
         // Test fields iterator on empty object
         let fields: Vec<_> = variant_obj.fields().unwrap().collect();
         assert_eq!(fields.len(), 0);
+    }
+
+    #[test]
+    fn test_variant_list_simple() {
+        // Create simple metadata (empty dictionary for this test)
+        let metadata_bytes = vec![
+            0x01, // header: version=1, sorted=0, offset_size_minus_one=0
+            0,    // dictionary_size = 0
+            0,    // offset[0] = 0 (end of dictionary)
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create list value data for: [42, true, "hi"]
+        // Header: basic_type=3 (array), field_offset_size_minus_one=0, is_large=0
+        // value_header = 0000_0_0_00 = 0x00
+        // So header byte = (0x00 << 2) | 3 = 0x03
+        let list_value = vec![
+            0x03, // header: basic_type=3, value_header=0x00
+            3,    // num_elements = 3
+            // Offsets (1 byte each): 4 offsets total
+            0, // offset to first value (int8)
+            2, // offset to second value (boolean true)
+            3, // offset to third value (short string)
+            6, // end offset
+            // Values:
+            0x0C,
+            42,   // int8: primitive_header=3, basic_type=0 -> (3 << 2) | 0 = 0x0C, then value 42
+            0x04, // boolean true: primitive_header=1, basic_type=0 -> (1 << 2) | 0 = 0x04
+            0x09, b'h', b'i', // short string: length=2, basic_type=1 -> (2 << 2) | 1 = 0x09
+        ];
+
+        let variant_list = VariantList::try_new(&metadata, &list_value).unwrap();
+
+        // Test basic properties
+        assert_eq!(variant_list.len(), 3);
+        assert!(!variant_list.is_empty());
+
+        // Test individual element access
+        let elem0 = variant_list.get(0).unwrap();
+        assert_eq!(elem0.as_int8(), Some(42));
+
+        let elem1 = variant_list.get(1).unwrap();
+        assert_eq!(elem1.as_boolean(), Some(true));
+
+        let elem2 = variant_list.get(2).unwrap();
+        assert_eq!(elem2.as_string(), Some("hi"));
+
+        // Test out of bounds access
+        let out_of_bounds = variant_list.get(3);
+        assert!(out_of_bounds.is_err());
+        assert!(matches!(
+            out_of_bounds.unwrap_err(),
+            ArrowError::InvalidArgumentError(ref msg) if msg.contains("out of bounds")
+        ));
+
+        // Test values iterator
+        let values: Vec<_> = variant_list.values().unwrap().collect();
+        assert_eq!(values.len(), 3);
+        assert_eq!(values[0].as_int8(), Some(42));
+        assert_eq!(values[1].as_boolean(), Some(true));
+        assert_eq!(values[2].as_string(), Some("hi"));
+    }
+
+    #[test]
+    fn test_variant_list_empty() {
+        // Create simple metadata (empty dictionary)
+        let metadata_bytes = vec![
+            0x01, // header: version=1, sorted=0, offset_size_minus_one=0
+            0,    // dictionary_size = 0
+            0,    // offset[0] = 0 (end of dictionary)
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create empty list value data: []
+        let list_value = vec![
+            0x03, // header: basic_type=3, value_header=0x00
+            0,    // num_elements = 0
+            0,    // single offset pointing to end
+                  // No values
+        ];
+
+        let variant_list = VariantList::try_new(&metadata, &list_value).unwrap();
+
+        // Test basic properties
+        assert_eq!(variant_list.len(), 0);
+        assert!(variant_list.is_empty());
+
+        // Test out of bounds access on empty list
+        let out_of_bounds = variant_list.get(0);
+        assert!(out_of_bounds.is_err());
+
+        // Test values iterator on empty list
+        let values: Vec<_> = variant_list.values().unwrap().collect();
+        assert_eq!(values.len(), 0);
+    }
+
+    #[test]
+    fn test_variant_list_large() {
+        // Create simple metadata (empty dictionary)
+        let metadata_bytes = vec![
+            0x01, // header: version=1, sorted=0, offset_size_minus_one=0
+            0,    // dictionary_size = 0
+            0,    // offset[0] = 0 (end of dictionary)
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create large list value data with 2-byte offsets: [null, false]
+        // Header: is_large=1, field_offset_size_minus_one=1, basic_type=3 (array)
+        let list_bytes = vec![
+            0x17, // header = 000_1_01_11 = 0x17
+            2, 0, 0, 0, // num_elements = 2 (4 bytes because is_large=1)
+            // Offsets (2 bytes each): 3 offsets total
+            0x00, 0x00, 0x01, 0x00, // first value (null)
+            0x02, 0x00, // second value (boolean false)
+            // Values:
+            0x00, // null: primitive_header=0, basic_type=0 -> (0 << 2) | 0 = 0x00
+            0x08, // boolean false: primitive_header=2, basic_type=0 -> (2 << 2) | 0 = 0x08
+        ];
+
+        let variant_list = VariantList::try_new(&metadata, &list_bytes).unwrap();
+
+        // Test basic properties
+        assert_eq!(variant_list.len(), 2);
+        assert!(!variant_list.is_empty());
+
+        // Test individual element access
+        let elem0 = variant_list.get(0).unwrap();
+        assert_eq!(elem0.as_null(), Some(()));
+
+        let elem1 = variant_list.get(1).unwrap();
+        assert_eq!(elem1.as_boolean(), Some(false));
     }
 }
