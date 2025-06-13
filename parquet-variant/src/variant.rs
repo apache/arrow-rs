@@ -22,6 +22,7 @@ use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use std::{num::TryFromIntError, ops::Range};
 
+/// The number of bytes used to store offsets in the [`VariantMetadataHeader`]
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum OffsetSizeBytes {
     One = 1,
@@ -88,6 +89,7 @@ impl OffsetSizeBytes {
     }
 }
 
+/// Header structure for [`VariantMetadata`]
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct VariantMetadataHeader {
     version: u8,
@@ -134,8 +136,10 @@ impl VariantMetadataHeader {
     }
 }
 
+/// [`Variant`] Metadata
+///
+/// see the Variant spec file for more information
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// Encodes the Variant Metadata, see the Variant spec file for more information
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
@@ -394,43 +398,152 @@ impl<'m, 'v> VariantArray<'m, 'v> {
     }
 }
 
-// impl<'m, 'v> Index<usize> for VariantArray<'m, 'v> {
-//     type Output = Variant<'m, 'v>;
-//
-// }
-
-/// Variant value. May contain references to metadata and value
+/// Represents a Parquet Variant
+///
+/// The lifetimes `'m` and `'v` are for metadata and value, respectively.
+///
+/// # Background
+///
+/// The [specification] says:
+///
+/// The Variant Binary Encoding allows representation of semi-structured data
+/// (e.g. JSON) in a form that can be efficiently queried by path. The design is
+/// intended to allow efficient access to nested data even in the presence of
+/// very wide or deep structures.
+///
+/// Another motivation for the representation is that (aside from metadata) each
+/// nested Variant value is contiguous and self-contained. For example, in a
+/// Variant containing an Array of Variant values, the representation of an
+/// inner Variant value, when paired with the metadata of the full variant, is
+/// itself a valid Variant.
+///
+/// When stored in Parquet files, Variant fields can also be *shredded*. Shredding
+/// refers to extracting some elements of the variant into separate columns for
+/// more efficient extraction/filter pushdown. The [Variant Shredding
+/// specification] describes the details of shredding Variant values as typed
+/// Parquet columns.
+///
+/// A Variant represents a type that contains one of:
+///
+/// * Primitive: A type and corresponding value (e.g. INT, STRING)
+///
+/// * Array: An ordered list of Variant values
+///
+/// * Object: An unordered collection of string/Variant pairs (i.e. key/value
+///   pairs). An object may not contain duplicate keys.
+///
+/// # Encoding
+///
+/// A Variant is encoded with 2 binary values, the value and the metadata. The
+/// metadata stores a header and an optional dictionary of field names which are
+/// referred to by offset in the value. The value is a binary representation of
+/// the actual data, and varies depending on the type.
+///
+/// # Design Goals
+///
+/// The design goals of the Rust API are as follows:
+/// 1. Speed / Zero copy access (no `clone`ing is required)
+/// 2. Safety
+/// 3. Follow standard Rust conventions
+///
+/// [specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+/// [Variant Shredding specification]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md
+///
+/// # Examples:
+///
+/// ## Creating `Variant` from Rust Types
+/// ```
+/// # use parquet_variant::Variant;
+/// // variants can be directly constructed
+/// let variant = Variant::Int32(123);
+/// // or constructed via `From` impls
+/// assert_eq!(variant, Variant::from(123i32));
+/// ```
+/// ## Creating `Variant` from metadata and value
+/// ```
+/// # use parquet_variant::{Variant, VariantMetadata};
+/// let metadata = [0x01, 0x00, 0x00];
+/// let value = [0x09, 0x48, 0x49];
+/// // parse the header metadata
+/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+/// assert_eq!(
+///   Variant::ShortString("HI"),
+///   Variant::try_new(&metadata, &value).unwrap()
+/// );
+/// ```
+///
+/// ## Using `Variant` values
+/// ```
+/// # use parquet_variant::Variant;
+/// # let variant = Variant::Int32(123);
+/// // variants can be used in match statements like normal enums
+/// match variant {
+///   Variant::Int32(i) => println!("Integer: {}", i),
+///   Variant::String(s) => println!("String: {}", s),
+///   _ => println!("Other variant"),
+/// }
+/// ```
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub enum Variant<'m, 'v> {
-    // TODO: Add types for the rest of the primitive types, once API is agreed upon
+    /// Primitive type: Null
     Null,
+    /// Primitive (type_id=1): INT(8, SIGNED)
     Int8(i8),
+    /// Primitive (type_id=1): INT(16, SIGNED)
     Int16(i16),
+    /// Primitive (type_id=1): INT(32, SIGNED)
     Int32(i32),
+    /// Primitive (type_id=1): INT(64, SIGNED)
     Int64(i64),
+    /// Primitive (type_id=1): DATE
     Date(NaiveDate),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=true, MICROS)
     TimestampMicros(DateTime<Utc>),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, MICROS)
     TimestampNtzMicros(NaiveDateTime),
+    /// Primitive (type_id=1): DECIMAL(precision, scale) 32-bits
     Decimal4 { integer: i32, scale: u8 },
+    /// Primitive (type_id=1): DECIMAL(precision, scale) 64-bits
     Decimal8 { integer: i64, scale: u8 },
+    /// Primitive (type_id=1): DECIMAL(precision, scale) 128-bits
     Decimal16 { integer: i128, scale: u8 },
+    /// Primitive (type_id=1): FLOAT
     Float(f32),
+    /// Primitive (type_id=1): DOUBLE
     Double(f64),
+    /// Primitive (type_id=1): BOOLEAN (true)
     BooleanTrue,
+    /// Primitive (type_id=1): BOOLEAN (false)
     BooleanFalse,
-
-    // Note: only need the *value* buffer
+    // Note: only need the *value* buffer for these types
+    /// Primitive (type_id=1): BINARY
     Binary(&'v [u8]),
+    /// Primitive (type_id=1): STRING
     String(&'v str),
+    /// Short String (type_id=2): STRING
     ShortString(&'v str),
-
     // need both metadata & value
+    /// Object (type_id=3): N/A
     Object(VariantObject<'m, 'v>),
+    /// Array (type_id=4): N/A
     Array(VariantArray<'m, 'v>),
 }
 
 impl<'m, 'v> Variant<'m, 'v> {
-    /// Parse the buffers and return the appropriate variant.
+    /// Create a new `Variant` from metadata and value.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// // parse the header metadata
+    /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+    /// assert_eq!(
+    ///   Variant::ShortString("HI"),
+    ///   Variant::try_new(&metadata, &value).unwrap()
+    /// );
+    /// ```
     pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
         let value_metadata = *first_byte_from_slice(value)?;
         let value_data = slice_from_slice(value, 1..)?;
