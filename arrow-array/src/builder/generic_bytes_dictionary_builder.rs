@@ -709,6 +709,8 @@ mod tests {
         expected_keys_builder.append_null();
         expected_keys_builder
             .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+        let expected_keys = expected_keys_builder.finish();
+        assert_eq!(array.keys(), &expected_keys);
 
         let av = array.values();
         let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
