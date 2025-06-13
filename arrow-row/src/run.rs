@@ -50,19 +50,39 @@ pub fn encode<R: RunEndIndexType>(
     opts: SortOptions,
     array: &RunArray<R>,
 ) {
-    for (idx, offset) in offsets.iter_mut().skip(1).enumerate() {
-        let physical_idx = array.get_physical_index(idx);
-        let is_valid = array.values().is_valid(physical_idx);
+    let run_ends = array.run_ends();
+    let values = array.values();
 
-        let out = &mut data[*offset..];
-        if is_valid {
-            let row = rows.row(physical_idx);
-            out[0] = 1; // valid
-            out[1..1 + row.data.len()].copy_from_slice(row.data);
-            *offset += row.data.len() + 1;
-        } else {
-            out[0] = null_sentinel(opts);
-            *offset += 1;
+    let mut logical_idx = 0;
+    let mut offset_idx = 1; // Skip first offset
+
+    // Iterate over each run
+    for physical_idx in 0..run_ends.values().len() {
+        let run_end = run_ends.values()[physical_idx].as_usize();
+        let is_valid = values.is_valid(physical_idx);
+
+        // Process all elements in this run
+        while logical_idx < run_end && offset_idx < offsets.len() {
+            let offset = &mut offsets[offset_idx];
+            let out = &mut data[*offset..];
+
+            if is_valid {
+                let row = rows.row(physical_idx);
+                out[0] = 1; // valid
+                out[1..1 + row.data.len()].copy_from_slice(row.data);
+                *offset += row.data.len() + 1;
+            } else {
+                out[0] = null_sentinel(opts);
+                *offset += 1;
+            }
+
+            logical_idx += 1;
+            offset_idx += 1;
+        }
+
+        // Break if we've processed all offsets
+        if offset_idx >= offsets.len() {
+            break;
         }
     }
 }
