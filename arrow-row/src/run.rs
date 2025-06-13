@@ -17,8 +17,8 @@
 
 use crate::{null_sentinel, RowConverter, Rows, SortField};
 use arrow_array::types::RunEndIndexType;
-use arrow_array::{Array, RunArray};
-use arrow_buffer::{ArrowNativeType, Buffer, BooleanBufferBuilder};
+use arrow_array::{Array, PrimitiveArray, RunArray};
+use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, SortOptions};
 
 /// Computes the lengths of each row for a RunEndEncodedArray
@@ -164,13 +164,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
     let values = converter.convert_raw(&mut values_data, validate_utf8)?;
 
     // Create run ends array
-    // Get the count of elements before we move the vector
-    let element_count = run_ends.len();
-    let buffer = Buffer::from_vec(run_ends);
-    let run_ends_array = arrow_array::PrimitiveArray::<R>::new(
-        arrow_buffer::ScalarBuffer::new(buffer, 0, element_count),
-        None,
-    );
+    let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(run_ends), None);
 
     // Update rows to consume the data we've processed
     for i in 0..rows.len() {
