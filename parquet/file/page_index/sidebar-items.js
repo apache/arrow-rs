@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["index","index_reader","offset_index"]};

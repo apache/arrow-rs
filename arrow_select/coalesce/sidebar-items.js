@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["gc_string_view_batch"],"struct":["BatchCoalescer"]};

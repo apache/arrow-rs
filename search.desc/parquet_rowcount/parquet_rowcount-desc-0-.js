@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_rowcount", 0, "Binary file to return the number of rows found from …\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")
