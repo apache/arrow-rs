@@ -328,6 +328,12 @@ impl Field {
         &self.metadata
     }
 
+    /// Returns a mutable reference to the `Field`'s optional custom metadata.
+    #[inline]
+    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.metadata
+    }
+
     /// Returns an immutable reference to the `Field`'s name.
     #[inline]
     pub const fn name(&self) -> &String {
