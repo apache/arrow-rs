@@ -24,6 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use arrow_schema::ArrowError;
+use chrono::NaiveDate;
 use parquet_variant::{Variant, VariantMetadata};
 
 fn cases_dir() -> PathBuf {
@@ -46,22 +47,23 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     // Cases are commented out
     // Enabling is tracked in  https://github.com/apache/arrow-rs/issues/7630
     vec![
-        // ("primitive_binary", Variant::Binary),
+        ("primitive_binary", Variant::Binary(&[0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe])),
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
-        // ("primitive_date", Variant::Null),
-        //("primitive_decimal4", Variant::Null),
-        //("primitive_decimal8", Variant::Null),
-        //("primitive_decimal16", Variant::Null),
-        //("primitive_float", Variant::Null),
+        ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
+        ("primitive_decimal4", Variant::Decimal4{integer: 1234, scale: 2}),
+        ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
+        ("primitive_decimal16", Variant::Decimal16{integer: 1234567891234567890, scale: 2}),
+        ("primitive_float", Variant::Float(1234567890.1234)),
+        ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
-        //("primitive_int16", Variant::Null),
-        //("primitive_int32", Variant::Null),
-        //("primitive_int64", Variant::Null),
+        ("primitive_int16", Variant::Int16(1234)),
+        ("primitive_int32", Variant::Int32(123456)),
+        ("primitive_int64", Variant::Int64(1234567890123456789)),
         ("primitive_null", Variant::Null),
         ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
-        //("primitive_timestamp", Variant::Null),
-        //("primitive_timestampntz", Variant::Null),
+        ("primitive_timestamp", Variant::TimestampMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(16, 34, 56, 780).unwrap().and_utc())),
+        ("primitive_timestampntz", Variant::TimestampNtzMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap())),
         ("short_string", Variant::ShortString("Less than 64 bytes (❤\u{fe0f} with utf8)")),
     ]
 }
