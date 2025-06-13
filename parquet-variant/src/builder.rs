@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
+use crate::{Variant, VariantArray, VariantObject};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const MAX_SHORT_STRING_SIZE: usize = 0x3F;
@@ -145,6 +146,35 @@ impl VariantBuilder {
         metadata[offset_start + nkeys] = cur_offset as u8;
         
         (metadata, self.buffer)
+    }
+
+    pub fn append<'m, 'v>(&mut self, value: &Variant<'m, 'v>) {
+        match value {
+            Variant::Null => self.append_null(),
+            Variant::BooleanFalse => self.append_bool(false),
+            Variant::BooleanTrue => self.append_bool(true),
+            Variant::Int8(val) => self.append_int8(*val),
+            Variant::String(s) => self.append_string(s),
+            Variant::ShortString(s) => self.append_string(s),
+            Variant::Array(arr) => {
+                let mut array_builder = self.begin_array();
+                for i in 0..arr.len() {
+                    if let Ok(v) = arr.get(i) {
+                        array_builder.append_element(|b| b.append(&v));
+                    }
+                }
+                array_builder.finish();
+            }
+            Variant::Object(obj) => {
+                let mut object_builder = self.begin_object();
+                if let Ok(fields) = obj.fields() {
+                    for (key, value) in fields {
+                        object_builder.append_field(key, |b| b.append(&value));
+                    }
+                }
+                object_builder.finish();
+            }
+        }
     }
 }
 
