@@ -161,21 +161,27 @@ where
     ///
     /// # Example
     /// ```
+    /// #
     /// # use arrow_array::builder::StringDictionaryBuilder;
     /// # use arrow_array::types::{UInt8Type, UInt16Type};
-    /// # use arrow_array::UInt16Array;;
+    /// # use arrow_array::UInt16Array;
+    /// # use arrow_schema::ArrowError;
     ///
     /// let mut u8_keyed_builder = StringDictionaryBuilder::<UInt8Type>::new();
-    /// u8_keyed_builder.append("def").unwrap();
-    /// u8_keyed_builder.append_null();
-    /// u8_keyed_builder.append("abc").unwrap();
     ///
-    /// // for some reason, we decide we need to upgrade the key type
+    /// // appending too many values causes the dictionary to overflow
+    /// for i in 0..256 {
+    ///     u8_keyed_builder.append_value(format!("{}", i));
+    /// }
+    /// let result = u8_keyed_builder.append("256");
+    /// assert!(matches!(result, Err(ArrowError::DictionaryKeyOverflowError{})));
+    ///
+    /// // we need to upgrade to a larger key type
     /// let mut u16_keyed_builder = StringDictionaryBuilder::<UInt16Type>::try_new_from_builder(u8_keyed_builder).unwrap();
     /// let dictionary_array = u16_keyed_builder.finish();
     /// let keys = dictionary_array.keys();
     ///
-    /// assert_eq!(keys, &UInt16Array::from(vec![Some(0), None, Some(1)]));
+    /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
     /// ```
     pub fn try_new_from_builder<K2>(
         mut source: GenericByteDictionaryBuilder<K2, T>,
