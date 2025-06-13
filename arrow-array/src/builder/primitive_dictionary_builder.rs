@@ -22,7 +22,7 @@ use crate::{
 };
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
-use num::{Num, NumCast};
+use num::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -173,12 +173,12 @@ where
 
     /// TODO docs
     pub fn try_new_from_builder<K2>(
-        mut source: PrimitiveDictionaryBuilder<K2, V>
+        mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
     where
         K::Native: NumCast,
         K2: ArrowDictionaryKeyType,
-        K2::Native: NumCast
+        K2::Native: NumCast,
     {
         let map = source.map;
         let values_builder = source.values_builder;
@@ -196,10 +196,12 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys.into_builder().expect("underlying buffer has no references"),
-            values_builder
+            keys_builder: new_keys
+                .into_builder()
+                .expect("underlying buffer has no references"),
+            values_builder,
         })
-    } 
+    }
 }
 
 impl<K, V> ArrayBuilder for PrimitiveDictionaryBuilder<K, V>
@@ -462,8 +464,11 @@ mod tests {
     use crate::array::{Int32Array, UInt32Array, UInt8Array};
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
-    use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
-    use crate::GenericByteArray;
+    use crate::types::{
+        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Int16Type, Int32Type,
+        Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type, UInt64Type,
+        UInt8Type,
+    };
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -682,35 +687,79 @@ mod tests {
         )
     }
 
-    fn _test_try_new_from_builder_generic_for_key_types<K1, K2, V>(values: Vec<&V::Native>) 
+    fn _test_try_new_from_builder_generic_for_key_types<K1, K2, V>(values: Vec<V::Native>)
     where
         K1: ArrowDictionaryKeyType,
         K1::Native: NumCast,
         K2: ArrowDictionaryKeyType,
         K2::Native: NumCast + From<u8>,
-        V: ArrowPrimitiveType
+        V: ArrowPrimitiveType,
     {
         let mut source = PrimitiveDictionaryBuilder::<K1, V>::new();
-        source.append(*values[0]).unwrap();
-        source.append(*values[1]).unwrap();
-        source.append(*values[2]).unwrap();
+        source.append(values[0]).unwrap();
+        source.append(values[1]).unwrap();
+        source.append(values[2]).unwrap();
 
         let mut result = PrimitiveDictionaryBuilder::<K2, V>::try_new_from_builder(source).unwrap();
         let array = result.finish();
 
         let mut expected_keys_builder = PrimitiveBuilder::<K2>::new();
-        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
-        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
-        expected_keys_builder.append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+        let expected_keys = expected_keys_builder.finish();
+        assert_eq!(array.keys(), &expected_keys);
 
         let av = array.values();
-        // let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<
+        let ava = av.as_any().downcast_ref::<PrimitiveArray<V>>().unwrap();
+        assert_eq!(ava.value(0), values[0]);
+        assert_eq!(ava.value(1), values[1]);
+        assert_eq!(ava.value(2), values[2]);
     }
 
-    fn _test_try_new_from_builder<T>(values: Vec<&T::Native>)
+    fn _test_try_new_from_builder_generic_for_value<T>(values: Vec<T::Native>)
     where
-        T: ArrowPrimitiveType
+        T: ArrowPrimitiveType,
     {
+        // test cast to bigger size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, UInt16Type, T>(
+            values.clone(),
+        );
+        // test cast going to smaller size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt16Type, UInt8Type, T>(
+            values.clone(),
+        );
+        // test cast going to bigger size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, Int16Type, T>(values.clone());
+        // test cast going to smaller size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+        // test going from signed to signed for different size changes
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, Int16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt8Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+    }
 
+    #[test]
+    fn test_try_new_from_builder() {
+        // test unsigned types
+        _test_try_new_from_builder_generic_for_value::<UInt8Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt16Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt32Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt64Type>(vec![1, 2, 3]);
+        // test signed types
+        _test_try_new_from_builder_generic_for_value::<Int8Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int16Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int32Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int64Type>(vec![-1, 0, 1]);
+        // test some date types
+        _test_try_new_from_builder_generic_for_value::<Date32Type>(vec![5, 6, 7]);
+        _test_try_new_from_builder_generic_for_value::<DurationNanosecondType>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<TimestampNanosecondType>(vec![1, 2, 3]);
+        // test some floating point types
+        _test_try_new_from_builder_generic_for_value::<Float32Type>(vec![0.1, 0.2, 0.3]);
     }
 }
