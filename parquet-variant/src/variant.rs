@@ -17,7 +17,10 @@
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
-use crate::utils::{array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice};
+use crate::utils::{
+    array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice,
+    try_binary_search_by,
+};
 use arrow_schema::ArrowError;
 use std::{num::TryFromIntError, ops::Range};
 
@@ -300,19 +303,182 @@ impl<'m> VariantMetadata<'m> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantObjectHeader {
+    field_offset_size: OffsetSizeBytes,
+    field_id_size: OffsetSizeBytes,
+    num_elements: usize,
+    field_ids_start_byte: usize,
+    field_offsets_start_byte: usize,
+    values_start_byte: usize,
+}
+
+impl VariantObjectHeader {
+    pub fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
+        // Parse the header byte to get object parameters
+        let header = first_byte_from_slice(value)?;
+        let value_header = header >> 2;
+
+        let field_offset_size_minus_one = value_header & 0x03; // Last 2 bits
+        let field_id_size_minus_one = (value_header >> 2) & 0x03; // Next 2 bits
+        let is_large = value_header & 0x10; // 5th bit
+
+        let field_offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
+        let field_id_size = OffsetSizeBytes::try_new(field_id_size_minus_one)?;
+
+        // Determine num_elements size based on is_large flag
+        let num_elements_size = if is_large != 0 {
+            OffsetSizeBytes::Four
+        } else {
+            OffsetSizeBytes::One
+        };
+
+        // Parse num_elements
+        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
+
+        // Calculate byte offsets for different sections
+        let field_ids_start_byte = 1 + num_elements_size as usize;
+        let field_offsets_start_byte = field_ids_start_byte + num_elements * field_id_size as usize;
+        let values_start_byte =
+            field_offsets_start_byte + (num_elements + 1) * field_offset_size as usize;
+
+        // Verify that the last field offset array entry is inside the value slice
+        let last_field_offset_byte =
+            field_offsets_start_byte + (num_elements + 1) * field_offset_size as usize;
+        if last_field_offset_byte > value.len() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Last field offset array entry is outside the value slice".to_string(),
+            ));
+        }
+
+        // Verify that the value of the last field offset array entry fits inside the value slice
+        let last_field_offset =
+            field_offset_size.unpack_usize(value, field_offsets_start_byte, num_elements)?;
+        if values_start_byte + last_field_offset > value.len() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Last field offset value is outside the value slice".to_string(),
+            ));
+        }
+        Ok(Self {
+            field_offset_size,
+            field_id_size,
+            num_elements,
+            field_ids_start_byte,
+            field_offsets_start_byte,
+            values_start_byte,
+        })
+    }
+
+    /// Returns the number of key-value pairs in this object
+    pub fn num_elements(&self) -> usize {
+        self.num_elements
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: &'m VariantMetadata<'m>,
     pub value: &'v [u8],
+    header: VariantObjectHeader,
 }
+
 impl<'m, 'v> VariantObject<'m, 'v> {
-    pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
-        todo!();
-        #[allow(unreachable_code)] // Just to infer the return type
-        Ok(vec![].into_iter())
+    pub fn try_new(metadata: &'m VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        Ok(Self {
+            metadata,
+            value,
+            header: VariantObjectHeader::try_new(value)?,
+        })
     }
-    pub fn field(&self, _name: &'m str) -> Result<Variant<'m, 'v>, ArrowError> {
-        todo!()
+
+    /// Returns the number of key-value pairs in this object
+    pub fn len(&self) -> usize {
+        self.header.num_elements()
+    }
+
+    /// Returns true if the object contains no key-value pairs
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
+        let field_list = self.parse_field_list()?;
+        Ok(field_list.into_iter())
+    }
+
+    pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
+        // Binary search through the sorted field IDs to find the field
+        let (field_ids, field_offsets) = self.parse_field_arrays()?;
+        let search_result = try_binary_search_by(&field_ids, &name, |&field_id| {
+            self.metadata.get_field_by(field_id)
+        })?;
+
+        let Ok(index) = search_result else {
+            return Ok(None);
+        };
+        let start_offset = field_offsets[index];
+        let end_offset = field_offsets[index + 1];
+        let value_bytes = slice_from_slice(
+            self.value,
+            self.header.values_start_byte + start_offset
+                ..self.header.values_start_byte + end_offset,
+        )?;
+        let variant = Variant::try_new(self.metadata, value_bytes)?;
+        Ok(Some(variant))
+    }
+
+    /// Parse field IDs and field offsets arrays using the cached header
+    fn parse_field_arrays(&self) -> Result<(Vec<usize>, Vec<usize>), ArrowError> {
+        // Parse field IDs
+        let field_ids = (0..self.header.num_elements)
+            .map(|i| {
+                self.header.field_id_size.unpack_usize(
+                    self.value,
+                    self.header.field_ids_start_byte,
+                    i,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        debug_assert_eq!(field_ids.len(), self.header.num_elements);
+
+        // Parse field offsets (num_elements + 1 entries)
+        let field_offsets = (0..=self.header.num_elements)
+            .map(|i| {
+                self.header.field_offset_size.unpack_usize(
+                    self.value,
+                    self.header.field_offsets_start_byte,
+                    i,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        debug_assert_eq!(field_offsets.len(), self.header.num_elements + 1);
+
+        Ok((field_ids, field_offsets))
+    }
+
+    /// Parse all fields into a vector for iteration
+    fn parse_field_list(&self) -> Result<Vec<(&'m str, Variant<'m, 'v>)>, ArrowError> {
+        let (field_ids, field_offsets) = self.parse_field_arrays()?;
+
+        let mut fields = Vec::with_capacity(self.header.num_elements);
+
+        for i in 0..self.header.num_elements {
+            let field_id = field_ids[i];
+            let field_name = self.metadata.get_field_by(field_id)?;
+
+            let start_offset = field_offsets[i];
+            let end_offset = field_offsets[i + 1];
+            let value_bytes = slice_from_slice(
+                self.value,
+                self.header.values_start_byte + start_offset
+                    ..self.header.values_start_byte + end_offset,
+            )?;
+            let variant = Variant::try_new(self.metadata, value_bytes)?;
+
+            fields.push((field_name, variant));
+        }
+
+        Ok(fields)
     }
 }
 
@@ -397,7 +563,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
 // }
 
 /// Variant value. May contain references to metadata and value
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Variant<'m, 'v> {
     // TODO: Add types for the rest of the primitive types, once API is agreed upon
     Null,
@@ -433,7 +599,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value)?)
             }
-            VariantBasicType::Object => Variant::Object(VariantObject { metadata, value }),
+            VariantBasicType::Object => Variant::Object(VariantObject::try_new(metadata, value)?),
             VariantBasicType::Array => Variant::Array(VariantArray { metadata, value }),
         };
         Ok(new_self)
@@ -649,7 +815,7 @@ mod tests {
     }
 
     /// Too short buffer test (missing one required offset).
-    /// Should error with “metadata shorter than dictionary_size implies”.
+    /// Should error with "metadata shorter than dictionary_size implies".
     #[test]
     fn try_new_missing_last_value() {
         let bytes = &[
@@ -716,5 +882,127 @@ mod tests {
             matches!(err, ArrowError::InvalidArgumentError(ref msg) if msg.contains("shorter")),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_variant_object_simple() {
+        // Create metadata with field names: "age", "name", "active" (sorted)
+        // Header: version=1, sorted=1, offset_size=1 (offset_size_minus_one=0)
+        // So header byte = 00_0_1_0001 = 0x10
+        let metadata_bytes = vec![
+            0b0001_0001,
+            3, // dictionary size
+            0, // "active"
+            6, // "age"
+            9, // "name"
+            13,
+            b'a',
+            b'c',
+            b't',
+            b'i',
+            b'v',
+            b'e',
+            b'a',
+            b'g',
+            b'e',
+            b'n',
+            b'a',
+            b'm',
+            b'e',
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create object value data for: {"active": true, "age": 42, "name": "hello"}
+        // Field IDs in sorted order: [0, 1, 2] (active, age, name)
+        // Header: basic_type=2, field_offset_size_minus_one=0, field_id_size_minus_one=0, is_large=0
+        // value_header = 0000_00_00 = 0x00
+        // So header byte = (0x00 << 2) | 2 = 0x02
+        let object_value = vec![
+            0x02, // header: basic_type=2, value_header=0x00
+            3,    // num_elements = 3
+            // Field IDs (1 byte each): active=0, age=1, name=2
+            0, 1, 2,
+            // Field offsets (1 byte each): 4 offsets total
+            0, // offset to first value (boolean true)
+            1, // offset to second value (int8)
+            3, // offset to third value (short string)
+            9, // end offset
+            // Values:
+            0x04, // boolean true: primitive_header=1, basic_type=0 -> (1 << 2) | 0 = 0x04
+            0x0C,
+            42, // int8: primitive_header=3, basic_type=0 -> (3 << 2) | 0 = 0x0C, then value 42
+            0x15, b'h', b'e', b'l', b'l',
+            b'o', // short string: length=5, basic_type=1 -> (5 << 2) | 1 = 0x15
+        ];
+
+        let variant_obj = VariantObject::try_new(&metadata, &object_value).unwrap();
+
+        // Test basic properties
+        assert_eq!(variant_obj.len(), 3);
+        assert!(!variant_obj.is_empty());
+
+        // Test field access
+        let active_field = variant_obj.field("active").unwrap();
+        assert!(active_field.is_some());
+        assert_eq!(active_field.unwrap().as_boolean(), Some(true));
+
+        let age_field = variant_obj.field("age").unwrap();
+        assert!(age_field.is_some());
+        assert_eq!(age_field.unwrap().as_int8(), Some(42));
+
+        let name_field = variant_obj.field("name").unwrap();
+        assert!(name_field.is_some());
+        assert_eq!(name_field.unwrap().as_string(), Some("hello"));
+
+        // Test non-existent field
+        let missing_field = variant_obj.field("missing").unwrap();
+        assert!(missing_field.is_none());
+
+        // Test fields iterator
+        let fields: Vec<_> = variant_obj.fields().unwrap().collect();
+        assert_eq!(fields.len(), 3);
+
+        // Fields should be in sorted order: active, age, name
+        assert_eq!(fields[0].0, "active");
+        assert_eq!(fields[0].1.as_boolean(), Some(true));
+
+        assert_eq!(fields[1].0, "age");
+        assert_eq!(fields[1].1.as_int8(), Some(42));
+
+        assert_eq!(fields[2].0, "name");
+        assert_eq!(fields[2].1.as_string(), Some("hello"));
+    }
+
+    #[test]
+    fn test_variant_object_empty() {
+        // Create metadata with no fields
+        let metadata_bytes = vec![
+            0x11, // header: version=1, sorted=0, offset_size_minus_one=0
+            0,    // dictionary_size = 0
+            0,    // offset[0] = 0 (end of dictionary)
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create empty object value data: {}
+        let object_value = vec![
+            0x02, // header: basic_type=2, value_header=0x00
+            0,    // num_elements = 0
+            0,    // single offset pointing to end
+                  // No field IDs, no values
+        ];
+
+        let variant_obj = VariantObject::try_new(&metadata, &object_value).unwrap();
+
+        // Test basic properties
+        assert_eq!(variant_obj.len(), 0);
+        assert!(variant_obj.is_empty());
+
+        // Test field access on empty object
+        let missing_field = variant_obj.field("anything").unwrap();
+        assert!(missing_field.is_none());
+
+        // Test fields iterator on empty object
+        let fields: Vec<_> = variant_obj.fields().unwrap().collect();
+        assert_eq!(fields.len(), 0);
     }
 }
