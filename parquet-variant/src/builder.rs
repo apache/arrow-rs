@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::Variant;
 use std::collections::HashMap;
@@ -5,22 +21,22 @@ use std::collections::HashMap;
 const BASIC_TYPE_BITS: u8 = 2;
 const MAX_SHORT_STRING_SIZE: usize = 0x3F;
 
-pub fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
+fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
     (primitive_type as u8) << 2 | VariantBasicType::Primitive as u8
 }
 
-pub fn short_string_header(len: usize) -> u8 {
+fn short_string_header(len: usize) -> u8 {
     (len as u8) << 2 | VariantBasicType::ShortString as u8
 }
 
-pub fn array_header(large: bool, offset_size: u8) -> u8 {
+fn array_header(large: bool, offset_size: u8) -> u8 {
     let large_bit = if large { 1 } else { 0 };
     (large_bit << (BASIC_TYPE_BITS + 2))
         | ((offset_size - 1) << BASIC_TYPE_BITS)
         | VariantBasicType::Array as u8
 }
 
-pub fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
+fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
     let large_bit = if large { 1 } else { 0 };
     (large_bit << (BASIC_TYPE_BITS + 4))
         | ((id_size - 1) << (BASIC_TYPE_BITS + 2))
@@ -183,6 +199,85 @@ impl VariantBuilder {
         self.buffer.push(value as u8);
     }
 
+    fn append_int16(&mut self, value: i16) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Int16));
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn append_int32(&mut self, value: i32) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Int32));
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn append_int64(&mut self, value: i64) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Int64));
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn append_float(&mut self, value: f32) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Float));
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn append_double(&mut self, value: f64) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Double));
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn append_date(&mut self, value: chrono::NaiveDate) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Date));
+        let days_since_epoch = value.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+        self.buffer.extend_from_slice(&days_since_epoch.to_le_bytes());
+    }
+
+    fn append_timestamp_micros(&mut self, value: chrono::DateTime<chrono::Utc>) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::TimestampMicros));
+        let micros = value.timestamp_micros();
+        self.buffer.extend_from_slice(&micros.to_le_bytes());
+    }
+
+    fn append_timestamp_ntz_micros(&mut self, value: chrono::NaiveDateTime) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::TimestampNtzMicros));
+        let micros = value.and_utc().timestamp_micros();
+        self.buffer.extend_from_slice(&micros.to_le_bytes());
+    }
+
+    fn append_decimal4(&mut self, integer: i32, scale: u8) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Decimal4));
+        self.buffer.push(scale);
+        self.buffer.extend_from_slice(&integer.to_le_bytes());
+    }
+
+    fn append_decimal8(&mut self, integer: i64, scale: u8) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Decimal8));
+        self.buffer.push(scale);
+        self.buffer.extend_from_slice(&integer.to_le_bytes());
+    }
+
+    fn append_decimal16(&mut self, integer: i128, scale: u8) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Decimal16));
+        self.buffer.push(scale);
+        self.buffer.extend_from_slice(&integer.to_le_bytes());
+    }
+
+    fn append_binary(&mut self, value: &[u8]) {
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::Binary));
+        self.buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        self.buffer.extend_from_slice(value);
+    }
+
     fn append_string(&mut self, value: &str) {
         if value.len() <= MAX_SHORT_STRING_SIZE {
             self.buffer.push(short_string_header(value.len()));
@@ -243,8 +338,7 @@ impl VariantBuilder {
         let metadata_size = string_start + total_dict_size;
 
         // Pre-allocate exact size to avoid reallocations
-        let mut metadata = Vec::with_capacity(metadata_size);
-        metadata.resize(metadata_size, 0);
+        let mut metadata = vec![0u8; metadata_size];
 
         // Write header: version=1, not sorted, with calculated offset_size
         metadata[0] = 0x01 | ((offset_size - 1) << 6);
@@ -281,8 +375,19 @@ impl VariantBuilder {
             Variant::BooleanTrue => self.append_bool(true),
             Variant::BooleanFalse => self.append_bool(false),
             Variant::Int8(v) => self.append_int8(v),
+            Variant::Int16(v) => self.append_int16(v),
+            Variant::Int32(v) => self.append_int32(v),
+            Variant::Int64(v) => self.append_int64(v),
+            Variant::Date(v) => self.append_date(v),
+            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
+            Variant::Decimal4 { integer, scale } => self.append_decimal4(integer, scale),
+            Variant::Decimal8 { integer, scale } => self.append_decimal8(integer, scale),
+            Variant::Decimal16 { integer, scale } => self.append_decimal16(integer, scale),
+            Variant::Float(v) => self.append_float(v),
+            Variant::Double(v) => self.append_double(v),
+            Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) | Variant::ShortString(s) => self.append_string(s),
-            // TODO: Add types for the rest of primitives
             Variant::Object(_) | Variant::Array(_) => {
                 unreachable!("Object and Array variants cannot be created through Into<Variant>")
             }
@@ -451,19 +556,119 @@ impl<'a> ObjectBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VariantMetadata;
 
     #[test]
     fn test_simple_usage() {
-        let mut builder = VariantBuilder::new();
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(());
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Null);
+        }
 
-        builder.append_value(());
-        builder.append_value(true);
-        builder.append_value(42i8);
-        builder.append_value("hello");
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(true);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::BooleanTrue);
+        }
 
-        let (metadata, value) = builder.finish();
-        assert!(!metadata.is_empty());
-        assert!(!value.is_empty());
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(false);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::BooleanFalse);
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(42i8);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Int8(42));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(1234i16);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Int16(1234));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(123456i32);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Int32(123456));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(123456789i64);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Int64(123456789));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(3.14f32);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Float(3.14));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value(2.718281828f64);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Double(2.718281828));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            builder.append_value("hello");
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::ShortString("hello"));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            let long_string = "This is a very long string that exceeds the short string limit of 63 bytes and should be encoded as a regular string type instead of a short string";
+            builder.append_value(long_string);
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::String(long_string));
+        }
+
+        {
+            let mut builder = VariantBuilder::new();
+            let binary_data = b"binary data";
+            builder.append_value(binary_data.as_slice());
+            let (metadata, value) = builder.finish();
+            let metadata = VariantMetadata::try_new(&metadata).unwrap();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            assert_eq!(variant, Variant::Binary(binary_data.as_slice()));
+        }
     }
 
     #[test]
@@ -481,6 +686,23 @@ mod tests {
         let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
         assert!(!value.is_empty());
+        
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        
+        match variant {
+            Variant::Array(array) => {
+                let val0 = array.get(0).unwrap();
+                assert_eq!(val0, Variant::Int8(1));
+                
+                let val1 = array.get(1).unwrap();
+                assert_eq!(val1, Variant::Int8(2));
+                
+                let val2 = array.get(2).unwrap();
+                assert_eq!(val2, Variant::ShortString("test"));
+            }
+            _ => panic!("Expected an array variant, got: {:?}", variant),
+        }
     }
 
     #[test]
