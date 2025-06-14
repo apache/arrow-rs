@@ -56,6 +56,98 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
     buffer.copy_within(src_start..src_end, dst_start);
 }
 
+/// Builder for [`Variant`] values
+///
+/// # Example: create a Primitive Int8
+/// ```
+/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+/// let mut builder = VariantBuilder::new();
+/// builder.append_value(Variant::Int8(42));
+/// // Finish the builder to get the metadata and value
+/// let (metadata, value) = builder.finish();
+/// // use the Variant API to verify the result
+/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// assert_eq!(variant, Variant::Int8(42));
+/// ```
+///
+/// # Example: Create an Object
+/// This example shows how to create an object with two fields:
+/// ```json
+/// {
+///  "first_name": "Jiaying",
+///  "last_name": "Li"
+/// }
+/// ```
+///
+/// ```
+/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+/// let mut builder = VariantBuilder::new();
+/// // Create an object builder that will write fields to the object
+/// let mut object_builder = builder.new_object();
+/// object_builder.append_value("first_name", "Jiaying");
+/// object_builder.append_value("last_name", "Li");
+/// object_builder.finish();
+/// // Finish the builder to get the metadata and value
+/// let (metadata, value) = builder.finish();
+/// // use the Variant API to verify the result
+/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// let Variant::Object(variant_object) = variant else {
+///   panic!("unexpected variant type")
+/// };
+/// /* TODO: uncomment this, but now VariantObject:field is not implemented
+/// assert_eq!(
+///   variant_object.field("first_name").unwrap(),
+///   Variant::String("Jiaying")
+/// );
+/// assert_eq!(
+///   variant_object.field("last_name").unwrap(),
+///   Variant::String("Li")
+/// );
+/// */
+/// ```
+///
+/// # Example: Create an Array
+///
+/// This example shows how to create an array of integers: `[1, 2, 3]`.
+/// (this test actually fails at the moment)
+/// ```
+///  # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+///  let mut builder = VariantBuilder::new();
+///  // Create an array builder that will write elements to the array
+///  let mut array_builder = builder.new_array();
+///  array_builder.append_value(1i8);
+///  array_builder.append_value(2i8);
+///  array_builder.append_value(3i8);
+/// // Finish the builder to get the metadata and value
+/// let (metadata, value) = builder.finish();
+/// // use the Variant API to verify the result
+/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// let Variant::Object(variant_object) = variant else {
+///   panic!("unexpected variant type")
+/// };
+/// // TODO: VERIFY THE RESULT this, but now VariantObject:field is not implemented
+/// ```
+///
+/// # Example: Array of objects
+///
+/// THis example shows how to create an array of objects:
+/// ```json
+/// [
+///  {
+///   "first_name": "Jiaying",
+///  "last_name": "Li"
+/// },
+///   {
+///    "first_name": "Malthe",
+///    "last_name": "Karbo"
+/// }
+/// ```
+///
+/// TODO
+///
 pub struct VariantBuilder {
     buffer: Vec<u8>,
     dict: HashMap<String, u32>,
@@ -122,10 +214,16 @@ impl VariantBuilder {
         self.buffer.len()
     }
 
+    /// Create an [`ArrayBuilder`] for creating [`Variant::Array`] values.
+    ///
+    /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_array(&mut self) -> ArrayBuilder {
         ArrayBuilder::new(self)
     }
 
+    /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
+    ///
+    /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder {
         ObjectBuilder::new(self)
     }
@@ -198,6 +296,9 @@ impl Default for VariantBuilder {
     }
 }
 
+/// A builder for creating [`Variant::Array`] values.
+///
+/// See the examples on [`VariantBuilder`] for usage.
 pub struct ArrayBuilder<'a> {
     parent: &'a mut VariantBuilder,
     start_pos: usize,
@@ -255,6 +356,9 @@ impl<'a> ArrayBuilder<'a> {
     }
 }
 
+/// A builder for creating [`Variant::Object`] values.
+///
+/// See the examples on [`VariantBuilder`] for usage.
 pub struct ObjectBuilder<'a> {
     parent: &'a mut VariantBuilder,
     start_pos: usize,
