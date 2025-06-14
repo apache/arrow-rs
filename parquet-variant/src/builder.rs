@@ -127,7 +127,6 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// # Example: Create an Array
 ///
 /// This example shows how to create an array of integers: `[1, 2, 3]`.
-/// (this test actually fails at the moment)
 /// ```
 ///  # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 ///  let mut builder = VariantBuilder::new();
@@ -136,15 +135,19 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 ///  array_builder.append_value(1i8);
 ///  array_builder.append_value(2i8);
 ///  array_builder.append_value(3i8);
+///  array_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
 /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
-/// let Variant::Object(variant_object) = variant else {
+/// let Variant::Array(variant_array) = variant else {
 ///   panic!("unexpected variant type")
 /// };
-/// // TODO: VERIFY THE RESULT this, but now VariantObject:field is not implemented
+/// // Verify the array contents
+/// assert_eq!(variant_array.get(0).unwrap(), Variant::Int8(1));
+/// assert_eq!(variant_array.get(1).unwrap(), Variant::Int8(2));
+/// assert_eq!(variant_array.get(2).unwrap(), Variant::Int8(3));
 /// ```
 ///
 /// # Example: Array of objects
@@ -232,8 +235,11 @@ impl VariantBuilder {
     fn append_date(&mut self, value: chrono::NaiveDate) {
         self.buffer
             .push(primitive_header(VariantPrimitiveType::Date));
-        let days_since_epoch = value.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
-        self.buffer.extend_from_slice(&days_since_epoch.to_le_bytes());
+        let days_since_epoch = value
+            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32;
+        self.buffer
+            .extend_from_slice(&days_since_epoch.to_le_bytes());
     }
 
     fn append_timestamp_micros(&mut self, value: chrono::DateTime<chrono::Utc>) {
@@ -274,7 +280,8 @@ impl VariantBuilder {
     fn append_binary(&mut self, value: &[u8]) {
         self.buffer
             .push(primitive_header(VariantPrimitiveType::Binary));
-        self.buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        self.buffer
+            .extend_from_slice(&(value.len() as u32).to_le_bytes());
         self.buffer.extend_from_slice(value);
     }
 
@@ -686,18 +693,18 @@ mod tests {
         let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
         assert!(!value.is_empty());
-        
+
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
-        
+
         match variant {
             Variant::Array(array) => {
                 let val0 = array.get(0).unwrap();
                 assert_eq!(val0, Variant::Int8(1));
-                
+
                 let val1 = array.get(1).unwrap();
                 assert_eq!(val1, Variant::Int8(2));
-                
+
                 let val2 = array.get(2).unwrap();
                 assert_eq!(val2, Variant::ShortString("test"));
             }

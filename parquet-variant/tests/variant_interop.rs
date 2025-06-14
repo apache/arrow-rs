@@ -24,8 +24,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use arrow_schema::ArrowError;
-use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 use chrono::NaiveDate;
+use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 type BuilderTestFn = fn(&mut VariantBuilder);
 
 fn cases_dir() -> PathBuf {
@@ -172,10 +172,10 @@ fn variant_array_builder() -> Result<(), ArrowError> {
 #[test]
 fn variant_object_builder() -> Result<(), ArrowError> {
     let mut builder = VariantBuilder::new();
-    
+
     let mut obj = builder.new_object();
     obj.append_value("int_field", 1i8);
-    
+
     // The double field is actually encoded as decimal4 with scale 8
     // Value: 123456789, Scale: 8 -> 1.23456789
     obj.append_value("double_field", (123456789i32, 8u8));
@@ -184,14 +184,14 @@ fn variant_object_builder() -> Result<(), ArrowError> {
     obj.append_value("string_field", "Apache Parquet");
     obj.append_value("null_field", ());
     obj.append_value("timestamp_field", "2025-04-16T12:34:56.78");
-    
+
     obj.finish();
-    
+
     let (built_metadata, built_value) = builder.finish();
     let (expected_metadata, expected_value) = load_case("object_primitive")?;
-    
+
     assert_eq!(built_metadata, expected_metadata);
     assert_eq!(built_value, expected_value);
-    
+
     Ok(())
 }
