@@ -592,6 +592,7 @@ impl DataType {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
+            RunEndEncoded(_, v) => DataType::is_nested(v.data_type()),
             List(_)
             | FixedSizeList(_, _)
             | LargeList(_)
