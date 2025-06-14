@@ -397,7 +397,7 @@ pub use arrow_ipc as ipc;
 #[cfg(feature = "json")]
 pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
-pub mod pyarrow;
+pub use arrow_pyarrow as pyarrow;
 
 /// Contains the `RecordBatch` type and associated traits
 pub mod record_batch {

@@ -33,6 +33,7 @@ members = [
     "arrow-ipc",
     "arrow-json",
     "arrow-ord",
+    "arrow-pyarrow",
     "arrow-row",
     "arrow-schema",
     "arrow-select",
@@ -88,6 +89,7 @@ arrow-data = { version = "55.1.0", path = "./arrow-data" }
 arrow-ipc = { version = "55.1.0", path = "./arrow-ipc" }
 arrow-json = { version = "55.1.0", path = "./arrow-json" }
 arrow-ord = { version = "55.1.0", path = "./arrow-ord" }
+arrow-pyarrow = { version = "55.1.0", path = "./arrow-pyarrow" }
 arrow-row = { version = "55.1.0", path = "./arrow-row" }
 arrow-schema = { version = "55.1.0", path = "./arrow-schema" }
 arrow-select = { version = "55.1.0", path = "./arrow-select" }

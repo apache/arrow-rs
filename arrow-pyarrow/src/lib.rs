@@ -60,21 +60,21 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::{RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray};
+use arrow_array::ffi;
+use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::{
+    make_array, RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+    StructArray,
+};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, Field, Schema};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
-
-use crate::array::{make_array, ArrayData};
-use crate::datatypes::{DataType, Field, Schema};
-use crate::error::ArrowError;
-use crate::ffi;
-use crate::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use crate::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
 /// Represents an exception raised by PyArrow.
