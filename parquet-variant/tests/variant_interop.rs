@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 
 use arrow_schema::ArrowError;
 use chrono::NaiveDate;
-use parquet_variant::{Variant, VariantMetadata};
+use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+type BuilderTestFn = fn(&mut VariantBuilder);
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -85,6 +86,41 @@ fn variant_primitive() -> Result<(), ArrowError> {
 }
 
 #[test]
+fn variant_primitive_builder() -> Result<(), ArrowError> {
+    let builder_cases: [(&'static str, BuilderTestFn); 6] = [
+        ("primitive_boolean_false", |b: &mut VariantBuilder| {
+            b.append_value(false)
+        }),
+        ("primitive_boolean_true", |b: &mut VariantBuilder| {
+            b.append_value(true)
+        }),
+        ("primitive_int8", |b: &mut VariantBuilder| {
+            b.append_value(42i8)
+        }),
+        ("primitive_null", |b: &mut VariantBuilder| {
+            b.append_value(())
+        }),
+        ("short_string", |b: &mut VariantBuilder| {
+            b.append_value("Less than 64 bytes (❤\u{fe0f} with utf8)")
+        }),
+        ("primitive_string", |b: &mut VariantBuilder| {
+            b.append_value("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")
+        }),
+    ];
+
+    for (case, build_fn) in builder_cases {
+        let mut builder = VariantBuilder::new();
+        build_fn(&mut builder);
+        let (built_metadata, built_value) = builder.finish();
+        let (expected_metadata, expected_value) = load_case(case)?;
+
+        assert_eq!(built_metadata, expected_metadata);
+        assert_eq!(built_value, expected_value);
+    }
+    Ok(())
+}
+
+#[test]
 fn variant_non_primitive() -> Result<(), ArrowError> {
     let cases = get_non_primitive_cases();
     for case in cases {
@@ -110,5 +146,52 @@ fn variant_non_primitive() -> Result<(), ArrowError> {
             _ => unreachable!(),
         }
     }
+    Ok(())
+}
+
+#[test]
+fn variant_array_builder() -> Result<(), ArrowError> {
+    let mut builder = VariantBuilder::new();
+
+    let mut arr = builder.new_array();
+    arr.append_value(2i8);
+    arr.append_value(1i8);
+    arr.append_value(5i8);
+    arr.append_value(9i8);
+    arr.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let (expected_metadata, expected_value) = load_case("array_primitive")?;
+
+    assert_eq!(built_metadata, expected_metadata);
+    assert_eq!(built_value, expected_value);
+
+    Ok(())
+}
+
+#[test]
+fn variant_object_builder() -> Result<(), ArrowError> {
+    let mut builder = VariantBuilder::new();
+
+    let mut obj = builder.new_object();
+    obj.append_value("int_field", 1i8);
+
+    // The double field is actually encoded as decimal4 with scale 8
+    // Value: 123456789, Scale: 8 -> 1.23456789
+    obj.append_value("double_field", (123456789i32, 8u8));
+    obj.append_value("boolean_true_field", true);
+    obj.append_value("boolean_false_field", false);
+    obj.append_value("string_field", "Apache Parquet");
+    obj.append_value("null_field", ());
+    obj.append_value("timestamp_field", "2025-04-16T12:34:56.78");
+
+    obj.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let (expected_metadata, expected_value) = load_case("object_primitive")?;
+
+    assert_eq!(built_metadata, expected_metadata);
+    assert_eq!(built_value, expected_value);
+
     Ok(())
 }

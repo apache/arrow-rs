@@ -20,7 +20,7 @@ use std::array::TryFromSliceError;
 
 use crate::utils::{array_from_slice, slice_from_slice, string_from_slice};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
     Primitive = 0,
     ShortString = 1,
@@ -28,7 +28,7 @@ pub enum VariantBasicType {
     Array = 3,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantPrimitiveType {
     Null = 0,
     BooleanTrue = 1,
