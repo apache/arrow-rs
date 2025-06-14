@@ -72,6 +72,8 @@ impl<'a> Parser<'a> {
             Token::Duration => self.parse_duration(),
             Token::Interval => self.parse_interval(),
             Token::FixedSizeBinary => self.parse_fixed_size_binary(),
+            Token::Decimal32 => self.parse_decimal_32(),
+            Token::Decimal64 => self.parse_decimal_64(),
             Token::Decimal128 => self.parse_decimal_128(),
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
@@ -266,6 +268,26 @@ impl<'a> Parser<'a> {
         let length = self.parse_i32("FixedSizeBinary")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::FixedSizeBinary(length))
+    }
+
+    /// Parses the next Decimal32 (called after `Decimal32` has been consumed)
+    fn parse_decimal_32(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let precision = self.parse_u8("Decimal32")?;
+        self.expect_token(Token::Comma)?;
+        let scale = self.parse_i8("Decimal32")?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::Decimal32(precision, scale))
+    }
+
+    /// Parses the next Decimal64 (called after `Decimal64` has been consumed)
+    fn parse_decimal_64(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let precision = self.parse_u8("Decimal64")?;
+        self.expect_token(Token::Comma)?;
+        let scale = self.parse_i8("Decimal64")?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::Decimal64(precision, scale))
     }
 
     /// Parses the next Decimal128 (called after `Decimal128` has been consumed)
@@ -518,6 +540,9 @@ impl<'a> Tokenizer<'a> {
             "Dictionary" => Token::Dictionary,
 
             "FixedSizeBinary" => Token::FixedSizeBinary,
+
+            "Decimal32" => Token::Decimal32,
+            "Decimal64" => Token::Decimal64,
             "Decimal128" => Token::Decimal128,
             "Decimal256" => Token::Decimal256,
 
@@ -577,6 +602,8 @@ enum Token {
     Duration,
     Interval,
     FixedSizeBinary,
+    Decimal32,
+    Decimal64,
     Decimal128,
     Decimal256,
     Dictionary,
@@ -616,6 +643,8 @@ impl Display for Token {
             Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
             Token::FixedSizeBinary => write!(f, "FixedSizeBinary"),
+            Token::Decimal32 => write!(f, "Decimal32"),
+            Token::Decimal64 => write!(f, "Decimal64"),
             Token::Decimal128 => write!(f, "Decimal128"),
             Token::Decimal256 => write!(f, "Decimal256"),
             Token::Dictionary => write!(f, "Dictionary"),
@@ -708,6 +737,8 @@ mod test {
             DataType::Utf8,
             DataType::Utf8View,
             DataType::LargeUtf8,
+            DataType::Decimal32(7, 8),
+            DataType::Decimal64(6, 9),
             DataType::Decimal128(7, 12),
             DataType::Decimal256(6, 13),
             // ---------
@@ -830,8 +861,12 @@ mod test {
             // too large for i32
             ("FixedSizeBinary(4000000000), ", "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted"),
             // can't have negative precision
+            ("Decimal32(-3, 5)", "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted"),
+            ("Decimal64(-3, 5)", "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted"),
             ("Decimal128(-3, 5)", "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted"),
             ("Decimal256(-3, 5)", "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted"),
+            ("Decimal32(3, 500)", "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted"),
+            ("Decimal64(3, 500)", "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted"),
             ("Decimal128(3, 500)", "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted"),
             ("Decimal256(3, 500)", "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted"),
             ("Struct(f1, Int64)", "Error finding next type, got unexpected ','"),
