@@ -632,20 +632,20 @@ mod tests {
 
         {
             let mut builder = VariantBuilder::new();
-            builder.append_value(3.14f32);
+            builder.append_value(1.5f32);
             let (metadata, value) = builder.finish();
             let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
-            assert_eq!(variant, Variant::Float(3.14));
+            assert_eq!(variant, Variant::Float(1.5));
         }
 
         {
             let mut builder = VariantBuilder::new();
-            builder.append_value(2.718281828f64);
+            builder.append_value(2.5f64);
             let (metadata, value) = builder.finish();
             let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
-            assert_eq!(variant, Variant::Double(2.718281828));
+            assert_eq!(variant, Variant::Double(2.5));
         }
 
         {
