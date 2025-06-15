@@ -309,12 +309,68 @@ pub struct VariantObject<'m, 'v> {
 }
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
-        todo!();
-        #[allow(unreachable_code)] // Just to infer the return type
-        Ok(vec![].into_iter())
+        // Parse the object header to get information about field layout
+        let value_header = *first_byte_from_slice(self.value_data)? >> 2;
+        let is_large = (value_header & 0x08) != 0; // 4th bit from the right
+        let field_id_size_minus_one = (value_header >> 2) & 0x03; // bits 4-5
+        let field_offset_size_minus_one = value_header & 0x03; // Last two bits
+        
+        let field_id_size = OffsetSizeBytes::try_new(field_id_size_minus_one)?;
+        let field_offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
+        
+        // The size of the num_fields entry in the object value_data is 4 bytes if
+        // is_large is true, otherwise 1 byte.
+        let num_fields_size = match is_large {
+            true => OffsetSizeBytes::Four,
+            false => OffsetSizeBytes::One,
+        };
+        
+        // Skip the header byte to read the num_fields
+        let num_fields = num_fields_size.unpack_usize(self.value_data, 1, 0)?;
+        let first_field_id_byte = 1 + num_fields_size as usize;
+        
+        // Collect all field information
+        let mut fields = Vec::new();
+        
+        for i in 0..num_fields {
+            // Get field ID
+            let field_id = field_id_size.unpack_usize(self.value_data, first_field_id_byte, i)?;
+            
+            // Get field name from metadata
+            let field_name = self.metadata.get_field_by(field_id)?;
+            
+            // Calculate offset positions
+            let first_offset_byte = first_field_id_byte + num_fields * (field_id_size as usize);
+            let start_offset = field_offset_size.unpack_usize(self.value_data, first_offset_byte, i)?;
+            let end_offset = field_offset_size.unpack_usize(self.value_data, first_offset_byte, i + 1)?;
+            
+            // Calculate the start of the values section
+            let first_value_byte = first_offset_byte + (num_fields + 1) * (field_offset_size as usize);
+            
+            // Extract field value bytes
+            let field_value_bytes = slice_from_slice(
+                self.value_data,
+                first_value_byte + start_offset..first_value_byte + end_offset,
+            )?;
+            
+            // Parse the field value as a Variant
+            let field_value = Variant::try_new(self.metadata, field_value_bytes)?;
+            
+            fields.push((field_name, field_value));
+        }
+        
+        Ok(fields.into_iter())
     }
-    pub fn field(&self, _name: &'m str) -> Result<Variant<'m, 'v>, ArrowError> {
-        todo!()
+    
+    pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
+        // Find the field by iterating through all fields
+        for field_result in self.fields()? {
+            let (key, value) = field_result;
+            if key == name {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -328,7 +384,19 @@ pub struct VariantArray<'m, 'v> {
 impl<'m, 'v> VariantArray<'m, 'v> {
     /// Return the length of this array
     pub fn len(&self) -> usize {
-        todo!()
+        // Parse the array header to get the number of elements
+        if let Ok(value_header) = first_byte_from_slice(self.value_data).map(|b| *b >> 2) {
+            let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
+            let num_elements_size = match is_large {
+                true => OffsetSizeBytes::Four,
+                false => OffsetSizeBytes::One,
+            };
+            
+            // Skip the header byte to read the num_elements
+            num_elements_size.unpack_usize(self.value_data, 1, 0).unwrap_or(0)
+        } else {
+            0 // Return 0 if we can't read the header
+        }
     }
 
     /// Is the array of zero length
@@ -337,9 +405,15 @@ impl<'m, 'v> VariantArray<'m, 'v> {
     }
 
     pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
-        todo!();
-        #[allow(unreachable_code)] // Just to infer the return type
-        Ok(vec![].into_iter())
+        let len = self.len();
+        let mut values = Vec::new();
+        
+        for i in 0..len {
+            let element = self.get(i)?;
+            values.push(element);
+        }
+        
+        Ok(values.into_iter())
     }
 
     pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
@@ -1039,6 +1113,14 @@ impl From<(i32, u8)> for Variant<'_, '_> {
         }
     }
 }
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
+        }
+    }
+}
 
 impl From<(i64, u8)> for Variant<'_, '_> {
     fn from(value: (i64, u8)) -> Self {
@@ -1067,16 +1149,6 @@ impl From<f32> for Variant<'_, '_> {
 impl From<f64> for Variant<'_, '_> {
     fn from(value: f64) -> Self {
         Variant::Double(value)
-    }
-}
-
-impl From<bool> for Variant<'_, '_> {
-    fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
-        }
     }
 }
 
@@ -1260,7 +1332,7 @@ mod tests {
     }
 
     /// Too short buffer test (missing one required offset).
-    /// Should error with “metadata shorter than dictionary_size implies”.
+    /// Should error with "metadata shorter than dictionary_size implies".
     #[test]
     fn try_new_missing_last_value() {
         let bytes = &[

@@ -15,26 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implementation of [Variant Binary Encoding] from [Apache Parquet].
-//!
-//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
-//! [Apache Parquet]: https://parquet.apache.org/
-//!
-//! ## 🚧 Work In Progress
-//!
-//! This crate is under active development and is not yet ready for production use.
-//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
-//!
-//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
+//! Encoder module for converting Variant values to other formats
 
-// TODO: dead code removal
-#[allow(dead_code)]
-mod decoder;
-mod encoder;
-mod variant;
-// TODO: dead code removal
-#[allow(dead_code)]
-mod utils;
-
-pub use variant::*;
-pub use encoder::variant_to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
+pub mod variant_to_json; 
