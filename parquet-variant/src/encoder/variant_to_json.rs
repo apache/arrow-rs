@@ -317,6 +317,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 mod tests {
     use super::*;
     use crate::Variant;
+    use chrono::{DateTime, NaiveDate, Utc};
 
     #[test]
     fn test_null_to_json() -> Result<(), ArrowError> {
@@ -359,6 +360,219 @@ mod tests {
     }
 
     #[test]
+    fn test_int16_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Int16(32767);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "32767");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::Number(32767.into()));
+
+        // Test negative value
+        let negative_variant = Variant::Int16(-32768);
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-32768");
+        Ok(())
+    }
+
+    #[test]
+    fn test_int32_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Int32(2147483647);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "2147483647");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::Number(2147483647.into()));
+
+        // Test negative value
+        let negative_variant = Variant::Int32(-2147483648);
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-2147483648");
+        Ok(())
+    }
+
+    #[test]
+    fn test_int64_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Int64(9223372036854775807);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "9223372036854775807");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::Number(9223372036854775807i64.into()));
+
+        // Test negative value
+        let negative_variant = Variant::Int64(-9223372036854775808);
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-9223372036854775808");
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Float(3.14159);
+        let json = variant_to_json_string(&variant)?;
+        assert!(json.starts_with("3.14159"));
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Number(_)));
+
+        // Test zero
+        let zero_variant = Variant::Float(0.0);
+        let zero_json = variant_to_json_string(&zero_variant)?;
+        assert_eq!(zero_json, "0");
+
+        // Test negative
+        let negative_variant = Variant::Float(-1.5);
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-1.5");
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Double(2.718281828459045);
+        let json = variant_to_json_string(&variant)?;
+        assert!(json.starts_with("2.718281828459045"));
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Number(_)));
+
+        // Test zero
+        let zero_variant = Variant::Double(0.0);
+        let zero_json = variant_to_json_string(&zero_variant)?;
+        assert_eq!(zero_json, "0");
+
+        // Test negative
+        let negative_variant = Variant::Double(-2.5);
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-2.5");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal4_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Decimal4 { integer: 12345, scale: 2 };
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "123.45");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Number(_)));
+
+        // Test zero scale
+        let no_scale_variant = Variant::Decimal4 { integer: 42, scale: 0 };
+        let no_scale_json = variant_to_json_string(&no_scale_variant)?;
+        assert_eq!(no_scale_json, "42");
+
+        // Test negative
+        let negative_variant = Variant::Decimal4 { integer: -12345, scale: 3 };
+        let negative_json = variant_to_json_string(&negative_variant)?;
+        assert_eq!(negative_json, "-12.345");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal8_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Decimal8 { integer: 1234567890, scale: 3 };
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "1234567.89");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Number(_)));
+
+        // Test large scale
+        let large_scale_variant = Variant::Decimal8 { integer: 123456789, scale: 6 };
+        let large_scale_json = variant_to_json_string(&large_scale_variant)?;
+        assert_eq!(large_scale_json, "123.456789");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal16_to_json() -> Result<(), ArrowError> {
+        let variant = Variant::Decimal16 { integer: 123456789012345, scale: 4 };
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "12345678901.2345");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Number(_)));
+
+        // Test very large number
+        let large_variant = Variant::Decimal16 { integer: 999999999999999999, scale: 2 };
+        let large_json = variant_to_json_string(&large_variant)?;
+        // Due to f64 precision limits, very large numbers may lose precision
+        assert!(large_json.starts_with("9999999999999999") || large_json.starts_with("10000000000000000"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_date_to_json() -> Result<(), ArrowError> {
+        let date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
+        let variant = Variant::Date(date);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "\"2023-12-25\"");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::String("2023-12-25".to_string()));
+
+        // Test leap year date
+        let leap_date = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+        let leap_variant = Variant::Date(leap_date);
+        let leap_json = variant_to_json_string(&leap_variant)?;
+        assert_eq!(leap_json, "\"2024-02-29\"");
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_micros_to_json() -> Result<(), ArrowError> {
+        let timestamp = DateTime::parse_from_rfc3339("2023-12-25T10:30:45Z").unwrap().with_timezone(&Utc);
+        let variant = Variant::TimestampMicros(timestamp);
+        let json = variant_to_json_string(&variant)?;
+        assert!(json.contains("2023-12-25T10:30:45"));
+        assert!(json.starts_with('"') && json.ends_with('"'));
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_ntz_micros_to_json() -> Result<(), ArrowError> {
+        let naive_timestamp = DateTime::from_timestamp(1703505045, 123456).unwrap().naive_utc();
+        let variant = Variant::TimestampNtzMicros(naive_timestamp);
+        let json = variant_to_json_string(&variant)?;
+        assert!(json.contains("2023-12-25"));
+        assert!(json.starts_with('"') && json.ends_with('"'));
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_binary_to_json() -> Result<(), ArrowError> {
+        let binary_data = b"Hello, World!";
+        let variant = Variant::Binary(binary_data);
+        let json = variant_to_json_string(&variant)?;
+        
+        // Should be base64 encoded and quoted
+        assert!(json.starts_with('"') && json.ends_with('"'));
+        assert!(json.len() > 2); // Should have content
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+
+        // Test empty binary
+        let empty_variant = Variant::Binary(b"");
+        let empty_json = variant_to_json_string(&empty_variant)?;
+        assert_eq!(empty_json, "\"\"");
+
+        // Test binary with special bytes
+        let special_variant = Variant::Binary(&[0, 255, 128, 64]);
+        let special_json = variant_to_json_string(&special_variant)?;
+        assert!(special_json.starts_with('"') && special_json.ends_with('"'));
+        Ok(())
+    }
+
+    #[test]
     fn test_string_to_json() -> Result<(), ArrowError> {
         let variant = Variant::String("hello world");
         let json = variant_to_json_string(&variant)?;
@@ -391,10 +605,6 @@ mod tests {
         Ok(())
     }
 
-    // TODO: Add tests for objects and arrays once the implementation is complete
-    // These will be added in the next steps when we implement the missing methods
-    // in VariantObject and VariantArray
-
     #[test]
     fn test_json_buffer_writing() -> Result<(), ArrowError> {
         let variant = Variant::Int8(123);
@@ -404,6 +614,39 @@ mod tests {
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
         assert_eq!(result, "123");
+        Ok(())
+    }
+
+    #[test]
+    fn test_comprehensive_type_coverage() -> Result<(), ArrowError> {
+        // Test all supported types to ensure no compilation errors
+        let test_variants = vec![
+            Variant::Null,
+            Variant::BooleanTrue,
+            Variant::BooleanFalse,
+            Variant::Int8(1),
+            Variant::Int16(2),
+            Variant::Int32(3),
+            Variant::Int64(4),
+            Variant::Float(5.0),
+            Variant::Double(6.0),
+            Variant::Decimal4 { integer: 7, scale: 0 },
+            Variant::Decimal8 { integer: 8, scale: 0 },
+            Variant::Decimal16 { integer: 9, scale: 0 },
+            Variant::Date(NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
+            Variant::TimestampMicros(DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z").unwrap().with_timezone(&Utc)),
+            Variant::TimestampNtzMicros(DateTime::from_timestamp(0, 0).unwrap().naive_utc()),
+            Variant::Binary(b"test"),
+            Variant::String("test"),
+            Variant::ShortString("test"),
+        ];
+
+        for variant in test_variants {
+            // Ensure all types can be converted without panicking
+            let _json_string = variant_to_json_string(&variant)?;
+            let _json_value = variant_to_json_value(&variant)?;
+        }
+        
         Ok(())
     }
 } 
