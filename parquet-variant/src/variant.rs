@@ -393,11 +393,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             };
             
             // Skip the header byte to read the num_elements
-            if let Ok(num_elements) = num_elements_size.unpack_usize(self.value, 1, 0) {
-                num_elements
-            } else {
-                0 // Return 0 if we can't parse the length
-            }
+            num_elements_size.unpack_usize(self.value, 1, 0).unwrap_or(0)
         } else {
             0 // Return 0 if we can't read the header
         }
@@ -1114,6 +1110,14 @@ impl From<(i32, u8)> for Variant<'_, '_> {
         Variant::Decimal4 {
             integer: value.0,
             scale: value.1,
+        }
+    }
+}
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
         }
     }
 }
