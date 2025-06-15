@@ -310,7 +310,7 @@ pub struct VariantObject<'m, 'v> {
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn fields(&self) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
         // Parse the object header to get information about field layout
-        let value_header = *first_byte_from_slice(self.value)? >> 2;
+        let value_header = *first_byte_from_slice(self.value_data)? >> 2;
         let is_large = (value_header & 0x08) != 0; // 4th bit from the right
         let field_id_size_minus_one = (value_header >> 2) & 0x03; // bits 4-5
         let field_offset_size_minus_one = value_header & 0x03; // Last two bits
@@ -326,7 +326,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         };
         
         // Skip the header byte to read the num_fields
-        let num_fields = num_fields_size.unpack_usize(self.value, 1, 0)?;
+        let num_fields = num_fields_size.unpack_usize(self.value_data, 1, 0)?;
         let first_field_id_byte = 1 + num_fields_size as usize;
         
         // Collect all field information
@@ -334,22 +334,22 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         
         for i in 0..num_fields {
             // Get field ID
-            let field_id = field_id_size.unpack_usize(self.value, first_field_id_byte, i)?;
+            let field_id = field_id_size.unpack_usize(self.value_data, first_field_id_byte, i)?;
             
             // Get field name from metadata
             let field_name = self.metadata.get_field_by(field_id)?;
             
             // Calculate offset positions
             let first_offset_byte = first_field_id_byte + num_fields * (field_id_size as usize);
-            let start_offset = field_offset_size.unpack_usize(self.value, first_offset_byte, i)?;
-            let end_offset = field_offset_size.unpack_usize(self.value, first_offset_byte, i + 1)?;
+            let start_offset = field_offset_size.unpack_usize(self.value_data, first_offset_byte, i)?;
+            let end_offset = field_offset_size.unpack_usize(self.value_data, first_offset_byte, i + 1)?;
             
             // Calculate the start of the values section
             let first_value_byte = first_offset_byte + (num_fields + 1) * (field_offset_size as usize);
             
             // Extract field value bytes
             let field_value_bytes = slice_from_slice(
-                self.value,
+                self.value_data,
                 first_value_byte + start_offset..first_value_byte + end_offset,
             )?;
             
@@ -385,7 +385,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
     /// Return the length of this array
     pub fn len(&self) -> usize {
         // Parse the array header to get the number of elements
-        if let Ok(value_header) = first_byte_from_slice(self.value).map(|b| *b >> 2) {
+        if let Ok(value_header) = first_byte_from_slice(self.value_data).map(|b| *b >> 2) {
             let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
             let num_elements_size = match is_large {
                 true => OffsetSizeBytes::Four,
@@ -393,7 +393,7 @@ impl<'m, 'v> VariantArray<'m, 'v> {
             };
             
             // Skip the header byte to read the num_elements
-            num_elements_size.unpack_usize(self.value, 1, 0).unwrap_or(0)
+            num_elements_size.unpack_usize(self.value_data, 1, 0).unwrap_or(0)
         } else {
             0 // Return 0 if we can't read the header
         }
@@ -1149,16 +1149,6 @@ impl From<f32> for Variant<'_, '_> {
 impl From<f64> for Variant<'_, '_> {
     fn from(value: f64) -> Self {
         Variant::Double(value)
-    }
-}
-
-impl From<bool> for Variant<'_, '_> {
-    fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
-        }
     }
 }
 
