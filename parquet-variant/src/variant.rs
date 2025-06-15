@@ -1342,6 +1342,14 @@ impl From<(i32, u8)> for Variant<'_, '_> {
         }
     }
 }
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
+        }
+    }
+}
 
 impl From<(i64, u8)> for Variant<'_, '_> {
     fn from(value: (i64, u8)) -> Self {
