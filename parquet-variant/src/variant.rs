@@ -1564,6 +1564,14 @@ impl From<VariantDecimal4> for Variant<'_, '_> {
         Variant::Decimal4(value)
     }
 }
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
+        }
+    }
+}
 
 impl From<VariantDecimal8> for Variant<'_, '_> {
     fn from(value: VariantDecimal8) -> Self {
