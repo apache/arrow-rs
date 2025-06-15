@@ -18,6 +18,7 @@
 //! Module for converting Variant data to JSON format
 
 use arrow_schema::ArrowError;
+use base64::{Engine as _, engine::general_purpose};
 use serde_json::Value;
 use std::io::Write;
 
@@ -66,6 +67,55 @@ pub fn variant_to_json<W: Write>(
         }
         Variant::Int8(i) => {
             write!(json_buffer, "{}", i)?;
+        }
+        Variant::Int16(i) => {
+            write!(json_buffer, "{}", i)?;
+        }
+        Variant::Int32(i) => {
+            write!(json_buffer, "{}", i)?;
+        }
+        Variant::Int64(i) => {
+            write!(json_buffer, "{}", i)?;
+        }
+        Variant::Float(f) => {
+            write!(json_buffer, "{}", f)?;
+        }
+        Variant::Double(f) => {
+            write!(json_buffer, "{}", f)?;
+        }
+        Variant::Decimal4 { integer, scale } => {
+            // Convert decimal to string representation
+            let divisor = 10_i32.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            write!(json_buffer, "{}", decimal_value)?;
+        }
+        Variant::Decimal8 { integer, scale } => {
+            // Convert decimal to string representation
+            let divisor = 10_i64.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            write!(json_buffer, "{}", decimal_value)?;
+        }
+        Variant::Decimal16 { integer, scale } => {
+            // Convert decimal to string representation
+            let divisor = 10_i128.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            write!(json_buffer, "{}", decimal_value)?;
+        }
+        Variant::Date(date) => {
+            write!(json_buffer, "\"{}\"", date.format("%Y-%m-%d"))?;
+        }
+        Variant::TimestampMicros(ts) => {
+            write!(json_buffer, "\"{}\"", ts.to_rfc3339())?;
+        }
+        Variant::TimestampNtzMicros(ts) => {
+            write!(json_buffer, "\"{}\"", ts.format("%Y-%m-%dT%H:%M:%S%.6f"))?;
+        }
+        Variant::Binary(bytes) => {
+            // Encode binary as base64 string
+            let base64_str = general_purpose::STANDARD.encode(bytes);
+            let json_str = serde_json::to_string(&base64_str)
+                .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e)))?;
+            write!(json_buffer, "{}", json_str)?;
         }
         Variant::String(s) | Variant::ShortString(s) => {
             // Use serde_json to properly escape the string
@@ -198,6 +248,44 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::BooleanTrue => Ok(Value::Bool(true)),
         Variant::BooleanFalse => Ok(Value::Bool(false)),
         Variant::Int8(i) => Ok(Value::Number((*i).into())),
+        Variant::Int16(i) => Ok(Value::Number((*i).into())),
+        Variant::Int32(i) => Ok(Value::Number((*i).into())),
+        Variant::Int64(i) => Ok(Value::Number((*i).into())),
+        Variant::Float(f) => {
+            serde_json::Number::from_f64(*f as f64)
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string()))
+        }
+        Variant::Double(f) => {
+            serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string()))
+        }
+        Variant::Decimal4 { integer, scale } => {
+            let divisor = 10_i32.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            serde_json::Number::from_f64(decimal_value)
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid decimal value".to_string()))
+        }
+        Variant::Decimal8 { integer, scale } => {
+            let divisor = 10_i64.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            serde_json::Number::from_f64(decimal_value)
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid decimal value".to_string()))
+        }
+        Variant::Decimal16 { integer, scale } => {
+            let divisor = 10_i128.pow(*scale as u32);
+            let decimal_value = *integer as f64 / divisor as f64;
+            serde_json::Number::from_f64(decimal_value)
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid decimal value".to_string()))
+        }
+        Variant::Date(date) => Ok(Value::String(date.format("%Y-%m-%d").to_string())),
+        Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
+        Variant::TimestampNtzMicros(ts) => Ok(Value::String(ts.format("%Y-%m-%dT%H:%M:%S%.6f").to_string())),
+        Variant::Binary(bytes) => Ok(Value::String(general_purpose::STANDARD.encode(bytes))),
         Variant::String(s) | Variant::ShortString(s) => Ok(Value::String(s.to_string())),
         Variant::Object(obj) => {
             let mut map = serde_json::Map::new();

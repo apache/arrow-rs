@@ -1597,16 +1597,6 @@ impl From<f64> for Variant<'_, '_> {
     }
 }
 
-impl From<bool> for Variant<'_, '_> {
-    fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
-        }
-    }
-}
-
 impl From<NaiveDate> for Variant<'_, '_> {
     fn from(value: NaiveDate) -> Self {
         Variant::Date(value)
