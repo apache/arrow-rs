@@ -68,7 +68,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             current: None,
             completed: vec![],
             buffer_source,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 
