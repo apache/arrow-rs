@@ -158,6 +158,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
 #[cfg(test)]
 mod tests {
     use crate::{RowConverter, SortField};
+    use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Array, Int64Array, RunArray, StringArray};
     use arrow_schema::{DataType, SortOptions};
@@ -691,5 +692,28 @@ mod tests {
             rows2.row(1) < rows3.row(1),
             "banana should come before cherry"
         );
+    }
+
+    #[test]
+    fn test_run_end_encoded_empty() {
+        // Test converting / decoding an empty RunEndEncodedArray
+        let values: Vec<&str> = vec![];
+        let array: RunArray<Int32Type> = values.into_iter().collect();
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+        ))])
+        .unwrap();
+
+        let rows = converter.convert_columns(&[Arc::new(array)]).unwrap();
+        assert_eq!(rows.num_rows(), 0);
+
+        // Likewise converting empty rows should yield an empty RunEndEncodedArray
+        let arrays = converter.convert_rows(&rows).unwrap();
+        assert_eq!(arrays.len(), 1);
+        // Verify both columns round-trip correctly
+        let result_ree = arrays[0].as_run::<Int32Type>();
+        assert_eq!(result_ree.len(), 0);
     }
 }
