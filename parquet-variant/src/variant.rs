@@ -384,13 +384,13 @@ impl VariantObjectHeader {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
-    pub metadata: &'m VariantMetadata<'m>,
+    pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
     header: VariantObjectHeader,
 }
 
 impl<'m, 'v> VariantObject<'m, 'v> {
-    pub fn try_new(metadata: &'m VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         Ok(Self {
             metadata,
             value,
@@ -430,7 +430,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             self.header.values_start_byte + start_offset
                 ..self.header.values_start_byte + end_offset,
         )?;
-        let variant = Variant::try_new(self.metadata, value_bytes)?;
+        let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
         Ok(Some(variant))
     }
 
@@ -480,7 +480,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 self.header.values_start_byte + start_offset
                     ..self.header.values_start_byte + end_offset,
             )?;
-            let variant = Variant::try_new(self.metadata, value_bytes)?;
+            let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
 
             fields.push((field_name, variant));
         }
@@ -596,13 +596,13 @@ impl VariantListHeader {
 // `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantList<'m, 'v> {
-    pub metadata: &'m VariantMetadata<'m>,
+    pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
     header: VariantListHeader,
 }
 
 impl<'m, 'v> VariantList<'m, 'v> {
-    pub fn try_new(metadata: &'m VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         Ok(Self {
             metadata,
             value,
@@ -655,7 +655,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
             self.header.first_value_byte() + start_field_offset_from_first_value_byte
                 ..self.header.first_value_byte() + end_field_offset_from_first_value_byte,
         )?;
-        let variant = Variant::try_new(self.metadata, variant_value_bytes)?;
+        let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)
     }
 }
@@ -691,8 +691,41 @@ pub enum Variant<'m, 'v> {
 }
 
 impl<'m, 'v> Variant<'m, 'v> {
-    /// Parse the buffers and return the appropriate variant.
-    pub fn try_new(metadata: &'m VariantMetadata, value: &'v [u8]) -> Result<Self, ArrowError> {
+    /// Create a new `Variant` from metadata and value.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// assert_eq!(
+    ///   Variant::ShortString("HI"),
+    ///   Variant::try_new(&metadata, &value).unwrap()
+    /// );
+    /// ```
+    pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
+        let metadata = VariantMetadata::try_new(metadata)?;
+        Self::try_new_with_metadata(metadata, value)
+    }
+
+    /// Create a new variant with existing metadata
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// // parse the header metadata first
+    /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+    /// assert_eq!(
+    ///   Variant::ShortString("HI"),
+    ///   Variant::try_new_with_metadata(metadata, &value).unwrap()
+    /// );
+    /// ```
+    pub fn try_new_with_metadata(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+    ) -> Result<Self, ArrowError> {
         let value_metadata = *first_byte_from_slice(value)?;
         let value_data = slice_from_slice(value, 1..)?;
         let new_self = match get_basic_type(value_metadata)? {
@@ -1248,7 +1281,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::List(VariantList { metadata, .. }) => Some(*metadata),
+            | Variant::List(VariantList { metadata, .. }) => Some(metadata),
             _ => None,
         }
     }
@@ -1633,7 +1666,7 @@ mod tests {
             b'o', // short string: length=5, basic_type=1 -> (5 << 2) | 1 = 0x15
         ];
 
-        let variant_obj = VariantObject::try_new(&metadata, &object_value).unwrap();
+        let variant_obj = VariantObject::try_new(metadata, &object_value).unwrap();
 
         // Test basic properties
         assert_eq!(variant_obj.len(), 3);
@@ -1689,7 +1722,7 @@ mod tests {
                   // No field IDs, no values
         ];
 
-        let variant_obj = VariantObject::try_new(&metadata, &object_value).unwrap();
+        let variant_obj = VariantObject::try_new(metadata, &object_value).unwrap();
 
         // Test basic properties
         assert_eq!(variant_obj.len(), 0);
@@ -1733,7 +1766,7 @@ mod tests {
             0x09, b'h', b'i', // short string: length=2, basic_type=1 -> (2 << 2) | 1 = 0x09
         ];
 
-        let variant_list = VariantList::try_new(&metadata, &list_value).unwrap();
+        let variant_list = VariantList::try_new(metadata, &list_value).unwrap();
 
         // Test basic properties
         assert_eq!(variant_list.len(), 3);
@@ -1783,7 +1816,7 @@ mod tests {
                   // No values
         ];
 
-        let variant_list = VariantList::try_new(&metadata, &list_value).unwrap();
+        let variant_list = VariantList::try_new(metadata, &list_value).unwrap();
 
         // Test basic properties
         assert_eq!(variant_list.len(), 0);
@@ -1821,7 +1854,7 @@ mod tests {
             0x08, // boolean false: primitive_header=2, basic_type=0 -> (2 << 2) | 0 = 0x08
         ];
 
-        let variant_list = VariantList::try_new(&metadata, &list_bytes).unwrap();
+        let variant_list = VariantList::try_new(metadata, &list_bytes).unwrap();
 
         // Test basic properties
         assert_eq!(variant_list.len(), 2);
