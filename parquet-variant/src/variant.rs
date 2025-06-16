@@ -474,12 +474,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             let field_name = self.metadata.get_field_by(field_id)?;
 
             let start_offset = field_offsets[i];
-            let end_offset = field_offsets[i + 1];
-            let value_bytes = slice_from_slice(
-                self.value,
-                self.header.values_start_byte + start_offset
-                    ..self.header.values_start_byte + end_offset,
-            )?;
+            let value_bytes =
+                slice_from_slice(self.value, self.header.values_start_byte + start_offset..)?;
             let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
 
             fields.push((field_name, variant));
