@@ -264,7 +264,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
 ///
 /// This is a subset of the ArrayBuilder APIs, but specialized for
 /// the incremental usecase
-trait InProgressArray: std::fmt::Debug {
+///
+/// [`UInt32Array`]: arrow_array::UInt32Array
+trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Push a new array to the in-progress array
     fn push_array(&mut self, array: ArrayRef);
 
@@ -275,6 +277,8 @@ trait InProgressArray: std::fmt::Debug {
 /// Fallback implementation for [`InProgressArray`]
 ///
 /// Internally, buffers arrays and calls [`concat`]
+///
+/// [`concat`]: crate::concat::concat
 #[derive(Debug)]
 struct GenericInProgressArray {
     /// The buffered arrays
@@ -503,11 +507,9 @@ impl InProgressArray for InProgressStringViewArray {
 }
 
 const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
-const MAX_BLOCK_SIZE: usize = 1 * 1024 * 1024; // 1MiB
+const MAX_BLOCK_SIZE: usize = 1024 * 1024; // 1MiB
 
 /// Manages allocating new buffers for `StringViewArray`
-///
-/// TODO: explore reusing buffers
 #[derive(Debug)]
 struct BufferSource {
     current_size: usize,
