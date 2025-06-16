@@ -17,10 +17,13 @@
 
 use crate::builder::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
 use crate::types::{ArrowDictionaryKeyType, ByteArrayType, GenericBinaryType, GenericStringType};
-use crate::{Array, ArrayRef, DictionaryArray, GenericByteArray, TypedDictionaryArray};
+use crate::{
+    Array, ArrayRef, DictionaryArray, GenericByteArray, PrimitiveArray, TypedDictionaryArray,
+};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
+use num::NumCast;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -149,6 +152,71 @@ where
             state,
             dedup,
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
+            values_builder,
+        })
+    }
+
+    /// Creates a new `GenericByteDictionaryBuilder` from the existing builder with the same
+    /// keys and values, but with a new data type for the keys.
+    ///
+    /// # Example
+    /// ```
+    /// #
+    /// # use arrow_array::builder::StringDictionaryBuilder;
+    /// # use arrow_array::types::{UInt8Type, UInt16Type};
+    /// # use arrow_array::UInt16Array;
+    /// # use arrow_schema::ArrowError;
+    ///
+    /// let mut u8_keyed_builder = StringDictionaryBuilder::<UInt8Type>::new();
+    ///
+    /// // appending too many values causes the dictionary to overflow
+    /// for i in 0..256 {
+    ///     u8_keyed_builder.append_value(format!("{}", i));
+    /// }
+    /// let result = u8_keyed_builder.append("256");
+    /// assert!(matches!(result, Err(ArrowError::DictionaryKeyOverflowError{})));
+    ///
+    /// // we need to upgrade to a larger key type
+    /// let mut u16_keyed_builder = StringDictionaryBuilder::<UInt16Type>::try_new_from_builder(u8_keyed_builder).unwrap();
+    /// let dictionary_array = u16_keyed_builder.finish();
+    /// let keys = dictionary_array.keys();
+    ///
+    /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
+    pub fn try_new_from_builder<K2>(
+        mut source: GenericByteDictionaryBuilder<K2, T>,
+    ) -> Result<Self, ArrowError>
+    where
+        K::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast,
+    {
+        let state = source.state;
+        let dedup = source.dedup;
+        let values_builder = source.values_builder;
+
+        let source_keys = source.keys_builder.finish();
+        let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
+            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Can't cast dictionary keys from source type {:?} to type {:?}",
+                    K2::DATA_TYPE,
+                    K::DATA_TYPE
+                ))
+            })
+        })?;
+
+        // drop source key here because currently source_keys and new_keys are holding reference to
+        // the same underlying null_buffer. Below we want to call new_keys.into_builder() it must
+        // be the only reference holder.
+        drop(source_keys);
+
+        Ok(Self {
+            state,
+            dedup,
+            keys_builder: new_keys
+                .into_builder()
+                .expect("underlying buffer has no references"),
             values_builder,
         })
     }
@@ -503,7 +571,7 @@ mod tests {
 
     use crate::array::Int8Array;
     use crate::cast::AsArray;
-    use crate::types::{Int16Type, Int32Type, Int8Type, Utf8Type};
+    use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type, Utf8Type};
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
@@ -612,6 +680,97 @@ mod tests {
         test_bytes_dictionary_builder_finish_cloned::<GenericBinaryType<i32>>(vec![
             b"abc", b"def", b"ghi",
         ]);
+    }
+
+    fn _test_try_new_from_builder_generic_for_key_types<K1, K2, T>(values: Vec<&T::Native>)
+    where
+        K1: ArrowDictionaryKeyType,
+        K1::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast + From<u8>,
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq + AsRef<<T as ByteArrayType>::Native>,
+    {
+        let mut source = GenericByteDictionaryBuilder::<K1, T>::new();
+        source.append(values[0]).unwrap();
+        source.append(values[1]).unwrap();
+        source.append_null();
+        source.append(values[2]).unwrap();
+
+        let mut result =
+            GenericByteDictionaryBuilder::<K2, T>::try_new_from_builder(source).unwrap();
+        let array = result.finish();
+
+        let mut expected_keys_builder = PrimitiveBuilder::<K2>::new();
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
+        expected_keys_builder.append_null();
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+        let expected_keys = expected_keys_builder.finish();
+        assert_eq!(array.keys(), &expected_keys);
+
+        let av = array.values();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        assert_eq!(ava.value(0), values[0]);
+        assert_eq!(ava.value(1), values[1]);
+        assert_eq!(ava.value(2), values[2]);
+    }
+
+    fn test_try_new_from_builder<T>(values: Vec<&T::Native>)
+    where
+        T: ByteArrayType,
+        <T as ByteArrayType>::Native: PartialEq + AsRef<<T as ByteArrayType>::Native>,
+    {
+        // test cast to bigger size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, UInt16Type, T>(
+            values.clone(),
+        );
+        // test cast going to smaller size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt16Type, UInt8Type, T>(
+            values.clone(),
+        );
+        // test cast going to bigger size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, Int16Type, T>(values.clone());
+        // test cast going to smaller size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+        // test going from signed to signed for different size changes
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, Int16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt8Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+    }
+
+    #[test]
+    fn test_string_dictionary_builder_try_new_from_builder() {
+        test_try_new_from_builder::<GenericStringType<i32>>(vec!["abc", "def", "ghi"]);
+    }
+
+    #[test]
+    fn test_binary_dictionary_builder_try_new_from_builder() {
+        test_try_new_from_builder::<GenericBinaryType<i32>>(vec![b"abc", b"def", b"ghi"]);
+    }
+
+    #[test]
+    fn test_try_new_from_builder_cast_fails() {
+        let mut source_builder = StringDictionaryBuilder::<UInt16Type>::new();
+        for i in 0..257 {
+            source_builder.append_value(format!("val{}", i));
+        }
+
+        // there should be too many values that we can't downcast to the underlying type
+        // we have keys that wouldn't fit into UInt8Type
+        let result = StringDictionaryBuilder::<UInt8Type>::try_new_from_builder(source_builder);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, ArrowError::CastError(_)));
+            assert_eq!(
+                e.to_string(),
+                "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
+            );
+        }
     }
 
     fn test_bytes_dictionary_builder_with_existing_dictionary<T>(
