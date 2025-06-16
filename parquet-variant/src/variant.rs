@@ -1260,7 +1260,7 @@ mod tests {
     }
 
     /// Too short buffer test (missing one required offset).
-    /// Should error with "metadata shorter than dictionary_size implies".
+    /// Should error with “metadata shorter than dictionary_size implies”.
     #[test]
     fn try_new_missing_last_value() {
         let bytes = &[

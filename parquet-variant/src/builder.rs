@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const MAX_SHORT_STRING_SIZE: usize = 0x3F;
+const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
     (primitive_type as u8) << 2 | VariantBasicType::Primitive as u8
@@ -56,7 +57,7 @@ fn int_size(v: usize) -> u8 {
 /// Write little-endian integer to buffer
 fn write_offset(buf: &mut [u8], value: usize, nbytes: u8) {
     for i in 0..nbytes {
-        buf[i as usize] = ((value >> (i * 8)) & 0xFF) as u8;
+        buf[i as usize] = (value >> (i * 8)) as u8;
     }
 }
 
@@ -235,9 +236,7 @@ impl VariantBuilder {
     fn append_date(&mut self, value: chrono::NaiveDate) {
         self.buffer
             .push(primitive_header(VariantPrimitiveType::Date));
-        let days_since_epoch = value
-            .signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days() as i32;
+        let days_since_epoch = value.signed_duration_since(UNIX_EPOCH_DATE).num_days() as i32;
         self.buffer
             .extend_from_slice(&days_since_epoch.to_le_bytes());
     }
