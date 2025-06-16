@@ -20,16 +20,19 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::concat::concat;
-use arrow_array::StringViewArray;
-use arrow_array::{cast::AsArray, Array, ArrayRef, RecordBatch};
-use arrow_buffer::{Buffer, NullBufferBuilder};
-use arrow_data::ByteView;
+use arrow_array::types::{BinaryViewType, StringViewType};
+use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
-// Originally From DataFusion's coalesce module:
+// Originally inspired by DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
+
+mod byte_view;
+mod generic;
+
+use byte_view::InProgressByteViewArray;
+use generic::GenericInProgressArray;
 
 /// Concatenate multiple [`RecordBatch`]es
 ///
@@ -252,7 +255,10 @@ impl BatchCoalescer {
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
     match data_type {
-        DataType::Utf8View => Box::new(InProgressStringViewArray::new(batch_size)),
+        DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
+        DataType::BinaryView => {
+            Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
         _ => Box::new(GenericInProgressArray::new()),
     }
 }
@@ -265,6 +271,7 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
 /// This is a subset of the ArrayBuilder APIs, but specialized for
 /// the incremental usecase
 ///
+/// [`StringViewArray`]: arrow_array::StringViewArray
 /// [`UInt32Array`]: arrow_array::UInt32Array
 trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Push a new array to the in-progress array
@@ -274,315 +281,15 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 }
 
-/// Fallback implementation for [`InProgressArray`]
-///
-/// Internally, buffers arrays and calls [`concat`]
-///
-/// [`concat`]: crate::concat::concat
-#[derive(Debug)]
-struct GenericInProgressArray {
-    /// The buffered arrays
-    buffered_arrays: Vec<ArrayRef>,
-}
-
-impl GenericInProgressArray {
-    /// Create a new `GenericInProgressArray`
-    pub fn new() -> Self {
-        Self {
-            buffered_arrays: vec![],
-        }
-    }
-}
-impl InProgressArray for GenericInProgressArray {
-    fn push_array(&mut self, array: ArrayRef) {
-        self.buffered_arrays.push(array);
-    }
-
-    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        // Concatenate all buffered arrays into a single array, which uses 2x
-        // peak memory
-        let array = concat(
-            &self
-                .buffered_arrays
-                .iter()
-                .map(|array| array as &dyn Array)
-                .collect::<Vec<_>>(),
-        )?;
-        self.buffered_arrays.clear();
-        Ok(array)
-    }
-}
-
-/// InProgressArray for StringViewArray
-///
-/// TODO: genreric for GenericByteView
-#[derive(Debug)]
-struct InProgressStringViewArray {
-    /// the target batch size (and thus size for views allocation)
-    batch_size: usize,
-    /// The in progress vies
-    views: Vec<u128>,
-    /// In progress nulls
-    nulls: NullBufferBuilder,
-    /// current buffer
-    current: Option<Vec<u8>>,
-    /// completed buffers
-    completed: Vec<Buffer>,
-    /// Where to get the next buffer
-    buffer_source: BufferSource,
-}
-
-impl InProgressStringViewArray {
-    fn new(batch_size: usize) -> Self {
-        let buffer_source = BufferSource::new();
-
-        Self {
-            batch_size,
-            views: Vec::new(),                         // allocate in push
-            nulls: NullBufferBuilder::new(batch_size), // no allocation
-            current: None,
-            completed: vec![],
-            buffer_source,
-        }
-    }
-
-    /// Allocate space for output views and nulls if needed
-    ///
-    /// This is done when on write (when we know it is needed) rather than
-    /// eagerly to avoid allocations that are not used.
-    fn ensure_capacity(&mut self) {
-        self.views.reserve(self.batch_size);
-    }
-
-    /// Update self.nulls with the nulls from the StringViewArray
-    fn push_nulls(&mut self, s: &StringViewArray) {
-        if let Some(nulls) = s.nulls().as_ref() {
-            self.nulls.append_buffer(nulls);
-        } else {
-            self.nulls.append_n_non_nulls(s.len());
-        }
-    }
-
-    /// Finishes the currently inprogress block, if any
-    fn finish_current(&mut self) {
-        let Some(next_buffer) = self.current.take() else {
-            return;
-        };
-        self.completed.push(next_buffer.into());
-    }
-
-    /// Append views to self.views, updating the buffer index if necessary
-    #[inline(never)]
-    fn append_views_and_update_buffer_index(&mut self, views: &[u128], buffers: &[Buffer]) {
-        if let Some(buffer) = self.current.take() {
-            self.completed.push(buffer.into());
-        }
-        let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
-        self.completed.extend_from_slice(buffers);
-
-        if starting_buffer == 0 {
-            // If there are no buffers, we can just use the views as is
-            self.views.extend_from_slice(views);
-        } else {
-            // If there are buffers, we need to update the buffer index
-            let updated_views = views.iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > 12 {
-                    // Small views (<=12 bytes) are inlined, so only need to update large views
-                    byte_view.buffer_index += starting_buffer;
-                };
-                byte_view.as_u128()
-            });
-
-            self.views.extend(updated_views);
-        }
-    }
-
-    /// Append views to self.views, copying data from the buffers into
-    /// self.buffers
-    ///
-    /// # Arguments
-    /// - `views` - the views to append
-    /// - `actual_buffer_size` - the size of the bytes pointed to by the views
-    /// - `buffers` - the buffers the reviews point to
-    #[inline(never)]
-    fn append_views_and_copy_strings(
-        &mut self,
-        views: &[u128],
-        actual_buffer_size: usize,
-        buffers: &[Buffer],
-    ) {
-        let mut current = match self.current.take() {
-            Some(current) => {
-                // If the current buffer is not large enough, allocate a new one
-                // TODO copy as many views that will fit into the current buffer?
-                if current.len() + actual_buffer_size > current.capacity() {
-                    self.completed.push(current.into());
-                    self.buffer_source.next_buffer(actual_buffer_size)
-                } else {
-                    current
-                }
-            }
-            None => {
-                // If there is no current buffer, allocate a new one
-                self.buffer_source.next_buffer(actual_buffer_size)
-            }
-        };
-
-        let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
-
-        // Copy the views, updating the buffer index and copying the data as needed
-        let new_views = views.iter().map(|v| {
-            let mut b: ByteView = ByteView::from(*v);
-            if b.length > 12 {
-                let buffer_index = b.buffer_index as usize;
-                let buffer_offset = b.offset as usize;
-                let str_len = b.length as usize;
-
-                // Update view to location in current
-                b.offset = current.len() as u32;
-                b.buffer_index = new_buffer_index;
-
-                // safety: input views are validly constructed
-                let src = unsafe {
-                    buffers
-                        .get_unchecked(buffer_index)
-                        .get_unchecked(buffer_offset..buffer_offset + str_len)
-                };
-                current.extend_from_slice(src);
-            }
-            b.as_u128()
-        });
-        self.views.extend(new_views);
-        self.current = Some(current);
-    }
-}
-
-impl InProgressArray for InProgressStringViewArray {
-    fn push_array(&mut self, array: ArrayRef) {
-        self.ensure_capacity();
-        let s = array.as_string_view();
-
-        // add any nulls, as necessary
-        self.push_nulls(s);
-
-        // If there are no data buffers in s (all inlined views), can append the
-        // views/nulls and done
-        if s.data_buffers().is_empty() {
-            self.views.extend_from_slice(s.views().as_ref());
-            return;
-        }
-
-        let ideal_buffer_size = s.total_buffer_bytes_used();
-        let actual_buffer_size = s.get_buffer_memory_size();
-        let buffers = s.data_buffers();
-
-        // None of the views references the buffers (e.g. sliced)
-        if ideal_buffer_size == 0 {
-            self.views.extend_from_slice(s.views().as_ref());
-            return;
-        }
-
-        // Copying the strings into a buffer can be time-consuming so
-        // only do it if the array is sparse
-        if actual_buffer_size > (ideal_buffer_size * 2) {
-            self.append_views_and_copy_strings(s.views(), actual_buffer_size, buffers);
-        } else {
-            self.append_views_and_update_buffer_index(s.views(), buffers);
-        }
-    }
-
-    fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        self.finish_current();
-        assert!(self.current.is_none());
-        let buffers = std::mem::take(&mut self.completed);
-        let views = std::mem::take(&mut self.views);
-        let nulls = self.nulls.finish();
-        self.nulls = NullBufferBuilder::new(self.batch_size);
-
-        // Safety: we created valid views and buffers above
-        let new_array = unsafe { StringViewArray::new_unchecked(views.into(), buffers, nulls) };
-        Ok(Arc::new(new_array))
-    }
-}
-
-const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
-const MAX_BLOCK_SIZE: usize = 1024 * 1024; // 1MiB
-
-/// Manages allocating new buffers for `StringViewArray`
-#[derive(Debug)]
-struct BufferSource {
-    current_size: usize,
-}
-
-impl BufferSource {
-    fn new() -> Self {
-        Self {
-            current_size: STARTING_BLOCK_SIZE,
-        }
-    }
-
-    /// Return a new buffer, with a capacity of at least `min_size`
-    fn next_buffer(&mut self, min_size: usize) -> Vec<u8> {
-        let size = self.next_size(min_size);
-        Vec::with_capacity(size)
-    }
-
-    fn next_size(&mut self, min_size: usize) -> usize {
-        if self.current_size < MAX_BLOCK_SIZE {
-            // If the current size is less than the max size, we can double it
-            // we have fixed start/end block sizes, so we can't overflow
-            self.current_size = self.current_size.saturating_mul(2);
-        }
-        if self.current_size >= min_size {
-            self.current_size
-        } else {
-            // increase next size until we hit min_size or max  size
-            while self.current_size <= min_size && self.current_size < MAX_BLOCK_SIZE {
-                self.current_size = self.current_size.saturating_mul(2);
-            }
-            self.current_size.max(min_size)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
-    use arrow_array::{RecordBatchOptions, StringViewArray, UInt32Array};
+    use arrow_array::cast::AsArray;
+    use arrow_array::{BinaryViewArray, RecordBatchOptions, StringViewArray, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
     use std::ops::Range;
-
-    #[test]
-    fn test_buffer_source() {
-        let mut source = BufferSource::new();
-        assert_eq!(source.next_size(1000), 8192);
-        assert_eq!(source.next_size(1000), 16384);
-        assert_eq!(source.next_size(1000), 32768);
-        assert_eq!(source.next_size(1000), 65536);
-        assert_eq!(source.next_size(1000), 131072);
-        assert_eq!(source.next_size(1000), 262144);
-        assert_eq!(source.next_size(1000), 524288);
-        assert_eq!(source.next_size(1000), 1024 * 1024);
-        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
-        // clamped to max size
-        assert_eq!(source.next_size(1000), 2 * 1024 * 1024);
-        // Can override with larger size request
-        assert_eq!(source.next_size(10_000_000), 10_000_000);
-    }
-
-    #[test]
-    fn test_buffer_source_with_min() {
-        let mut source = BufferSource::new();
-        assert_eq!(source.next_size(1_000_000), 1024 * 1024);
-        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
-        // clamped to max size
-        assert_eq!(source.next_size(1_000_000), 2 * 1024 * 1024);
-        // Can override with larger size request
-        assert_eq!(source.next_size(10_000_000), 10_000_000);
-    }
 
     #[test]
     fn test_coalesce() {
@@ -674,43 +381,76 @@ mod tests {
 
     #[test]
     fn test_string_view_no_views() {
-        Test::new()
+        let output_batches = Test::new()
             // both input batches have no views, so no need to compact
             .with_batch(stringview_batch([Some("foo"), Some("bar")]))
             .with_batch(stringview_batch([Some("baz"), Some("qux")]))
             .with_expected_output_sizes(vec![4])
             .run();
+
+        expect_buffer_layout(
+            col_as_string_view("c0", output_batches.first().unwrap()),
+            vec![],
+        );
     }
 
     #[test]
     fn test_string_view_batch_small_no_compact() {
         // view with only short strings (no buffers) --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("a"), Some("b"), Some("c")]);
-        let gc_batches = Test::new()
+        let output_batches = Test::new()
             .with_batch(batch.clone())
             .with_expected_output_sizes(vec![1000])
             .run();
 
         let array = col_as_string_view("c0", &batch);
-        let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
+        let gc_array = col_as_string_view("c0", output_batches.first().unwrap());
         assert_eq!(array.data_buffers().len(), 0);
         assert_eq!(array.data_buffers().len(), gc_array.data_buffers().len()); // no compaction
+
+        expect_buffer_layout(gc_array, vec![]);
     }
 
     #[test]
     fn test_string_view_batch_large_no_compact() {
         // view with large strings (has buffers) but full --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
-        let gc_batches = Test::new()
+        let output_batches = Test::new()
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![1000])
             .run();
 
         let array = col_as_string_view("c0", &batch);
-        let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
+        let gc_array = col_as_string_view("c0", output_batches.first().unwrap());
         assert_eq!(array.data_buffers().len(), 5);
         assert_eq!(array.data_buffers().len(), gc_array.data_buffers().len()); // no compaction
+
+        expect_buffer_layout(
+            gc_array,
+            vec![
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 2240,
+                    capacity: 8192,
+                },
+            ],
+        );
     }
 
     #[test]
@@ -723,14 +463,14 @@ mod tests {
         let batch = stringview_batch_repeated(1000, values)
             // take only 10 short strings (no long ones)
             .slice(5, 10);
-        let gc_batches = Test::new()
+        let output_batches = Test::new()
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![10])
             .run();
 
         let array = col_as_string_view("c0", &batch);
-        let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
+        let gc_array = col_as_string_view("c0", output_batches.first().unwrap());
         assert_eq!(array.data_buffers().len(), 1); // input has one buffer
         assert_eq!(gc_array.data_buffers().len(), 0); // output has no buffers as only short strings
     }
@@ -742,16 +482,24 @@ mod tests {
             // slice only 22 rows, so most of the buffer is not used
             .slice(11, 22);
 
-        let gc_batches = Test::new()
+        let output_batches = Test::new()
             .with_batch(batch.clone())
             .with_batch_size(1000)
             .with_expected_output_sizes(vec![22])
             .run();
 
         let array = col_as_string_view("c0", &batch);
-        let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
+        let gc_array = col_as_string_view("c0", output_batches.first().unwrap());
         assert_eq!(array.data_buffers().len(), 5);
         assert_eq!(gc_array.data_buffers().len(), 1); // compacted into a single buffer
+
+        expect_buffer_layout(
+            gc_array,
+            vec![ExpectedLayout {
+                len: 770,
+                capacity: 8192,
+            }],
+        );
     }
 
     #[test]
@@ -774,7 +522,7 @@ mod tests {
 
         // Several batches with mixed inline / non inline
         // 4k rows in
-        let gc_batches = Test::new()
+        let output_batches = Test::new()
             .with_batch(large_view_batch.clone())
             .with_batch(small_view_batch)
             // this batch needs to be compacted (less than 1/2 full)
@@ -786,9 +534,199 @@ mod tests {
             .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
             .run();
 
-        let gc_array = col_as_string_view("c0", gc_batches.first().unwrap());
+        expect_buffer_layout(
+            col_as_string_view("c0", output_batches.first().unwrap()),
+            vec![
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 8190,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 2240,
+                    capacity: 8192,
+                },
+            ],
+        );
+    }
 
-        assert_eq!(gc_array.data_buffers().len(), 5);
+    #[test]
+    fn test_string_view_many_small_compact() {
+        // The strings are 37 bytes long, so each batch has 200 * 28 = 5600 bytes
+        let batch = stringview_batch_repeated(
+            400,
+            [Some("This string is 28 bytes long"), Some("small string")],
+        );
+        let output_batches = Test::new()
+            // First allocated buffer is 8kb.
+            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch_size(8000)
+            .with_expected_output_sizes(vec![2000]) // only 2000 rows total
+            .run();
+
+        // expect a nice even distribution of buffers
+        expect_buffer_layout(
+            col_as_string_view("c0", output_batches.first().unwrap()),
+            vec![
+                ExpectedLayout {
+                    len: 8176,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 16380,
+                    capacity: 16384,
+                },
+                ExpectedLayout {
+                    len: 3444,
+                    capacity: 32768,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn test_string_view_many_small_boundary() {
+        // The strings are designed to exactly fit into buffers that are powers of 2 long
+        let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
+        let output_batches = Test::new()
+            .with_batches(std::iter::repeat(batch).take(20))
+            .with_batch_size(900)
+            .with_expected_output_sizes(vec![900, 900, 200])
+            .run();
+
+        // expect each buffer to be entirely full except the last one
+        expect_buffer_layout(
+            col_as_string_view("c0", output_batches.first().unwrap()),
+            vec![
+                ExpectedLayout {
+                    len: 8192,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 16384,
+                    capacity: 16384,
+                },
+                ExpectedLayout {
+                    len: 4224,
+                    capacity: 32768,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn test_string_view_large_small() {
+        // The strings are 37 bytes long, so each batch has 200 * 28 = 5600 bytes
+        let mixed_batch = stringview_batch_repeated(
+            400,
+            [Some("This string is 28 bytes long"), Some("small string")],
+        );
+        // These strings aren't copied, this array has an 8k buffer
+        let all_large = stringview_batch_repeated(
+            100,
+            [Some(
+                "This buffer has only large strings in it so there are no buffer copies",
+            )],
+        );
+
+        let output_batches = Test::new()
+            // First allocated buffer is 8kb.
+            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            .with_batch(mixed_batch.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
+            .with_batch_size(8000)
+            .with_expected_output_sizes(vec![1400])
+            .run();
+
+        expect_buffer_layout(
+            col_as_string_view("c0", output_batches.first().unwrap()),
+            vec![
+                ExpectedLayout {
+                    len: 8176,
+                    capacity: 8192,
+                },
+                // this buffer was allocated but not used when the all_large batch was pushed
+                ExpectedLayout {
+                    len: 3024,
+                    capacity: 16384,
+                },
+                ExpectedLayout {
+                    len: 7000,
+                    capacity: 8192,
+                },
+                ExpectedLayout {
+                    len: 5600,
+                    capacity: 32768,
+                },
+                ExpectedLayout {
+                    len: 7000,
+                    capacity: 8192,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn test_binary_view() {
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"foo"),
+            None,
+            Some(b"A longer string that is more than 12 bytes"),
+        ];
+
+        let binary_view =
+            BinaryViewArray::from_iter(std::iter::repeat(values.iter()).flatten().take(1000));
+        let batch =
+            RecordBatch::try_from_iter(vec![("c0", Arc::new(binary_view) as ArrayRef)]).unwrap();
+
+        Test::new()
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch_size(512)
+            .with_expected_output_sizes(vec![512, 512, 512, 464])
+            .run();
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct ExpectedLayout {
+        len: usize,
+        capacity: usize,
+    }
+
+    /// Asserts that the buffer layout of the specified StringViewArray matches the expected layout
+    fn expect_buffer_layout(array: &StringViewArray, expected: Vec<ExpectedLayout>) {
+        let actual = array
+            .data_buffers()
+            .iter()
+            .map(|b| ExpectedLayout {
+                len: b.len(),
+                capacity: b.capacity(),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual, expected,
+            "Expected buffer layout {expected:#?} but got {actual:#?}"
+        );
     }
 
     /// Test for [`BatchCoalescer`]
@@ -871,10 +809,26 @@ mod tests {
 
             let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
 
+            let had_input = input_batches.iter().any(|b| b.num_rows() > 0);
             for batch in input_batches {
                 coalescer.push_batch(batch).unwrap();
             }
+            assert_eq!(schema, coalescer.schema());
+
+            if had_input {
+                assert!(!coalescer.is_empty(), "Coalescer should not be empty");
+            } else {
+                assert!(coalescer.is_empty(), "Coalescer should be empty");
+            }
+
             coalescer.finish_buffered_batch().unwrap();
+            if had_input {
+                assert!(
+                    coalescer.has_completed_batch(),
+                    "Coalescer should have completed batches"
+                );
+            }
+
             let mut output_batches = vec![];
             while let Some(batch) = coalescer.next_completed_batch() {
                 output_batches.push(batch);
@@ -882,7 +836,6 @@ mod tests {
 
             // make sure we got the expected number of output batches and content
             let mut starting_idx = 0;
-            assert_eq!(expected_output_sizes.len(), output_batches.len());
             let actual_output_sizes: Vec<usize> =
                 output_batches.iter().map(|b| b.num_rows()).collect();
             assert_eq!(
@@ -962,7 +915,8 @@ mod tests {
             builder.append_option(val);
         }
 
-        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(builder.finish())]).unwrap()
+        let array = builder.finish();
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
     /// Returns the named column as a StringViewArray
