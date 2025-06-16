@@ -503,7 +503,7 @@ impl InProgressArray for InProgressStringViewArray {
 }
 
 const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
-const MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024; // 2MiB
+const MAX_BLOCK_SIZE: usize = 1 * 1024 * 1024; // 1MiB
 
 /// Manages allocating new buffers for `StringViewArray`
 ///
