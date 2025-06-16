@@ -1,15 +1,21 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: "/"
+    directories:
+      - "**/*"
     schedule:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: main
-    labels: [ auto-dependencies, arrow ]
+    labels: [auto-dependencies, arrow]
+    groups:
+      prost:
+        applies-to: version-updates
+        patterns:
+          - "prost*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
-    labels: [ auto-dependencies ]
+    labels: [auto-dependencies]

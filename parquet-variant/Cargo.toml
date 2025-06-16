@@ -32,7 +32,6 @@ rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = "55.1.0"
+chrono = { workspace = true }
 
 [lib]
-
-
