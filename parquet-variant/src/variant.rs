@@ -92,7 +92,7 @@ impl OffsetSizeBytes {
 }
 
 #[derive(Clone, Debug, Copy, PartialEq)]
-pub struct VariantMetadataHeader {
+pub(crate) struct VariantMetadataHeader {
     version: u8,
     is_sorted: bool,
     /// Note: This is `offset_size_minus_one` + 1
@@ -116,7 +116,7 @@ impl VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub fn try_new(bytes: &[u8]) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(bytes: &[u8]) -> Result<Self, ArrowError> {
         let header = first_byte_from_slice(bytes)?;
 
         let version = header & 0x0F; // First four bits
@@ -270,7 +270,8 @@ impl<'m> VariantMetadata<'m> {
         Ok(result)
     }
 
-    pub fn header(&self) -> VariantMetadataHeader {
+    #[allow(unused)]
+    pub(crate) fn header(&self) -> VariantMetadataHeader {
         self.header
     }
 
@@ -305,7 +306,7 @@ impl<'m> VariantMetadata<'m> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct VariantObjectHeader {
+pub(crate) struct VariantObjectHeader {
     field_offset_size: OffsetSizeBytes,
     field_id_size: OffsetSizeBytes,
     num_elements: usize,
@@ -315,7 +316,7 @@ pub struct VariantObjectHeader {
 }
 
 impl VariantObjectHeader {
-    pub fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
         // Parse the header byte to get object parameters
         let header = first_byte_from_slice(value)?;
         let value_header = header >> 2;
@@ -377,7 +378,7 @@ impl VariantObjectHeader {
     }
 
     /// Returns the number of key-value pairs in this object
-    pub fn num_elements(&self) -> usize {
+    pub(crate) fn num_elements(&self) -> usize {
         self.num_elements
     }
 }
@@ -414,7 +415,11 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
-        // Binary search through the sorted field IDs to find the field
+        // Binary search through the field IDs of this object to find the requested field name.
+        //
+        // NOTE: This does not require a sorted metadata dictionary, because the variant spec
+        // requires object field ids to be lexically sorted by their corresponding string values,
+        // and probing the dictionary for a field id is always O(1) work.
         let (field_ids, field_offsets) = self.parse_field_arrays()?;
         let search_result = try_binary_search_by(&field_ids, &name, |&field_id| {
             self.metadata.get_field_by(field_id)
@@ -486,7 +491,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct VariantListHeader {
+pub(crate) struct VariantListHeader {
     offset_size: OffsetSizeBytes,
     is_large: bool,
     num_elements: usize,
@@ -495,7 +500,7 @@ pub struct VariantListHeader {
 }
 
 impl VariantListHeader {
-    pub fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
         // The 6 first bits to the left are the value_header and the 2 bits
         // to the right are the basic type, so we shift to get only the value_header
         let value_header = first_byte_from_slice(value)? >> 2;
@@ -562,34 +567,38 @@ impl VariantListHeader {
     }
 
     /// Returns the number of elements in this list
-    pub fn num_elements(&self) -> usize {
+    pub(crate) fn num_elements(&self) -> usize {
         self.num_elements
     }
 
     /// Returns the offset size in bytes
-    pub fn offset_size(&self) -> usize {
+    #[allow(unused)]
+    pub(crate) fn offset_size(&self) -> usize {
         self.offset_size as _
     }
 
     /// Returns whether this is a large list
-    pub fn is_large(&self) -> bool {
+    #[allow(unused)]
+    pub(crate) fn is_large(&self) -> bool {
         self.is_large
     }
 
     /// Returns the byte offset where the offset array starts
-    pub fn first_offset_byte(&self) -> usize {
+    pub(crate) fn first_offset_byte(&self) -> usize {
         self.first_offset_byte
     }
 
     /// Returns the byte offset where the values start
-    pub fn first_value_byte(&self) -> usize {
+    pub(crate) fn first_value_byte(&self) -> usize {
         self.first_value_byte
     }
 }
 
-// NOTE: We differ from the variant spec and call it "list" instead of "array" in order to be
-// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
-// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
+/// Represents a variant array.
+///
+/// NOTE: The "list" naming differs from the variant spec -- which calls it "array" -- in order to be
+/// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
+/// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
