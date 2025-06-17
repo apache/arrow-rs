@@ -57,3 +57,45 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
     str::from_utf8(slice_from_slice(slice, range)?)
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
+
+/// Performs a binary search on a slice using a fallible key extraction function.
+///
+/// This is similar to the standard library's `binary_search_by`, but allows the key
+/// extraction function to fail. If key extraction fails during the search, that error
+/// is propagated immediately.
+///
+/// # Arguments
+/// * `slice` - The slice to search in
+/// * `target` - The target value to search for
+/// * `key_extractor` - A function that extracts a comparable key from slice elements.
+///   This function can fail and return an error.
+///
+/// # Returns
+/// * `Ok(Ok(index))` - Element found at the given index
+/// * `Ok(Err(index))` - Element not found, but would be inserted at the given index
+/// * `Err(e)` - Key extraction failed with error `e`
+pub(crate) fn try_binary_search_by<T, K, E, F>(
+    slice: &[T],
+    target: &K,
+    mut key_extractor: F,
+) -> Result<Result<usize, usize>, E>
+where
+    K: Ord,
+    F: FnMut(&T) -> Result<K, E>,
+{
+    let mut left = 0;
+    let mut right = slice.len();
+
+    while left < right {
+        let mid = (left + right) / 2;
+        let key = key_extractor(&slice[mid])?;
+
+        match key.cmp(target) {
+            std::cmp::Ordering::Equal => return Ok(Ok(mid)),
+            std::cmp::Ordering::Greater => right = mid,
+            std::cmp::Ordering::Less => left = mid + 1,
+        }
+    }
+
+    Ok(Err(left))
+}
