@@ -369,7 +369,7 @@ impl VariantBuilder {
         (metadata, self.buffer)
     }
 
-    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, value: T) {
+    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         let variant = value.into();
         match variant {
             Variant::Null => self.append_null(),
@@ -421,7 +421,7 @@ impl<'a> ArrayBuilder<'a> {
         }
     }
 
-    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, value: T) {
+    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.parent.append_value(value);
         let element_end = self.parent.offset() - self.start_pos;
         self.offsets.push(element_end);
@@ -482,7 +482,7 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     /// Add a field with key and value to the object
-    pub fn append_value<T: Into<Variant<'static, 'static>>>(&mut self, key: &str, value: T) {
+    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
         let id = self.parent.add_key(key);
         let field_start = self.parent.offset() - self.start_pos;
         self.parent.append_value(value);
