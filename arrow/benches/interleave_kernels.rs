@@ -84,6 +84,7 @@ fn add_benchmark(c: &mut Criterion) {
         ("str(20, 0.5)", &string_opt),
         ("dict(20, 0.0)", &dict),
         ("dict_sparse(20, 0.0)", &sparse_dict),
+        ("string view", &create_string_view_array(1024, 0.0)),
     ];
 
     for (prefix, base) in cases {
