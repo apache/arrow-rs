@@ -87,7 +87,8 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// assert_eq!(variant, Variant::Int8(42));
 /// ```
 ///
-/// # Example: Create an Object
+/// # Example: Create a [`Variant::Object`]
+///
 /// This example shows how to create an object with two fields:
 /// ```json
 /// {
@@ -121,18 +122,18 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// );
 /// ```
 ///
-/// # Example: Create an Array
+/// # Example: Create a [`Variant::List`] (an Array)
 ///
 /// This example shows how to create an array of integers: `[1, 2, 3]`.
 /// ```
 ///  # use parquet_variant::{Variant, VariantBuilder};
 ///  let mut builder = VariantBuilder::new();
-///  // Create an array builder that will write elements to the array
-///  let mut array_builder = builder.new_array();
-///  array_builder.append_value(1i8);
-///  array_builder.append_value(2i8);
-///  array_builder.append_value(3i8);
-///  array_builder.finish();
+///  // Create a builder that will write elements to the list
+///  let mut list_builder = builder.new_list();
+///  list_builder.append_value(1i8);
+///  list_builder.append_value(2i8);
+///  list_builder.append_value(3i8);
+///  list_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
@@ -140,15 +141,15 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// let Variant::List(variant_list) = variant else {
 ///   panic!("unexpected variant type")
 /// };
-/// // Verify the array contents
+/// // Verify the list contents
 /// assert_eq!(variant_list.get(0).unwrap(), Variant::Int8(1));
 /// assert_eq!(variant_list.get(1).unwrap(), Variant::Int8(2));
 /// assert_eq!(variant_list.get(2).unwrap(), Variant::Int8(3));
 /// ```
 ///
-/// # Example: Array of objects
+/// # Example: [`Variant::List`] of  [`Variant::Object`]s
 ///
-/// THis example shows how to create an array of objects:
+/// THis example shows how to create an list  of objects:
 /// ```json
 /// [
 ///  {
@@ -310,11 +311,11 @@ impl VariantBuilder {
         self.buffer.len()
     }
 
-    /// Create an [`ArrayBuilder`] for creating [`Variant::Array`] values.
+    /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_array(&mut self) -> ArrayBuilder {
-        ArrayBuilder::new(self)
+    pub fn new_list(&mut self) -> ListBuilder {
+        ListBuilder::new(self)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
@@ -390,7 +391,7 @@ impl VariantBuilder {
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) | Variant::ShortString(s) => self.append_string(s),
             Variant::Object(_) | Variant::List(_) => {
-                unreachable!("Object and Array variants cannot be created through Into<Variant>")
+                unreachable!("Object and List variants cannot be created through Into<Variant>")
             }
         }
     }
@@ -402,16 +403,16 @@ impl Default for VariantBuilder {
     }
 }
 
-/// A builder for creating [`Variant::Array`] values.
+/// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ArrayBuilder<'a> {
+pub struct ListBuilder<'a> {
     parent: &'a mut VariantBuilder,
     start_pos: usize,
     offsets: Vec<usize>,
 }
 
-impl<'a> ArrayBuilder<'a> {
+impl<'a> ListBuilder<'a> {
     fn new(parent: &'a mut VariantBuilder) -> Self {
         let start_pos = parent.offset();
         Self {
@@ -660,15 +661,15 @@ mod tests {
     }
 
     #[test]
-    fn test_array() {
+    fn test_list() {
         let mut builder = VariantBuilder::new();
 
         {
-            let mut array = builder.new_array();
-            array.append_value(1i8);
-            array.append_value(2i8);
-            array.append_value("test");
-            array.finish();
+            let mut list = builder.new_list();
+            list.append_value(1i8);
+            list.append_value(2i8);
+            list.append_value("test");
+            list.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -678,14 +679,14 @@ mod tests {
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         match variant {
-            Variant::List(array) => {
-                let val0 = array.get(0).unwrap();
+            Variant::List(list) => {
+                let val0 = list.get(0).unwrap();
                 assert_eq!(val0, Variant::Int8(1));
 
-                let val1 = array.get(1).unwrap();
+                let val1 = list.get(1).unwrap();
                 assert_eq!(val1, Variant::Int8(2));
 
-                let val2 = array.get(2).unwrap();
+                let val2 = list.get(2).unwrap();
                 assert_eq!(val2, Variant::ShortString("test"));
             }
             _ => panic!("Expected an array variant, got: {:?}", variant),

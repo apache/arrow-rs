@@ -177,7 +177,7 @@ fn variant_array_primitive() {
 fn variant_array_builder() {
     let mut builder = VariantBuilder::new();
 
-    let mut arr = builder.new_array();
+    let mut arr = builder.new_list();
     arr.append_value(2i8);
     arr.append_value(1i8);
     arr.append_value(5i8);
