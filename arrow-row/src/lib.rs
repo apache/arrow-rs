@@ -274,7 +274,11 @@ mod variable;
 ///
 /// ## Dictionary Encoding
 ///
-/// Dictionaries are hydrated to their underlying values
+/// Dictionary encoded arrays are hydrated to their underlying values
+///
+/// ## REE Encoding
+///
+/// REE (Run End Encoding) arrays, A form of Run Length Encoding, are hydrated to their underlying values.
 ///
 /// ## Struct Encoding
 ///
