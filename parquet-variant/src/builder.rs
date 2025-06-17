@@ -108,7 +108,6 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
-/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let Variant::Object(variant_object) = variant else {
 ///   panic!("unexpected variant type")
@@ -140,15 +139,14 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
-/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
-/// let Variant::Array(variant_array) = variant else {
+/// let Variant::List(variant_list) = variant else {
 ///   panic!("unexpected variant type")
 /// };
 /// // Verify the array contents
-/// assert_eq!(variant_array.get(0).unwrap(), Variant::Int8(1));
-/// assert_eq!(variant_array.get(1).unwrap(), Variant::Int8(2));
-/// assert_eq!(variant_array.get(2).unwrap(), Variant::Int8(3));
+/// assert_eq!(variant_list.get(0).unwrap(), Variant::Int8(1));
+/// assert_eq!(variant_list.get(1).unwrap(), Variant::Int8(2));
+/// assert_eq!(variant_list.get(2).unwrap(), Variant::Int8(3));
 /// ```
 ///
 /// # Example: Array of objects
@@ -394,7 +392,7 @@ impl VariantBuilder {
             Variant::Double(v) => self.append_double(v),
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) | Variant::ShortString(s) => self.append_string(s),
-            Variant::Object(_) | Variant::Array(_) => {
+            Variant::Object(_) | Variant::List(_) => {
                 unreachable!("Object and Array variants cannot be created through Into<Variant>")
             }
         }
@@ -562,7 +560,6 @@ impl<'a> ObjectBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VariantMetadata;
 
     #[test]
     fn test_simple_usage() {
@@ -570,7 +567,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(());
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Null);
         }
@@ -579,7 +575,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(true);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::BooleanTrue);
         }
@@ -588,7 +583,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(false);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::BooleanFalse);
         }
@@ -597,7 +591,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(42i8);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Int8(42));
         }
@@ -606,7 +599,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(1234i16);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Int16(1234));
         }
@@ -615,7 +607,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(123456i32);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Int32(123456));
         }
@@ -624,7 +615,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(123456789i64);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Int64(123456789));
         }
@@ -633,7 +623,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(1.5f32);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Float(1.5));
         }
@@ -642,7 +631,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value(2.5f64);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Double(2.5));
         }
@@ -651,7 +639,6 @@ mod tests {
             let mut builder = VariantBuilder::new();
             builder.append_value("hello");
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::ShortString("hello"));
         }
@@ -661,7 +648,6 @@ mod tests {
             let long_string = "This is a very long string that exceeds the short string limit of 63 bytes and should be encoded as a regular string type instead of a short string";
             builder.append_value(long_string);
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::String(long_string));
         }
@@ -671,7 +657,6 @@ mod tests {
             let binary_data = b"binary data";
             builder.append_value(binary_data.as_slice());
             let (metadata, value) = builder.finish();
-            let metadata = VariantMetadata::try_new(&metadata).unwrap();
             let variant = Variant::try_new(&metadata, &value).unwrap();
             assert_eq!(variant, Variant::Binary(binary_data.as_slice()));
         }
@@ -693,11 +678,10 @@ mod tests {
         assert!(!metadata.is_empty());
         assert!(!value.is_empty());
 
-        let metadata = VariantMetadata::try_new(&metadata).unwrap();
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         match variant {
-            Variant::Array(array) => {
+            Variant::List(array) => {
                 let val0 = array.get(0).unwrap();
                 assert_eq!(val0, Variant::Int8(1));
 
