@@ -561,15 +561,19 @@ mod tests {
     fn test_fixed_decoding() {
         let avro_type = avro_from_codec(Codec::Fixed(3));
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
-        
+
         let data1 = [1u8, 2, 3];
         let mut cursor1 = AvroCursor::new(&data1);
-        decoder.decode(&mut cursor1).expect("Failed to decode data1");
+        decoder
+            .decode(&mut cursor1)
+            .expect("Failed to decode data1");
         assert_eq!(cursor1.position(), 3, "Cursor should advance by fixed size");
-        
+
         let data2 = [4u8, 5, 6];
         let mut cursor2 = AvroCursor::new(&data2);
-        decoder.decode(&mut cursor2).expect("Failed to decode data2");
+        decoder
+            .decode(&mut cursor2)
+            .expect("Failed to decode data2");
         assert_eq!(cursor2.position(), 3, "Cursor should advance by fixed size");
 
         let array = decoder.flush(None).expect("Failed to flush decoder");
@@ -580,9 +584,21 @@ mod tests {
             .downcast_ref::<FixedSizeBinaryArray>()
             .expect("Failed to downcast to FixedSizeBinaryArray");
 
-        assert_eq!(fixed_size_binary_array.value_length(), 3, "Fixed size of binary values should be 3");
-        assert_eq!(fixed_size_binary_array.value(0), &[1, 2, 3], "First item mismatch");
-        assert_eq!(fixed_size_binary_array.value(1), &[4, 5, 6], "Second item mismatch");
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            3,
+            "Fixed size of binary values should be 3"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(0),
+            &[1, 2, 3],
+            "First item mismatch"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(1),
+            &[4, 5, 6],
+            "Second item mismatch"
+        );
     }
 
     #[test]
@@ -590,15 +606,21 @@ mod tests {
         let avro_type = avro_from_codec(Codec::Fixed(5));
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
 
-        let array = decoder.flush(None).expect("Failed to flush decoder for empty input");
+        let array = decoder
+            .flush(None)
+            .expect("Failed to flush decoder for empty input");
 
         assert_eq!(array.len(), 0, "Array should be empty");
         let fixed_size_binary_array = array
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
             .expect("Failed to downcast to FixedSizeBinaryArray for empty array");
-        
-        assert_eq!(fixed_size_binary_array.value_length(), 5, "Fixed size of binary values should be 5 as per type");
+
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            5,
+            "Fixed size of binary values should be 5 as per type"
+        );
     }
 
 

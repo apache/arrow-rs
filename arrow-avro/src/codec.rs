@@ -586,15 +586,15 @@ mod tests {
 
         assert!(matches!(result.codec, Codec::TimestampMicros(false)));
     }
-    
+
     #[test]
     fn test_uuid_type() {
         let mut codec = Codec::Fixed(16);
-        
+
         if let c @ Codec::Fixed(16) = &mut codec {
             *c = Codec::Uuid;
         }
-        
+
         assert!(matches!(codec, Codec::Uuid));
     }
 
