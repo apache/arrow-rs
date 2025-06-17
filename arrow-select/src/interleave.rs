@@ -262,11 +262,12 @@ fn interleave_views<T: ByteViewType>(
             }
             // value is big enough to be in a variadic buffer
             let view = ByteView::from(*view);
-            let remap_idx = offsets[*array_idx] + view.buffer_index as usize;
-            let new_buffer_idx: u32 = *buffer_to_new_index[remap_idx].get_or_insert_with(|| {
-                buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
-                (buffers.len() - 1) as u32
-            });
+            let buffer_to_new_idx = offsets[*array_idx] + view.buffer_index as usize;
+            let new_buffer_idx: u32 =
+                *buffer_to_new_index[buffer_to_new_idx].get_or_insert_with(|| {
+                    buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
+                    (buffers.len() - 1) as u32
+                });
             view.with_buffer_index(new_buffer_idx).as_u128()
         })
         .collect();
