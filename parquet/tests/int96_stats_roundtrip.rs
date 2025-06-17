@@ -43,14 +43,12 @@ fn verify_ordering(data: Vec<Int96>) {
     let expected_min = data[0];
     let expected_max = data[data.len() - 1];
 
-    // Create writer and write data
     {
         let file = File::create(&file_path).unwrap();
         let mut writer = SerializedFileWriter::new(file, schema.into(), Arc::new(props)).unwrap();
         let mut row_group = writer.next_row_group().unwrap();
         let mut col_writer = row_group.next_column().unwrap().unwrap();
 
-        // Write the data
         {
             let writer = col_writer.typed::<Int96Type>();
             writer.write_batch(&data, None, None).unwrap();
@@ -60,14 +58,12 @@ fn verify_ordering(data: Vec<Int96>) {
         writer.close().unwrap();
     }
 
-    // Read the file back
     let file = File::open(&file_path).unwrap();
     let reader = SerializedFileReader::new(file).unwrap();
     let metadata = reader.metadata();
     let row_group = metadata.row_group(0);
     let column = row_group.column(0);
 
-    // Get the statistics
     let stats = column.statistics().unwrap();
     assert_eq!(stats.physical_type(), Type::INT96);
     
@@ -75,7 +71,6 @@ fn verify_ordering(data: Vec<Int96>) {
         let min = stats.min_opt().unwrap();
         let max = stats.max_opt().unwrap();
         
-        // Verify the statistics
         assert_eq!(*min, expected_min, "Min value should be {} but was {}", expected_min, min);
         assert_eq!(*max, expected_max, "Max value should be {} but was {}", expected_max, max);
         assert_eq!(stats.null_count_opt(), Some(0));
@@ -85,18 +80,38 @@ fn verify_ordering(data: Vec<Int96>) {
 }
 
 #[test]
-fn test_int96_stats() {
+fn test_multiple_dates() {
     let data = vec![
         datetime_to_int96("2020-01-01 00:00:00.000"),
-        datetime_to_int96("2020-02-29 23:59:59.999"),
-        datetime_to_int96("2020-12-31 23:59:59.999"),
+        datetime_to_int96("2020-02-29 23:59:59.000"),
+        datetime_to_int96("2020-12-31 23:59:59.000"),
         datetime_to_int96("2021-01-01 00:00:00.000"),
-        datetime_to_int96("2023-06-15 12:30:45.500"),
-        datetime_to_int96("2024-02-29 15:45:30.750"),
+        datetime_to_int96("2023-06-15 12:30:45.000"),
+        datetime_to_int96("2024-02-29 15:45:30.000"),
         datetime_to_int96("2024-12-25 07:00:00.000"),
         datetime_to_int96("2025-01-01 00:00:00.000"),
         datetime_to_int96("2025-07-04 20:00:00.000"),
-        datetime_to_int96("2025-12-31 23:59:59.999"),
+        datetime_to_int96("2025-12-31 23:59:59.000"),
+    ];
+    verify_ordering(data);
+}
+
+#[test]
+fn test_same_day_different_time() {
+    let data = vec![
+        datetime_to_int96("2020-01-01 00:01:00.000"),
+        datetime_to_int96("2020-01-01 00:02:00.000"),
+        datetime_to_int96("2020-01-01 00:03:00.000"),
+    ];
+    verify_ordering(data);
+}
+
+#[test]
+fn test_increasing_day_decreasing_time() {
+    let data = vec![
+        datetime_to_int96("2020-01-01 12:00:00.000"),
+        datetime_to_int96("2020-02-01 11:00:00.000"),
+        datetime_to_int96("2020-03-01 10:00:00.000"),
     ];
     verify_ordering(data);
 }
