@@ -239,37 +239,35 @@ fn interleave_views<T: ByteViewType>(
     let interleaved = Interleave::<'_, GenericByteViewArray<T>>::new(values, indices);
     let mut buffers = Vec::new();
 
-    // (input array_index, input buffer_index) -> output buffer_index
-    // A mapping from (input array_index, input buffer_index) -> output buffer_index
-    // The outer vec corresponds to the input array index.
-    // The inner vec corresponds to the buffer index within that input array.
-    // The value is the index of the buffer in the output array.
-    let mut buffer_remap: Vec<Vec<Option<u32>>> = interleaved
-        .arrays
-        .iter()
-        .map(|a| vec![None; a.data_buffers().len()])
-        .collect();
+    // Contains the offsets of start buffer in `buffer_to_new_index`
+    let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
+    offsets.push(0);
+    let mut total_buffers = 0;
+    for a in interleaved.arrays.iter() {
+        total_buffers += a.data_buffers().len();
+        offsets.push(total_buffers);
+    }
+
+    // contains the mapping from old buffer index to new buffer index
+    let mut buffer_to_new_index = vec![None; total_buffers];
 
     let views: Vec<u128> = indices
         .iter()
         .map(|(array_idx, value_idx)| {
             let array = interleaved.arrays[*array_idx];
-            let raw_view = array.views().get(*value_idx).unwrap();
-            let view_len = *raw_view as u32;
+            let view = array.views().get(*value_idx).unwrap();
+            let view_len = *view as u32;
             if view_len <= 12 {
-                return *raw_view;
+                return *view;
             }
             // value is big enough to be in a variadic buffer
-            let view = ByteView::from(*raw_view);
-            let new_buffer_idx = match &mut buffer_remap[*array_idx][view.buffer_index as usize] {
-                Some(idx) => *idx,
-                opt => {
-                    buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
-                    let new_idx = (buffers.len() - 1) as u32;
-                    *opt = Some(new_idx);
-                    new_idx
-                }
-            };
+            let view = ByteView::from(*view);
+            let remap_idx = offsets[*array_idx] + view.buffer_index as usize;
+            let new_buffer_idx: u32 = *buffer_to_new_index[remap_idx].get_or_insert_with(|| {
+                buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
+                let new_idx = (buffers.len() - 1) as u32;
+                new_idx
+            });
             view.with_buffer_index(new_buffer_idx).as_u128()
         })
         .collect();
