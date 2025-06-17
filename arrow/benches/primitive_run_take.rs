@@ -23,6 +23,7 @@ use arrow::util::test_util::seedable_rng;
 use arrow_array::UInt32Array;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::Rng;
+use std::hint;
 
 fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
     let mut rng = seedable_rng();
@@ -52,7 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, take_len:{take_len})"),
             |b| {
                 b.iter(|| {
-                    criterion::black_box(take(&run_array, &indices, None).unwrap());
+                    hint::black_box(take(&run_array, &indices, None).unwrap());
                 })
             },
         );

@@ -29,6 +29,7 @@ use arrow_string::regexp::regexp_is_match_scalar;
 use criterion::Criterion;
 use rand::rngs::StdRng;
 use rand::Rng;
+use std::hint;
 
 const SIZE: usize = 65536;
 
@@ -53,21 +54,11 @@ fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
 }
 
 fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn bench_string_regexp_is_match_scalar(arr_a: &StringArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {

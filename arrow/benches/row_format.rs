@@ -28,8 +28,8 @@ use arrow::util::bench_util::{
 };
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
-use criterion::{black_box, Criterion};
-use std::sync::Arc;
+use criterion::Criterion;
+use std::{hint, sync::Arc};
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
@@ -40,7 +40,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     c.bench_function(&format!("convert_columns {name}"), |b| {
         b.iter(|| {
             let converter = RowConverter::new(fields.clone()).unwrap();
-            black_box(converter.convert_columns(&cols).unwrap())
+            hint::black_box(converter.convert_columns(&cols).unwrap())
         });
     });
 
@@ -48,16 +48,16 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let rows = converter.convert_columns(&cols).unwrap();
     // using a pre-prepared row converter should be faster than the first time
     c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
-        b.iter(|| black_box(converter.convert_columns(&cols).unwrap()));
+        b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
     });
 
     c.bench_function(&format!("convert_rows {name}"), |b| {
-        b.iter(|| black_box(converter.convert_rows(&rows).unwrap()));
+        b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
 }
 
 fn bench_iter(c: &mut Criterion) {
-    let col = create_string_view_array_with_len(40960, 0., 100, false);
+    let col = create_string_view_array_with_len(4096, 0., 100, false);
     let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
     let rows = converter
         .convert_columns(&[Arc::new(col) as ArrayRef])
@@ -66,7 +66,7 @@ fn bench_iter(c: &mut Criterion) {
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
             for r in rows.iter() {
-                std::hint::black_box(r.as_ref());
+                hint::black_box(r.as_ref());
             }
         })
     });
@@ -109,8 +109,8 @@ fn row_bench(c: &mut Criterion) {
     let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 30, false)) as ArrayRef];
     do_bench(c, "4096 string view(30, 0)", cols);
 
-    let cols = vec![Arc::new(create_string_view_array_with_len(40960, 0., 100, false)) as ArrayRef];
-    do_bench(c, "40960 string view(100, 0)", cols);
+    let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0., 100, false)) as ArrayRef];
+    do_bench(c, "4096 string view(100, 0)", cols);
 
     let cols = vec![Arc::new(create_string_view_array_with_len(4096, 0.5, 100, false)) as ArrayRef];
     do_bench(c, "4096 string view(100, 0.5)", cols);

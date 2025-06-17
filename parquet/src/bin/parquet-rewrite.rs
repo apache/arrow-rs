@@ -39,9 +39,9 @@ use arrow_array::RecordBatchReader;
 use clap::{builder::PossibleValue, Parser, ValueEnum};
 use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
-    basic::Compression,
+    basic::{Compression, Encoding},
     file::{
-        properties::{EnabledStatistics, WriterProperties, WriterVersion},
+        properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},
         reader::FileReader,
         serialized_reader::SerializedFileReader,
     },
@@ -85,6 +85,53 @@ impl From<CompressionArgs> for Compression {
             CompressionArgs::Lz4 => Self::LZ4,
             CompressionArgs::Zstd => Self::ZSTD(Default::default()),
             CompressionArgs::Lz4Raw => Self::LZ4_RAW,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum EncodingArgs {
+    /// Default byte encoding.
+    Plain,
+
+    /// **Deprecated** dictionary encoding.
+    PlainDictionary,
+
+    /// Group packed run length encoding.
+    Rle,
+
+    /// **Deprecated** Bit-packed encoding.
+    BitPacked,
+
+    /// Delta encoding for integers, either INT32 or INT64.
+    DeltaBinaryPacked,
+
+    /// Encoding for byte arrays to separate the length values and the data.
+    DeltaLengthByteArray,
+
+    /// Incremental encoding for byte arrays.
+    DeltaByteArray,
+
+    /// Dictionary encoding.
+    RleDictionary,
+
+    /// Encoding for fixed-width data.
+    ByteStreamSplit,
+}
+
+#[allow(deprecated)]
+impl From<EncodingArgs> for Encoding {
+    fn from(value: EncodingArgs) -> Self {
+        match value {
+            EncodingArgs::Plain => Self::PLAIN,
+            EncodingArgs::PlainDictionary => Self::PLAIN_DICTIONARY,
+            EncodingArgs::Rle => Self::RLE,
+            EncodingArgs::BitPacked => Self::BIT_PACKED,
+            EncodingArgs::DeltaBinaryPacked => Self::DELTA_BINARY_PACKED,
+            EncodingArgs::DeltaLengthByteArray => Self::DELTA_LENGTH_BYTE_ARRAY,
+            EncodingArgs::DeltaByteArray => Self::DELTA_BYTE_ARRAY,
+            EncodingArgs::RleDictionary => Self::RLE_DICTIONARY,
+            EncodingArgs::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
         }
     }
 }
@@ -139,6 +186,24 @@ impl From<WriterVersionArgs> for WriterVersion {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum BloomFilterPositionArgs {
+    /// Write Bloom Filters of each row group right after the row group
+    AfterRowGroup,
+
+    /// Write Bloom Filters at the end of the file
+    End,
+}
+
+impl From<BloomFilterPositionArgs> for BloomFilterPosition {
+    fn from(value: BloomFilterPositionArgs) -> Self {
+        match value {
+            BloomFilterPositionArgs::AfterRowGroup => Self::AfterRowGroup,
+            BloomFilterPositionArgs::End => Self::End,
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Read and write parquet file with potentially different settings"), long_about = None)]
 struct Args {
@@ -150,9 +215,21 @@ struct Args {
     #[clap(short, long)]
     output: String,
 
-    /// Compression used.
+    /// Compression used for all columns.
     #[clap(long, value_enum)]
     compression: Option<CompressionArgs>,
+
+    /// Encoding used for all columns, if dictionary is not enabled.
+    #[clap(long, value_enum)]
+    encoding: Option<EncodingArgs>,
+
+    /// Sets flag to enable/disable dictionary encoding for all columns.
+    #[clap(long)]
+    dictionary_enabled: Option<bool>,
+
+    /// Sets best effort maximum dictionary page size, in bytes.
+    #[clap(long)]
+    dictionary_page_size_limit: Option<usize>,
 
     /// Sets maximum number of rows in a row group.
     #[clap(long)]
@@ -166,33 +243,29 @@ struct Args {
     #[clap(long)]
     data_page_size_limit: Option<usize>,
 
-    /// Sets max statistics size for any column.
+    /// Sets max statistics size for all columns.
     ///
     /// Applicable only if statistics are enabled.
     #[clap(long)]
     max_statistics_size: Option<usize>,
 
-    /// Sets best effort maximum dictionary page size, in bytes.
-    #[clap(long)]
-    dictionary_page_size_limit: Option<usize>,
-
-    /// Sets whether bloom filter is enabled for any column.
+    /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
     bloom_filter_enabled: Option<bool>,
 
-    /// Sets bloom filter false positive probability (fpp) for any column.
+    /// Sets bloom filter false positive probability (fpp) for all columns.
     #[clap(long)]
     bloom_filter_fpp: Option<f64>,
 
-    /// Sets number of distinct values (ndv) for bloom filter for any column.
+    /// Sets number of distinct values (ndv) for bloom filter for all columns.
     #[clap(long)]
     bloom_filter_ndv: Option<u64>,
 
-    /// Sets flag to enable/disable dictionary encoding for any column.
+    /// Sets the position of bloom filter
     #[clap(long)]
-    dictionary_enabled: Option<bool>,
+    bloom_filter_position: Option<BloomFilterPositionArgs>,
 
-    /// Sets flag to enable/disable statistics for any column.
+    /// Sets flag to enable/disable statistics for all columns.
     #[clap(long)]
     statistics_enabled: Option<EnabledStatisticsArgs>,
 
@@ -230,6 +303,18 @@ fn main() {
     if let Some(value) = args.compression {
         writer_properties_builder = writer_properties_builder.set_compression(value.into());
     }
+
+    // setup encoding
+    if let Some(value) = args.encoding {
+        writer_properties_builder = writer_properties_builder.set_encoding(value.into());
+    }
+    if let Some(value) = args.dictionary_enabled {
+        writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
+    }
+    if let Some(value) = args.dictionary_page_size_limit {
+        writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
+    }
+
     if let Some(value) = args.max_row_group_size {
         writer_properties_builder = writer_properties_builder.set_max_row_group_size(value);
     }
@@ -238,9 +323,6 @@ fn main() {
     }
     if let Some(value) = args.data_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_data_page_size_limit(value);
-    }
-    if let Some(value) = args.dictionary_page_size_limit {
-        writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
     }
     #[allow(deprecated)]
     if let Some(value) = args.max_statistics_size {
@@ -256,10 +338,11 @@ fn main() {
             if let Some(value) = args.bloom_filter_ndv {
                 writer_properties_builder = writer_properties_builder.set_bloom_filter_ndv(value);
             }
+            if let Some(value) = args.bloom_filter_position {
+                writer_properties_builder =
+                    writer_properties_builder.set_bloom_filter_position(value.into());
+            }
         }
-    }
-    if let Some(value) = args.dictionary_enabled {
-        writer_properties_builder = writer_properties_builder.set_dictionary_enabled(value);
     }
     if let Some(value) = args.statistics_enabled {
         writer_properties_builder = writer_properties_builder.set_statistics_enabled(value.into());

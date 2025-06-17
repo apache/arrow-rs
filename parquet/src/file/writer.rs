@@ -212,12 +212,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         if let Some(file_encryption_properties) = &properties.file_encryption_properties {
             file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
 
-            if !file_encryption_properties.encrypt_footer() {
-                return Err(general_err!(
-                    "Writing encrypted files with plaintext footers is not supported yet"
-                ));
-            }
-
             Ok(Some(Arc::new(FileEncryptor::new(
                 file_encryption_properties.clone(),
             )?)))
@@ -694,6 +688,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
+        }
+        if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
+            builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
         }
         builder = self.set_column_crypto_metadata(builder, &metadata);
         close.metadata = builder.build()?;

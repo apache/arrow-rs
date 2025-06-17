@@ -16,17 +16,21 @@
 // under the License.
 
 #[cfg(feature = "encryption")]
-use crate::encryption::encrypt::{encrypt_object, encrypt_object_to_vec, FileEncryptor};
-#[cfg(feature = "encryption")]
-use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
+use crate::encryption::{
+    encrypt::{
+        encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor,
+    },
+    modules::{create_footer_aad, create_module_aad, ModuleType},
+};
 #[cfg(feature = "encryption")]
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
+use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
-use crate::format::{AesGcmV1, ColumnCryptoMetaData, EncryptionAlgorithm};
+use crate::format::{AesGcmV1, ColumnCryptoMetaData};
 use crate::format::{ColumnChunk, ColumnIndex, FileMetaData, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
@@ -136,11 +140,12 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // in any Statistics or ColumnIndex object in the whole file.
         // But for simplicity we always set this field.
         let column_orders = Some(column_orders);
-
         let (row_groups, unencrypted_row_groups) = self
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
+        let (encryption_algorithm, footer_signing_key_metadata) =
+            self.object_writer.get_plaintext_footer_crypto_metadata();
         let mut file_metadata = FileMetaData {
             num_rows,
             row_groups,
@@ -149,8 +154,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
             column_orders,
-            encryption_algorithm: None,
-            footer_signing_key_metadata: None,
+            encryption_algorithm,
+            footer_signing_key_metadata,
         };
 
         // Write file metadata
@@ -474,6 +479,12 @@ impl MetadataObjectWriter {
     pub fn get_file_magic(&self) -> &[u8; 4] {
         get_file_magic()
     }
+
+    fn get_plaintext_footer_crypto_metadata(
+        &self,
+    ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
+        (None, None)
+    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
@@ -502,6 +513,11 @@ impl MetadataObjectWriter {
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
                 encrypt_object(file_metadata, &mut encryptor, &mut sink, &aad)
+            }
+            Some(file_encryptor) if file_metadata.encryption_algorithm.is_some() => {
+                let aad = create_footer_aad(file_encryptor.file_aad())?;
+                let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                write_signed_plaintext_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
             _ => Self::write_object(file_metadata, &mut sink),
         }
@@ -622,25 +638,45 @@ impl MetadataObjectWriter {
         }
     }
 
+    fn get_plaintext_footer_crypto_metadata(
+        &self,
+    ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
+        // Only plaintext footers may contain encryption algorithm and footer key metadata.
+        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
+            let encryption_properties = file_encryptor.properties();
+            if !encryption_properties.encrypt_footer() {
+                return (
+                    Some(Self::encryption_algorithm_from_encryptor(file_encryptor)),
+                    encryption_properties.footer_key_metadata().cloned(),
+                );
+            }
+        }
+        (None, None)
+    }
+
+    fn encryption_algorithm_from_encryptor(file_encryptor: &FileEncryptor) -> EncryptionAlgorithm {
+        let supply_aad_prefix = file_encryptor
+            .properties()
+            .aad_prefix()
+            .map(|_| !file_encryptor.properties().store_aad_prefix());
+        let aad_prefix = if file_encryptor.properties().store_aad_prefix() {
+            file_encryptor.properties().aad_prefix().cloned()
+        } else {
+            None
+        };
+        EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
+            aad_prefix,
+            aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
+            supply_aad_prefix,
+        })
+    }
+
     fn file_crypto_metadata(
         file_encryptor: &FileEncryptor,
     ) -> Result<crate::format::FileCryptoMetaData> {
         let properties = file_encryptor.properties();
-        let supply_aad_prefix = properties
-            .aad_prefix()
-            .map(|_| !properties.store_aad_prefix());
-        let encryption_algorithm = AesGcmV1 {
-            aad_prefix: if properties.store_aad_prefix() {
-                properties.aad_prefix().cloned()
-            } else {
-                None
-            },
-            aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
-            supply_aad_prefix,
-        };
-
         Ok(crate::format::FileCryptoMetaData {
-            encryption_algorithm: EncryptionAlgorithm::AESGCMV1(encryption_algorithm),
+            encryption_algorithm: Self::encryption_algorithm_from_encryptor(file_encryptor),
             key_metadata: properties.footer_key_metadata().cloned(),
         })
     }

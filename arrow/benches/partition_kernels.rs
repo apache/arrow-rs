@@ -28,7 +28,7 @@ use arrow::{
 };
 use arrow_ord::partition::partition;
 use rand::distr::{Distribution, StandardUniform};
-use std::iter;
+use std::{hint, iter};
 
 fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
 where
@@ -40,7 +40,7 @@ where
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
-    criterion::black_box(partition(sorted_columns).unwrap().ranges());
+    hint::black_box(partition(sorted_columns).unwrap().ranges());
 }
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
