@@ -407,6 +407,20 @@ impl RecordBatch {
     /// Mutable access to the metadata of the schema.
     ///
     /// This allows you to modify [`Schema::metadata`] of [`Self::schema`] in a convenient and fast way.
+    ///
+    /// Note this will clone the entire underlying `Schema` object if it is currently shared
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{record_batch, RecordBatch};
+    /// let mut batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// // Initially, the metadata is empty
+    /// assert!(batch.schema().metadata().get("key").is_none());
+    /// // Insert a key-value pair into the metadata
+    /// batch.schema_metadata_mut().insert("key".into(), "value".into());
+    /// assert_eq!(batch.schema().metadata().get("key"), Some(&String::from("value")));
+    /// ```    
     pub fn schema_metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
         let schema = Arc::make_mut(&mut self.schema);
         &mut schema.metadata
