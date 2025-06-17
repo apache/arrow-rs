@@ -160,6 +160,7 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 ///    "first_name": "Malthe",
 ///    "last_name": "Karbo"
 /// }
+/// ]
 /// ```
 ///
 /// TODO
