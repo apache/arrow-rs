@@ -5,6 +5,7 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
+use rand::seq::SliceRandom;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::Builder;
@@ -51,7 +52,9 @@ fn verify_ordering(data: Vec<Int96>) {
 
         {
             let writer = col_writer.typed::<Int96Type>();
-            writer.write_batch(&data, None, None).unwrap();
+            let mut shuffled_data = data.clone();
+            shuffled_data.shuffle(&mut rand::rng());
+            writer.write_batch(&shuffled_data, None, None).unwrap();
         }
         col_writer.close().unwrap();
         row_group.close().unwrap();
