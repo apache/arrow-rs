@@ -102,7 +102,7 @@ where
         }
     }
 
-    /// Creates a new `PrimitiveDictionaryBuilder` from the existing builder with the same
+    /// Creates a new `FixedSizeBinaryDictionaryBuilder` from the existing builder with the same
     /// keys and values, but with a new data type for the keys.
     ///
     /// # Example
