@@ -77,13 +77,12 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 ///
 /// # Example: create a Primitive Int8
 /// ```
-/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+/// # use parquet_variant::{Variant, VariantBuilder};
 /// let mut builder = VariantBuilder::new();
 /// builder.append_value(Variant::Int8(42));
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
-/// let metadata = VariantMetadata::try_new(&metadata).unwrap();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// assert_eq!(variant, Variant::Int8(42));
 /// ```
@@ -98,7 +97,7 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// ```
 ///
 /// ```
-/// # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+/// # use parquet_variant::{Variant, VariantBuilder};
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
 /// let mut object_builder = builder.new_object();
@@ -112,23 +111,21 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// let Variant::Object(variant_object) = variant else {
 ///   panic!("unexpected variant type")
 /// };
-/// /* TODO: uncomment this, but now VariantObject:field is not implemented
 /// assert_eq!(
 ///   variant_object.field("first_name").unwrap(),
-///   Variant::String("Jiaying")
+///   Some(Variant::ShortString("Jiaying"))
 /// );
 /// assert_eq!(
 ///   variant_object.field("last_name").unwrap(),
-///   Variant::String("Li")
+///   Some(Variant::ShortString("Li"))
 /// );
-/// */
 /// ```
 ///
 /// # Example: Create an Array
 ///
 /// This example shows how to create an array of integers: `[1, 2, 3]`.
 /// ```
-///  # use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+///  # use parquet_variant::{Variant, VariantBuilder};
 ///  let mut builder = VariantBuilder::new();
 ///  // Create an array builder that will write elements to the array
 ///  let mut array_builder = builder.new_array();
