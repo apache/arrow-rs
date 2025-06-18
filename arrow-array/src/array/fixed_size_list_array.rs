@@ -343,8 +343,8 @@ impl From<ArrayData> for FixedSizeListArray {
     fn from(data: ArrayData) -> Self {
         let value_length = match data.data_type() {
             DataType::FixedSizeList(_, len) => *len,
-            _ => {
-                panic!("FixedSizeListArray data should contain a FixedSizeList data type")
+            data_type => {
+                panic!("FixedSizeListArray data should contain a FixedSizeList data type, got {data_type:?}")
             }
         };
 
