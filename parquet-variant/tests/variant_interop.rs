@@ -137,7 +137,7 @@ fn variant_object_primitive() {
             Variant::ShortString("2025-04-16T12:34:56.78"),
         ),
     ];
-    let actual_fields: Vec<_> = variant_object.fields().unwrap().collect();
+    let actual_fields: Vec<_> = variant_object.fields().collect();
     assert_eq!(actual_fields, expected_fields);
 }
 #[test]
@@ -163,7 +163,7 @@ fn variant_array_primitive() {
         Variant::Int8(5),
         Variant::Int8(9),
     ];
-    let actual: Vec<_> = list.values().unwrap().collect();
+    let actual: Vec<_> = list.values().collect();
     assert_eq!(actual, expected);
 
     // Call `get` for each individual element
