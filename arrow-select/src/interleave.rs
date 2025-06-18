@@ -376,7 +376,8 @@ pub fn interleave_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder};
+    use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
+    use arrow_array::Int32RunArray;
 
     #[test]
     fn test_primitive() {
@@ -736,5 +737,212 @@ mod tests {
                 3, // Second buffer from array B (reused)
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_primitive() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 2, 2, 3].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([4, 5, 5, 6, 6, 6].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 1), (1, 0), (0, 4), (1, 2), (0, 5)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 4, 2, 5, 3];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_string() {
+        let a: Int32RunArray = vec!["hello", "hello", "world", "world", "foo"]
+            .into_iter()
+            .collect();
+        let b: Int32RunArray = vec!["bar", "baz", "baz", "qux"].into_iter().collect();
+
+        let indices = &[(0, 0), (1, 1), (0, 3), (1, 3), (0, 4)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec!["hello", "baz", "world", "qux", "foo"];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_string::<i32>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_with_nulls() {
+        let a: Int32RunArray = vec![Some("a"), Some("a"), None, None, Some("b")]
+            .into_iter()
+            .collect();
+        let b: Int32RunArray = vec![None, Some("c"), Some("c"), Some("d")]
+            .into_iter()
+            .collect();
+
+        let indices = &[(0, 1), (1, 0), (0, 2), (1, 3), (0, 4)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![Some("a"), None, None, Some("d"), Some("b")];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            if result_run_array.values().is_null(physical_idx) {
+                actual.push(None);
+            } else {
+                let value = result_run_array
+                    .values()
+                    .as_string::<i32>()
+                    .value(physical_idx);
+                actual.push(Some(value));
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_different_run_types() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 3, 3].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        builder.extend([4, 5, 5, 6].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 0), (1, 1), (0, 3), (1, 3)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &RunArray<Int16Type> = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 5, 3, 6];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_mixed_run_lengths() {
+        let mut builder = PrimitiveRunBuilder::<Int64Type, Int32Type>::new();
+        builder.extend([1, 2, 2, 2, 2, 3, 3, 4].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int64Type, Int32Type>::new();
+        builder.extend([5, 5, 5, 6, 7, 7, 8, 8].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[
+            (0, 0), // 1
+            (1, 2), // 5
+            (0, 3), // 2
+            (1, 3), // 6
+            (0, 6), // 3
+            (1, 6), // 8
+            (0, 7), // 4
+            (1, 4), // 7
+        ];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &RunArray<Int64Type> = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 5, 2, 6, 3, 8, 4, 7];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_empty_runs() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([2, 2, 2].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 0), (1, 1), (1, 2)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 2, 2];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
     }
 }
