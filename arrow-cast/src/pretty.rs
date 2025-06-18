@@ -889,8 +889,8 @@ mod tests {
             "Teamsters",
             vec![0, 1],
             vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Float64, false),
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Float64, true),
             ],
             UnionMode::Dense,
         )]);
@@ -925,8 +925,8 @@ mod tests {
             "Teamsters",
             vec![0, 1],
             vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Float64, false),
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Float64, true),
             ],
             UnionMode::Sparse,
         )]);
@@ -963,8 +963,8 @@ mod tests {
             "European Union",
             vec![0, 1],
             vec![
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Float64, false),
+                Field::new("b", DataType::Int32, true),
+                Field::new("c", DataType::Float64, true),
             ],
             UnionMode::Dense,
         );
