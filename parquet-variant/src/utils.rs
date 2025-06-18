@@ -59,14 +59,14 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
-/// Performs a binary search on a slice using a fallible key extraction function.
+/// Performs a binary search over a range using a fallible key extraction function; a failed key
+/// extraction immediately terminats the search.
 ///
-/// This is similar to the standard library's `binary_search_by`, but allows the key
-/// extraction function to fail. If key extraction fails during the search, that error
-/// is propagated immediately.
+/// This is similar to the standard library's `binary_search_by`, but generalized to ranges instead
+/// of slices.
 ///
 /// # Arguments
-/// * `slice` - The slice to search in
+/// * `range` - The range to search in
 /// * `target` - The target value to search for
 /// * `key_extractor` - A function that extracts a comparable key from slice elements.
 ///   This function can fail and return an error.
@@ -87,7 +87,7 @@ where
     let Range { mut start, mut end } = range;
 
     while start < end {
-        let mid = (start + end) / 2;
+        let mid = start + (end - start) / 2;
         let key = key_extractor(mid)?;
 
         match key.cmp(target) {
@@ -98,4 +98,14 @@ where
     }
 
     Ok(Err(start))
+}
+
+/// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
+/// element and returning the first error (if any).
+pub(crate) fn validate_fallible_iterator<T, E>(
+    mut it: impl Iterator<Item = Result<T, E>>,
+) -> Result<(), E> {
+    // NOTE: It should really be `let None = ...`, but the compiler can't prove that.
+    let _ = it.find(Result::is_err).transpose()?;
+    Ok(())
 }

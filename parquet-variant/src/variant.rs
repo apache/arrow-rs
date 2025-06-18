@@ -19,11 +19,11 @@ use crate::decoder::{
 };
 use crate::utils::{
     array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice,
-    try_binary_search_range_by,
+    try_binary_search_range_by, validate_fallible_iterator,
 };
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use std::{num::TryFromIntError, ops::Range};
+use std::num::TryFromIntError;
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 enum OffsetSizeBytes {
@@ -154,31 +154,20 @@ impl<'m> VariantMetadata<'m> {
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
         let header = first_byte_from_slice(bytes)?;
         let header = VariantMetadataHeader::try_new(header)?;
+
         // Offset 1, index 0 because first element after header is dictionary size
         let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
 
-        // Check that we have the correct metadata length according to dictionary_size, or return
-        // error early.
-        // Minimum number of bytes the metadata buffer must contain:
-        // 1 byte header
-        // + offset_size-byte `dictionary_size` field
-        // + (dict_size + 1) offset entries, each `offset_size` bytes. (Table size, essentially)
-        // 1 + offset_size + (dict_size + 1) * offset_size
+        // Calculate the starting offset of the dictionary string bytes.
+        //
+        // Value header, dict_size (offset_size bytes), and dict_size+1 offsets
+        // = 1 + offset_size + (dict_size + 1) * offset_size
         // = (dict_size + 2) * offset_size + 1
-        let offset_size = header.offset_size as usize; // Cheap to copy
-
         let dictionary_key_start_byte = dict_size
             .checked_add(2)
-            .and_then(|n| n.checked_mul(offset_size))
+            .and_then(|n| n.checked_mul(header.offset_size as usize))
             .and_then(|n| n.checked_add(1))
             .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
-
-        if bytes.len() < dictionary_key_start_byte {
-            return Err(ArrowError::InvalidArgumentError(
-                "Metadata shorter than dictionary_size implies".to_string(),
-            ));
-        }
-
         let s = Self {
             bytes,
             header,
@@ -186,8 +175,11 @@ impl<'m> VariantMetadata<'m> {
             dictionary_key_start_byte,
         };
 
-        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
-        let _ = s.fields_checked().find(Result::is_err).transpose()?;
+        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
+        //
+        // This has the side effect of validating the offset array and proving that the string bytes
+        // are all in bounds.
+        validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
 
@@ -200,89 +192,35 @@ impl<'m> VariantMetadata<'m> {
     pub fn dictionary_size(&self) -> usize {
         self.dict_size
     }
+
+    /// The variant protocol version
     pub fn version(&self) -> u8 {
         self.header.version
     }
 
-    /// Helper method to get the offset start and end range for a key by index.
-    fn get_offsets_for_key_by(&self, index: usize) -> Result<Range<usize>, ArrowError> {
-        if index >= self.dict_size {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Index {} out of bounds for dictionary of length {}",
-                index, self.dict_size
-            )));
-        }
-
+    /// Gets an offset array entry by index.
+    fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
         // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
-        let unpack = |i| self.header.offset_size.unpack_usize(self.bytes, 1, i + 1);
-        Ok(unpack(index)?..unpack(index + 1)?)
+        let bytes = slice_from_slice(self.bytes, ..self.dictionary_key_start_byte)?;
+        self.header.offset_size.unpack_usize(bytes, 1, i + 1)
     }
 
-    /// Get a single offset by index
-    #[allow(unused)]
-    pub(crate) fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
-        if index >= self.dict_size {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Index {} out of bounds for dictionary of length {}",
-                index, self.dict_size
-            )));
-        }
-
-        // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
-        let unpack = |i| self.header.offset_size.unpack_usize(self.bytes, 1, i + 1);
-        unpack(index)
-    }
-
-    /// Get the key-name by index
-    pub fn get_field_by(&self, index: usize) -> Result<&'m str, ArrowError> {
-        let offset_range = self.get_offsets_for_key_by(index)?;
-        self.get_field_by_offset(offset_range)
-    }
-
-    /// Gets the field using an offset (Range) - helper method to keep consistent API.
-    pub(crate) fn get_field_by_offset(&self, offset: Range<usize>) -> Result<&'m str, ArrowError> {
-        let dictionary_keys_bytes =
-            slice_from_slice(self.bytes, self.dictionary_key_start_byte..self.bytes.len())?;
-        string_from_slice(dictionary_keys_bytes, offset)
-    }
-
-    #[allow(unused)]
-    pub(crate) fn header(&self) -> VariantMetadataHeader {
-        self.header
-    }
-
-    /// Get the offsets as an iterator
-    #[allow(unused)]
-    pub(crate) fn offsets(&self) -> impl Iterator<Item = Range<usize>> + 'm {
-        self.offsets_checked().map(Result::unwrap)
-    }
-
-    // Fallible iteration over field offsets. The constructor traverses the iterator to prove it has
-    // no errors, so that all other use sites can blindly `unwrap` the result.
-    fn offsets_checked(&self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
-        let offset_size = self.header.offset_size; // `Copy`
-        let bytes = self.bytes;
-
-        (0..self.dict_size).map(move |i| {
-            // This wont be out of bounds as long as dict_size and offsets have been validated
-            // during construction via `try_new`, as it calls unpack_usize for the
-            // indices `1..dict_size+1` already.
-            let start = offset_size.unpack_usize(bytes, 1, i + 1)?;
-            let end = offset_size.unpack_usize(bytes, 1, i + 2)?;
-            Ok(start..end)
-        })
+    /// Gets a dictionary entry by index
+    pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
+        let dictionary_keys_bytes = slice_from_slice(self.bytes, self.dictionary_key_start_byte..)?;
+        let byte_range = self.get_offset(i)?..self.get_offset(i + 1)?;
+        string_from_slice(dictionary_keys_bytes, byte_range)
     }
 
     /// Get all key-names as an Iterator of strings
-    pub fn fields(&'m self) -> impl Iterator<Item = &'m str> {
-        self.fields_checked().map(Result::unwrap)
+    pub fn iter(&self) -> impl Iterator<Item = &'m str> + '_ {
+        self.iter_checked().map(Result::unwrap)
     }
 
     // Fallible iteration over the fields of this dictionary. The constructor traverse the iterator
     // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
-    fn fields_checked(&'m self) -> impl Iterator<Item = Result<&'m str, ArrowError>> {
-        self.offsets_checked()
-            .map(move |offset_range| self.get_field_by_offset(offset_range?))
+    fn iter_checked(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
+        (0..self.dict_size).map(move |i| self.get(i))
     }
 }
 
@@ -342,21 +280,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let values_start_byte =
             field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
 
-        // Verify that the last field offset array entry is inside the value slice
-        let last_field_offset_byte =
-            field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
-        if last_field_offset_byte > value.len() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Last field offset array entry at offset {} with length {} is outside the value slice of length {}",
-                last_field_offset_byte,
-                header.field_offset_size as usize,
-                value.len()
-            )));
-        }
-
-        // Verify that the value of the last field offset array entry fits inside the value slice.
+        // Spec says: "The last field_offset points to the byte after the end of the last value"
         //
-        // NOTE: The iterator test below doesn't cover this last offset, so we check it here.
+        // Use the last offset as a bounds check. The iterator check below doesn't use it -- offsets
+        // are not monotonic -- so we have to check separately here.
         let last_field_offset =
             header
                 .field_offset_size
@@ -380,8 +307,11 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             values_start_byte,
         };
 
-        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
-        let _ = s.fields_checked().find(Result::is_err).transpose()?;
+        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
+        //
+        // This has the side effect of validating the field_id and field_offset arrays, and also
+        // proves the field values are all in bounds.
+        validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
 
@@ -395,65 +325,52 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         self.len() == 0
     }
 
-    /// Get a field ID by index, in `0..self.len()`
-    fn get_field_id(&self, index: usize) -> Result<usize, ArrowError> {
-        self.header
-            .field_id_size
-            .unpack_usize(self.value, self.field_ids_start_byte, index)
+    /// Get a field's value by index in `0..self.len()`
+    pub fn field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+        let start_offset = self.header.field_offset_size.unpack_usize(
+            self.value,
+            self.field_offsets_start_byte,
+            i,
+        )?;
+        let value_bytes = slice_from_slice(self.value, self.values_start_byte + start_offset..)?;
+        Variant::try_new_with_metadata(self.metadata, value_bytes)
     }
 
-    /// Get a field offset by index, in `0..=self.len()`
-    fn get_field_offset(&self, index: usize) -> Result<usize, ArrowError> {
-        self.header
-            .field_offset_size
-            .unpack_usize(self.value, self.field_offsets_start_byte, index)
+    /// Get a field's name by index in `0..self.len()`
+    pub fn field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
+        let field_id =
+            self.header
+                .field_id_size
+                .unpack_usize(self.value, self.field_ids_start_byte, i)?;
+        self.metadata.get(field_id)
     }
 
-    pub fn fields(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
-        self.fields_checked().map(Result::unwrap)
+    /// Returns an iterator of (name, value) pairs over the fields of this object.
+    pub fn iter(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
+        self.iter_checked().map(Result::unwrap)
     }
 
     // Fallible iteration over the fields of this object. The constructor traverses the iterator to
     // prove it has no errors, so that all other use sites can blindly `unwrap` the result.
-    fn fields_checked(
+    fn iter_checked(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| {
-            let field_id = self.get_field_id(i)?;
-            let field_name = self.metadata.get_field_by(field_id)?;
-
-            let start_offset = self.get_field_offset(i)?;
-            let value_bytes =
-                slice_from_slice(self.value, self.values_start_byte + start_offset..)?;
-            let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
-
-            Ok((field_name, variant))
-        })
+        (0..self.num_elements).map(move |i| Ok((self.field_name(i)?, self.field(i)?)))
     }
 
-    pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
+    /// Returns the value of the field with the specified name, if any.
+    ///
+    /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
+    pub fn field_by_name(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let search_result = try_binary_search_range_by(0..self.num_elements, &name, |index| {
-            let field_id = self.get_field_id(index)?;
-            self.metadata.get_field_by(field_id)
-        })?;
+        let search_result =
+            try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?;
 
-        let Ok(index) = search_result else {
-            return Ok(None);
-        };
-
-        let start_offset = self.get_field_offset(index)?;
-        let end_offset = self.get_field_offset(index + 1)?;
-        let value_bytes = slice_from_slice(
-            self.value,
-            self.values_start_byte + start_offset..self.values_start_byte + end_offset,
-        )?;
-        let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
-        Ok(Some(variant))
+        search_result.ok().map(|i| self.field(i)).transpose()
     }
 }
 
@@ -476,18 +393,6 @@ impl VariantListHeader {
             offset_size,
             is_large,
         })
-    }
-
-    /// Returns the offset size in bytes
-    #[allow(unused)]
-    pub(crate) fn offset_size(&self) -> usize {
-        self.offset_size as _
-    }
-
-    /// Returns whether this is a large list
-    #[allow(unused)]
-    pub(crate) fn is_large(&self) -> bool {
-        self.is_large
     }
 }
 
@@ -538,31 +443,6 @@ impl<'m, 'v> VariantList<'m, 'v> {
             .checked_add(value_bytes)
             .ok_or_else(overflow)?;
 
-        // Verify that the last offset array entry is inside the value slice
-        let last_offset_byte = first_offset_byte + n_offsets * header.offset_size as usize;
-        if last_offset_byte > value.len() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Last offset array entry at offset {} with length {} is outside the value slice of length {}",
-                last_offset_byte,
-                header.offset_size as usize,
-                value.len()
-            )));
-        }
-
-        // Verify that the value of the last offset array entry fits inside the value slice
-        let last_offset =
-            header
-                .offset_size
-                .unpack_usize(value, first_offset_byte, num_elements)?;
-        if first_value_byte + last_offset > value.len() {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Last offset value {} at offset {} is outside the value slice of length {}",
-                last_offset,
-                first_value_byte,
-                value.len()
-            )));
-        }
-
         let s = Self {
             metadata,
             value,
@@ -572,8 +452,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
             first_value_byte,
         };
 
-        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
-        let _ = s.values_checked().find(Result::is_err).transpose()?;
+        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
+        //
+        // This has the side effect of validating the field_offset array, and also proves that the
+        // field values are all in bounds.
+        validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
 
@@ -616,13 +499,13 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 
     /// Iterates over the values of this list
-    pub fn values(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
-        self.values_checked().map(Result::unwrap)
+    pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
+        self.iter_checked().map(Result::unwrap)
     }
 
     // Fallible iteration over the values of this list. The constructor traverses validates the
     // iterator has no errors, so that all other use sites can blindly `unwrap` the result.
-    fn values_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
+    fn iter_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
         (0..self.len()).map(move |i| self.get(i))
     }
 }
@@ -1489,21 +1372,21 @@ mod tests {
         let md = VariantMetadata::try_new(bytes).expect("should parse");
         assert_eq!(md.dictionary_size(), 2);
         // Fields
-        assert_eq!(md.get_field_by(0).unwrap(), "cat");
-        assert_eq!(md.get_field_by(1).unwrap(), "dog");
+        assert_eq!(md.get(0).unwrap(), "cat");
+        assert_eq!(md.get(1).unwrap(), "dog");
 
         // Offsets
-        assert_eq!(md.get_offset_by(0).unwrap(), 0x00);
-        assert_eq!(md.get_offset_by(1).unwrap(), 0x03);
-        // We only have 2 keys, the final offset should not be accessible using this method.
-        let err = md.get_offset_by(2).unwrap_err();
+        assert_eq!(md.get_offset(0).unwrap(), 0x00);
+        assert_eq!(md.get_offset(1).unwrap(), 0x03);
+        assert_eq!(md.get_offset(2).unwrap(), 0x06);
 
+        let err = md.get_offset(3);
         assert!(
-            matches!(err, ArrowError::InvalidArgumentError(ref msg)
-                     if msg.contains("Index 2 out of bounds for dictionary of length 2")),
-            "unexpected error: {err:?}"
+            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
+            "unexpected result: {err:?}"
         );
-        let fields: Vec<(usize, &str)> = md.fields().enumerate().collect();
+
+        let fields: Vec<(usize, &str)> = md.iter().enumerate().collect();
         assert_eq!(fields, vec![(0usize, "cat"), (1usize, "dog")]);
     }
 
@@ -1523,15 +1406,15 @@ mod tests {
 
         let working_md = VariantMetadata::try_new(bytes).expect("should parse");
         assert_eq!(working_md.dictionary_size(), 2);
-        assert_eq!(working_md.get_field_by(0).unwrap(), "a");
-        assert_eq!(working_md.get_field_by(1).unwrap(), "b");
+        assert_eq!(working_md.get(0).unwrap(), "a");
+        assert_eq!(working_md.get(1).unwrap(), "b");
 
         let truncated = &bytes[..bytes.len() - 1];
 
         let err = VariantMetadata::try_new(truncated);
         assert!(
             matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected error: {err:?}"
+            "unexpected result: {err:?}"
         );
     }
 
@@ -1560,7 +1443,7 @@ mod tests {
         let err = VariantMetadata::try_new(bytes);
         assert!(
             matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected error: {err:?}"
+            "unexpected result: {err:?}"
         );
     }
 
@@ -1569,10 +1452,10 @@ mod tests {
         // Missing final offset
         let bytes = &[0b0000_0001, 0x02, 0x00, 0x01];
 
-        let err = VariantMetadata::try_new(bytes).unwrap_err();
+        let err = VariantMetadata::try_new(bytes);
         assert!(
-            matches!(err, ArrowError::InvalidArgumentError(ref msg) if msg.contains("shorter")),
-            "unexpected error: {err:?}"
+            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
+            "unexpected result: {err:?}"
         );
     }
 
@@ -1634,24 +1517,24 @@ mod tests {
         assert!(!variant_obj.is_empty());
 
         // Test field access
-        let active_field = variant_obj.field("active").unwrap();
+        let active_field = variant_obj.field_by_name("active").unwrap();
         assert!(active_field.is_some());
         assert_eq!(active_field.unwrap().as_boolean(), Some(true));
 
-        let age_field = variant_obj.field("age").unwrap();
+        let age_field = variant_obj.field_by_name("age").unwrap();
         assert!(age_field.is_some());
         assert_eq!(age_field.unwrap().as_int8(), Some(42));
 
-        let name_field = variant_obj.field("name").unwrap();
+        let name_field = variant_obj.field_by_name("name").unwrap();
         assert!(name_field.is_some());
         assert_eq!(name_field.unwrap().as_string(), Some("hello"));
 
         // Test non-existent field
-        let missing_field = variant_obj.field("missing").unwrap();
+        let missing_field = variant_obj.field_by_name("missing").unwrap();
         assert!(missing_field.is_none());
 
         // Test fields iterator
-        let fields: Vec<_> = variant_obj.fields().collect();
+        let fields: Vec<_> = variant_obj.iter().collect();
         assert_eq!(fields.len(), 3);
 
         // Fields should be in sorted order: active, age, name
@@ -1690,11 +1573,11 @@ mod tests {
         assert!(variant_obj.is_empty());
 
         // Test field access on empty object
-        let missing_field = variant_obj.field("anything").unwrap();
+        let missing_field = variant_obj.field_by_name("anything").unwrap();
         assert!(missing_field.is_none());
 
         // Test fields iterator on empty object
-        let fields: Vec<_> = variant_obj.fields().collect();
+        let fields: Vec<_> = variant_obj.iter().collect();
         assert_eq!(fields.len(), 0);
     }
 
@@ -1752,7 +1635,7 @@ mod tests {
         ));
 
         // Test values iterator
-        let values: Vec<_> = variant_list.values().collect();
+        let values: Vec<_> = variant_list.iter().collect();
         assert_eq!(values.len(), 3);
         assert_eq!(values[0].as_int8(), Some(42));
         assert_eq!(values[1].as_boolean(), Some(true));
@@ -1788,7 +1671,7 @@ mod tests {
         assert!(out_of_bounds.is_err());
 
         // Test values iterator on empty list
-        let values: Vec<_> = variant_list.values().collect();
+        let values: Vec<_> = variant_list.iter().collect();
         assert_eq!(values.len(), 0);
     }
 
