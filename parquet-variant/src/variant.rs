@@ -19,7 +19,7 @@ use crate::decoder::{
 };
 use crate::utils::{
     array_from_slice, first_byte_from_slice, slice_from_slice, string_from_slice,
-    try_binary_search_by,
+    try_binary_search_range_by,
 };
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -116,9 +116,7 @@ impl VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub(crate) fn try_new(bytes: &[u8]) -> Result<Self, ArrowError> {
-        let header = first_byte_from_slice(bytes)?;
-
+    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
         let version = header & 0x0F; // First four bits
         if version != CORRECT_VERSION_VALUE {
             let err_msg = format!(
@@ -154,7 +152,8 @@ impl<'m> VariantMetadata<'m> {
     }
 
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        let header = VariantMetadataHeader::try_new(bytes)?;
+        let header = first_byte_from_slice(bytes)?;
+        let header = VariantMetadataHeader::try_new(header)?;
         // Offset 1, index 0 because first element after header is dictionary size
         let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
 
@@ -187,8 +186,7 @@ impl<'m> VariantMetadata<'m> {
             dictionary_key_start_byte,
         };
 
-        // Verify that we can iterate safely through the fields of this object, so that other
-        // callers can blindly `unwrap` results.
+        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
         let _ = s.fields_checked().find(Result::is_err).transpose()?;
         Ok(s)
     }
@@ -221,7 +219,8 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get a single offset by index
-    pub fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
+    #[allow(unused)]
+    pub(crate) fn get_offset_by(&self, index: usize) -> Result<usize, ArrowError> {
         if index >= self.dict_size {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for dictionary of length {}",
@@ -253,9 +252,13 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get the offsets as an iterator
-    pub fn offsets(&self) -> impl Iterator<Item = Range<usize>> + 'm {
+    #[allow(unused)]
+    pub(crate) fn offsets(&self) -> impl Iterator<Item = Range<usize>> + 'm {
         self.offsets_checked().map(Result::unwrap)
     }
+
+    // Fallible iteration over field offsets. The constructor traverses the iterator to prove it has
+    // no errors, so that all other use sites can blindly `unwrap` the result.
     fn offsets_checked(&self) -> impl Iterator<Item = Result<Range<usize>, ArrowError>> + 'm {
         let offset_size = self.header.offset_size; // `Copy`
         let bytes = self.bytes;
@@ -274,6 +277,9 @@ impl<'m> VariantMetadata<'m> {
     pub fn fields(&'m self) -> impl Iterator<Item = &'m str> {
         self.fields_checked().map(Result::unwrap)
     }
+
+    // Fallible iteration over the fields of this dictionary. The constructor traverse the iterator
+    // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn fields_checked(&'m self) -> impl Iterator<Item = Result<&'m str, ArrowError>> {
         self.offsets_checked()
             .map(move |offset_range| self.get_field_by_offset(offset_range?))
@@ -284,27 +290,43 @@ impl<'m> VariantMetadata<'m> {
 pub(crate) struct VariantObjectHeader {
     field_offset_size: OffsetSizeBytes,
     field_id_size: OffsetSizeBytes,
+    is_large: bool,
+}
+
+impl VariantObjectHeader {
+    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
+        // Parse the header byte to get object parameters
+        let value_header = header >> 2;
+        let field_offset_size_minus_one = value_header & 0x03; // Last 2 bits
+        let field_id_size_minus_one = (value_header >> 2) & 0x03; // Next 2 bits
+        let is_large = (value_header & 0x10) != 0; // 5th bit
+
+        Ok(Self {
+            field_offset_size: OffsetSizeBytes::try_new(field_offset_size_minus_one)?,
+            field_id_size: OffsetSizeBytes::try_new(field_id_size_minus_one)?,
+            is_large,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantObject<'m, 'v> {
+    pub metadata: VariantMetadata<'m>,
+    pub value: &'v [u8],
+    header: VariantObjectHeader,
     num_elements: usize,
     field_ids_start_byte: usize,
     field_offsets_start_byte: usize,
     values_start_byte: usize,
 }
 
-impl VariantObjectHeader {
-    pub(crate) fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
-        // Parse the header byte to get object parameters
+impl<'m, 'v> VariantObject<'m, 'v> {
+    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header = first_byte_from_slice(value)?;
-        let value_header = header >> 2;
-
-        let field_offset_size_minus_one = value_header & 0x03; // Last 2 bits
-        let field_id_size_minus_one = (value_header >> 2) & 0x03; // Next 2 bits
-        let is_large = value_header & 0x10; // 5th bit
-
-        let field_offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
-        let field_id_size = OffsetSizeBytes::try_new(field_id_size_minus_one)?;
+        let header = VariantObjectHeader::try_new(header)?;
 
         // Determine num_elements size based on is_large flag
-        let num_elements_size = if is_large != 0 {
+        let num_elements_size = if header.is_large {
             OffsetSizeBytes::Four
         } else {
             OffsetSizeBytes::One
@@ -315,62 +337,57 @@ impl VariantObjectHeader {
 
         // Calculate byte offsets for different sections
         let field_ids_start_byte = 1 + num_elements_size as usize;
-        let field_offsets_start_byte = field_ids_start_byte + num_elements * field_id_size as usize;
+        let field_offsets_start_byte =
+            field_ids_start_byte + num_elements * header.field_id_size as usize;
         let values_start_byte =
-            field_offsets_start_byte + (num_elements + 1) * field_offset_size as usize;
+            field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
 
         // Verify that the last field offset array entry is inside the value slice
         let last_field_offset_byte =
-            field_offsets_start_byte + (num_elements + 1) * field_offset_size as usize;
+            field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
         if last_field_offset_byte > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Last field offset array entry at offset {} with length {} is outside the value slice of length {}",
                 last_field_offset_byte,
-                field_offset_size as usize,
+                header.field_offset_size as usize,
                 value.len()
             )));
         }
 
-        Ok(Self {
-            field_offset_size,
-            field_id_size,
+        // Verify that the value of the last field offset array entry fits inside the value slice.
+        //
+        // NOTE: The iterator test below doesn't cover this last offset, so we check it here.
+        let last_field_offset =
+            header
+                .field_offset_size
+                .unpack_usize(value, field_offsets_start_byte, num_elements)?;
+        if values_start_byte + last_field_offset > value.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Last field offset value {} at offset {} is outside the value slice of length {}",
+                last_field_offset,
+                values_start_byte,
+                value.len()
+            )));
+        }
+
+        let s = Self {
+            metadata,
+            value,
+            header,
             num_elements,
             field_ids_start_byte,
             field_offsets_start_byte,
             values_start_byte,
-        })
-    }
-
-    /// Returns the number of key-value pairs in this object
-    pub(crate) fn num_elements(&self) -> usize {
-        self.num_elements
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct VariantObject<'m, 'v> {
-    pub metadata: VariantMetadata<'m>,
-    pub value: &'v [u8],
-    header: VariantObjectHeader,
-}
-
-impl<'m, 'v> VariantObject<'m, 'v> {
-    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let s = Self {
-            metadata,
-            value,
-            header: VariantObjectHeader::try_new(value)?,
         };
 
-        // Verify that we can iterate safely through the fields of this object, so that other
-        // callers can blindly `unwrap` results.
-        let _ = s.fields_checked()?; //.find(Result::is_err).transpose()?;
+        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
+        let _ = s.fields_checked().find(Result::is_err).transpose()?;
         Ok(s)
     }
 
     /// Returns the number of key-value pairs in this object
     pub fn len(&self) -> usize {
-        self.header.num_elements()
+        self.num_elements
     }
 
     /// Returns true if the object contains no key-value pairs
@@ -378,14 +395,40 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         self.len() == 0
     }
 
-    pub fn fields(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> {
-        self.fields_checked().unwrap()
+    /// Get a field ID by index, in `0..self.len()`
+    fn get_field_id(&self, index: usize) -> Result<usize, ArrowError> {
+        self.header
+            .field_id_size
+            .unpack_usize(self.value, self.field_ids_start_byte, index)
     }
+
+    /// Get a field offset by index, in `0..=self.len()`
+    fn get_field_offset(&self, index: usize) -> Result<usize, ArrowError> {
+        self.header
+            .field_offset_size
+            .unpack_usize(self.value, self.field_offsets_start_byte, index)
+    }
+
+    pub fn fields(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
+        self.fields_checked().map(Result::unwrap)
+    }
+
+    // Fallible iteration over the fields of this object. The constructor traverses the iterator to
+    // prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn fields_checked(
         &self,
-    ) -> Result<impl Iterator<Item = (&'m str, Variant<'m, 'v>)>, ArrowError> {
-        let field_list = self.parse_field_list()?;
-        Ok(field_list.into_iter())
+    ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
+        (0..self.num_elements).map(move |i| {
+            let field_id = self.get_field_id(i)?;
+            let field_name = self.metadata.get_field_by(field_id)?;
+
+            let start_offset = self.get_field_offset(i)?;
+            let value_bytes =
+                slice_from_slice(self.value, self.values_start_byte + start_offset..)?;
+            let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
+
+            Ok((field_name, variant))
+        })
     }
 
     pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
@@ -394,73 +437,23 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let (field_ids, field_offsets) = self.parse_field_arrays()?;
-        let search_result = try_binary_search_by(&field_ids, &name, |&field_id| {
+        let search_result = try_binary_search_range_by(0..self.num_elements, &name, |index| {
+            let field_id = self.get_field_id(index)?;
             self.metadata.get_field_by(field_id)
         })?;
 
         let Ok(index) = search_result else {
             return Ok(None);
         };
-        let start_offset = field_offsets[index];
-        let end_offset = field_offsets[index + 1];
+
+        let start_offset = self.get_field_offset(index)?;
+        let end_offset = self.get_field_offset(index + 1)?;
         let value_bytes = slice_from_slice(
             self.value,
-            self.header.values_start_byte + start_offset
-                ..self.header.values_start_byte + end_offset,
+            self.values_start_byte + start_offset..self.values_start_byte + end_offset,
         )?;
         let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
         Ok(Some(variant))
-    }
-
-    /// Parse field IDs and field offsets arrays using the cached header
-    fn parse_field_arrays(&self) -> Result<(Vec<usize>, Vec<usize>), ArrowError> {
-        // Parse field IDs
-        let field_ids = (0..self.header.num_elements)
-            .map(|i| {
-                self.header.field_id_size.unpack_usize(
-                    self.value,
-                    self.header.field_ids_start_byte,
-                    i,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        debug_assert_eq!(field_ids.len(), self.header.num_elements);
-
-        // Parse field offsets (num_elements + 1 entries)
-        let field_offsets = (0..=self.header.num_elements)
-            .map(|i| {
-                self.header.field_offset_size.unpack_usize(
-                    self.value,
-                    self.header.field_offsets_start_byte,
-                    i,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        debug_assert_eq!(field_offsets.len(), self.header.num_elements + 1);
-
-        Ok((field_ids, field_offsets))
-    }
-
-    /// Parse all fields into a vector for iteration
-    fn parse_field_list(&self) -> Result<Vec<(&'m str, Variant<'m, 'v>)>, ArrowError> {
-        let (field_ids, field_offsets) = self.parse_field_arrays()?;
-
-        let mut fields = Vec::with_capacity(self.header.num_elements);
-
-        for i in 0..self.header.num_elements {
-            let field_id = field_ids[i];
-            let field_name = self.metadata.get_field_by(field_id)?;
-
-            let start_offset = field_offsets[i];
-            let value_bytes =
-                slice_from_slice(self.value, self.header.values_start_byte + start_offset..)?;
-            let variant = Variant::try_new_with_metadata(self.metadata, value_bytes)?;
-
-            fields.push((field_name, variant));
-        }
-
-        Ok(fields)
     }
 }
 
@@ -468,23 +461,59 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 pub(crate) struct VariantListHeader {
     offset_size: OffsetSizeBytes,
     is_large: bool,
+}
+
+impl VariantListHeader {
+    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
+        // The 6 first bits to the left are the value_header and the 2 bits
+        // to the right are the basic type, so we shift to get only the value_header
+        let value_header = header >> 2;
+        let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
+        let field_offset_size_minus_one = value_header & 0x03; // Last two bits
+        let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
+
+        Ok(Self {
+            offset_size,
+            is_large,
+        })
+    }
+
+    /// Returns the offset size in bytes
+    #[allow(unused)]
+    pub(crate) fn offset_size(&self) -> usize {
+        self.offset_size as _
+    }
+
+    /// Returns whether this is a large list
+    #[allow(unused)]
+    pub(crate) fn is_large(&self) -> bool {
+        self.is_large
+    }
+}
+
+/// Represents a variant array.
+///
+/// NOTE: The "list" naming differs from the variant spec -- which calls it "array" -- in order to be
+/// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
+/// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VariantList<'m, 'v> {
+    pub metadata: VariantMetadata<'m>,
+    pub value: &'v [u8],
+    header: VariantListHeader,
     num_elements: usize,
     first_offset_byte: usize,
     first_value_byte: usize,
 }
 
-impl VariantListHeader {
-    pub(crate) fn try_new(value: &[u8]) -> Result<Self, ArrowError> {
-        // The 6 first bits to the left are the value_header and the 2 bits
-        // to the right are the basic type, so we shift to get only the value_header
-        let value_header = first_byte_from_slice(value)? >> 2;
-        let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
-        let field_offset_size_minus_one = value_header & 0x03; // Last two bits
-        let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
+impl<'m, 'v> VariantList<'m, 'v> {
+    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
+        let header = first_byte_from_slice(value)?;
+        let header = VariantListHeader::try_new(header)?;
 
         // The size of the num_elements entry in the array value_data is 4 bytes if
         // is_large is true, otherwise 1 byte.
-        let num_elements_size = match is_large {
+        let num_elements_size = match header.is_large {
             true => OffsetSizeBytes::Four,
             false => OffsetSizeBytes::One,
         };
@@ -501,7 +530,7 @@ impl VariantListHeader {
 
         // 2.  (num_elements + 1) * offset_size
         let value_bytes = n_offsets
-            .checked_mul(offset_size as usize)
+            .checked_mul(header.offset_size as usize)
             .ok_or_else(overflow)?;
 
         // 3.  first_offset_byte + ...
@@ -510,18 +539,21 @@ impl VariantListHeader {
             .ok_or_else(overflow)?;
 
         // Verify that the last offset array entry is inside the value slice
-        let last_offset_byte = first_offset_byte + n_offsets * offset_size as usize;
+        let last_offset_byte = first_offset_byte + n_offsets * header.offset_size as usize;
         if last_offset_byte > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Last offset array entry at offset {} with length {} is outside the value slice of length {}",
                 last_offset_byte,
-                offset_size as usize,
+                header.offset_size as usize,
                 value.len()
             )));
         }
 
         // Verify that the value of the last offset array entry fits inside the value slice
-        let last_offset = offset_size.unpack_usize(value, first_offset_byte, num_elements)?;
+        let last_offset =
+            header
+                .offset_size
+                .unpack_usize(value, first_offset_byte, num_elements)?;
         if first_value_byte + last_offset > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Last offset value {} at offset {} is outside the value slice of length {}",
@@ -531,72 +563,23 @@ impl VariantListHeader {
             )));
         }
 
-        Ok(Self {
-            offset_size,
-            is_large,
-            num_elements,
-            first_offset_byte,
-            first_value_byte,
-        })
-    }
-
-    /// Returns the number of elements in this list
-    pub(crate) fn num_elements(&self) -> usize {
-        self.num_elements
-    }
-
-    /// Returns the offset size in bytes
-    #[allow(unused)]
-    pub(crate) fn offset_size(&self) -> usize {
-        self.offset_size as _
-    }
-
-    /// Returns whether this is a large list
-    #[allow(unused)]
-    pub(crate) fn is_large(&self) -> bool {
-        self.is_large
-    }
-
-    /// Returns the byte offset where the offset array starts
-    pub(crate) fn first_offset_byte(&self) -> usize {
-        self.first_offset_byte
-    }
-
-    /// Returns the byte offset where the values start
-    pub(crate) fn first_value_byte(&self) -> usize {
-        self.first_value_byte
-    }
-}
-
-/// Represents a variant array.
-///
-/// NOTE: The "list" naming differs from the variant spec -- which calls it "array" -- in order to be
-/// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
-/// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VariantList<'m, 'v> {
-    pub metadata: VariantMetadata<'m>,
-    pub value: &'v [u8],
-    header: VariantListHeader,
-}
-
-impl<'m, 'v> VariantList<'m, 'v> {
-    pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let s = Self {
             metadata,
             value,
-            header: VariantListHeader::try_new(value)?,
+            header,
+            num_elements,
+            first_offset_byte,
+            first_value_byte,
         };
 
-        // Verify that we can iterate safely through the values of this list, so that other callers
-        // can blindly `unwrap` results.
+        // Verify that we can iterate safely, so that other callers can blindly `unwrap` results.
         let _ = s.values_checked().find(Result::is_err).transpose()?;
         Ok(s)
     }
 
     /// Return the length of this array
     pub fn len(&self) -> usize {
-        self.header.num_elements()
+        self.num_elements
     }
 
     /// Is the array of zero length
@@ -605,31 +588,28 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 
     pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        if index >= self.header.num_elements() {
+        if index >= self.num_elements {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for list of length {}",
-                index,
-                self.header.num_elements()
+                index, self.num_elements,
             )));
         }
 
         // Skip header and num_elements bytes to read the offsets
-        let start_field_offset_from_first_value_byte = self.header.offset_size.unpack_usize(
-            self.value,
-            self.header.first_offset_byte(),
-            index,
-        )?;
-        let end_field_offset_from_first_value_byte = self.header.offset_size.unpack_usize(
-            self.value,
-            self.header.first_offset_byte(),
-            index + 1,
-        )?;
+        let start_field_offset_from_first_value_byte =
+            self.header
+                .offset_size
+                .unpack_usize(self.value, self.first_offset_byte, index)?;
+        let end_field_offset_from_first_value_byte =
+            self.header
+                .offset_size
+                .unpack_usize(self.value, self.first_offset_byte, index + 1)?;
 
         // Read the value bytes from the offsets
         let variant_value_bytes = slice_from_slice(
             self.value,
-            self.header.first_value_byte() + start_field_offset_from_first_value_byte
-                ..self.header.first_value_byte() + end_field_offset_from_first_value_byte,
+            self.first_value_byte + start_field_offset_from_first_value_byte
+                ..self.first_value_byte + end_field_offset_from_first_value_byte,
         )?;
         let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)
@@ -713,7 +693,7 @@ impl<'m, 'v> Variant<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        let value_metadata = *first_byte_from_slice(value)?;
+        let value_metadata = first_byte_from_slice(value)?;
         let value_data = slice_from_slice(value, 1..)?;
         let new_self = match get_basic_type(value_metadata)? {
             VariantBasicType::Primitive => match get_primitive_type(value_metadata)? {

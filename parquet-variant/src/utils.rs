@@ -46,9 +46,10 @@ pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
     ArrowError::InvalidArgumentError(e.to_string())
 }
 
-pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<&u8, ArrowError> {
+pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
     slice
         .first()
+        .copied()
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
@@ -74,28 +75,27 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
 /// * `Ok(Ok(index))` - Element found at the given index
 /// * `Ok(Err(index))` - Element not found, but would be inserted at the given index
 /// * `Err(e)` - Key extraction failed with error `e`
-pub(crate) fn try_binary_search_by<T, K, E, F>(
-    slice: &[T],
+pub(crate) fn try_binary_search_range_by<K, E, F>(
+    range: Range<usize>,
     target: &K,
     mut key_extractor: F,
 ) -> Result<Result<usize, usize>, E>
 where
     K: Ord,
-    F: FnMut(&T) -> Result<K, E>,
+    F: FnMut(usize) -> Result<K, E>,
 {
-    let mut left = 0;
-    let mut right = slice.len();
+    let Range { mut start, mut end } = range;
 
-    while left < right {
-        let mid = (left + right) / 2;
-        let key = key_extractor(&slice[mid])?;
+    while start < end {
+        let mid = (start + end) / 2;
+        let key = key_extractor(mid)?;
 
         match key.cmp(target) {
             std::cmp::Ordering::Equal => return Ok(Ok(mid)),
-            std::cmp::Ordering::Greater => right = mid,
-            std::cmp::Ordering::Less => left = mid + 1,
+            std::cmp::Ordering::Greater => end = mid,
+            std::cmp::Ordering::Less => start = mid + 1,
         }
     }
 
-    Ok(Err(left))
+    Ok(Err(start))
 }
