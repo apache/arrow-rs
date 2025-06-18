@@ -293,7 +293,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         self.ensure_capacity();
         let source = self.source.take().ok_or_else(|| {
-            ArrowError::InvalidArgumentError("InProgressByteViewArray: source not set".to_string())
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            )
         })?;
 
         // If creating StringViewArray output, ensure input was valid utf8 too

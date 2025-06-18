@@ -49,7 +49,9 @@ impl InProgressArray for GenericInProgressArray {
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         let source = self.source.as_ref().ok_or_else(|| {
-            ArrowError::InvalidArgumentError("GenericInProgressArray: source not set".to_string())
+            ArrowError::InvalidArgumentError(
+                "Internal Error: GenericInProgressArray: source not set".to_string(),
+            )
         })?;
         let array = source.slice(offset, len);
         self.buffered_arrays.push(array);
