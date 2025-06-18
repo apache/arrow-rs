@@ -103,7 +103,5 @@ where
 pub(crate) fn validate_fallible_iterator<T, E>(
     mut it: impl Iterator<Item = Result<T, E>>,
 ) -> Result<(), E> {
-    // NOTE: It should really be `let None = ...`, but the compiler can't prove that.
-    let _ = it.find(Result::is_err).transpose()?;
-    Ok(())
+    it.find(Result::is_err).transpose().map(|_| ())
 }

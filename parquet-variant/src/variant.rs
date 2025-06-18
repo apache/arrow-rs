@@ -91,6 +91,7 @@ impl OffsetSizeBytes {
     }
 }
 
+/// A parsed version of the variant metadata header byte.
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
@@ -105,6 +106,8 @@ const CORRECT_VERSION_VALUE: u8 = 1;
 
 impl VariantMetadataHeader {
     /// Tries to construct the variant metadata header, which has the form
+    ///
+    /// ```text
     ///              7     6  5   4  3             0
     ///             +-------+---+---+---------------+
     /// header      |       |   |   |    version    |
@@ -112,6 +115,8 @@ impl VariantMetadataHeader {
     ///                 ^         ^
     ///                 |         +-- sorted_strings
     ///                 +-- offset_size_minus_one
+    /// ```
+    ///
     /// The version is a 4-bit value that must always contain the value 1.
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
@@ -151,6 +156,12 @@ impl<'m> VariantMetadata<'m> {
         self.bytes
     }
 
+    /// Attempts to interpret `bytes` as a variant metadata instance.
+    ///
+    /// # Validation
+    ///
+    /// This constructor verifies that `bytes` points to a valid variant metadata instance. In
+    /// particular, all offsets are in-bounds and point to valid utf8 strings.
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(bytes)?;
         let header = VariantMetadataHeader::try_new(header_byte)?;
@@ -176,10 +187,8 @@ impl<'m> VariantMetadata<'m> {
             dictionary_key_start_byte,
         };
 
-        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
-        //
-        // This has the side effect of validating the offset array and proving that the string bytes
-        // are all in bounds.
+        // Iterate over all string keys in this dictionary in order to validate the offset array and
+        // prove that the string bytes are all in bounds. Otherwise, `iter` might panic on `unwrap`.
         validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
@@ -200,6 +209,9 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Gets an offset array entry by index.
+    ///
+    /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
+    /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
     fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
         // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
         let bytes = slice_from_slice(self.bytes, ..self.dictionary_key_start_byte)?;
@@ -213,8 +225,9 @@ impl<'m> VariantMetadata<'m> {
         string_from_slice(dictionary_keys_bytes, byte_range)
     }
 
-    /// Get all key-names as an Iterator of strings
+    /// Get all dictionary entries as an Iterator of strings
     pub fn iter(&self) -> impl Iterator<Item = &'m str> + '_ {
+        // NOTE: It is safe to unwrap because the constructor already made a successful traversal.
         self.iter_checked().map(Result::unwrap)
     }
 
@@ -225,6 +238,7 @@ impl<'m> VariantMetadata<'m> {
     }
 }
 
+/// A parsed version of the variant object value header byte.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantObjectHeader {
     field_offset_size: OffsetSizeBytes,
@@ -260,6 +274,14 @@ pub struct VariantObject<'m, 'v> {
 }
 
 impl<'m, 'v> VariantObject<'m, 'v> {
+    /// Attempts to interpret `value` as a variant object value.
+    ///
+    /// # Validation
+    ///
+    /// This constructor verifies that `value` points to a valid variant object value. In
+    /// particular, that all field ids exist in `metadata`, and all offsets are in-bounds and point
+    /// to valid objects.
+    // TODO: How to make the validation non-recursive while still making iterators safely infallible??
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantObjectHeader::try_new(header_byte)?;
@@ -308,10 +330,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             values_start_byte,
         };
 
-        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
-        //
-        // This has the side effect of validating the field_id and field_offset arrays, and also
-        // proves the field values are all in bounds.
+        // Iterate over all fields of this object in order to validate the field_id and field_offset
+        // arrays, and also to prove the field values are all in bounds. Otherwise, `iter` might
+        // panic on `unwrap`.
         validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
@@ -348,6 +369,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
     pub fn iter(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
+        // NOTE: It is safe to unwrap because the constructor already made a successful traversal.
         self.iter_checked().map(Result::unwrap)
     }
 
@@ -375,6 +397,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 }
 
+/// A parsed version of the variant array value header byte.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantListHeader {
     offset_size: OffsetSizeBytes,
@@ -413,6 +436,13 @@ pub struct VariantList<'m, 'v> {
 }
 
 impl<'m, 'v> VariantList<'m, 'v> {
+    /// Attempts to interpret `value` as a variant array value.
+    ///
+    /// # Validation
+    ///
+    /// This constructor verifies that `value` points to a valid variant array value. In particular,
+    /// that all offsets are in-bounds and point to valid objects.
+    // TODO: How to make the validation non-recursive while still making iterators safely infallible??
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantListHeader::try_new(header_byte)?;
@@ -453,10 +483,8 @@ impl<'m, 'v> VariantList<'m, 'v> {
             first_value_byte,
         };
 
-        // Verify that `iter` can safely `unwrap` the items produced by this iterator.
-        //
-        // This has the side effect of validating the field_offset array, and also proves that the
-        // field values are all in bounds.
+        // Iterate over all values of this array in order to validate the field_offset array and
+        // prove that the field values are all in bounds. Otherwise, `iter` might panic on `unwrap`.
         validate_fallible_iterator(s.iter_checked())?;
         Ok(s)
     }
@@ -497,6 +525,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Iterates over the values of this list
     pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
+        // NOTE: It is safe to unwrap because the constructor already made a successful traversal.
         self.iter_checked().map(Result::unwrap)
     }
 
@@ -1377,10 +1406,10 @@ mod tests {
         assert_eq!(md.get_offset(1).unwrap(), 0x03);
         assert_eq!(md.get_offset(2).unwrap(), 0x06);
 
-        let err = md.get_offset(3);
+        let err = md.get_offset(3).unwrap_err();
         assert!(
-            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected result: {err:?}"
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
         );
 
         let fields: Vec<(usize, &str)> = md.iter().enumerate().collect();
@@ -1408,10 +1437,10 @@ mod tests {
 
         let truncated = &bytes[..bytes.len() - 1];
 
-        let err = VariantMetadata::try_new(truncated);
+        let err = VariantMetadata::try_new(truncated).unwrap_err();
         assert!(
-            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected result: {err:?}"
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -1437,10 +1466,10 @@ mod tests {
             b'b',
         ];
 
-        let err = VariantMetadata::try_new(bytes);
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
         assert!(
-            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected result: {err:?}"
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -1449,10 +1478,10 @@ mod tests {
         // Missing final offset
         let bytes = &[0b0000_0001, 0x02, 0x00, 0x01];
 
-        let err = VariantMetadata::try_new(bytes);
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
         assert!(
-            matches!(err, Err(ArrowError::InvalidArgumentError(_))),
-            "unexpected result: {err:?}"
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
         );
     }
 
