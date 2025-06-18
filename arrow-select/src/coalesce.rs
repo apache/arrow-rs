@@ -21,11 +21,11 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::filter_record_batch;
-use arrow_array::{Array, ArrayRef, RecordBatch, BooleanArray};
+use arrow_array::types::{BinaryViewType, StringViewType};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use arrow_array::types::{BinaryViewType, StringViewType};
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
@@ -220,41 +220,49 @@ impl BatchCoalescer {
     /// let expected_batch = record_batch!(("a", Int32, [1, 2, 3, 4, 5, 6])).unwrap();
     /// assert_eq!(completed_batch, expected_batch);
     /// ```
-    pub fn push_batch(&mut self, mut batch: RecordBatch) -> Result<(), ArrowError> {
-        if batch.num_rows() == 0 {
+    pub fn push_batch(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
+        let (_schema, arrays, mut num_rows) = batch.into_parts();
+        if num_rows == 0 {
             return Ok(());
         }
 
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
-        while batch.num_rows() > (self.batch_size - self.buffered_rows) {
+        let mut offset = 0;
+        while num_rows > (self.batch_size - self.buffered_rows) {
             let remaining_rows = self.batch_size - self.buffered_rows;
             debug_assert!(remaining_rows > 0);
-            let head_batch = batch.slice(0, remaining_rows);
-            batch = batch.slice(remaining_rows, batch.num_rows() - remaining_rows);
-            self.buffered_rows += head_batch.num_rows();
-            self.buffer_batch(head_batch);
+
+            // Copy remaining_rows from each array
+            for (idx, array) in arrays.iter().enumerate() {
+                let array = array.slice(offset, remaining_rows);
+                // TODO move slicing into InProgressArray
+                self.in_progress_arrays[idx].push_array(array);
+            }
+
+            self.buffered_rows += remaining_rows;
+            offset += remaining_rows;
+            num_rows -= remaining_rows;
+
             self.finish_buffered_batch()?;
         }
-        // Add the remaining rows to the buffer
-        self.buffered_rows += batch.num_rows();
-        self.buffer_batch(batch);
+
+        // Add any the remaining rows to the buffer
+        self.buffered_rows += num_rows;
+        if num_rows > 0 {
+            for (idx, array) in arrays.into_iter().enumerate() {
+                // Push the array to the in-progress array
+                let array = array.slice(offset, num_rows);
+                // TODO move slicing into InProgressArray
+                self.in_progress_arrays[idx].push_array(array);
+            }
+        }
 
         // If we have reached the target batch size, finalize the buffered batch
         if self.buffered_rows >= self.batch_size {
             self.finish_buffered_batch()?;
         }
         Ok(())
-    }
-
-    /// Appends the rows in `batch` to the in progress arrays
-    fn buffer_batch(&mut self, batch: RecordBatch) {
-        let (_schema, arrays, row_count) = batch.into_parts();
-        debug_assert!(row_count > 0);
-        for (idx, array) in arrays.into_iter().enumerate() {
-            // Push the array to the in-progress array
-            self.in_progress_arrays[idx].push_array(array);
-        }
     }
 
     /// Concatenates any buffered batches into a single `RecordBatch` and
@@ -275,8 +283,8 @@ impl BatchCoalescer {
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         for (array, field) in new_arrays.iter().zip(self.schema.fields().iter()) {
-            assert_eq!(array.data_type(), field.data_type());
-            assert_eq!(array.len(), self.buffered_rows);
+            debug_assert_eq!(array.data_type(), field.data_type());
+            debug_assert_eq!(array.len(), self.buffered_rows);
         }
 
         // SAFETY: we verified the length and types match above

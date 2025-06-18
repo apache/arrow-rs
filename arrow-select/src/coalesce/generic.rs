@@ -17,7 +17,7 @@
 
 use super::InProgressArray;
 use crate::concat::concat;
-use arrow_array::{Array, ArrayRef};
+use arrow_array::ArrayRef;
 use arrow_schema::ArrowError;
 
 /// Fallback implementation for [`InProgressArray`]
@@ -51,7 +51,7 @@ impl InProgressArray for GenericInProgressArray {
             &self
                 .buffered_arrays
                 .iter()
-                .map(|array| array as &dyn Array)
+                .map(|array| array.as_ref())
                 .collect::<Vec<_>>(),
         )?;
         self.buffered_arrays.clear();
