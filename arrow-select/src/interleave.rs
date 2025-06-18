@@ -18,7 +18,7 @@
 //! Interleave elements from multiple arrays
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -26,7 +26,6 @@ use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, Of
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
 use arrow_schema::{ArrowError, DataType};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -238,32 +237,43 @@ fn interleave_views<T: ByteViewType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteViewArray<T>>::new(values, indices);
-    let mut views_builder = BufferBuilder::new(indices.len());
     let mut buffers = Vec::new();
 
-    // (input array_index, input buffer_index) -> output buffer_index
-    let mut buffer_lookup: HashMap<(usize, u32), u32> = HashMap::new();
-    for (array_idx, value_idx) in indices {
-        let array = interleaved.arrays[*array_idx];
-        let raw_view = array.views().get(*value_idx).unwrap();
-        let view_len = *raw_view as u32;
-        if view_len <= 12 {
-            views_builder.append(*raw_view);
-            continue;
-        }
-        // value is big enough to be in a variadic buffer
-        let view = ByteView::from(*raw_view);
-        let new_buffer_idx: &mut u32 = buffer_lookup
-            .entry((*array_idx, view.buffer_index))
-            .or_insert_with(|| {
-                buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
-                (buffers.len() - 1) as u32
-            });
-        views_builder.append(view.with_buffer_index(*new_buffer_idx).into());
+    // Contains the offsets of start buffer in `buffer_to_new_index`
+    let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
+    offsets.push(0);
+    let mut total_buffers = 0;
+    for a in interleaved.arrays.iter() {
+        total_buffers += a.data_buffers().len();
+        offsets.push(total_buffers);
     }
 
+    // contains the mapping from old buffer index to new buffer index
+    let mut buffer_to_new_index = vec![None; total_buffers];
+
+    let views: Vec<u128> = indices
+        .iter()
+        .map(|(array_idx, value_idx)| {
+            let array = interleaved.arrays[*array_idx];
+            let view = array.views().get(*value_idx).unwrap();
+            let view_len = *view as u32;
+            if view_len <= 12 {
+                return *view;
+            }
+            // value is big enough to be in a variadic buffer
+            let view = ByteView::from(*view);
+            let buffer_to_new_idx = offsets[*array_idx] + view.buffer_index as usize;
+            let new_buffer_idx: u32 =
+                *buffer_to_new_index[buffer_to_new_idx].get_or_insert_with(|| {
+                    buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
+                    (buffers.len() - 1) as u32
+                });
+            view.with_buffer_index(new_buffer_idx).as_u128()
+        })
+        .collect();
+
     let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views_builder.into(), buffers, interleaved.nulls)
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
     };
     Ok(Arc::new(array))
 }

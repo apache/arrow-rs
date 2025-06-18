@@ -158,8 +158,9 @@ pub unsafe fn decode<R: RunEndIndexType>(
 #[cfg(test)]
 mod tests {
     use crate::{RowConverter, SortField};
-    use arrow_array::types::Int32Type;
-    use arrow_array::{Array, Int64Array, RunArray, StringArray};
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int16Type, Int32Type, Int64Type};
+    use arrow_array::{Array, Int64Array, PrimitiveArray, RunArray, StringArray};
     use arrow_schema::{DataType, SortOptions};
     use std::sync::Arc;
 
@@ -173,14 +174,44 @@ mod tests {
     }
 
     #[test]
-    fn test_run_end_encoded_round_trip_int64s() {
+    fn test_run_end_encoded_round_trip_int16_int64s() {
+        // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
+        // doesn't just work with eg. strings (which are all the other tests).
+
+        let values = Int64Array::from(vec![100, 200, 100, 300]);
+        let run_ends = vec![2, 3, 5, 6];
+        let array: RunArray<Int16Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Int64, true)),
+        ))])
+        .unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(array.clone())])
+            .unwrap();
+
+        let arrays = converter.convert_rows(&rows).unwrap();
+        let result = arrays[0]
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+
+        assert_eq!(array.run_ends().values(), result.run_ends().values());
+        assert_eq!(array.values().as_ref(), result.values().as_ref());
+    }
+
+    #[test]
+    fn test_run_end_encoded_round_trip_int32_int64s() {
         // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
         // doesn't just work with eg. strings (which are all the other tests).
 
         let values = Int64Array::from(vec![100, 200, 100, 300]);
         let run_ends = vec![2, 3, 5, 6];
         let array: RunArray<Int32Type> =
-            RunArray::try_new(&arrow_array::PrimitiveArray::from(run_ends), &values).unwrap();
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
 
         let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
             Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
@@ -196,6 +227,36 @@ mod tests {
         let result = arrays[0]
             .as_any()
             .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(array.run_ends().values(), result.run_ends().values());
+        assert_eq!(array.values().as_ref(), result.values().as_ref());
+    }
+
+    #[test]
+    fn test_run_end_encoded_round_trip_int64_int64s() {
+        // Test round-trip correctness for RunEndEncodedArray with Int64 values making sure it
+        // doesn't just work with eg. strings (which are all the other tests).
+
+        let values = Int64Array::from(vec![100, 200, 100, 300]);
+        let run_ends = vec![2, 3, 5, 6];
+        let array: RunArray<Int64Type> =
+            RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Int64, true)),
+        ))])
+        .unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(array.clone())])
+            .unwrap();
+
+        let arrays = converter.convert_rows(&rows).unwrap();
+        let result = arrays[0]
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
             .unwrap();
 
         assert_eq!(array.run_ends().values(), result.run_ends().values());
@@ -691,5 +752,28 @@ mod tests {
             rows2.row(1) < rows3.row(1),
             "banana should come before cherry"
         );
+    }
+
+    #[test]
+    fn test_run_end_encoded_empty() {
+        // Test converting / decoding an empty RunEndEncodedArray
+        let values: Vec<&str> = vec![];
+        let array: RunArray<Int32Type> = values.into_iter().collect();
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
+            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+        ))])
+        .unwrap();
+
+        let rows = converter.convert_columns(&[Arc::new(array)]).unwrap();
+        assert_eq!(rows.num_rows(), 0);
+
+        // Likewise converting empty rows should yield an empty RunEndEncodedArray
+        let arrays = converter.convert_rows(&rows).unwrap();
+        assert_eq!(arrays.len(), 1);
+        // Verify both columns round-trip correctly
+        let result_ree = arrays[0].as_run::<Int32Type>();
+        assert_eq!(result_ree.len(), 0);
     }
 }
