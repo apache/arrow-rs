@@ -27,7 +27,9 @@ use arrow_schema::ArrowError;
 /// [`concat`]: crate::concat::concat
 #[derive(Debug)]
 pub(crate) struct GenericInProgressArray {
-    /// The buffered arrays
+    /// The current source
+    source: Option<ArrayRef>,
+    /// The buffered array slices
     buffered_arrays: Vec<ArrayRef>,
 }
 
@@ -35,13 +37,23 @@ impl GenericInProgressArray {
     /// Create a new `GenericInProgressArray`
     pub(crate) fn new() -> Self {
         Self {
+            source: None,
             buffered_arrays: vec![],
         }
     }
 }
 impl InProgressArray for GenericInProgressArray {
-    fn push_array(&mut self, array: ArrayRef) {
+    fn set_source(&mut self, source: Option<ArrayRef>) {
+        self.source = source
+    }
+
+    fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
+        let source = self.source.as_ref().ok_or_else(|| {
+            ArrowError::InvalidArgumentError("GenericInProgressArray: source not set".to_string())
+        })?;
+        let array = source.slice(offset, len);
         self.buffered_arrays.push(array);
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {

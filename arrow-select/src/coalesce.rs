@@ -226,6 +226,15 @@ impl BatchCoalescer {
             return Ok(());
         }
 
+        // setup input rows
+        assert_eq!(arrays.len(), self.in_progress_arrays.len());
+        self.in_progress_arrays
+            .iter_mut()
+            .zip(arrays)
+            .for_each(|(in_progress, array)| {
+                in_progress.set_source(Some(array));
+            });
+
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
         let mut offset = 0;
@@ -234,10 +243,8 @@ impl BatchCoalescer {
             debug_assert!(remaining_rows > 0);
 
             // Copy remaining_rows from each array
-            for (idx, array) in arrays.iter().enumerate() {
-                let array = array.slice(offset, remaining_rows);
-                // TODO move slicing into InProgressArray
-                self.in_progress_arrays[idx].push_array(array);
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows(offset, remaining_rows)?;
             }
 
             self.buffered_rows += remaining_rows;
@@ -250,11 +257,8 @@ impl BatchCoalescer {
         // Add any the remaining rows to the buffer
         self.buffered_rows += num_rows;
         if num_rows > 0 {
-            for (idx, array) in arrays.into_iter().enumerate() {
-                // Push the array to the in-progress array
-                let array = array.slice(offset, num_rows);
-                // TODO move slicing into InProgressArray
-                self.in_progress_arrays[idx].push_array(array);
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows(offset, num_rows)?;
             }
         }
 
@@ -262,6 +266,12 @@ impl BatchCoalescer {
         if self.buffered_rows >= self.batch_size {
             self.finish_buffered_batch()?;
         }
+
+        // clear in progress sources (to allow the memory to be freed)
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.set_source(None);
+        }
+
         Ok(())
     }
 
@@ -335,10 +345,17 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
 /// [`StringViewArray`]: arrow_array::StringViewArray
 /// [`UInt32Array`]: arrow_array::UInt32Array
 trait InProgressArray: std::fmt::Debug + Send + Sync {
-    /// Push a new array to the in-progress array
-    fn push_array(&mut self, array: ArrayRef);
+    /// Set the source array.
+    ///
+    /// Subsequent calls to "copy" copy rows from this array into the in-progress array
+    fn set_source(&mut self, source: Option<ArrayRef>);
 
-    /// Finish the currently in-progress array and clear state for the next
+    /// copy rows from the source array into the in-progress array
+    ///
+    /// Return an error if the source is not set
+    fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
+
+    /// Finish the currently in-progress array and clear state
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 }
 
@@ -552,7 +569,6 @@ mod tests {
         let array = col_as_string_view("c0", &batch);
         let gc_array = col_as_string_view("c0", output_batches.first().unwrap());
         assert_eq!(array.data_buffers().len(), 5);
-        assert_eq!(gc_array.data_buffers().len(), 1); // compacted into a single buffer
 
         expect_buffer_layout(
             gc_array,
@@ -624,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_string_view_many_small_compact() {
-        // The strings are 37 bytes long, so each batch has 200 * 28 = 5600 bytes
+        // The strings are 28 long, so each batch has 400 * 28 = 5600 bytes
         let batch = stringview_batch_repeated(
             400,
             [Some("This string is 28 bytes long"), Some("small string")],

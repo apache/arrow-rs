@@ -27,6 +27,8 @@ use std::sync::Arc;
 
 /// InProgressArray for StringViewArray and BinaryViewArray
 pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
+    /// The source array
+    source: Option<Source>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
     /// The in progress vies
@@ -42,6 +44,15 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// Phantom so we can use the same struct for both StringViewArray and
     /// BinaryViewArray
     _phantom: PhantomData<B>,
+}
+
+struct Source {
+    /// The array to copy form
+    array: ArrayRef,
+    /// Should the strings from the source array be copied into new buffers?
+    need_gc: bool,
+    /// How many bytes were actually used in the source array's buffers?
+    ideal_buffer_size: usize,
 }
 
 // manually implement Debug because ByteViewType doesn't implement Debug
@@ -63,6 +74,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
         Self {
             batch_size,
+            source: None,
             views: Vec::new(),                         // allocate in push
             nulls: NullBufferBuilder::new(batch_size), // no allocation
             current: None,
@@ -78,15 +90,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
         self.views.reserve(self.batch_size);
-    }
-
-    /// Update self.nulls with the nulls from the StringViewArray
-    fn push_nulls(&mut self, s: &GenericByteViewArray<B>) {
-        if let Some(nulls) = s.nulls().as_ref() {
-            self.nulls.append_buffer(nulls);
-        } else {
-            self.nulls.append_n_non_nulls(s.len());
-        }
     }
 
     /// Finishes in progress block, if any
@@ -263,38 +266,67 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 }
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
-    fn push_array(&mut self, array: ArrayRef) {
-        // If creating StringViewArray output, ensure input was valid utf8 too
+    fn set_source(&mut self, source: Option<ArrayRef>) {
+        self.source = source.map(|array| {
+            let s = array.as_byte_view::<B>();
+
+            let (need_gc, ideal_buffer_size) = if s.data_buffers().is_empty() {
+                (false, 0)
+            } else {
+                let ideal_buffer_size = s.total_buffer_bytes_used();
+                let actual_buffer_size = s.get_buffer_memory_size();
+                // copying strings is expensive, so only do it if the array is
+                // sparse (uses at least 2x the memory it needs)
+                let need_gc =
+                    ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
+                (need_gc, ideal_buffer_size)
+            };
+
+            Source {
+                array,
+                need_gc,
+                ideal_buffer_size,
+            }
+        })
+    }
+
+    fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         self.ensure_capacity();
-        let s = array.as_byte_view::<B>();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError("InProgressByteViewArray: source not set".to_string())
+        })?;
+
+        // If creating StringViewArray output, ensure input was valid utf8 too
+        let s = source.array.as_byte_view::<B>();
 
         // add any nulls, as necessary
-        self.push_nulls(s);
+        if let Some(nulls) = s.nulls().as_ref() {
+            let nulls = nulls.slice(offset, len);
+            self.nulls.append_buffer(&nulls);
+        } else {
+            self.nulls.append_n_non_nulls(len);
+        };
+
+        let buffers = s.data_buffers();
+        let views = &s.views().as_ref()[offset..offset + len];
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
-        if s.data_buffers().is_empty() {
-            self.views.extend_from_slice(s.views().as_ref());
-            return;
-        }
-
-        let ideal_buffer_size = s.total_buffer_bytes_used();
-        let actual_buffer_size = s.get_buffer_memory_size();
-        let buffers = s.data_buffers();
-
-        // None of the views references the buffers (e.g. sliced)
-        if ideal_buffer_size == 0 {
-            self.views.extend_from_slice(s.views().as_ref());
-            return;
+        if source.ideal_buffer_size == 0 {
+            self.views.extend_from_slice(views);
+            self.source = Some(source);
+            return Ok(());
         }
 
         // Copying the strings into a buffer can be time-consuming so
         // only do it if the array is sparse
-        if actual_buffer_size > (ideal_buffer_size * 2) {
-            self.append_views_and_copy_strings(s.views(), ideal_buffer_size, buffers);
+        if source.need_gc {
+            self.append_views_and_copy_strings(views, source.ideal_buffer_size, buffers);
         } else {
-            self.append_views_and_update_buffer_index(s.views(), buffers);
+            self.append_views_and_update_buffer_index(views, buffers);
         }
+        self.source = Some(source);
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
