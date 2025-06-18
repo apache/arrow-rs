@@ -85,11 +85,9 @@ where
     F: FnMut(usize) -> Result<K, E>,
 {
     let Range { mut start, mut end } = range;
-
     while start < end {
         let mid = start + (end - start) / 2;
         let key = key_extractor(mid)?;
-
         match key.cmp(target) {
             std::cmp::Ordering::Equal => return Ok(Ok(mid)),
             std::cmp::Ordering::Greater => end = mid,

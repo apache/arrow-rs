@@ -116,8 +116,8 @@ impl VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
-    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
-        let version = header & 0x0F; // First four bits
+    pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
+        let version = header_byte & 0x0F; // First four bits
         if version != CORRECT_VERSION_VALUE {
             let err_msg = format!(
                 "The version bytes in the header is not {CORRECT_VERSION_VALUE}, got {:b}",
@@ -125,8 +125,8 @@ impl VariantMetadataHeader {
             );
             return Err(ArrowError::InvalidArgumentError(err_msg));
         }
-        let is_sorted = (header & 0x10) != 0; // Fifth bit
-        let offset_size_minus_one = header >> 6; // Last two bits
+        let is_sorted = (header_byte & 0x10) != 0; // Fifth bit
+        let offset_size_minus_one = header_byte >> 6; // Last two bits
         Ok(Self {
             version,
             is_sorted,
@@ -152,8 +152,8 @@ impl<'m> VariantMetadata<'m> {
     }
 
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        let header = first_byte_from_slice(bytes)?;
-        let header = VariantMetadataHeader::try_new(header)?;
+        let header_byte = first_byte_from_slice(bytes)?;
+        let header = VariantMetadataHeader::try_new(header_byte)?;
 
         // Offset 1, index 0 because first element after header is dictionary size
         let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
@@ -168,6 +168,7 @@ impl<'m> VariantMetadata<'m> {
             .and_then(|n| n.checked_mul(header.offset_size as usize))
             .and_then(|n| n.checked_add(1))
             .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
+        println!("dictionary_key_start_byte: {dictionary_key_start_byte}");
         let s = Self {
             bytes,
             header,
@@ -217,7 +218,7 @@ impl<'m> VariantMetadata<'m> {
         self.iter_checked().map(Result::unwrap)
     }
 
-    // Fallible iteration over the fields of this dictionary. The constructor traverse the iterator
+    // Fallible iteration over the fields of this dictionary. The constructor traverses the iterator
     // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn iter_checked(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
         (0..self.dict_size).map(move |i| self.get(i))
@@ -232,9 +233,9 @@ pub(crate) struct VariantObjectHeader {
 }
 
 impl VariantObjectHeader {
-    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         // Parse the header byte to get object parameters
-        let value_header = header >> 2;
+        let value_header = header_byte >> 2;
         let field_offset_size_minus_one = value_header & 0x03; // Last 2 bits
         let field_id_size_minus_one = (value_header >> 2) & 0x03; // Next 2 bits
         let is_large = (value_header & 0x10) != 0; // 5th bit
@@ -260,8 +261,8 @@ pub struct VariantObject<'m, 'v> {
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let header = first_byte_from_slice(value)?;
-        let header = VariantObjectHeader::try_new(header)?;
+        let header_byte = first_byte_from_slice(value)?;
+        let header = VariantObjectHeader::try_new(header_byte)?;
 
         // Determine num_elements size based on is_large flag
         let num_elements_size = if header.is_large {
@@ -381,10 +382,10 @@ pub(crate) struct VariantListHeader {
 }
 
 impl VariantListHeader {
-    pub(crate) fn try_new(header: u8) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         // The 6 first bits to the left are the value_header and the 2 bits
         // to the right are the basic type, so we shift to get only the value_header
-        let value_header = header >> 2;
+        let value_header = header_byte >> 2;
         let is_large = (value_header & 0x04) != 0; // 3rd bit from the right
         let field_offset_size_minus_one = value_header & 0x03; // Last two bits
         let offset_size = OffsetSizeBytes::try_new(field_offset_size_minus_one)?;
@@ -413,8 +414,8 @@ pub struct VariantList<'m, 'v> {
 
 impl<'m, 'v> VariantList<'m, 'v> {
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let header = first_byte_from_slice(value)?;
-        let header = VariantListHeader::try_new(header)?;
+        let header_byte = first_byte_from_slice(value)?;
+        let header = VariantListHeader::try_new(header_byte)?;
 
         // The size of the num_elements entry in the array value_data is 4 bytes if
         // is_large is true, otherwise 1 byte.
@@ -479,20 +480,16 @@ impl<'m, 'v> VariantList<'m, 'v> {
         }
 
         // Skip header and num_elements bytes to read the offsets
-        let start_field_offset_from_first_value_byte =
+        let unpack = |i| {
             self.header
                 .offset_size
-                .unpack_usize(self.value, self.first_offset_byte, index)?;
-        let end_field_offset_from_first_value_byte =
-            self.header
-                .offset_size
-                .unpack_usize(self.value, self.first_offset_byte, index + 1)?;
+                .unpack_usize(self.value, self.first_offset_byte, i)
+        };
 
         // Read the value bytes from the offsets
         let variant_value_bytes = slice_from_slice(
             self.value,
-            self.first_value_byte + start_field_offset_from_first_value_byte
-                ..self.first_value_byte + end_field_offset_from_first_value_byte,
+            self.first_value_byte + unpack(index)?..self.first_value_byte + unpack(index + 1)?,
         )?;
         let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)
@@ -503,8 +500,8 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.iter_checked().map(Result::unwrap)
     }
 
-    // Fallible iteration over the values of this list. The constructor traverses validates the
-    // iterator has no errors, so that all other use sites can blindly `unwrap` the result.
+    // Fallible iteration over the fields of this dictionary. The constructor traverses the iterator
+    // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn iter_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
         (0..self.len()).map(move |i| self.get(i))
     }
