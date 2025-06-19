@@ -17,9 +17,7 @@
 
 //! Example showing how to convert Variant values to JSON
 
-use parquet_variant::{
-    variant_to_json, variant_to_json_string, variant_to_json_value, Variant,
-};
+use parquet_variant::{variant_to_json, variant_to_json_string, variant_to_json_value, Variant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let variants = vec![
@@ -39,12 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: String escaping
     println!("\n🔤 2. String Escaping:");
-    
-    let special_string = Variant::String("Line 1\nLine 2\tTabbed\r\nWith \"quotes\" and \\backslashes");
+
+    let special_string =
+        Variant::String("Line 1\nLine 2\tTabbed\r\nWith \"quotes\" and \\backslashes");
     let escaped_json = variant_to_json_string(&special_string)?;
     println!("   Original: Line 1\\nLine 2\\tTabbed\\r\\nWith \"quotes\" and \\\\backslashes");
     println!("   JSON:     {}", escaped_json);
-    
+
     let unicode_variants = vec![
         Variant::String("Hello 世界 🌍"),
         Variant::String("Emoji: 💻"),
@@ -55,25 +54,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_string = variant_to_json_string(&variant)?;
         println!("   {}", json_string);
     }
-    
+
     let test_variant = Variant::String("Buffer test");
-    
+
     // Write to Vec<u8>
     let mut vec_buffer = Vec::new();
     variant_to_json(&mut vec_buffer, &test_variant)?;
     println!("   Vec<u8> buffer: {}", String::from_utf8(vec_buffer)?);
-    
+
     // Write to String (through write! macro)
     let mut string_buffer = String::new();
     use std::fmt::Write;
     write!(string_buffer, "Prefix: ")?;
-    
+
     // Convert to bytes temporarily to use the Write trait
     let mut temp_buffer = Vec::new();
     variant_to_json(&mut temp_buffer, &test_variant)?;
     string_buffer.push_str(&String::from_utf8(temp_buffer)?);
     println!("   String buffer: {}", string_buffer);
-    
+
     let variants_for_value = vec![
         Variant::Null,
         Variant::BooleanTrue,
@@ -85,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json_value = variant_to_json_value(&variant)?;
         println!("   {:?} -> {:?}", variant, json_value);
     }
-    
+
     let start = std::time::Instant::now();
     for i in 0..1000 {
         let variant = Variant::Int8((i % 128) as i8);
@@ -93,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let duration = start.elapsed();
     println!("   Converted 1000 variants in {:?}", duration);
-    
+
     // This would demonstrate error handling if we had invalid variants
     // For now, all our examples work, so we'll just show the pattern
     match variant_to_json_string(&Variant::String("Valid string")) {
@@ -102,4 +101,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-} 
+}

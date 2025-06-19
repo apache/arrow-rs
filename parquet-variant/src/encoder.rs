@@ -17,4 +17,4 @@
 
 //! Encoder module for converting Variant values to other formats
 
-pub mod variant_to_json; 
+pub mod variant_to_json;

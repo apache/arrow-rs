@@ -38,5 +38,7 @@ mod builder;
 mod utils;
 
 pub use builder::*;
+pub use encoder::variant_to_json::{
+    variant_to_json, variant_to_json_string, variant_to_json_value,
+};
 pub use variant::*;
-pub use encoder::variant_to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
