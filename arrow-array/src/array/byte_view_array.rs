@@ -479,7 +479,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         builder.finish()
     }
 
-    /// Returns the total number of bytes used by all non inlined views in all buffers.
+    /// Returns the total number of bytes used by all non inlined views in all
+    /// buffers.
+    ///
+    /// Note this does not account for views that point at the same underlying
+    /// data in buffers
+    ///
+    /// For example, if the array has three strings views:
+    /// * View with length = 9 (inlined)
+    /// * View with length = 32 (non inlined)
+    /// * View with length = 16 (non inlined)
+    ///
+    /// Then this method would report 48
     pub fn total_buffer_bytes_used(&self) -> usize {
         self.views()
             .iter()

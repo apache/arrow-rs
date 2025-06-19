@@ -42,7 +42,8 @@ use generic::GenericInProgressArray;
 /// [`RecordBatch`]es.
 ///
 /// This is useful after operations such as [`filter`] and [`take`] that produce
-/// smaller batches, and we want to coalesce them into larger
+/// smaller batches, and we want to coalesce them into larger batches for
+/// further processing.
 ///
 /// [`filter`]: crate::filter::filter
 /// [`take`]: crate::take::take
@@ -117,10 +118,6 @@ use generic::GenericInProgressArray;
 ///
 /// 2. The output is a sequence of batches, with all but the last being at exactly
 ///    `target_batch_size` rows.
-///
-/// 3. Eventually this may also be able to handle other optimizations such as a
-///    combined filter/coalesce operation. See <https://github.com/apache/arrow-rs/issues/6692>
-///
 #[derive(Debug)]
 pub struct BatchCoalescer {
     /// The input schema
