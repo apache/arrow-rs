@@ -671,7 +671,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
 /// Represents a Parquet Variant
 ///
-/// The lifetimes `'m` and `'v` are for metadata and value, respectively.
+/// The lifetimes `'m` and `'v` are for metadata and value buffers, respectively.
 ///
 /// # Background
 ///
