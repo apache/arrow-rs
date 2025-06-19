@@ -378,10 +378,8 @@ mod tests {
 
         let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
 
-        // First, we need to copy the existing data
+        mutable.extend_nulls(3);
         mutable.extend(0, 0, 5);
-
-        // Then add nulls
         mutable.extend_nulls(3);
 
         // Verify the run ends were extended correctly
@@ -389,12 +387,34 @@ mod tests {
         let run_ends_buffer = &result.child_data()[0].buffers()[0];
         let run_ends_slice = run_ends_buffer.as_slice();
 
-        // Should have two run ends now: original 5 and new 8 (5 + 3)
-        assert_eq!(result.child_data()[0].len(), 2);
+        // Should have three run ends now
+        assert_eq!(result.child_data()[0].len(), 3);
         let first_run_end = i32::from_ne_bytes(run_ends_slice[0..4].try_into().unwrap());
         let second_run_end = i32::from_ne_bytes(run_ends_slice[4..8].try_into().unwrap());
-        assert_eq!(first_run_end, 5);
+        let third_run_end = i32::from_ne_bytes(run_ends_slice[8..12].try_into().unwrap());
+        assert_eq!(first_run_end, 3);
         assert_eq!(second_run_end, 8);
+        assert_eq!(third_run_end, 11);
+
+        // Verify the values array was extended correctly
+        assert_eq!(result.child_data()[1].len(), 3); // Should match run ends length
+        let values_buffer = &result.child_data()[1].buffers()[0];
+        let values_slice = values_buffer.as_slice();
+
+        // Check the values in the buffer
+        let second_value = i32::from_ne_bytes(values_slice[4..8].try_into().unwrap());
+
+        // Second value should be the original value from the source array
+        assert_eq!(second_value, 42);
+
+        // Verify the validity buffer shows the correct null pattern
+        let values_array = &result.child_data()[1];
+        // First value should be null
+        assert!(values_array.is_null(0));
+        // Second value should be valid
+        assert!(values_array.is_valid(1));
+        // Third value should be null
+        assert!(values_array.is_null(2));
     }
 
     #[test]
