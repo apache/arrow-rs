@@ -397,14 +397,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
     
     pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
-        let len = self.len();
-        let mut values = Vec::new();
-        
-        for i in 0..len {
-            let element = self.get(i)?;
-            values.push(element);
-        }
-        
+        let fields = self.parse_field_list()?;
+        let values: Vec<_> = fields.into_iter().map(|(_, variant)| variant).collect();
         Ok(values.into_iter())
     }
 

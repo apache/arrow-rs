@@ -22,7 +22,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde_json::Value;
 use std::io::Write;
 
-use crate::variant::{Variant, VariantArray, VariantObject};
+use crate::variant::{Variant, VariantList, VariantObject};
 
 /// Converts a Variant to JSON and writes it to the provided buffer
 ///
@@ -126,7 +126,7 @@ pub fn variant_to_json<W: Write>(
         Variant::Object(obj) => {
             convert_object_to_json(json_buffer, obj)?;
         }
-        Variant::Array(arr) => {
+        Variant::List(arr) => {
             convert_array_to_json(json_buffer, arr)?;
         }
     }
@@ -166,7 +166,7 @@ fn convert_object_to_json<W: Write>(
 /// Convert array elements to JSON
 fn convert_array_to_json<W: Write>(
     buffer: &mut W,
-    arr: &VariantArray,
+    arr: &VariantList,
 ) -> Result<(), ArrowError> {
     write!(buffer, "[")?;
     
@@ -298,7 +298,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             
             Ok(Value::Object(map))
         }
-        Variant::Array(arr) => {
+        Variant::List(arr) => {
             let mut vec = Vec::new();
             let len = arr.len();
             
