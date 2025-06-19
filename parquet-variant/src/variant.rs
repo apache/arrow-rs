@@ -395,7 +395,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let field_list = self.parse_field_list()?;
         Ok(field_list.into_iter())
     }
-    
+
     pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
         let fields = self.parse_field_list()?;
         let values: Vec<_> = fields.into_iter().map(|(_, variant)| variant).collect();

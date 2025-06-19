@@ -17,9 +17,9 @@
 
 //! Integration tests for JSON conversion functionality
 
+use chrono::{DateTime, NaiveDate, Utc};
 use parquet_variant::{variant_to_json_string, variant_to_json_value, Variant};
 use serde_json::Value;
-use chrono::{DateTime, NaiveDate, Utc};
 
 #[test]
 fn test_primitive_values_to_json() {
@@ -33,26 +33,47 @@ fn test_primitive_values_to_json() {
     let bool_false = Variant::BooleanFalse;
     assert_eq!(variant_to_json_string(&bool_true).unwrap(), "true");
     assert_eq!(variant_to_json_string(&bool_false).unwrap(), "false");
-    assert_eq!(variant_to_json_value(&bool_true).unwrap(), Value::Bool(true));
-    assert_eq!(variant_to_json_value(&bool_false).unwrap(), Value::Bool(false));
+    assert_eq!(
+        variant_to_json_value(&bool_true).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        variant_to_json_value(&bool_false).unwrap(),
+        Value::Bool(false)
+    );
 
     // Test integers
     let int8_variant = Variant::Int8(42);
     assert_eq!(variant_to_json_string(&int8_variant).unwrap(), "42");
-    assert_eq!(variant_to_json_value(&int8_variant).unwrap(), Value::Number(42.into()));
+    assert_eq!(
+        variant_to_json_value(&int8_variant).unwrap(),
+        Value::Number(42.into())
+    );
 
     let negative_int8 = Variant::Int8(-123);
     assert_eq!(variant_to_json_string(&negative_int8).unwrap(), "-123");
-    assert_eq!(variant_to_json_value(&negative_int8).unwrap(), Value::Number((-123).into()));
+    assert_eq!(
+        variant_to_json_value(&negative_int8).unwrap(),
+        Value::Number((-123).into())
+    );
 
     // Test strings
     let string_variant = Variant::String("hello world");
-    assert_eq!(variant_to_json_string(&string_variant).unwrap(), "\"hello world\"");
-    assert_eq!(variant_to_json_value(&string_variant).unwrap(), Value::String("hello world".to_string()));
+    assert_eq!(
+        variant_to_json_string(&string_variant).unwrap(),
+        "\"hello world\""
+    );
+    assert_eq!(
+        variant_to_json_value(&string_variant).unwrap(),
+        Value::String("hello world".to_string())
+    );
 
     let short_string = Variant::ShortString("test");
     assert_eq!(variant_to_json_string(&short_string).unwrap(), "\"test\"");
-    assert_eq!(variant_to_json_value(&short_string).unwrap(), Value::String("test".to_string()));
+    assert_eq!(
+        variant_to_json_value(&short_string).unwrap(),
+        Value::String("test".to_string())
+    );
 }
 
 #[test]
@@ -60,29 +81,59 @@ fn test_integer_types_to_json() {
     // Test Int16
     let int16_variant = Variant::Int16(32767);
     assert_eq!(variant_to_json_string(&int16_variant).unwrap(), "32767");
-    assert_eq!(variant_to_json_value(&int16_variant).unwrap(), Value::Number(32767.into()));
+    assert_eq!(
+        variant_to_json_value(&int16_variant).unwrap(),
+        Value::Number(32767.into())
+    );
 
     let negative_int16 = Variant::Int16(-32768);
     assert_eq!(variant_to_json_string(&negative_int16).unwrap(), "-32768");
-    assert_eq!(variant_to_json_value(&negative_int16).unwrap(), Value::Number((-32768).into()));
+    assert_eq!(
+        variant_to_json_value(&negative_int16).unwrap(),
+        Value::Number((-32768).into())
+    );
 
     // Test Int32
     let int32_variant = Variant::Int32(2147483647);
-    assert_eq!(variant_to_json_string(&int32_variant).unwrap(), "2147483647");
-    assert_eq!(variant_to_json_value(&int32_variant).unwrap(), Value::Number(2147483647.into()));
+    assert_eq!(
+        variant_to_json_string(&int32_variant).unwrap(),
+        "2147483647"
+    );
+    assert_eq!(
+        variant_to_json_value(&int32_variant).unwrap(),
+        Value::Number(2147483647.into())
+    );
 
     let negative_int32 = Variant::Int32(-2147483648);
-    assert_eq!(variant_to_json_string(&negative_int32).unwrap(), "-2147483648");
-    assert_eq!(variant_to_json_value(&negative_int32).unwrap(), Value::Number((-2147483648).into()));
+    assert_eq!(
+        variant_to_json_string(&negative_int32).unwrap(),
+        "-2147483648"
+    );
+    assert_eq!(
+        variant_to_json_value(&negative_int32).unwrap(),
+        Value::Number((-2147483648).into())
+    );
 
     // Test Int64
     let int64_variant = Variant::Int64(9223372036854775807);
-    assert_eq!(variant_to_json_string(&int64_variant).unwrap(), "9223372036854775807");
-    assert_eq!(variant_to_json_value(&int64_variant).unwrap(), Value::Number(9223372036854775807i64.into()));
+    assert_eq!(
+        variant_to_json_string(&int64_variant).unwrap(),
+        "9223372036854775807"
+    );
+    assert_eq!(
+        variant_to_json_value(&int64_variant).unwrap(),
+        Value::Number(9223372036854775807i64.into())
+    );
 
     let negative_int64 = Variant::Int64(-9223372036854775808);
-    assert_eq!(variant_to_json_string(&negative_int64).unwrap(), "-9223372036854775808");
-    assert_eq!(variant_to_json_value(&negative_int64).unwrap(), Value::Number((-9223372036854775808i64).into()));
+    assert_eq!(
+        variant_to_json_string(&negative_int64).unwrap(),
+        "-9223372036854775808"
+    );
+    assert_eq!(
+        variant_to_json_value(&negative_int64).unwrap(),
+        Value::Number((-9223372036854775808i64).into())
+    );
 }
 
 #[test]
@@ -91,7 +142,7 @@ fn test_floating_point_types_to_json() {
     let float_variant = Variant::Float(3.14159);
     let float_json = variant_to_json_string(&float_variant).unwrap();
     assert!(float_json.starts_with("3.14159"));
-    
+
     let float_value = variant_to_json_value(&float_variant).unwrap();
     assert!(matches!(float_value, Value::Number(_)));
 
@@ -99,7 +150,7 @@ fn test_floating_point_types_to_json() {
     let double_variant = Variant::Double(2.718281828459045);
     let double_json = variant_to_json_string(&double_variant).unwrap();
     assert!(double_json.starts_with("2.718281828459045"));
-    
+
     let double_value = variant_to_json_value(&double_variant).unwrap();
     assert!(matches!(double_value, Value::Number(_)));
 
@@ -114,28 +165,46 @@ fn test_floating_point_types_to_json() {
 #[test]
 fn test_decimal_types_to_json() {
     // Test Decimal4 (i32 with scale)
-    let decimal4_variant = Variant::Decimal4 { integer: 12345, scale: 2 };
+    let decimal4_variant = Variant::Decimal4 {
+        integer: 12345,
+        scale: 2,
+    };
     assert_eq!(variant_to_json_string(&decimal4_variant).unwrap(), "123.45");
-    
+
     let decimal4_value = variant_to_json_value(&decimal4_variant).unwrap();
     assert!(matches!(decimal4_value, Value::Number(_)));
 
     // Test Decimal8 (i64 with scale)
-    let decimal8_variant = Variant::Decimal8 { integer: 1234567890, scale: 3 };
-    assert_eq!(variant_to_json_string(&decimal8_variant).unwrap(), "1234567.89");
-    
+    let decimal8_variant = Variant::Decimal8 {
+        integer: 1234567890,
+        scale: 3,
+    };
+    assert_eq!(
+        variant_to_json_string(&decimal8_variant).unwrap(),
+        "1234567.89"
+    );
+
     let decimal8_value = variant_to_json_value(&decimal8_variant).unwrap();
     assert!(matches!(decimal8_value, Value::Number(_)));
 
     // Test Decimal16 (i128 with scale)
-    let decimal16_variant = Variant::Decimal16 { integer: 123456789012345, scale: 4 };
-    assert_eq!(variant_to_json_string(&decimal16_variant).unwrap(), "12345678901.2345");
-    
+    let decimal16_variant = Variant::Decimal16 {
+        integer: 123456789012345,
+        scale: 4,
+    };
+    assert_eq!(
+        variant_to_json_string(&decimal16_variant).unwrap(),
+        "12345678901.2345"
+    );
+
     let decimal16_value = variant_to_json_value(&decimal16_variant).unwrap();
     assert!(matches!(decimal16_value, Value::Number(_)));
 
     // Test zero scale decimal
-    let no_scale_decimal = Variant::Decimal4 { integer: 42, scale: 0 };
+    let no_scale_decimal = Variant::Decimal4 {
+        integer: 42,
+        scale: 0,
+    };
     assert_eq!(variant_to_json_string(&no_scale_decimal).unwrap(), "42");
 }
 
@@ -144,18 +213,28 @@ fn test_date_and_timestamp_types_to_json() {
     // Test Date
     let date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
     let date_variant = Variant::Date(date);
-    assert_eq!(variant_to_json_string(&date_variant).unwrap(), "\"2023-12-25\"");
-    assert_eq!(variant_to_json_value(&date_variant).unwrap(), Value::String("2023-12-25".to_string()));
+    assert_eq!(
+        variant_to_json_string(&date_variant).unwrap(),
+        "\"2023-12-25\""
+    );
+    assert_eq!(
+        variant_to_json_value(&date_variant).unwrap(),
+        Value::String("2023-12-25".to_string())
+    );
 
     // Test TimestampMicros (UTC)
-    let timestamp_utc = DateTime::parse_from_rfc3339("2023-12-25T10:30:45Z").unwrap().with_timezone(&Utc);
+    let timestamp_utc = DateTime::parse_from_rfc3339("2023-12-25T10:30:45Z")
+        .unwrap()
+        .with_timezone(&Utc);
     let timestamp_variant = Variant::TimestampMicros(timestamp_utc);
     let timestamp_json = variant_to_json_string(&timestamp_variant).unwrap();
     assert!(timestamp_json.contains("2023-12-25T10:30:45"));
     assert!(timestamp_json.starts_with('"') && timestamp_json.ends_with('"'));
 
     // Test TimestampNtzMicros (naive datetime)
-    let naive_timestamp = DateTime::from_timestamp(1703505045, 123456).unwrap().naive_utc();
+    let naive_timestamp = DateTime::from_timestamp(1703505045, 123456)
+        .unwrap()
+        .naive_utc();
     let naive_timestamp_variant = Variant::TimestampNtzMicros(naive_timestamp);
     let naive_json = variant_to_json_string(&naive_timestamp_variant).unwrap();
     assert!(naive_json.contains("2023-12-25"));
@@ -167,14 +246,14 @@ fn test_binary_type_to_json() {
     // Test Binary data (encoded as base64)
     let binary_data = b"Hello, World!";
     let binary_variant = Variant::Binary(binary_data);
-    
+
     let binary_json = variant_to_json_string(&binary_variant).unwrap();
     // Should be base64 encoded and quoted
     assert!(binary_json.starts_with('"') && binary_json.ends_with('"'));
-    
+
     let binary_value = variant_to_json_value(&binary_variant).unwrap();
     assert!(matches!(binary_value, Value::String(_)));
-    
+
     // Test empty binary
     let empty_binary = Variant::Binary(b"");
     let empty_json = variant_to_json_string(&empty_binary).unwrap();
@@ -200,9 +279,18 @@ fn test_comprehensive_roundtrip_compatibility() {
         Variant::Int64(10000000000),
         Variant::Float(3.5), // Use a value that can be represented exactly in f32
         Variant::Double(2.718281828),
-        Variant::Decimal4 { integer: 12345, scale: 2 },
-        Variant::Decimal8 { integer: 1234567890, scale: 3 },
-        Variant::Decimal16 { integer: 123456789012345, scale: 4 },
+        Variant::Decimal4 {
+            integer: 12345,
+            scale: 2,
+        },
+        Variant::Decimal8 {
+            integer: 1234567890,
+            scale: 3,
+        },
+        Variant::Decimal16 {
+            integer: 123456789012345,
+            scale: 4,
+        },
         Variant::Date(NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
         Variant::String("test string"),
         Variant::ShortString("short"),
@@ -211,10 +299,10 @@ fn test_comprehensive_roundtrip_compatibility() {
 
     for variant in test_cases {
         let json_string = variant_to_json_string(&variant).unwrap();
-        
+
         // Ensure the JSON can be parsed back
         let parsed: Value = serde_json::from_str(&json_string).unwrap();
-        
+
         // Ensure our direct Value conversion matches
         let direct_value = variant_to_json_value(&variant).unwrap();
         assert_eq!(parsed, direct_value, "Mismatch for variant: {:?}", variant);
@@ -226,7 +314,10 @@ fn test_string_escaping_edge_cases() {
     // Test various escape sequences
     let escaped_string = Variant::String("line1\nline2\ttab\"quote\"\\backslash");
     let expected_json = "\"line1\\nline2\\ttab\\\"quote\\\"\\\\backslash\"";
-    assert_eq!(variant_to_json_string(&escaped_string).unwrap(), expected_json);
+    assert_eq!(
+        variant_to_json_string(&escaped_string).unwrap(),
+        expected_json
+    );
 
     // Test Unicode characters
     let unicode_string = Variant::String("Hello 世界 🌍");
@@ -253,10 +344,10 @@ fn test_json_roundtrip_compatibility() {
 
     for variant in test_cases {
         let json_string = variant_to_json_string(&variant).unwrap();
-        
+
         // Ensure the JSON can be parsed back
         let parsed: Value = serde_json::from_str(&json_string).unwrap();
-        
+
         // Ensure our direct Value conversion matches
         let direct_value = variant_to_json_value(&variant).unwrap();
         assert_eq!(parsed, direct_value, "Mismatch for variant: {:?}", variant);
@@ -269,29 +360,29 @@ fn test_buffer_writing() {
     use std::io::Write;
 
     let variant = Variant::String("test buffer writing");
-    
+
     // Test writing to a Vec<u8>
     let mut buffer = Vec::new();
     variant_to_json(&mut buffer, &variant).unwrap();
     let result = String::from_utf8(buffer).unwrap();
     assert_eq!(result, "\"test buffer writing\"");
-    
+
     // Test writing to a custom writer
     struct CustomWriter {
         data: Vec<u8>,
     }
-    
+
     impl Write for CustomWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.data.extend_from_slice(buf);
             Ok(buf.len())
         }
-        
+
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-    
+
     let mut custom_writer = CustomWriter { data: Vec::new() };
     variant_to_json(&mut custom_writer, &variant).unwrap();
     let result = String::from_utf8(custom_writer.data).unwrap();
@@ -300,4 +391,4 @@ fn test_buffer_writing() {
 
 // Note: Tests for arrays and objects would require actual Variant data structures
 // to be created, which would need the builder API to be implemented first.
-// These tests demonstrate the primitive functionality that's currently working. 
+// These tests demonstrate the primitive functionality that's currently working.
