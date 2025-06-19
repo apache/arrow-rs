@@ -214,10 +214,9 @@ fn filter_streams(
     while num_output_batches > 0 {
         let filter = filter_stream.next_filter();
         let batch = data_stream.next_batch();
-        // Apply the filter to the input batch
-        let filtered_batch = arrow_select::filter::filter_record_batch(batch, filter).unwrap();
-        // Add the filtered batch to the coalescer
-        coalescer.push_batch(filtered_batch).unwrap();
+        coalescer
+            .push_batch_with_filter(batch.clone(), filter)
+            .unwrap();
         // consume (but discard) the output batch
         if coalescer.next_completed_batch().is_some() {
             num_output_batches -= 1;

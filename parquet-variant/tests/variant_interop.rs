@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use parquet_variant::Variant;
+use parquet_variant::{Variant, VariantBuilder};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -137,7 +137,7 @@ fn variant_object_primitive() {
             Variant::ShortString("2025-04-16T12:34:56.78"),
         ),
     ];
-    let actual_fields: Vec<_> = variant_object.fields().unwrap().collect();
+    let actual_fields: Vec<_> = variant_object.iter().collect();
     assert_eq!(actual_fields, expected_fields);
 }
 #[test]
@@ -163,7 +163,7 @@ fn variant_array_primitive() {
         Variant::Int8(5),
         Variant::Int8(9),
     ];
-    let actual: Vec<_> = list.values().unwrap().collect();
+    let actual: Vec<_> = list.iter().collect();
     assert_eq!(actual, expected);
 
     // Call `get` for each individual element
@@ -171,6 +171,51 @@ fn variant_array_primitive() {
         let got = list.get(i).unwrap();
         assert_eq!(&got, expected_value);
     }
+}
+
+#[test]
+fn variant_array_builder() {
+    let mut builder = VariantBuilder::new();
+
+    let mut arr = builder.new_list();
+    arr.append_value(2i8);
+    arr.append_value(1i8);
+    arr.append_value(5i8);
+    arr.append_value(9i8);
+    arr.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
+    let case = Case::load("array_primitive");
+    let expected = case.variant();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn variant_object_builder() {
+    let mut builder = VariantBuilder::new();
+
+    let mut obj = builder.new_object();
+    obj.append_value("int_field", 1i8);
+
+    // The double field is actually encoded as decimal4 with scale 8
+    // Value: 123456789, Scale: 8 -> 1.23456789
+    obj.append_value("double_field", (123456789i32, 8u8));
+    obj.append_value("boolean_true_field", true);
+    obj.append_value("boolean_false_field", false);
+    obj.append_value("string_field", "Apache Parquet");
+    obj.append_value("null_field", ());
+    obj.append_value("timestamp_field", "2025-04-16T12:34:56.78");
+
+    obj.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
+    let case = Case::load("object_primitive");
+    let expected = case.variant();
+
+    assert_eq!(actual, expected);
 }
 
 // TODO: Add tests for object_nested and array_nested
