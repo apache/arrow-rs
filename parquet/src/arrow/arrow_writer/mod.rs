@@ -320,14 +320,21 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Returns a reference to the underlying writer.
+    ///
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
     pub fn inner(&self) -> &W {
         self.writer.inner()
     }
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer, doing so
-    /// will likely result in a corrupt parquet file
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
     pub fn inner_mut(&mut self) -> &mut W {
         self.writer.inner_mut()
     }
