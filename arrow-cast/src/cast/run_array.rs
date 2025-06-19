@@ -7,23 +7,46 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
 ) -> Result<ArrayRef, ArrowError> {
     match array.data_type() {
         DataType::RunEndEncoded(_run_end_field, _values_field) => {
-            let run_array = array.as_any().downcast_ref::<RunArray<K>>().unwrap();
+            let run_array = array
+                .as_any()
+                .downcast_ref::<RunArray<K>>()
+                .ok_or_else(|| ArrowError::CastError("Expected RunArray".to_string()))?;
 
             let values = run_array.values();
 
-            // Cast the values to the target type
-            let cast_values = cast_with_options(values, to_type, cast_options)?;
+            match to_type {
+                // CASE 1: Stay as RunEndEncoded, cast only the values
+                DataType::RunEndEncoded(_target_run_end_field, target_value_field) => {
+                    let cast_values =
+                        cast_with_options(values, target_value_field.data_type(), cast_options)?;
 
-            // Create a PrimitiveArray from the run_ends buffer
-            let run_ends_buffer = run_array.run_ends();
-            let run_ends_array =
-                PrimitiveArray::<K>::from_iter_values(run_ends_buffer.values().iter().copied());
+                    let run_ends_array = PrimitiveArray::<K>::from_iter_values(
+                        run_array.run_ends().values().iter().copied(),
+                    );
 
-            // Create new RunArray with the same run_ends but cast values
-            let new_run_array = RunArray::<K>::try_new(&run_ends_array, cast_values.as_ref())?;
+                    let new_run_array =
+                        RunArray::<K>::try_new(&run_ends_array, cast_values.as_ref())?;
+                    Ok(Arc::new(new_run_array))
+                }
 
-            Ok(Arc::new(new_run_array))
+                // CASE 2: Expand to logical form
+                _ => {
+                    let total_len = run_array.len();
+                    let indices = Int32Array::from_iter_values(
+                        (0..total_len).map(|i| run_array.get_physical_index(i) as i32),
+                    );
+
+                    let taken = take(values.as_ref(), &indices, None)?;
+
+                    if taken.data_type() != to_type {
+                        cast_with_options(taken.as_ref(), to_type, cast_options)
+                    } else {
+                        Ok(taken)
+                    }
+                }
+            }
         }
+
         _ => Err(ArrowError::CastError(format!(
             "Cannot cast array of type {:?} to RunEndEncodedArray",
             array.data_type()
@@ -76,12 +99,6 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
         )?));
     }
 
-    // Step 3: Use a simpler approach - use existing Arrow builders for run-length encoding
-    // This is a more robust implementation that handles all data types correctly
-
-    // For now, we'll use a basic approach that works with the existing builder infrastructure
-    // In a production implementation, you'd want to use type-specific comparison logic
-
     // Create a temporary builder to construct the run array
     // We'll iterate through and build runs by comparing adjacent elements
     let mut run_ends_vec = Vec::new();
@@ -132,226 +149,4 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     // Step 7: Create and return the RunArray
     let run_array = RunArray::<K>::try_new(&run_ends_array, values_array.as_ref())?;
     Ok(Arc::new(run_array))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow_array::*;
-    use arrow_schema::DataType;
-    use std::sync::Arc;
-
-    /// Test casting FROM RunEndEncoded to other types
-    #[test]
-    fn test_run_end_encoded_to_primitive() {
-        // Create a RunEndEncoded array: [1, 1, 2, 2, 2, 3]
-        let run_ends = Int32Array::from(vec![2, 5, 6]);
-        let values = Int32Array::from(vec![1, 2, 3]);
-        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        let array_ref = Arc::new(run_array) as ArrayRef;
-
-        // Cast to Int64
-        let cast_result = run_end_encoded_cast::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Int64,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is a RunArray with Int64 values
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check that values were cast to Int64
-        assert_eq!(result_run_array.values().data_type(), &DataType::Int64);
-
-        // Check that run structure is preserved
-        assert_eq!(result_run_array.run_ends().values(), &[2, 5, 6]);
-
-        // Check that values are correct
-        let values_array = result_run_array.values().as_primitive::<Int64Type>();
-        assert_eq!(values_array.values(), &[1i64, 2i64, 3i64]);
-    }
-
-    #[test]
-    fn test_run_end_encoded_to_string() {
-        // Create a RunEndEncoded array with Int32 values: [10, 10, 20, 30, 30]
-        let run_ends = Int32Array::from(vec![2, 3, 5]);
-        let values = Int32Array::from(vec![10, 20, 30]);
-        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        let array_ref = Arc::new(run_array) as ArrayRef;
-
-        // Cast to String
-        let cast_result = run_end_encoded_cast::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Utf8,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is a RunArray with String values
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check that values were cast to String
-        assert_eq!(result_run_array.values().data_type(), &DataType::Utf8);
-
-        // Check that run structure is preserved
-        assert_eq!(result_run_array.run_ends().values(), &[2, 3, 5]);
-
-        // Check that values are correct
-        let values_array = result_run_array.values().as_string::<i32>();
-        assert_eq!(values_array.value(0), "10");
-        assert_eq!(values_array.value(1), "20");
-        assert_eq!(values_array.value(2), "30");
-    }
-
-    /// Test casting TO RunEndEncoded from other types
-    #[test]
-    fn test_primitive_to_run_end_encoded() {
-        // Create an Int32 array with repeated values: [1, 1, 2, 2, 2, 3]
-        let source_array = Int32Array::from(vec![1, 1, 2, 2, 2, 3]);
-        let array_ref = Arc::new(source_array) as ArrayRef;
-
-        // Cast to RunEndEncoded<Int32, Int32>
-        let cast_result = cast_to_run_end_encoded::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Int32,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is a RunArray
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check run structure: runs should end at positions [2, 5, 6]
-        assert_eq!(result_run_array.run_ends().values(), &[2, 5, 6]);
-
-        // Check values: should be [1, 2, 3]
-        let values_array = result_run_array.values().as_primitive::<Int32Type>();
-        assert_eq!(values_array.values(), &[1, 2, 3]);
-    }
-
-    #[test]
-    fn test_string_to_run_end_encoded() {
-        // Create a String array with repeated values: ["a", "a", "b", "c", "c"]
-        let source_array = StringArray::from(vec!["a", "a", "b", "c", "c"]);
-        let array_ref = Arc::new(source_array) as ArrayRef;
-
-        // Cast to RunEndEncoded<Int32, String>
-        let cast_result = cast_to_run_end_encoded::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Utf8,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is a RunArray
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check run structure: runs should end at positions [2, 3, 5]
-        assert_eq!(result_run_array.run_ends().values(), &[2, 3, 5]);
-
-        // Check values: should be ["a", "b", "c"]
-        let values_array = result_run_array.values().as_string::<i32>();
-        assert_eq!(values_array.value(0), "a");
-        assert_eq!(values_array.value(1), "b");
-        assert_eq!(values_array.value(2), "c");
-    }
-
-    #[test]
-    fn test_cast_with_type_conversion() {
-        // Create an Int32 array: [1, 1, 2, 2, 3]
-        let source_array = Int32Array::from(vec![1, 1, 2, 2, 3]);
-        let array_ref = Arc::new(source_array) as ArrayRef;
-
-        // Cast to RunEndEncoded<Int32, String> (values get converted to strings)
-        let cast_result = cast_to_run_end_encoded::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Utf8,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is a RunArray with String values
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check that values were converted to strings
-        assert_eq!(result_run_array.values().data_type(), &DataType::Utf8);
-
-        // Check run structure: runs should end at positions [2, 4, 5]
-        assert_eq!(result_run_array.run_ends().values(), &[2, 4, 5]);
-
-        // Check values: should be ["1", "2", "3"]
-        let values_array = result_run_array.values().as_string::<i32>();
-        assert_eq!(values_array.value(0), "1");
-        assert_eq!(values_array.value(1), "2");
-        assert_eq!(values_array.value(2), "3");
-    }
-
-    #[test]
-    fn test_empty_array_to_run_end_encoded() {
-        // Create an empty Int32 array
-        let source_array = Int32Array::from(Vec::<i32>::new());
-        let array_ref = Arc::new(source_array) as ArrayRef;
-
-        // Cast to RunEndEncoded<Int32, Int32>
-        let cast_result = cast_to_run_end_encoded::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Int32,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result is an empty RunArray
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check that both run_ends and values are empty
-        assert_eq!(result_run_array.run_ends().len(), 0);
-        assert_eq!(result_run_array.values().len(), 0);
-    }
-
-    #[test]
-    fn test_run_end_encoded_with_nulls() {
-        // Create a RunEndEncoded array with nulls: [1, 1, null, 2, 2]
-        let run_ends = Int32Array::from(vec![2, 3, 5]);
-        let values = Int32Array::from(vec![Some(1), None, Some(2)]);
-        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        let array_ref = Arc::new(run_array) as ArrayRef;
-
-        // Cast to String
-        let cast_result = run_end_encoded_cast::<Int32Type>(
-            array_ref.as_ref(),
-            &DataType::Utf8,
-            &CastOptions::default(),
-        )
-        .unwrap();
-
-        // Verify the result preserves nulls
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        let values_array = result_run_array.values().as_string::<i32>();
-        assert_eq!(values_array.value(0), "1");
-        assert!(values_array.is_null(1));
-        assert_eq!(values_array.value(2), "2");
-    }
 }

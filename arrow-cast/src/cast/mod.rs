@@ -10726,25 +10726,16 @@ mod tests {
             let values = Int32Array::from(vec![1, 2, 3]);
             let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
             let array_ref = Arc::new(run_array) as ArrayRef;
-
+            println!("1");
             // Cast to Int64
             let cast_result = cast(&array_ref, &DataType::Int64).unwrap();
-
+            println!("2");
             // Verify the result is a RunArray with Int64 values
             let result_run_array = cast_result
                 .as_any()
-                .downcast_ref::<RunArray<Int32Type>>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
-
-            // Check that values were cast to Int64
-            assert_eq!(result_run_array.values().data_type(), &DataType::Int64);
-
-            // Check that run structure is preserved
-            assert_eq!(result_run_array.run_ends().values(), &[2, 5, 6]);
-
-            // Check that values are correct
-            let values_array = result_run_array.values().as_primitive::<Int64Type>();
-            assert_eq!(values_array.values(), &[1i64, 2i64, 3i64]);
+            assert_eq!(result_run_array.values(), &[1i64, 1i64, 2i64, 2i64, 2i64, 3i64]);
         }
 
         /// Test casting FROM RunEndEncoded to string
@@ -10760,22 +10751,14 @@ mod tests {
             let cast_result = cast(&array_ref, &DataType::Utf8).unwrap();
 
             // Verify the result is a RunArray with String values
-            let result_run_array = cast_result
+            let result_array = cast_result
                 .as_any()
-                .downcast_ref::<RunArray<Int32Type>>()
+                .downcast_ref::<StringArray>()
                 .unwrap();
-
-            // Check that values were cast to String
-            assert_eq!(result_run_array.values().data_type(), &DataType::Utf8);
-
-            // Check that run structure is preserved
-            assert_eq!(result_run_array.run_ends().values(), &[2, 3, 5]);
-
             // Check that values are correct
-            let values_array = result_run_array.values().as_string::<i32>();
-            assert_eq!(values_array.value(0), "10");
-            assert_eq!(values_array.value(1), "20");
-            assert_eq!(values_array.value(2), "30");
+            assert_eq!(result_array.value(0), "10");
+            assert_eq!(result_array.value(1), "10");
+            assert_eq!(result_array.value(2), "20");
         }
 
         /// Test casting TO RunEndEncoded from primitive types
@@ -10909,13 +10892,11 @@ mod tests {
             // Verify the result preserves nulls
             let result_run_array = cast_result
                 .as_any()
-                .downcast_ref::<RunArray<Int32Type>>()
+                .downcast_ref::<StringArray>()
                 .unwrap();
-
-            let values_array = result_run_array.values().as_string::<i32>();
-            assert_eq!(values_array.value(0), "1");
-            assert!(values_array.is_null(1));
-            assert_eq!(values_array.value(2), "2");
+            assert_eq!(result_run_array.value(0), "1");
+            assert!(result_run_array.is_null(2));
+            assert_eq!(result_run_array.value(4), "2");
         }
 
         /// Test different index types (Int16, Int64)
