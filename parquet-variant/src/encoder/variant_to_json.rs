@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_float_to_json() -> Result<(), ArrowError> {
-        let variant = Variant::Float(3.14159);
+        let variant = Variant::Float(std::f32::consts::PI);
         let json = variant_to_json_string(&variant)?;
         assert!(json.starts_with("3.14159"));
 
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_double_to_json() -> Result<(), ArrowError> {
-        let variant = Variant::Double(2.718281828459045);
+        let variant = Variant::Double(std::f64::consts::E);
         let json = variant_to_json_string(&variant)?;
         assert!(json.starts_with("2.718281828459045"));
 
@@ -852,7 +852,7 @@ mod tests {
             list.append_value(42i32);
             list.append_value(true);
             list.append_value(()); // null
-            list.append_value(3.14f64);
+            list.append_value(std::f64::consts::PI);
             list.finish();
         }
 
@@ -921,7 +921,7 @@ mod tests {
             list.append_value("string_value");
             list.append_value(42i32);
             list.append_value(true);
-            list.append_value(3.14f64);
+            list.append_value(std::f64::consts::PI);
             list.append_value(false);
             list.append_value(()); // null
             list.append_value(100i64);
