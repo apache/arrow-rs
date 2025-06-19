@@ -143,7 +143,9 @@ impl VariantMetadataHeader {
 
 /// [`Variant`] Metadata
 ///
-/// see the Variant spec file for more information
+/// See the [Variant Spec] file for more information
+///
+/// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
@@ -265,6 +267,7 @@ impl VariantObjectHeader {
     }
 }
 
+/// A Variant Object (struct with named fields).
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
@@ -285,6 +288,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// particular, that all field ids exist in `metadata`, and all offsets are in-bounds and point
     /// to valid objects.
     // TODO: How to make the validation non-recursive while still making iterators safely infallible??
+    // See https://github.com/apache/arrow-rs/issues/7711
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantObjectHeader::try_new(header_byte)?;
