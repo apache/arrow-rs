@@ -18,6 +18,7 @@
 use super::{ArrayData, Extend, _MutableArrayData};
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_schema::DataType;
+use num::CheckedAdd;
 
 /// Generic helper to get the last run end value from a run ends array
 fn get_last_run_end<T: ArrowNativeType>(run_ends_data: &super::MutableArrayData) -> T {
@@ -59,7 +60,9 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
     macro_rules! extend_nulls_impl {
         ($run_end_type:ty) => {{
             let last_run_end = get_last_run_end::<$run_end_type>(&mutable.child_data[0]);
-            let new_value = last_run_end + <$run_end_type as ArrowNativeType>::usize_as(len);
+            let new_value = last_run_end
+                .checked_add(<$run_end_type as ArrowNativeType>::usize_as(len))
+                .expect("run end overflow");
             mutable.child_data[0]
                 .data
                 .buffer1
@@ -82,7 +85,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
 }
 
 /// Build run ends bytes and values range directly for batch processing
-fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T>>(
+fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedAdd>(
     buffer: &Buffer,
     length: usize,
     start: usize,
@@ -109,7 +112,9 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T>>(
                 } else {
                     run_end - prev_end
                 };
-                current_run_end = current_run_end + T::usize_as(end_offset - start_offset);
+                current_run_end = current_run_end
+                    .checked_add(&T::usize_as(end_offset - start_offset))
+                    .expect("run end overflow");
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Start the range
@@ -119,7 +124,9 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T>>(
                     values_range = Some((values_range.unwrap().0, i + 1));
                 }
             } else if prev_end >= start && run_end <= end {
-                current_run_end = current_run_end + T::usize_as(run_end - prev_end);
+                current_run_end = current_run_end
+                    .checked_add(&T::usize_as(run_end - prev_end))
+                    .expect("run end overflow");
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range
@@ -129,7 +136,9 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T>>(
                     values_range = Some((values_range.unwrap().0, i + 1));
                 }
             } else if prev_end < end && run_end >= end {
-                current_run_end = current_run_end + T::usize_as(end - prev_end);
+                current_run_end = current_run_end
+                    .checked_add(&T::usize_as(end - prev_end))
+                    .expect("run end overflow");
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range and break
@@ -576,5 +585,75 @@ mod tests {
         // Should have 2 runs since we have 2 different values
         assert_eq!(result.child_data()[0].len(), 2);
         assert_eq!(result.child_data()[1].len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "run end overflow")]
+    fn test_extend_nulls_overflow_i16() {
+        let values = create_int32_array_data(vec![42]);
+        // Start with run end close to max to set up overflow condition
+        let ree_array = create_run_array_data_int16(vec![5], values);
+        let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
+
+        // Extend the original data first to initialize state
+        mutable.extend(0, 0, 5_usize);
+
+        // This should cause overflow: i16::MAX + 5 > i16::MAX
+        mutable.extend_nulls(i16::MAX as usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "run end overflow")]
+    fn test_extend_nulls_overflow_i32() {
+        let values = create_int32_array_data(vec![42]);
+        // Start with run end close to max to set up overflow condition
+        let ree_array = create_run_array_data(vec![10], values);
+        let mut mutable = MutableArrayData::new(vec![&ree_array], true, 10);
+
+        // Extend the original data first to initialize state
+        mutable.extend(0, 0, 10_usize);
+
+        // This should cause overflow: (i32::MAX - 10) + 20 > i32::MAX
+        mutable.extend_nulls(i32::MAX as usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "run end overflow")]
+    fn test_build_extend_overflow_i16() {
+        // Create a source array with small run that will cause overflow when added
+        let values = create_int32_array_data(vec![10]);
+        let source_array = create_run_array_data_int16(vec![20], values);
+
+        // Create a destination array with run end close to max
+        let dest_values = create_int32_array_data(vec![42]);
+        let dest_array = create_run_array_data_int16(vec![i16::MAX - 5], dest_values);
+
+        let mut mutable = MutableArrayData::new(vec![&source_array, &dest_array], false, 10);
+
+        // First extend the destination array to set up state
+        mutable.extend(1, 0, (i16::MAX - 5) as usize);
+
+        // This should cause overflow: (i16::MAX - 5) + 20 > i16::MAX
+        mutable.extend(0, 0, 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "run end overflow")]
+    fn test_build_extend_overflow_i32() {
+        // Create a source array with small run that will cause overflow when added
+        let values = create_int32_array_data(vec![10]);
+        let source_array = create_run_array_data(vec![100], values);
+
+        // Create a destination array with run end close to max
+        let dest_values = create_int32_array_data(vec![42]);
+        let dest_array = create_run_array_data(vec![i32::MAX - 50], dest_values);
+
+        let mut mutable = MutableArrayData::new(vec![&source_array, &dest_array], false, 10);
+
+        // First extend the destination array to set up state
+        mutable.extend(1, 0, (i32::MAX - 50) as usize);
+
+        // This should cause overflow: (i32::MAX - 50) + 100 > i32::MAX
+        mutable.extend(0, 0, 100);
     }
 }
