@@ -395,7 +395,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Writes the given buf bytes to the internal buffer.
-    pub fn write_all(&mut self, buf :&[u8]) -> std::io::Result<()> {
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.buf.write_all(buf)
     }
 
