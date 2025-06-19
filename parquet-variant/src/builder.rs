@@ -113,11 +113,11 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 ///   panic!("unexpected variant type")
 /// };
 /// assert_eq!(
-///   variant_object.field("first_name").unwrap(),
+///   variant_object.field_by_name("first_name").unwrap(),
 ///   Some(Variant::ShortString("Jiaying"))
 /// );
 /// assert_eq!(
-///   variant_object.field("last_name").unwrap(),
+///   variant_object.field_by_name("last_name").unwrap(),
 ///   Some(Variant::ShortString("Li"))
 /// );
 /// ```

@@ -46,9 +46,10 @@ pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
     ArrowError::InvalidArgumentError(e.to_string())
 }
 
-pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<&u8, ArrowError> {
+pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
     slice
         .first()
+        .copied()
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
@@ -58,14 +59,14 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
-/// Performs a binary search on a slice using a fallible key extraction function.
+/// Performs a binary search over a range using a fallible key extraction function; a failed key
+/// extraction immediately terminats the search.
 ///
-/// This is similar to the standard library's `binary_search_by`, but allows the key
-/// extraction function to fail. If key extraction fails during the search, that error
-/// is propagated immediately.
+/// This is similar to the standard library's `binary_search_by`, but generalized to ranges instead
+/// of slices.
 ///
 /// # Arguments
-/// * `slice` - The slice to search in
+/// * `range` - The range to search in
 /// * `target` - The target value to search for
 /// * `key_extractor` - A function that extracts a comparable key from slice elements.
 ///   This function can fail and return an error.
@@ -74,28 +75,33 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
 /// * `Ok(Ok(index))` - Element found at the given index
 /// * `Ok(Err(index))` - Element not found, but would be inserted at the given index
 /// * `Err(e)` - Key extraction failed with error `e`
-pub(crate) fn try_binary_search_by<T, K, E, F>(
-    slice: &[T],
+pub(crate) fn try_binary_search_range_by<K, E, F>(
+    range: Range<usize>,
     target: &K,
     mut key_extractor: F,
 ) -> Result<Result<usize, usize>, E>
 where
     K: Ord,
-    F: FnMut(&T) -> Result<K, E>,
+    F: FnMut(usize) -> Result<K, E>,
 {
-    let mut left = 0;
-    let mut right = slice.len();
-
-    while left < right {
-        let mid = (left + right) / 2;
-        let key = key_extractor(&slice[mid])?;
-
+    let Range { mut start, mut end } = range;
+    while start < end {
+        let mid = start + (end - start) / 2;
+        let key = key_extractor(mid)?;
         match key.cmp(target) {
             std::cmp::Ordering::Equal => return Ok(Ok(mid)),
-            std::cmp::Ordering::Greater => right = mid,
-            std::cmp::Ordering::Less => left = mid + 1,
+            std::cmp::Ordering::Greater => end = mid,
+            std::cmp::Ordering::Less => start = mid + 1,
         }
     }
 
-    Ok(Err(left))
+    Ok(Err(start))
+}
+
+/// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
+/// element and returning the first error (if any).
+pub(crate) fn validate_fallible_iterator<T, E>(
+    mut it: impl Iterator<Item = Result<T, E>>,
+) -> Result<(), E> {
+    it.find(Result::is_err).transpose().map(|_| ())
 }
