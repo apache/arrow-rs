@@ -414,6 +414,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Ok(field_list.into_iter())
     }
 
+    pub fn values(&self) -> Result<impl Iterator<Item = Variant<'m, 'v>>, ArrowError> {
+        let fields = self.parse_field_list()?;
+        let values: Vec<_> = fields.into_iter().map(|(_, variant)| variant).collect();
+        Ok(values.into_iter())
+    }
+
     pub fn field(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
@@ -1330,6 +1336,14 @@ impl From<(i32, u8)> for Variant<'_, '_> {
         }
     }
 }
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
+        }
+    }
+}
 
 impl From<(i64, u8)> for Variant<'_, '_> {
     fn from(value: (i64, u8)) -> Self {
@@ -1358,16 +1372,6 @@ impl From<f32> for Variant<'_, '_> {
 impl From<f64> for Variant<'_, '_> {
     fn from(value: f64) -> Self {
         Variant::Double(value)
-    }
-}
-
-impl From<bool> for Variant<'_, '_> {
-    fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
-        }
     }
 }
 
