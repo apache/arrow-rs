@@ -649,4 +649,294 @@ mod tests {
         
         Ok(())
     }
+
+    #[test]
+    fn test_simple_object_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        // Create a simple object with various field types
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut obj = builder.new_object();
+            obj.append_value("name", "Alice");
+            obj.append_value("age", 30i32);
+            obj.append_value("active", true);
+            obj.append_value("score", 95.5f64);
+            obj.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        // Parse the JSON to verify structure - handle JSON parsing errors manually
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        if let Value::Object(obj) = parsed {
+            assert_eq!(obj.get("name"), Some(&Value::String("Alice".to_string())));
+            assert_eq!(obj.get("age"), Some(&Value::Number(30.into())));
+            assert_eq!(obj.get("active"), Some(&Value::Bool(true)));
+            assert!(matches!(obj.get("score"), Some(Value::Number(_))));
+            assert_eq!(obj.len(), 4);
+        } else {
+            panic!("Expected JSON object");
+        }
+        
+        // Test variant_to_json_value as well
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::Object(_)));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_object_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let obj = builder.new_object();
+            obj.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "{}");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::Object(serde_json::Map::new()));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_with_special_characters_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut obj = builder.new_object();
+            obj.append_value("message", "Hello \"World\"\nWith\tTabs");
+            obj.append_value("path", "C:\\Users\\Alice\\Documents");
+            obj.append_value("unicode", "😀 Smiley");
+            obj.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        // Verify that special characters are properly escaped
+        assert!(json.contains("Hello \\\"World\\\"\\nWith\\tTabs"));
+        assert!(json.contains("C:\\\\Users\\\\Alice\\\\Documents"));
+        assert!(json.contains("😀 Smiley"));
+        
+        // Verify that the JSON can be parsed back
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        assert!(matches!(parsed, Value::Object(_)));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_list_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut list = builder.new_list();
+            list.append_value(1i32);
+            list.append_value(2i32);
+            list.append_value(3i32);
+            list.append_value(4i32);
+            list.append_value(5i32);
+            list.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "[1,2,3,4,5]");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        if let Value::Array(arr) = json_value {
+            assert_eq!(arr.len(), 5);
+            assert_eq!(arr[0], Value::Number(1.into()));
+            assert_eq!(arr[4], Value::Number(5.into()));
+        } else {
+            panic!("Expected JSON array");
+        }
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_list_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let list = builder.new_list();
+            list.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "[]");
+        
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(json_value, Value::Array(vec![]));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_mixed_type_list_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut list = builder.new_list();
+            list.append_value("hello");
+            list.append_value(42i32);
+            list.append_value(true);
+            list.append_value(());  // null
+            list.append_value(3.14f64);
+            list.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        if let Value::Array(arr) = parsed {
+            assert_eq!(arr.len(), 5);
+            assert_eq!(arr[0], Value::String("hello".to_string()));
+            assert_eq!(arr[1], Value::Number(42.into()));
+            assert_eq!(arr[2], Value::Bool(true));
+            assert_eq!(arr[3], Value::Null);
+            assert!(matches!(arr[4], Value::Number(_)));
+        } else {
+            panic!("Expected JSON array");
+        }
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_field_ordering_in_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut obj = builder.new_object();
+            // Add fields in non-alphabetical order
+            obj.append_value("zebra", "last");
+            obj.append_value("alpha", "first");
+            obj.append_value("beta", "second");
+            obj.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        // Parse and verify all fields are present
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        if let Value::Object(obj) = parsed {
+            assert_eq!(obj.len(), 3);
+            assert_eq!(obj.get("alpha"), Some(&Value::String("first".to_string())));
+            assert_eq!(obj.get("beta"), Some(&Value::String("second".to_string())));
+            assert_eq!(obj.get("zebra"), Some(&Value::String("last".to_string())));
+        } else {
+            panic!("Expected JSON object");
+        }
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut list = builder.new_list();
+            list.append_value("string_value");
+            list.append_value(42i32);
+            list.append_value(true);
+            list.append_value(3.14f64);
+            list.append_value(false);
+            list.append_value(());  // null
+            list.append_value(100i64);
+            list.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        if let Value::Array(arr) = parsed {
+            assert_eq!(arr.len(), 7);
+            assert_eq!(arr[0], Value::String("string_value".to_string()));
+            assert_eq!(arr[1], Value::Number(42.into()));
+            assert_eq!(arr[2], Value::Bool(true));
+            assert!(matches!(arr[3], Value::Number(_))); // float
+            assert_eq!(arr[4], Value::Bool(false));
+            assert_eq!(arr[5], Value::Null);
+            assert_eq!(arr[6], Value::Number(100.into()));
+        } else {
+            panic!("Expected JSON array");
+        }
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
+        use crate::builder::VariantBuilder;
+        
+        let mut builder = VariantBuilder::new();
+        
+        {
+            let mut obj = builder.new_object();
+            obj.append_value("string_field", "test_string");
+            obj.append_value("int_field", 123i32);
+            obj.append_value("bool_field", true);
+            obj.append_value("float_field", 2.71f64);
+            obj.append_value("null_field", ());
+            obj.append_value("long_field", 999i64);
+            obj.finish();
+        }
+        
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        let json = variant_to_json_string(&variant)?;
+        
+        let parsed: Value = serde_json::from_str(&json).map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
+        if let Value::Object(obj) = parsed {
+            assert_eq!(obj.len(), 6);
+            assert_eq!(obj.get("string_field"), Some(&Value::String("test_string".to_string())));
+            assert_eq!(obj.get("int_field"), Some(&Value::Number(123.into())));
+            assert_eq!(obj.get("bool_field"), Some(&Value::Bool(true)));
+            assert!(matches!(obj.get("float_field"), Some(Value::Number(_))));
+            assert_eq!(obj.get("null_field"), Some(&Value::Null));
+            assert_eq!(obj.get("long_field"), Some(&Value::Number(999.into())));
+        } else {
+            panic!("Expected JSON object");
+        }
+        
+        Ok(())
+    }
 } 
