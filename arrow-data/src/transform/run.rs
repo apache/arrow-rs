@@ -118,11 +118,7 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Start the range
-                if values_range.is_none() {
-                    values_range = Some((i, i + 1));
-                } else {
-                    values_range = Some((values_range.unwrap().0, i + 1));
-                }
+                values_range = Some((i, i + 1));
             } else if prev_end >= start && run_end <= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(run_end - prev_end))
@@ -130,11 +126,10 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range
-                if values_range.is_none() {
-                    values_range = Some((i, i + 1));
-                } else {
-                    values_range = Some((values_range.unwrap().0, i + 1));
-                }
+                values_range = Some((values_range.expect("Unreachable: values_range cannot be None when prev_end >= start && run_end <= end. \
+                           If prev_end >= start and run_end > prev_end (required for valid runs), then run_end > start, \
+                           which means the first condition (prev_end <= start && run_end > start) would have been true \
+                           and already set values_range to Some.").0, i + 1));
             } else if prev_end < end && run_end >= end {
                 current_run_end = current_run_end
                     .checked_add(&T::usize_as(end - prev_end))
@@ -142,11 +137,12 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
                 run_ends_bytes.extend_from_slice(current_run_end.to_byte_slice());
 
                 // Extend the range and break
-                if values_range.is_none() {
-                    values_range = Some((i, i + 1));
-                } else {
-                    values_range = Some((values_range.unwrap().0, i + 1));
-                }
+                values_range = Some((values_range.expect("Unreachable: values_range cannot be None when prev_end < end && run_end >= end. \
+                           Due to sequential processing and monotonic prev_end advancement, if we reach a run \
+                           that spans beyond the slice end (run_end >= end), at least one previous condition \
+                           must have matched first to set values_range. Either the first condition matched when \
+                           the slice started (prev_end <= start && run_end > start), or the second condition \
+                           matched for runs within the slice (prev_end >= start && run_end <= end).").0, i + 1));
                 break;
             }
 
