@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// also handles "garbage collection" by copying strings to a new buffer when
 /// the source buffer is sparse (i.e. uses at least 2x more than the memory it
 /// needs).
-/// 
+///
 /// [`StringViewArray`]: arrow_array::StringViewArray
 /// [`BinaryViewArray`]: arrow_array::BinaryViewArray
 pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
