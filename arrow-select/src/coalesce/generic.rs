@@ -20,9 +20,11 @@ use crate::concat::concat;
 use arrow_array::ArrayRef;
 use arrow_schema::ArrowError;
 
-/// Fallback implementation for [`InProgressArray`]
+/// Generic implementation for [`InProgressArray`] that works with any type of
+/// array.
 ///
-/// Internally, buffers arrays and calls [`concat`]
+/// Internally, this buffers arrays and then calls other kernels such as
+/// [`concat`] to produce the final array.
 ///
 /// [`concat`]: crate::concat::concat
 #[derive(Debug)]

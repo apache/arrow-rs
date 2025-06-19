@@ -294,7 +294,7 @@ impl BatchCoalescer {
             debug_assert_eq!(array.len(), self.buffered_rows);
         }
 
-        // SAFETY: we verified the length and types match above
+        // SAFETY: each array was created of the correct type and length.
         let batch = unsafe {
             RecordBatch::new_unchecked(Arc::clone(&self.schema), new_arrays, self.buffered_rows)
         };
@@ -331,28 +331,30 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
     }
 }
 
-/// Incrementally builds in progress arrays
+/// Incrementally builds up arrays
 ///
-/// There are different specialized implementations of this trait for different
-/// array types (e.g., [`StringViewArray`], [`UInt32Array`], etc.).
+/// [`GenericInProgressArray`] is the default implementation that buffers
+/// arrays and uses other kernels concatenates them when finished.
 ///
-/// This is a subset of the ArrayBuilder APIs, but specialized for
-/// the incremental usecase
+/// Some types have specialized implementations for this array types (e.g.,
+/// [`StringViewArray`], etc.).
 ///
 /// [`StringViewArray`]: arrow_array::StringViewArray
-/// [`UInt32Array`]: arrow_array::UInt32Array
 trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Set the source array.
     ///
-    /// Subsequent calls to "copy" copy rows from this array into the in-progress array
+    /// Calls to [`Self::copy_rows`] will copy rows from this array into the
+    /// current in-progress array
     fn set_source(&mut self, source: Option<ArrayRef>);
 
-    /// copy rows from the source array into the in-progress array
+    /// Copy rows from the current source array into the in-progress array
     ///
-    /// Return an error if the source is not set
+    /// The source array is set by [`Self::set_source`].
+    ///
+    /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
-    /// Finish the currently in-progress array and clear state
+    /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 }
 

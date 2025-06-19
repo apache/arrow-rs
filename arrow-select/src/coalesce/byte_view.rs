@@ -25,13 +25,18 @@ use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// InProgressArray for StringViewArray and BinaryViewArray
+/// InProgressArray for [`StringViewArray`] and [`BinaryViewArray`]
+///
+/// This structure buffers the views and data buffers as they are copied from
+/// the source array, and then produces a new array when `finish` is called. It also
+/// handles "garbage collection" by copying strings to a new buffer when the source
+/// buffer is sparse (i.e. uses at least 2x more than the memory it needs).
 pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
-    /// The source array
+    /// The source array and information
     source: Option<Source>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
-    /// The in progress vies
+    /// The in progress views
     views: Vec<u128>,
     /// In progress nulls
     nulls: NullBufferBuilder,
@@ -39,7 +44,7 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     current: Option<Vec<u8>>,
     /// completed buffers
     completed: Vec<Buffer>,
-    /// Where to get the next buffer
+    /// Allocates new buffers of increasing size as needed
     buffer_source: BufferSource,
     /// Phantom so we can use the same struct for both StringViewArray and
     /// BinaryViewArray
@@ -86,13 +91,13 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
     /// Allocate space for output views and nulls if needed
     ///
-    /// This is done when on write (when we know it is necessary) rather than
+    /// This is done on write (when we know it is necessary) rather than
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
         self.views.reserve(self.batch_size);
     }
 
-    /// Finishes in progress block, if any
+    /// Finishes in progress buffer, if any
     fn finish_current(&mut self) {
         let Some(next_buffer) = self.current.take() else {
             return;
@@ -128,11 +133,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     }
 
     /// Append views to self.views, copying data from the buffers into
-    /// self.buffers
+    /// self.buffers and updating the buffer index as necessary.
     ///
     /// # Arguments
     /// - `views` - the views to append
-    /// - `view_buffer_size` - the total number of bytes pointed to by the views
+    /// - `view_buffer_size` - the total number of bytes pointed to by all
+    ///   views (used to allocate new buffers if needed)
     /// - `buffers` - the buffers the reviews point to
     #[inline(never)]
     fn append_views_and_copy_strings(
@@ -164,7 +170,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         // hold all the strings. Copy as many views as we can into the current
         // buffer and then allocate a new buffer for the remaining views
         //
-        // TODO: maybe we can copy the strings too at the same time?
+        // TODO: should we copy the strings too at the same time?
         let mut num_view_to_current = 0;
         for view in views {
             let b = ByteView::from(*view);
@@ -350,7 +356,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 const STARTING_BLOCK_SIZE: usize = 4 * 1024; // (note the first size used is actually 8KiB)
 const MAX_BLOCK_SIZE: usize = 1024 * 1024; // 1MiB
 
-/// Manages allocating new buffers for `StringViewArray`
+/// Manages allocating new buffers for `StringViewArray` in increasing sizes
 #[derive(Debug)]
 struct BufferSource {
     current_size: usize,
