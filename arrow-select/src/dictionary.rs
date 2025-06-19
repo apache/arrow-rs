@@ -17,7 +17,6 @@
 
 //! Dictionary utilities for Arrow arrays
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::filter::filter;
@@ -33,7 +32,7 @@ use arrow_array::{
     downcast_dictionary_array, AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp,
     BooleanArray, DictionaryArray, GenericByteArray, PrimitiveArray,
 };
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, ScalarBuffer, ToByteSlice};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 
 /// Garbage collects a [DictionaryArray] by removing unreferenced values.
@@ -43,47 +42,31 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
     let keys = dictionary.keys();
     let values = dictionary.values();
 
-    let mut mask_builder =
-        BooleanBufferBuilder::new_from_buffer(MutableBuffer::new_null(values.len()), values.len());
-
-    for key in keys {
-        if let Some(key) = key {
-            mask_builder.set_bit(key.as_usize(), true);
-        }
-    }
-
-    let mask = mask_builder.finish();
+    let mask = dictionary.occupancy();
 
     // If no work to do, return the original dictionary
     if mask.count_set_bits() == values.len() {
         return Ok(dictionary.clone());
     }
 
-    // Remap the keys to new indices based on the set bits in the mask
-    let key_remap: HashMap<usize, usize> = mask
-        .set_indices()
-        .enumerate()
-        .map(|(new, old)| (old, new))
-        .collect();
+    // Create a mapping from the old keys to the new keys, use a Vec for easy indexing
+    let mut key_remap = vec![K::Native::ZERO; values.len()];
+    for (new_idx, old_idx) in mask.set_indices().enumerate() {
+        key_remap[old_idx] = K::Native::from_usize(new_idx)
+            .expect("new index should fit in K::Native, as old index was in range");
+    }
 
-    let new_keys = keys
-        .iter()
-        .map(|key| {
-            key.map_or(<K::Native as ArrowNativeTypeOp>::ZERO, |k| {
-                K::Native::from_usize(
-                    key_remap
-                        .get(&k.as_usize())
-                        .copied()
-                        .expect("key should be in remap"),
-                )
-                .expect("key remap should always be in range of K")
-            })
-        })
-        .collect::<ScalarBuffer<K::Native>>();
+    // ... and then build the new keys array
+    let new_keys = keys.unary(|key| {
+        key_remap
+            .get(key.as_usize())
+            .copied()
+            // nulls may be present in the keys, and they will have arbitrary value; we don't care
+            // and can safely return zero
+            .unwrap_or(K::Native::ZERO)
+    });
 
-    let new_keys = PrimitiveArray::new(new_keys, keys.nulls().cloned());
-
-    // Create a new values array with the masked values
+    // Create a new values array by filtering using the mask
     let values = filter(dictionary.values(), &BooleanArray::new(mask, None))?;
 
     Ok(DictionaryArray::new(new_keys, values))
