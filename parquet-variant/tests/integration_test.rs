@@ -139,7 +139,7 @@ fn test_integer_types_to_json() {
 #[test]
 fn test_floating_point_types_to_json() {
     // Test Float (f32)
-    let float_variant = Variant::Float(3.14159);
+    let float_variant = Variant::Float(std::f32::consts::PI);
     let float_json = variant_to_json_string(&float_variant).unwrap();
     assert!(float_json.starts_with("3.14159"));
 
@@ -147,7 +147,7 @@ fn test_floating_point_types_to_json() {
     assert!(matches!(float_value, Value::Number(_)));
 
     // Test Double (f64)
-    let double_variant = Variant::Double(2.718281828459045);
+    let double_variant = Variant::Double(std::f64::consts::E);
     let double_json = variant_to_json_string(&double_variant).unwrap();
     assert!(double_json.starts_with("2.718281828459045"));
 
@@ -278,7 +278,7 @@ fn test_comprehensive_roundtrip_compatibility() {
         Variant::Int32(100000),
         Variant::Int64(10000000000),
         Variant::Float(3.5), // Use a value that can be represented exactly in f32
-        Variant::Double(2.718281828),
+        Variant::Double(std::f64::consts::E),
         Variant::Decimal4 {
             integer: 12345,
             scale: 2,
