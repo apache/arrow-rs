@@ -267,7 +267,7 @@ impl VariantObjectHeader {
     }
 }
 
-/// A Variant Object (struct with named fields).
+/// A [`Variant`] Object (struct with named fields).
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
@@ -427,10 +427,10 @@ impl VariantListHeader {
     }
 }
 
-/// Represents a variant array.
+/// [`Variant`] Array.
 ///
 /// NOTE: The "list" naming differs from the variant spec -- which calls it "array" -- in order to be
-/// consistent with parquet and arrow type naming. Otherwise, the name would conflict with the
+/// consistent with Parquet and Arrow type naming. Otherwise, the name would conflict with the
 /// `VariantArray : Array` we must eventually define for variant-typed arrow arrays.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VariantList<'m, 'v> {
@@ -450,6 +450,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// This constructor verifies that `value` points to a valid variant array value. In particular,
     /// that all offsets are in-bounds and point to valid objects.
     // TODO: How to make the validation non-recursive while still making iterators safely infallible??
+    // See https://github.com/apache/arrow-rs/issues/7711
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantListHeader::try_new(header_byte)?;
@@ -543,7 +544,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 }
 
-/// Represents a Parquet Variant
+/// Represents a [Parquet Variant]
 ///
 /// The lifetimes `'m` and `'v` are for metadata and value buffers, respectively.
 ///
@@ -591,6 +592,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 /// 2. Safety
 /// 3. Follow standard Rust conventions
 ///
+/// [Parquet Variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 /// [specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 /// [Variant Shredding specification]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md
 ///
