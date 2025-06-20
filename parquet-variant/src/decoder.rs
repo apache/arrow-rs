@@ -98,7 +98,9 @@ impl TryFrom<u8> for VariantPrimitiveType {
     }
 }
 
-/// The number of bytes used to store offsets in the `VariantMetadataHeader`
+/// Used to unpack offset array entries such as metadata dictionary offsets or object/array value
+/// offsets. Also used to unpack object field ids. These are always derived from a two-bit
+/// `XXX_size_minus_one` field in the corresponding header byte.
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub(crate) enum OffsetSizeBytes {
     One = 1,
