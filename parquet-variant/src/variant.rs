@@ -14,9 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-pub(crate) use self::list::VariantList;
-pub(crate) use self::metadata::VariantMetadata;
-pub(crate) use self::object::VariantObject;
+pub use self::list::VariantList;
+pub use self::metadata::VariantMetadata;
+pub use self::object::VariantObject;
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
