@@ -328,13 +328,6 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Returns a reference to the underlying writer.
-    ///
-    /// **Warning**: if you write directly to this writer, you will skip
-    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
-    /// the file footer’s recorded offsets and sizes to diverge from reality,
-    /// resulting in an unreadable or corrupted Parquet file.
-    ///
-    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner(&self) -> &W {
         self.writer.inner()
     }

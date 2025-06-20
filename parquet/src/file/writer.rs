@@ -390,13 +390,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Returns a reference to the underlying writer.
-    ///
-    /// **Warning**: if you write directly to this writer, you will skip
-    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
-    /// the file footer’s recorded offsets and sizes to diverge from reality,
-    /// resulting in an unreadable or corrupted Parquet file.
-    ///
-    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner(&self) -> &W {
         self.buf.inner()
     }
@@ -404,7 +397,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Writes the given buf bytes to the internal buffer.
     ///
     /// This can be used to write raw data to an in-progress parquet file, for
-    /// example custom index structures or other payloads. Other parquet readers
+    ///  example, custom index structures or other payloads. Other parquet readers
     /// will skip this data when reading the files.
     ///
     /// It's safe to use this method to write data to the underlying writer,
