@@ -98,7 +98,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
     }
 }
 
-/// The number of bytes used to store offsets in the [`VariantMetadataHeader`]
+/// The number of bytes used to store offsets in the `VariantMetadataHeader`
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub(crate) enum OffsetSizeBytes {
     One = 1,
