@@ -29,6 +29,37 @@ mod list;
 mod metadata;
 mod object;
 
+const MAX_SHORT_STRING_SIZE: usize = 0x3F;
+
+/// A Variant [`ShortString`]
+///
+/// This implementation is a zero cost wrapper over `&str` that ensures
+/// the length of the underlying string is a valid Variant short string (63 bytes or less)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShortString<'a>(pub(crate) &'a str);
+
+impl<'a> ShortString<'a> {
+    /// Attempts to interpret `value` as a variant short string value.  
+    ///
+    /// # Validation
+    ///
+    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_SIZE`
+    pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
+        if value.len() > MAX_SHORT_STRING_SIZE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "value is larger than {MAX_SHORT_STRING_SIZE} bytes"
+            )));
+        }
+
+        Ok(Self(value))
+    }
+
+    /// Returns the underlying Variant short string as a &str
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
 /// Represents a [Parquet Variant]
 ///
 /// The lifetimes `'m` and `'v` are for metadata and value buffers, respectively.
@@ -85,7 +116,7 @@ mod object;
 ///
 /// ## Creating `Variant` from Rust Types
 /// ```
-/// # use parquet_variant::Variant;
+/// use parquet_variant::{Variant};
 /// // variants can be directly constructed
 /// let variant = Variant::Int32(123);
 /// // or constructed via `From` impls
@@ -98,7 +129,7 @@ mod object;
 /// let value = [0x09, 0x48, 0x49];
 /// // parse the header metadata
 /// assert_eq!(
-///   Variant::ShortString("HI"),
+///   Variant::from("HI"),
 ///   Variant::try_new(&metadata, &value).unwrap()
 /// );
 /// ```
@@ -152,7 +183,7 @@ pub enum Variant<'m, 'v> {
     /// Primitive (type_id=1): STRING
     String(&'v str),
     /// Short String (type_id=2): STRING
-    ShortString(&'v str),
+    ShortString(ShortString<'v>),
     // need both metadata & value
     /// Object (type_id=3): N/A
     Object(VariantObject<'m, 'v>),
@@ -165,12 +196,12 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// # Example
     /// ```
-    /// # use parquet_variant::{Variant, VariantMetadata};
+    /// # use parquet_variant::{Variant, VariantMetadata, ShortString};
     /// let metadata = [0x01, 0x00, 0x00];
     /// let value = [0x09, 0x48, 0x49];
     /// // parse the header metadata
     /// assert_eq!(
-    ///   Variant::ShortString("HI"),
+    ///   Variant::from("HI"),
     ///   Variant::try_new(&metadata, &value).unwrap()
     /// );
     /// ```
@@ -189,7 +220,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// // parse the header metadata first
     /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
     /// assert_eq!(
-    ///   Variant::ShortString("HI"),
+    ///   Variant::from("HI"),
     ///   Variant::try_new_with_metadata(metadata, &value).unwrap()
     /// );
     /// ```
@@ -428,11 +459,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::Variant;
+    /// use parquet_variant::{Variant};
     ///
     /// // you can extract a string from string variants
     /// let s = "hello!";
-    /// let v1 = Variant::ShortString(s);
+    /// let v1 = Variant::from(s);
     /// assert_eq!(v1.as_string(), Some(s));
     ///
     /// // but not from other variants
@@ -441,7 +472,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_string(&'v self) -> Option<&'v str> {
         match self {
-            Variant::String(s) | Variant::ShortString(s) => Some(s),
+            Variant::String(s) | Variant::ShortString(ShortString(s)) => Some(s),
             _ => None,
         }
     }
@@ -861,10 +892,25 @@ impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
 
 impl<'v> From<&'v str> for Variant<'_, 'v> {
     fn from(value: &'v str) -> Self {
-        if value.len() < 64 {
-            Variant::ShortString(value)
-        } else {
+        if value.len() > MAX_SHORT_STRING_SIZE {
             Variant::String(value)
+        } else {
+            Variant::ShortString(ShortString(value))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_construct_short_string() {
+        let short_string = ShortString::try_new("norm").expect("should fit in short string");
+        assert_eq!(short_string.as_str(), "norm");
+
+        let long_string = "a".repeat(MAX_SHORT_STRING_SIZE + 1);
+        let res = ShortString::try_new(&long_string);
+        assert!(res.is_err());
     }
 }

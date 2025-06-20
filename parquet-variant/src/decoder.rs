@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::utils::{array_from_slice, slice_from_slice, string_from_slice};
+use crate::ShortString;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
@@ -273,10 +274,10 @@ pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
 }
 
 /// Decodes a short string from the value section of a variant.
-pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<&str, ArrowError> {
+pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortString, ArrowError> {
     let len = (metadata >> 2) as usize;
     let string = string_from_slice(data, 0..len)?;
-    Ok(string)
+    ShortString::try_new(string)
 }
 
 #[cfg(test)]
@@ -420,7 +421,7 @@ mod tests {
     fn test_short_string() -> Result<(), ArrowError> {
         let data = [b'H', b'e', b'l', b'l', b'o', b'o'];
         let result = decode_short_string(1 | 5 << 2, &data)?;
-        assert_eq!(result, "Hello");
+        assert_eq!(result.0, "Hello");
         Ok(())
     }
 
