@@ -25,58 +25,56 @@
 
 **Implemented enhancements:**
 
-- \[Epic\] Improved Support for RunArray [\#7690](https://github.com/apache/arrow-rs/issues/7690) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- `interleave_views` is really slow [\#7688](https://github.com/apache/arrow-rs/issues/7688)
-- Add min max aggregates for FixedSizeBinary [\#7674](https://github.com/apache/arrow-rs/issues/7674)
-- Offering pyarrow as a standalone crate [\#7668](https://github.com/apache/arrow-rs/issues/7668)
-- \[Variant\] Implement `VariantObject::field` and `VariantObject::fields` [\#7665](https://github.com/apache/arrow-rs/issues/7665)
-- \[Variant\] Implement read support for remaining primitive types [\#7630](https://github.com/apache/arrow-rs/issues/7630)
-- Fast and ergonomic method to add metadata to a `RecordBatch` [\#7628](https://github.com/apache/arrow-rs/issues/7628)
-- Add efficient way to change the keys of string dictionary builder [\#7610](https://github.com/apache/arrow-rs/issues/7610)
-- Support `add_nulls` on additional builder types [\#7605](https://github.com/apache/arrow-rs/issues/7605)
-- Add `into_inner` for `AsyncArrowWriter` [\#7603](https://github.com/apache/arrow-rs/issues/7603)
+- `interleave_views` is really slow [\#7688](https://github.com/apache/arrow-rs/issues/7688) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add min max aggregates for FixedSizeBinary [\#7674](https://github.com/apache/arrow-rs/issues/7674) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Deliver pyarrow as a standalone crate [\#7668](https://github.com/apache/arrow-rs/issues/7668) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] Implement `VariantObject::field` and `VariantObject::fields` [\#7665](https://github.com/apache/arrow-rs/issues/7665) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] Implement read support for remaining primitive types [\#7630](https://github.com/apache/arrow-rs/issues/7630) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Fast and ergonomic method to add metadata to a `RecordBatch` [\#7628](https://github.com/apache/arrow-rs/issues/7628) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add efficient way to change the keys of string dictionary builder [\#7610](https://github.com/apache/arrow-rs/issues/7610) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support `add_nulls` on additional builder types [\#7605](https://github.com/apache/arrow-rs/issues/7605) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `into_inner` for `AsyncArrowWriter` [\#7603](https://github.com/apache/arrow-rs/issues/7603) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Optimize `PrimitiveBuilder::append_trusted_len_iter` [\#7591](https://github.com/apache/arrow-rs/issues/7591) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Benchmark for filter+concat and take+concat into even sized record batches [\#7589](https://github.com/apache/arrow-rs/issues/7589)
-- Feature Request: Encoding in `parquet-rewrite` [\#7575](https://github.com/apache/arrow-rs/issues/7575)
-- Add a `strong_count` method to `Buffer` [\#7568](https://github.com/apache/arrow-rs/issues/7568)
-- Use PR title and description for commit message [\#7562](https://github.com/apache/arrow-rs/issues/7562)
-- Integration test: Use apache/arrow-{go,java,js} [\#7560](https://github.com/apache/arrow-rs/issues/7560)
-- Create version of LexicographicalComparator that compares fixed number of columns [\#7531](https://github.com/apache/arrow-rs/issues/7531)
+- Benchmark for filter+concat and take+concat into even sized record batches [\#7589](https://github.com/apache/arrow-rs/issues/7589) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `max_statistics_truncate_length` is ignored when writing statistics to data page headers [\#7579](https://github.com/apache/arrow-rs/issues/7579) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Feature Request: Encoding in `parquet-rewrite` [\#7575](https://github.com/apache/arrow-rs/issues/7575) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add a `strong_count` method to `Buffer` [\#7568](https://github.com/apache/arrow-rs/issues/7568) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Create version of LexicographicalComparator that compares fixed number of columns [\#7531](https://github.com/apache/arrow-rs/issues/7531) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet-show-bloom-filter should work with integer typed columns [\#7528](https://github.com/apache/arrow-rs/issues/7528) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Allow merging primitive dictionary values in concat and interleave kernels [\#7518](https://github.com/apache/arrow-rs/issues/7518)
-- Add efficient concatenation of StructArrays [\#7516](https://github.com/apache/arrow-rs/issues/7516)
-- Rename `flight-sql-experimental` to `flight-sql` [\#7498](https://github.com/apache/arrow-rs/issues/7498)
+- Allow merging primitive dictionary values in concat and interleave kernels [\#7518](https://github.com/apache/arrow-rs/issues/7518) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add efficient concatenation of StructArrays [\#7516](https://github.com/apache/arrow-rs/issues/7516) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Rename `flight-sql-experimental` to `flight-sql` [\#7498](https://github.com/apache/arrow-rs/issues/7498) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - Consider moving from ryu to lexical-core for string formatting / casting floats to string. [\#7496](https://github.com/apache/arrow-rs/issues/7496)
 - Arithmetic kernels can be safer and faster [\#7494](https://github.com/apache/arrow-rs/issues/7494) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Speedup `filter_bytes` by precalculating capacity [\#7465](https://github.com/apache/arrow-rs/issues/7465)
-- Variant: Rust API to Create Variant Values [\#7424](https://github.com/apache/arrow-rs/issues/7424)
-- Variant: Rust API to Read Variant Values [\#7423](https://github.com/apache/arrow-rs/issues/7423)
-- Release arrow-rs / parquet Minor version `55.1.0` \(May 2025\) [\#7393](https://github.com/apache/arrow-rs/issues/7393)
-- Support create\_random\_array for Decimal data types [\#7343](https://github.com/apache/arrow-rs/issues/7343)
+- Speedup `filter_bytes` by precalculating capacity [\#7465](https://github.com/apache/arrow-rs/issues/7465) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\]: Rust API to Create Variant Values [\#7424](https://github.com/apache/arrow-rs/issues/7424) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] Rust API to Read Variant Values [\#7423](https://github.com/apache/arrow-rs/issues/7423) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Release arrow-rs / parquet Minor version `55.1.0` \(May 2025\) [\#7393](https://github.com/apache/arrow-rs/issues/7393) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support create\_random\_array for Decimal data types [\#7343](https://github.com/apache/arrow-rs/issues/7343) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Truncate Parquet page data page statistics [\#7555](https://github.com/apache/arrow-rs/pull/7555) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 
 **Fixed bugs:**
 
-- FlightSQL "GetDbSchemas" and "GetTables" schemas do not fully match the protocol [\#7637](https://github.com/apache/arrow-rs/issues/7637)
+- FlightSQL "GetDbSchemas" and "GetTables" schemas do not fully match the protocol [\#7637](https://github.com/apache/arrow-rs/issues/7637) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - Cannot read encrypted Parquet file if page index reading is enabled [\#7629](https://github.com/apache/arrow-rs/issues/7629) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- `encoding_stats` not present in Parquet generated by `parquet-rewrite` [\#7616](https://github.com/apache/arrow-rs/issues/7616)
+- `encoding_stats` not present in Parquet generated by `parquet-rewrite` [\#7616](https://github.com/apache/arrow-rs/issues/7616) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - When writing parquet plaintext footer files `footer_signing_key_metadata` is not included, encryption alghoritm is always written in footer [\#7599](https://github.com/apache/arrow-rs/issues/7599) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Bad min value in row group statistics in some special cases [\#7593](https://github.com/apache/arrow-rs/issues/7593)
-- `max_statistics_truncate_length` is ignored when writing statistics to data page headers [\#7579](https://github.com/apache/arrow-rs/issues/7579) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - `new_null_array` panics when constructing a struct of a dictionary [\#7571](https://github.com/apache/arrow-rs/issues/7571)
 - Parquet derive fails to build when Result is aliased [\#7547](https://github.com/apache/arrow-rs/issues/7547)
-- Unable to read `Dictionary(u8, FixedSizeBinary(_))` using datafusion. [\#7545](https://github.com/apache/arrow-rs/issues/7545)
-- filter\_record\_batch panics with empty struct array. [\#7538](https://github.com/apache/arrow-rs/issues/7538)
-- Panic in `pretty_format` function when displaying DurationSecondsArray with `i64::MIN` / `i64::MAX` [\#7533](https://github.com/apache/arrow-rs/issues/7533)
-- Record API unable to parse TIME\_MILLIS when encoded as INT32 [\#7510](https://github.com/apache/arrow-rs/issues/7510)
-- The `read_record_batch` func of the `RecordBatchDecoder` does not respect the `skip_validation` property [\#7508](https://github.com/apache/arrow-rs/issues/7508)
+- Unable to read `Dictionary(u8, FixedSizeBinary(_))` using datafusion. [\#7545](https://github.com/apache/arrow-rs/issues/7545) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- filter\_record\_batch panics with empty struct array. [\#7538](https://github.com/apache/arrow-rs/issues/7538) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Panic in `pretty_format` function when displaying DurationSecondsArray with `i64::MIN` / `i64::MAX` [\#7533](https://github.com/apache/arrow-rs/issues/7533) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Record API unable to parse TIME\_MILLIS when encoded as INT32 [\#7510](https://github.com/apache/arrow-rs/issues/7510) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- The `read_record_batch` func of the `RecordBatchDecoder` does not respect the `skip_validation` property [\#7508](https://github.com/apache/arrow-rs/issues/7508) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - `arrow-55.1.0` breaks `filter_record_batch` [\#7500](https://github.com/apache/arrow-rs/issues/7500)
-- Files containing binary data with \>=8\_388\_855 bytes per row written with `arrow-rs` can't be read with `pyarrow` [\#7489](https://github.com/apache/arrow-rs/issues/7489)
-- \[Bug\] Ingestion with Arrow Flight Sql panic when the input stream is empty or fallible [\#7329](https://github.com/apache/arrow-rs/issues/7329) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Files containing binary data with \>=8\_388\_855 bytes per row written with `arrow-rs` can't be read with `pyarrow` [\#7489](https://github.com/apache/arrow-rs/issues/7489) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Bug\] Ingestion with Arrow Flight Sql panic when the input stream is empty or fallible [\#7329](https://github.com/apache/arrow-rs/issues/7329) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - Ensure page encoding statistics are written to Parquet file [\#7643](https://github.com/apache/arrow-rs/pull/7643) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
-- Truncate Parquet page data page statistics [\#7555](https://github.com/apache/arrow-rs/pull/7555) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 
 **Documentation updates:**
 
+- arrow\_reader\_row\_filter benchmark doesn't capture page cache improvements [\#7460](https://github.com/apache/arrow-rs/issues/7460) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - chore: fix a typo in `ExtensionType::supports_data_type` docs [\#7682](https://github.com/apache/arrow-rs/pull/7682) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mbrobbel](https://github.com/mbrobbel))
 - \[Variant\] Add variant docs and examples [\#7661](https://github.com/apache/arrow-rs/pull/7661) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Minor: Add version to deprecation notice for `ParquetMetaDataReader::decode_footer` [\#7639](https://github.com/apache/arrow-rs/pull/7639) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
@@ -88,12 +86,11 @@
 
 **Closed issues:**
 
-- \[Variant\] Improve API for iterating over values of a VariantList [\#7685](https://github.com/apache/arrow-rs/issues/7685)
-- \[Variant\] Consider validating variants on creation \(rather than read\) [\#7684](https://github.com/apache/arrow-rs/issues/7684)
-- Miri test\_native\_type\_pow test failing [\#7641](https://github.com/apache/arrow-rs/issues/7641)
-- Improve performance of `coalesce` and `concat` for views [\#7615](https://github.com/apache/arrow-rs/issues/7615)
-- Feature Request: BloomFilter Position Flexibility in `parquet-rewrite` [\#7552](https://github.com/apache/arrow-rs/issues/7552)
-- arrow\_reader\_row\_filter benchmark doesn't capture page cache improvements [\#7460](https://github.com/apache/arrow-rs/issues/7460)
+- \[Variant\] Improve API for iterating over values of a VariantList [\#7685](https://github.com/apache/arrow-rs/issues/7685) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] Consider validating variants on creation \(rather than read\) [\#7684](https://github.com/apache/arrow-rs/issues/7684) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Miri test\_native\_type\_pow test failing [\#7641](https://github.com/apache/arrow-rs/issues/7641) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve performance of `coalesce` and `concat` for views [\#7615](https://github.com/apache/arrow-rs/issues/7615) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Feature Request: BloomFilter Position Flexibility in `parquet-rewrite` [\#7552](https://github.com/apache/arrow-rs/issues/7552) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Merged pull requests:**
 
