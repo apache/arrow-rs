@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
-use arrow_array::{Array, BinaryViewArray, StringViewArray};
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
+};
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::Python;
 use std::sync::Arc;
 
