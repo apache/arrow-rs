@@ -29,7 +29,7 @@ mod list;
 mod metadata;
 mod object;
 
-const MAX_SHORT_STRING_SIZE: usize = 0x3F;
+const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
 /// A Variant [`ShortString`]
 ///
@@ -43,11 +43,11 @@ impl<'a> ShortString<'a> {
     ///
     /// # Validation
     ///
-    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_SIZE`
+    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_BYTES`
     pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
-        if value.len() > MAX_SHORT_STRING_SIZE {
+        if value.len() > MAX_SHORT_STRING_BYTES {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "value is larger than {MAX_SHORT_STRING_SIZE} bytes"
+                "value is larger than {MAX_SHORT_STRING_BYTES} bytes"
             )));
         }
 
@@ -56,6 +56,26 @@ impl<'a> ShortString<'a> {
 
     /// Returns the underlying Variant short string as a &str
     pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+impl<'a> From<ShortString<'a>> for &'a str {
+    fn from(value: ShortString<'a>) -> Self {
+        value.0
+    }
+}
+
+impl<'a> TryFrom<&'a str> for ShortString<'a> {
+    type Error = ArrowError;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+impl<'a> AsRef<str> for ShortString<'a> {
+    fn as_ref(&self) -> &str {
         self.0
     }
 }
@@ -116,7 +136,7 @@ impl<'a> ShortString<'a> {
 ///
 /// ## Creating `Variant` from Rust Types
 /// ```
-/// use parquet_variant::{Variant};
+/// use parquet_variant::Variant;
 /// // variants can be directly constructed
 /// let variant = Variant::Int32(123);
 /// // or constructed via `From` impls
@@ -196,7 +216,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// # Example
     /// ```
-    /// # use parquet_variant::{Variant, VariantMetadata, ShortString};
+    /// use parquet_variant::{Variant, VariantMetadata};
     /// let metadata = [0x01, 0x00, 0x00];
     /// let value = [0x09, 0x48, 0x49];
     /// // parse the header metadata
@@ -459,7 +479,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::{Variant};
+    /// use parquet_variant::Variant;
     ///
     /// // you can extract a string from string variants
     /// let s = "hello!";
@@ -892,7 +912,7 @@ impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
 
 impl<'v> From<&'v str> for Variant<'_, 'v> {
     fn from(value: &'v str) -> Self {
-        if value.len() > MAX_SHORT_STRING_SIZE {
+        if value.len() > MAX_SHORT_STRING_BYTES {
             Variant::String(value)
         } else {
             Variant::ShortString(ShortString(value))
@@ -909,7 +929,7 @@ mod tests {
         let short_string = ShortString::try_new("norm").expect("should fit in short string");
         assert_eq!(short_string.as_str(), "norm");
 
-        let long_string = "a".repeat(MAX_SHORT_STRING_SIZE + 1);
+        let long_string = "a".repeat(MAX_SHORT_STRING_BYTES + 1);
         let res = ShortString::try_new(&long_string);
         assert!(res.is_err());
     }
