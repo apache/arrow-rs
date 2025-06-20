@@ -17,7 +17,7 @@
 
 use arrow_array::BooleanArray;
 use criterion::*;
-use parquet::arrow::arrow_reader::RowSelection;
+use parquet::arrow::arrow_reader::{BooleanRowSelection, RowSelection};
 use rand::Rng;
 use std::hint;
 
@@ -41,47 +41,50 @@ fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> Boo
 
 fn criterion_benchmark(c: &mut Criterion) {
     let total_rows = 300_000;
-    let selection_ratio = 1.0 / 3.0;
+    let selection_ratios = [0.000_01, 0.001, 0.1, 0.3];
 
-    // Generate two random RowSelections with approximately 1/3 of the rows selected.
-    let row_selection_a =
-        RowSelection::from_filters(&[generate_random_row_selection(total_rows, selection_ratio)]);
-    let row_selection_b =
-        RowSelection::from_filters(&[generate_random_row_selection(total_rows, selection_ratio)]);
+    for ratio in selection_ratios {
+        let slice_selection_a =
+            RowSelection::from_filters(&[generate_random_row_selection(total_rows, ratio)]);
+        let slice_selection_b =
+            RowSelection::from_filters(&[generate_random_row_selection(total_rows, ratio)]);
 
-    // Benchmark the intersection of the two RowSelections.
-    c.bench_function("intersection", |b| {
-        b.iter(|| {
-            let intersection = row_selection_a.intersection(&row_selection_b);
-            hint::black_box(intersection);
-        })
-    });
+        // Benchmark the intersection of the two RowSelections.
+        c.bench_function("intersection", |b| {
+            b.iter(|| {
+                let intersection = row_selection_a.intersection(&row_selection_b);
+                hint::black_box(intersection);
+            })
+        });
 
-    c.bench_function("union", |b| {
-        b.iter(|| {
-            let union = row_selection_a.union(&row_selection_b);
-            hint::black_box(union);
-        })
-    });
+        c.bench_function("union", |b| {
+            b.iter(|| {
+                let union = row_selection_a.union(&row_selection_b);
+                hint::black_box(union);
+            })
+        });
 
-    c.bench_function("from_filters", |b| {
-        let boolean_array = generate_random_row_selection(total_rows, selection_ratio);
-        b.iter(|| {
-            let array = boolean_array.clone();
-            let selection = RowSelection::from_filters(&[array]);
-            hint::black_box(selection);
-        })
-    });
+        c.bench_function("from_filters", |b| {
+            let boolean_array = generate_random_row_selection(total_rows, selection_ratio);
+            b.iter(|| {
+                let array = boolean_array.clone();
+                let selection = RowSelection::from_filters(&[array]);
+                hint::black_box(selection);
+            })
+        });
 
-    c.bench_function("and_then", |b| {
-        let selected = row_selection_a.row_count();
-        let sub_selection =
-            RowSelection::from_filters(&[generate_random_row_selection(selected, selection_ratio)]);
-        b.iter(|| {
-            let result = row_selection_a.and_then(&sub_selection);
-            hint::black_box(result);
-        })
-    });
+        c.bench_function("and_then", |b| {
+            let selected = row_selection_a.row_count();
+            let sub_selection = RowSelection::from_filters(&[generate_random_row_selection(
+                selected,
+                selection_ratio,
+            )]);
+            b.iter(|| {
+                let result = row_selection_a.and_then(&sub_selection);
+                hint::black_box(result);
+            })
+        });
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);
