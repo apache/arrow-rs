@@ -156,7 +156,6 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
     data_page_size_limit: usize,
-    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -210,7 +209,9 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_page_size_limit`]
     pub fn dictionary_page_size_limit(&self) -> usize {
-        self.dictionary_page_size_limit
+        self.default_column_properties
+            .dictionary_page_size_limit()
+            .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
     }
 
     /// Returns dictionary page size limit for a specific column.
@@ -219,7 +220,7 @@ impl WriterProperties {
             .get(col)
             .and_then(|c| c.dictionary_page_size_limit())
             .or_else(|| self.default_column_properties.dictionary_page_size_limit())
-            .unwrap_or(self.dictionary_page_size_limit)
+            .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
     }
 
     /// Returns the maximum page row count
@@ -434,7 +435,6 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
-    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -458,7 +458,6 @@ impl WriterPropertiesBuilder {
     fn with_defaults() -> Self {
         Self {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
-            dictionary_page_size_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
@@ -482,7 +481,6 @@ impl WriterPropertiesBuilder {
     pub fn build(self) -> WriterProperties {
         WriterProperties {
             data_page_size_limit: self.data_page_size_limit,
-            dictionary_page_size_limit: self.dictionary_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
@@ -558,7 +556,8 @@ impl WriterPropertiesBuilder {
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
-        self.default_column_properties.set_dictionary_page_size_limit(value);
+        self.default_column_properties
+            .set_dictionary_page_size_limit(value);
         self
     }
 
