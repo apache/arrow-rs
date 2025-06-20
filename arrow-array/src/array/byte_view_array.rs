@@ -481,7 +481,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
     /// Compare two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
-    /// Comparing two ByteView types are non-trivial.
+    /// Comparing two ByteView types is non-trivial.
     /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
     ///
     /// ByteView types give us the following two advantages, and we need to be careful not to lose them:
@@ -499,29 +499,33 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
     ///
     /// # Order check flow
-    /// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
-    /// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+    /// (1) if both strings do not contain buffers, we don't need to compute the len of the view,
+    /// we can compare the views directly. The first 4 bytes of the view is the length of the string, and the rest is the inlined data.
+    /// (2) if any has no empty buffer, both strings are smaller than 12 bytes, we can directly compare the view.
+    /// (3) if any of the strings is larger than 12 bytes, we need to compare the full string.
     ///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
     ///     (2.2) o.w., we need to compare the full string.
     ///
     /// # Safety
-    /// The left/right_idx must within range of each array
+    /// The left/right_idx must be within range of each array
     pub unsafe fn compare_unchecked(
         left: &GenericByteViewArray<T>,
         left_idx: usize,
         right: &GenericByteViewArray<T>,
         right_idx: usize,
     ) -> std::cmp::Ordering {
-        let l_view = left.views().get_unchecked(left_idx);
-        let l_len = *l_view as u32;
+        if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
+            // If both arrays have no buffers, we can compare the views directly
+            return left.views.get_unchecked(left_idx).cmp(right.views.get_unchecked(right_idx));
+        }
 
+        let l_view = left.views().get_unchecked(left_idx);
         let r_view = right.views().get_unchecked(right_idx);
-        let r_len = *r_view as u32;
+        let l_len  = *l_view as u32;
+        let r_len  = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {
-            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
-            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
-            return l_data.cmp(r_data);
+            return l_view.cmp(r_view);
         }
 
         // one of the string is larger than 12 bytes,
