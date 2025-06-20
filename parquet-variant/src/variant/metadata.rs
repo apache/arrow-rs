@@ -75,6 +75,7 @@ impl VariantMetadataHeader {
 ///
 /// See the [Variant Spec] file for more information
 ///
+/// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VariantMetadata<'m> {
