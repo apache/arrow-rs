@@ -33,7 +33,7 @@ edition = { workspace = true }
 rust-version = "1.83"
 
 [dependencies]
-arrow-schema = "55.2.0.0"
+arrow-schema = "55.2.0"
 chrono = { workspace = true }
 
 [lib]
