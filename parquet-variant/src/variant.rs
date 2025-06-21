@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -76,6 +78,14 @@ impl<'a> TryFrom<&'a str> for ShortString<'a> {
 
 impl<'a> AsRef<str> for ShortString<'a> {
     fn as_ref(&self) -> &str {
+        self.0
+    }
+}
+
+impl<'a> Deref for ShortString<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         self.0
     }
 }
