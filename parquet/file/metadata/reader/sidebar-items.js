@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_file_decryptor"],"struct":["FooterTail","ParquetMetaDataReader"]};
