@@ -489,7 +489,7 @@ macro_rules! decimal_display {
     };
 }
 
-decimal_display!(Decimal128Type, Decimal256Type);
+decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 fn write_timestamp(
     f: &mut dyn Write,
