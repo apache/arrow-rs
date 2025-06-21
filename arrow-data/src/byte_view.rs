@@ -18,6 +18,14 @@
 use arrow_buffer::Buffer;
 use arrow_schema::ArrowError;
 
+/// The maximum number of bytes that can be stored inline in a byte view.
+///
+/// See [`ByteView`] and [`GenericByteViewArray`] for more information on the
+/// layout of the views.
+///
+/// [`GenericByteViewArray`]: https://docs.rs/arrow/latest/arrow/array/struct.GenericByteViewArray.html
+pub const MAX_INLINE_VIEW_LEN: u32 = 12;
+
 /// Helper to access views of [`GenericByteViewArray`] (`StringViewArray` and
 /// `BinaryViewArray`) where the length is greater than 12 bytes.
 ///
@@ -76,15 +84,15 @@ impl ByteView {
     /// See example on [`ByteView`] docs
     ///
     /// Notes:
-    /// * the length should always be greater than 12 (Data less than 12
-    ///   bytes is stored as an inline view)
+    /// * the length should always be greater than [`MAX_INLINE_VIEW_LEN`]
+    ///   (Data less than 12 bytes is stored as an inline view)
     /// * buffer and offset are set to `0`
     ///
     /// # Panics
     /// If the prefix is not exactly 4 bytes
     #[inline]
     pub fn new(length: u32, prefix: &[u8]) -> Self {
-        debug_assert!(length > 12);
+        debug_assert!(length > MAX_INLINE_VIEW_LEN);
         Self {
             length,
             prefix: u32::from_le_bytes(prefix.try_into().unwrap()),
@@ -159,8 +167,8 @@ where
 {
     for (idx, v) in views.iter().enumerate() {
         let len = *v as u32;
-        if len <= 12 {
-            if len < 12 && (v >> (32 + len * 8)) != 0 {
+        if len <= MAX_INLINE_VIEW_LEN {
+            if len < MAX_INLINE_VIEW_LEN && (v >> (32 + len * 8)) != 0 {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "View at index {idx} contained non-zero padding for string of length {len}",
                 )));

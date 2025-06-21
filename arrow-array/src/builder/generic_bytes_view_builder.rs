@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ByteView;
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
@@ -68,8 +68,8 @@ impl BlockSizeGrowthStrategy {
 ///
 /// To avoid bump allocating, this builder allocates data in fixed size blocks, configurable
 /// using [`GenericByteViewBuilder::with_fixed_block_size`]. [`GenericByteViewBuilder::append_value`]
-/// writes values larger than 12 bytes to the current in-progress block, with values smaller
-/// than 12 bytes inlined into the views. If a value is appended that will not fit in the
+/// writes values larger than [`MAX_INLINE_VIEW_LEN`] bytes to the current in-progress block, with values smaller
+/// than [`MAX_INLINE_VIEW_LEN`] bytes inlined into the views. If a value is appended that will not fit in the
 /// in-progress block, it will be closed, and a new block of sufficient size allocated
 ///
 /// # Append Views
@@ -114,7 +114,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Set a fixed buffer size for variable length strings
     ///
     /// The block size is the size of the buffer used to store values greater
-    /// than 12 bytes. The builder allocates new buffers when the current
+    /// than [`MAX_INLINE_VIEW_LEN`] bytes. The builder allocates new buffers when the current
     /// buffer is full.
     ///
     /// By default the builder balances buffer size and buffer count by
@@ -221,7 +221,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         } else {
             self.views_buffer.extend(array.views().iter().map(|v| {
                 let mut byte_view = ByteView::from(*v);
-                if byte_view.length > 12 {
+                if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
                 };
@@ -289,7 +289,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn get_value(&self, index: usize) -> &[u8] {
         let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
-        if len <= 12 {
+        if len <= MAX_INLINE_VIEW_LEN {
             // # Safety
             // The view is valid from the builder
             unsafe { GenericByteViewArray::<T>::inline_value(view, len as usize) }
@@ -315,7 +315,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
         let v: &[u8] = value.as_ref().as_ref();
         let length: u32 = v.len().try_into().unwrap();
-        if length <= 12 {
+        if length <= MAX_INLINE_VIEW_LEN {
             let mut view_buffer = [0; 16];
             view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
             view_buffer[4..4 + v.len()].copy_from_slice(v);
