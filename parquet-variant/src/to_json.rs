@@ -81,22 +81,55 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
             write!(json_buffer, "{}", f)?;
         }
         Variant::Decimal4 { integer, scale } => {
-            // Convert decimal to string representation
-            let divisor = 10_i32.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
-            write!(json_buffer, "{}", decimal_value)?;
+            // Convert decimal to string representation using integer arithmetic
+            if *scale == 0 {
+                write!(json_buffer, "{}", integer)?;
+            } else {
+                let divisor = 10_i32.pow(*scale as u32);
+                let quotient = integer / divisor;
+                let remainder = (integer % divisor).abs();
+                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
+                if trimmed_remainder.is_empty() {
+                    write!(json_buffer, "{}", quotient)?;
+                } else {
+                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
+                }
+            }
         }
         Variant::Decimal8 { integer, scale } => {
-            // Convert decimal to string representation
-            let divisor = 10_i64.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
-            write!(json_buffer, "{}", decimal_value)?;
+            // Convert decimal to string representation using integer arithmetic
+            if *scale == 0 {
+                write!(json_buffer, "{}", integer)?;
+            } else {
+                let divisor = 10_i64.pow(*scale as u32);
+                let quotient = integer / divisor;
+                let remainder = (integer % divisor).abs();
+                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
+                if trimmed_remainder.is_empty() {
+                    write!(json_buffer, "{}", quotient)?;
+                } else {
+                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
+                }
+            }
         }
         Variant::Decimal16 { integer, scale } => {
-            // Convert decimal to string representation
-            let divisor = 10_i128.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
-            write!(json_buffer, "{}", decimal_value)?;
+            // Convert decimal to string representation using integer arithmetic
+            if *scale == 0 {
+                write!(json_buffer, "{}", integer)?;
+            } else {
+                let divisor = 10_i128.pow(*scale as u32);
+                let quotient = integer / divisor;
+                let remainder = (integer % divisor).abs();
+                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
+                if trimmed_remainder.is_empty() {
+                    write!(json_buffer, "{}", quotient)?;
+                } else {
+                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
+                }
+            }
         }
         Variant::Date(date) => {
             write!(json_buffer, "\"{}\"", date.format("%Y-%m-%d"))?;
@@ -252,30 +285,30 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
         Variant::Decimal4 { integer, scale } => {
-            let divisor = 10_i32.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
+                            let divisor = 10_i32.pow(*scale as u32);
+                let decimal_value = *integer as f64 / divisor as f64;
             serde_json::Number::from_f64(decimal_value)
                 .map(Value::Number)
                 .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
+ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
                 })
         }
         Variant::Decimal8 { integer, scale } => {
-            let divisor = 10_i64.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
+                            let divisor = 10_i64.pow(*scale as u32);
+                let decimal_value = *integer as f64 / divisor as f64;
             serde_json::Number::from_f64(decimal_value)
                 .map(Value::Number)
                 .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
+ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
                 })
         }
         Variant::Decimal16 { integer, scale } => {
-            let divisor = 10_i128.pow(*scale as u32);
-            let decimal_value = *integer as f64 / divisor as f64;
+                            let divisor = 10_i128.pow(*scale as u32);
+                let decimal_value = *integer as f64 / divisor as f64;
             serde_json::Number::from_f64(decimal_value)
                 .map(Value::Number)
                 .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
+ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
                 })
         }
         Variant::Date(date) => Ok(Value::String(date.format("%Y-%m-%d").to_string())),
