@@ -165,9 +165,16 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
             })?;
             write!(json_buffer, "{}", json_str)?;
         }
-        Variant::String(s) | Variant::ShortString(s) => {
+        Variant::String(s) => {
             // Use serde_json to properly escape the string
             let json_str = serde_json::to_string(s).map_err(|e| {
+                ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
+            })?;
+            write!(json_buffer, "{}", json_str)?;
+        }
+        Variant::ShortString(s) => {
+            // Use serde_json to properly escape the string
+            let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
                 ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
             })?;
             write!(json_buffer, "{}", json_str)?;
@@ -187,10 +194,9 @@ fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Resul
     write!(buffer, "{{")?;
 
     // Get all fields from the object
-    let fields = obj.fields()?;
     let mut first = true;
 
-    for (key, value) in fields {
+    for (key, value) in obj.iter() {
         if !first {
             write!(buffer, ",")?;
         }
@@ -332,12 +338,12 @@ ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
         Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
         Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
-        Variant::String(s) | Variant::ShortString(s) => Ok(Value::String(s.to_string())),
+        Variant::String(s) => Ok(Value::String(s.to_string())),
+        Variant::ShortString(s) => Ok(Value::String(s.to_string())),
         Variant::Object(obj) => {
             let mut map = serde_json::Map::new();
-            let fields = obj.fields()?;
 
-            for (key, value) in fields {
+            for (key, value) in obj.iter() {
                 let json_value = variant_to_json_value(&value)?;
                 map.insert(key.to_string(), json_value);
             }
@@ -659,7 +665,9 @@ mod tests {
 
     #[test]
     fn test_short_string_to_json() -> Result<(), ArrowError> {
-        let variant = Variant::ShortString("short");
+        use crate::variant::ShortString;
+        let short_string = ShortString::try_new("short")?;
+        let variant = Variant::ShortString(short_string);
         let json = variant_to_json_string(&variant)?;
         assert_eq!(json, "\"short\"");
 
@@ -696,6 +704,7 @@ mod tests {
 
     #[test]
     fn test_comprehensive_type_coverage() -> Result<(), ArrowError> {
+        use crate::variant::ShortString;
         // Test all supported types to ensure no compilation errors
         let test_variants = vec![
             Variant::Null,
@@ -728,7 +737,7 @@ mod tests {
             Variant::TimestampNtzMicros(DateTime::from_timestamp(0, 0).unwrap().naive_utc()),
             Variant::Binary(b"test"),
             Variant::String("test"),
-            Variant::ShortString("test"),
+            Variant::ShortString(ShortString::try_new("test")?),
         ];
 
         for variant in test_variants {

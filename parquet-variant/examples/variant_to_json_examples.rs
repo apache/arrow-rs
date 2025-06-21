@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Integer 42", Variant::Int8(42)),
         ("Negative Integer", Variant::Int8(-123)),
         ("String", Variant::String("Hello, World!")),
-        ("Short String", Variant::ShortString("Hi!")),
+        ("Short String", Variant::ShortString(parquet_variant::ShortString::try_new("Hi!").unwrap())),
     ];
 
     for (name, variant) in variants {

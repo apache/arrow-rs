@@ -68,7 +68,7 @@ fn test_primitive_values_to_json() {
         Value::String("hello world".to_string())
     );
 
-    let short_string = Variant::ShortString("test");
+    let short_string = Variant::ShortString(parquet_variant::ShortString::try_new("test").unwrap());
     assert_eq!(variant_to_json_string(&short_string).unwrap(), "\"test\"");
     assert_eq!(
         variant_to_json_value(&short_string).unwrap(),
@@ -293,7 +293,7 @@ fn test_comprehensive_roundtrip_compatibility() {
         },
         Variant::Date(NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
         Variant::String("test string"),
-        Variant::ShortString("short"),
+        Variant::ShortString(parquet_variant::ShortString::try_new("short").unwrap()),
         Variant::Binary(b"binary data"),
     ];
 
@@ -339,7 +339,7 @@ fn test_json_roundtrip_compatibility() {
         Variant::String(""),
         Variant::String("simple string"),
         Variant::String("string with\nnewlines\tand\ttabs"),
-        Variant::ShortString("short"),
+        Variant::ShortString(parquet_variant::ShortString::try_new("short").unwrap()),
     ];
 
     for variant in test_cases {
