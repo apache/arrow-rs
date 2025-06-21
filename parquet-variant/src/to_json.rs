@@ -51,7 +51,7 @@ use crate::variant::{Variant, VariantList, VariantObject};
 /// }
 /// example().unwrap();
 /// ```
-pub fn variant_to_json<W: Write>(json_buffer: &mut W, variant: &Variant) -> Result<(), ArrowError> {
+pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
     match variant {
         Variant::Null => {
             write!(json_buffer, "null")?;
@@ -133,7 +133,7 @@ pub fn variant_to_json<W: Write>(json_buffer: &mut W, variant: &Variant) -> Resu
 }
 
 /// Convert object fields to JSON
-fn convert_object_to_json<W: Write>(buffer: &mut W, obj: &VariantObject) -> Result<(), ArrowError> {
+fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Result<(), ArrowError> {
     write!(buffer, "{{")?;
 
     // Get all fields from the object
@@ -161,7 +161,7 @@ fn convert_object_to_json<W: Write>(buffer: &mut W, obj: &VariantObject) -> Resu
 }
 
 /// Convert array elements to JSON
-fn convert_array_to_json<W: Write>(buffer: &mut W, arr: &VariantList) -> Result<(), ArrowError> {
+fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(), ArrowError> {
     write!(buffer, "[")?;
 
     let len = arr.len();
