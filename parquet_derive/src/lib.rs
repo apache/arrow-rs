@@ -95,6 +95,7 @@ mod parquet_field;
 ///     writer.close().unwrap();
 /// }
 /// ```
+/// 
 #[proc_macro_derive(ParquetRecordWriter)]
 pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);
