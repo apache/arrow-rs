@@ -75,14 +75,12 @@ mod parquet_field;
 ///         },
 ///     ];
 ///
-///     let schema = samples.as_slice().schema();
+///     let schema = samples.as_slice().schema().unwrap();
 ///
 ///     let props = Arc::new(WriterProperties::builder().build());
 ///
 ///     let file = File::create("example.parquet").unwrap();
 ///
-///     let schema = schema.unwrap();
-/// 
 ///     let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
 ///
 ///     let mut row_group = writer.next_row_group().unwrap();
