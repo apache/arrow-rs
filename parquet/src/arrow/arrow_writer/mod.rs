@@ -3930,7 +3930,7 @@ mod tests {
             }
         };
 
-        assert_eq!(get_dict_page_size(&col0_meta), 1024 * 1024);
-        assert_eq!(get_dict_page_size(&col1_meta), 1024 * 1024 * 4);
+        assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
+        assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 }
