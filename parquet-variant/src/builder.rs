@@ -740,4 +740,75 @@ mod tests {
         // apple(1), banana(2), zebra(0)
         assert_eq!(field_ids, vec![1, 2, 0]);
     }
+
+    #[test]
+    fn test_object_and_metadata_ordering() {
+        let mut builder = VariantBuilder::new();
+
+        let mut obj = builder.new_object();
+
+        obj.append_value("zebra", "stripes"); // ID = 0
+        obj.append_value("apple", "red"); // ID = 1
+
+        {
+            // fields_map is ordered by insertion order (field id)
+            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
+            assert_eq!(fields_map, vec![0, 1]);
+
+            // dict is ordered by field names
+            // NOTE: when we support nested objects, we'll want to perform a filter by fields_map field ids
+            let dict_metadata = obj
+                .parent
+                .dict
+                .iter()
+                .map(|(f, i)| (f.as_str(), *i))
+                .collect::<Vec<_>>();
+
+            assert_eq!(dict_metadata, vec![("apple", 1), ("zebra", 0)]);
+
+            // dict_keys is ordered by insertion order (field id)
+            let dict_keys = obj
+                .parent
+                .dict_keys
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(dict_keys, vec!["zebra", "apple"]);
+        }
+
+        obj.append_value("banana", "yellow"); // ID = 2
+
+        {
+            // fields_map is ordered by insertion order (field id)
+            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
+            assert_eq!(fields_map, vec![0, 1, 2]);
+
+            // dict is ordered by field names
+            // NOTE: when we support nested objects, we'll want to perform a filter by fields_map field ids
+            let dict_metadata = obj
+                .parent
+                .dict
+                .iter()
+                .map(|(f, i)| (f.as_str(), *i))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                dict_metadata,
+                vec![("apple", 1), ("banana", 2), ("zebra", 0)]
+            );
+
+            // dict_keys is ordered by insertion order (field id)
+            let dict_keys = obj
+                .parent
+                .dict_keys
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(dict_keys, vec!["zebra", "apple", "banana"]);
+        }
+
+        obj.finish();
+
+        builder.finish();
+    }
 }
