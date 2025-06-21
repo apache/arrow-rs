@@ -33,9 +33,12 @@ use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
-    value: [u32; 3],
+    /// First 8 bytes store nanoseconds since midnight
+    pub nanos: i64,
+    /// Last 4 bytes store Julian days
+    pub days: i32,
 }
 
 const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
@@ -59,19 +62,25 @@ const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
-        Self { value: [0; 3] }
+        Self { nanos: 0, days: 0 }
     }
 
-    /// Returns underlying data as slice of [`u32`].
+    /// Returns underlying data as slice of [`u32`] for compatibility with Parquet format
     #[inline]
     pub fn data(&self) -> &[u32] {
-        &self.value
+        // SAFETY: We're reinterpreting the bytes of our struct as [u32; 3]
+        // This is safe because:
+        // 1. The memory layout is compatible (12 bytes total)
+        // 2. The alignment requirements are met (u32 requires 4-byte alignment)
+        // 3. We maintain the invariant that the bytes are always valid u32s
+        unsafe { std::slice::from_raw_parts(self as *const Int96 as *const u32, 3) }
     }
 
-    /// Sets data for this INT96 type.
+    /// Sets data for this INT96 type from raw Parquet format.
     #[inline]
     pub fn set_data(&mut self, elem0: u32, elem1: u32, elem2: u32) {
-        self.value = [elem0, elem1, elem2];
+        self.nanos = ((elem1 as i64) << 32) | (elem0 as i64);
+        self.days = elem2 as i32;
     }
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
@@ -124,13 +133,46 @@ impl Int96 {
             .wrapping_add(nanos)
     }
 
+    /// Sets the INT96 data directly from days and nanoseconds
+    #[inline]
+    pub fn set_data_from_days_and_nanos(&mut self, days: i32, nanos: i64) {
+        self.days = days;
+        self.nanos = nanos;
+    }
+
     #[inline]
     fn data_as_days_and_nanos(&self) -> (i32, i64) {
-        let day = self.data()[2] as i32;
-        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        (day, nanos)
+        (self.days, self.nanos)
+    }
+
+    /// Sets the INT96 data from nanoseconds since epoch
+    #[inline]
+    pub fn set_data_from_nanos(&mut self, nanos: i64) {
+        let days = nanos / NANOSECONDS_IN_DAY;
+        let remaining_nanos = nanos % NANOSECONDS_IN_DAY;
+        let julian_day = (days + JULIAN_DAY_OF_EPOCH) as i32;
+        self.set_data_from_days_and_nanos(julian_day, remaining_nanos);
+    }
+
+    /// Sets the INT96 data from seconds since epoch
+    #[inline]
+    pub fn set_data_from_seconds(&mut self, seconds: i64) {
+        self.set_data_from_nanos(seconds.wrapping_mul(NANOSECONDS))
+    }
+
+    /// Sets the INT96 data from milliseconds since epoch
+    #[inline]
+    pub fn set_data_from_millis(&mut self, millis: i64) {
+        self.set_data_from_nanos(millis.wrapping_mul(MICROSECONDS))
+    }
+
+    /// Sets the INT96 data from microseconds since epoch
+    #[inline]
+    pub fn set_data_from_micros(&mut self, micros: i64) {
+        self.set_data_from_nanos(micros.wrapping_mul(MILLISECONDS))
     }
 }
+
 
 impl From<Vec<u32>> for Int96 {
     fn from(buf: Vec<u32>) -> Self {
@@ -138,6 +180,21 @@ impl From<Vec<u32>> for Int96 {
         let mut result = Self::new();
         result.set_data(buf[0], buf[1], buf[2]);
         result
+    }
+}
+
+impl PartialOrd for Int96 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int96 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.days.cmp(&other.days) {
+            Ordering::Equal => self.nanos.cmp(&other.nanos),
+            ord => ord,
+        }
     }
 }
 
@@ -609,8 +666,8 @@ impl AsBytes for bool {
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
-        // SAFETY: Int96::data is a &[u32; 3].
-        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
+        // SAFETY: The layout of Int96 is i64 followed by i32, which is 12 contiguous bytes
+        unsafe { std::slice::from_raw_parts(self as *const Int96 as *const u8, 12) }
     }
 }
 
@@ -1408,5 +1465,74 @@ mod tests {
         assert!(ba1 > ba4);
         assert_eq!(ba1, ba11);
         assert!(ba5 > ba1);
+    }
+
+    #[test]
+    fn test_int96_time_conversions() {
+        let test_values = [
+            0, 1, 60, 3600, 86400, 1234567, 31536000,
+        ];
+
+        for &value in &test_values {
+            let mut i96: Int96 = Int96::new();
+            
+            i96.set_data_from_seconds(value);
+            assert_eq!(i96.to_seconds(), value, "seconds roundtrip failed for {}", value);
+            
+            i96.set_data_from_millis(value);
+            assert_eq!(i96.to_millis(), value, "millis roundtrip failed for {}", value);
+
+            i96.set_data_from_micros(value);
+            assert_eq!(i96.to_micros(), value, "micros roundtrip failed for {}", value);
+
+            i96.set_data_from_nanos(value);
+            assert_eq!(i96.to_nanos(), value, "nanos roundtrip failed for {}", value);
+
+            let test_day_nanos = [
+                (0, 0),                    // 1970-01-01 00:00:00.000000000 (Unix epoch)
+                (0, 1),                    // 1970-01-01 00:00:00.000000001
+                (0, NANOSECONDS - 1),      // 1970-01-01 00:00:00.999999999
+                (0, NANOSECONDS),          // 1970-01-01 00:00:01.000000000
+                (1, 0),                    // 1970-01-02 00:00:00.000000000
+                (1, NANOSECONDS),          // 1970-01-02 00:00:01.000000000
+                (365, 0),                  // 1971-01-01 00:00:00.000000000 (1 year after epoch)
+                (365, NANOSECONDS * 3600), // 1971-01-01 01:00:00.000000000
+                (10957, 0),                // 2000-01-01 00:00:00.000000000 (Y2K)
+                (18262, 0),                // 2020-01-01 00:00:00.000000000
+                (18262, NANOSECONDS * 3600 * 12), // 2020-01-01 12:00:00.000000000
+            ];
+
+            for &(days, nanos) in &test_day_nanos {
+                let mut i96 = Int96::new();
+                i96.set_data_from_days_and_nanos(days, nanos);
+                let (roundtrip_days, roundtrip_nanos) = i96.data_as_days_and_nanos();
+                assert_eq!(roundtrip_days, days, "days roundtrip failed for days={}, nanos={}", days, nanos);
+                assert_eq!(roundtrip_nanos, nanos, "nanos roundtrip failed for days={}, nanos={}", days, nanos);
+            }
+        }
+    }
+
+    #[test]
+    fn test_int96_ord() {
+        let test_pairs = [
+    
+            ((99, 5), (100, 4)),
+            ((100, 10), (100, 5523)),
+            ((0, 0), (100, 0)),
+            ((10000, 1_000_000_000), (10000, 2_000_000_000)),
+            ((10000, 1_000_000_000), (20000, 1_000_000_000)),
+        ];
+
+        for (smaller, larger) in test_pairs {
+            let mut small = Int96::new();
+            small.set_data_from_days_and_nanos(smaller.0, smaller.1);
+            let mut large = Int96::new();
+            large.set_data_from_days_and_nanos(larger.0, larger.1);
+            
+            assert!(small < large, "Expected {:?} < {:?}", smaller, larger);
+            assert!(large > small, "Expected {:?} > {:?}", larger, smaller);
+            assert!(small == small, "Expected {:?} == {:?}", smaller, smaller);
+            assert!(large == large, "Expected {:?} == {:?}", larger, larger);
+        }
     }
 }
