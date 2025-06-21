@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::{null_sentinel, RowConverter, Rows, SortField};
-use arrow_array::{Array, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_array::{Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, SortOptions};
 use std::ops::Range;
@@ -38,6 +38,20 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
             let range = array.is_valid(idx).then_some(start..end);
             *length += encoded_len(rows, range);
         });
+}
+
+pub fn compute_lengths_fixed_size_list(
+    lengths: &mut [usize],
+    rows: &Rows,
+    array: &FixedSizeListArray,
+) {
+    let stride = array.value_length().as_usize();
+    lengths.iter_mut().enumerate().for_each(|(idx, length)| {
+        let start = idx * stride;
+        let end = start + stride;
+        let range = array.is_valid(idx).then_some(start..end);
+        *length += encoded_len(rows, range);
+    });
 }
 
 fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
