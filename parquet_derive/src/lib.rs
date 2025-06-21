@@ -50,45 +50,53 @@ mod parquet_field;
 /// Example:
 ///
 /// ```no_run
-/// use parquet_derive::ParquetRecordWriter;
-/// use std::io::{self, Write};
 /// use parquet::file::properties::WriterProperties;
 /// use parquet::file::writer::SerializedFileWriter;
 /// use parquet::record::RecordWriter;
+/// use parquet_derive::ParquetRecordWriter;
 /// use std::fs::File;
-///
 /// use std::sync::Arc;
-///
+/// 
 /// #[derive(ParquetRecordWriter)]
 /// struct ACompleteRecord<'a> {
-///   pub a_bool: bool,
-///   pub a_str: &'a str,
+///     pub a_bool: bool,
+///     pub a_str: &'a str,
 /// }
-///
+/// 
 /// pub fn write_some_records() {
-///   let samples = vec![
-///     ACompleteRecord {
-///       a_bool: true,
-///       a_str: "I'm true"
-///     },
-///     ACompleteRecord {
-///       a_bool: false,
-///       a_str: "I'm false"
-///     }
-///   ];
-///  let file = File::open("some_file.parquet").unwrap();
+///     let samples = vec![
+///         ACompleteRecord {
+///             a_bool: true,
+///             a_str: "I'm true",
+///         },
+///         ACompleteRecord {
+///             a_bool: false,
+///             a_str: "I'm false",
+///         },
+///     ];
 ///
-///  let schema = samples.as_slice().schema().unwrap();
+///     let schema = samples.as_slice().schema();
 ///
-///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
+///     let props = Arc::new(WriterProperties::builder().build());
 ///
-///  let mut row_group = writer.next_row_group().unwrap();
-///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
-///  row_group.close().unwrap();
-///  writer.close().unwrap();
+///     let file = File::create("example.parquet").unwrap();
+///
+///     let schema = schema.unwrap();
+/// 
+///     let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+///
+///     let mut row_group = writer.next_row_group().unwrap();
+///
+///     samples
+///         .as_slice()
+///         .write_to_row_group(&mut row_group)
+///         .unwrap();
+/// 
+///     row_group.close().unwrap();
+///
+///     writer.close().unwrap();
 /// }
 /// ```
-///
 #[proc_macro_derive(ParquetRecordWriter)]
 pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);
