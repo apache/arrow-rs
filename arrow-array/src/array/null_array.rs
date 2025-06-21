@@ -170,6 +170,9 @@ impl std::fmt::Debug for NullArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{make_array, Int64Array, StructArray};
+    use arrow_data::transform::MutableArrayData;
+    use arrow_schema::Field;
 
     #[test]
     fn test_null_array() {
@@ -200,5 +203,33 @@ mod tests {
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
         assert_eq!(format!("{array:?}"), "NullArray(1048576)");
+    }
+
+    #[test]
+    fn test_null_array_with_parent_null_buffer() {
+        let null_array = NullArray::new(1);
+        let int_array = Int64Array::from(vec![42]);
+
+        let fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Null, true),
+        ];
+
+        let struct_array_data = ArrayData::builder(DataType::Struct(fields.into()))
+            .len(1)
+            .add_child_data(int_array.to_data())
+            .add_child_data(null_array.to_data())
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&struct_array_data], true, 1);
+
+        // Simulate a NULL value in the parent array, for instance, if array being queried by
+        // invalid index
+        mutable.extend_nulls(1);
+        let data = mutable.freeze();
+
+        let struct_array = Arc::new(StructArray::from(data.clone()));
+        assert!(make_array(data) == struct_array);
     }
 }
