@@ -542,13 +542,16 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ) -> std::cmp::Ordering {
         if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
             // If both arrays have no buffers, we can compare the views directly
-            return left.views.get_unchecked(left_idx).cmp(right.views.get_unchecked(right_idx));
+            return left
+                .views
+                .get_unchecked(left_idx)
+                .cmp(right.views.get_unchecked(right_idx));
         }
 
         let l_view = left.views().get_unchecked(left_idx);
         let r_view = right.views().get_unchecked(right_idx);
-        let l_len  = *l_view as u32;
-        let r_len  = *r_view as u32;
+        let l_len = *l_view as u32;
+        let r_len = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {
             return l_view.cmp(r_view);
