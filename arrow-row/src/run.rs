@@ -159,10 +159,43 @@ pub unsafe fn decode<R: RunEndIndexType>(
 mod tests {
     use crate::{RowConverter, SortField};
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Int16Type, Int32Type, Int64Type};
+    use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
     use arrow_array::{Array, Int64Array, PrimitiveArray, RunArray, StringArray};
     use arrow_schema::{DataType, SortOptions};
     use std::sync::Arc;
+
+    fn assert_roundtrip<R: RunEndIndexType>(
+        array: &RunArray<R>,
+        run_end_type: DataType,
+        values_type: DataType,
+        sort_options: Option<SortOptions>,
+    ) {
+        let sort_field = if let Some(options) = sort_options {
+            SortField::new_with_options(
+                DataType::RunEndEncoded(
+                    Arc::new(arrow_schema::Field::new("run_ends", run_end_type, false)),
+                    Arc::new(arrow_schema::Field::new("values", values_type, true)),
+                ),
+                options,
+            )
+        } else {
+            SortField::new(DataType::RunEndEncoded(
+                Arc::new(arrow_schema::Field::new("run_ends", run_end_type, false)),
+                Arc::new(arrow_schema::Field::new("values", values_type, true)),
+            ))
+        };
+
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(array.clone())])
+            .unwrap();
+
+        let arrays = converter.convert_rows(&rows).unwrap();
+        let result = arrays[0].as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+        assert_eq!(array, result);
+    }
 
     #[test]
     fn test_run_end_encoded_supports_datatype() {
@@ -183,24 +216,7 @@ mod tests {
         let array: RunArray<Int16Type> =
             RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Int64, true)),
-        ))])
-        .unwrap();
-
-        let rows = converter
-            .convert_columns(&[Arc::new(array.clone())])
-            .unwrap();
-
-        let arrays = converter.convert_rows(&rows).unwrap();
-        let result = arrays[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int16Type>>()
-            .unwrap();
-
-        assert_eq!(array.run_ends().values(), result.run_ends().values());
-        assert_eq!(array.values().as_ref(), result.values().as_ref());
+        assert_roundtrip(&array, DataType::Int16, DataType::Int64, None);
     }
 
     #[test]
@@ -213,24 +229,7 @@ mod tests {
         let array: RunArray<Int32Type> =
             RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Int64, true)),
-        ))])
-        .unwrap();
-
-        let rows = converter
-            .convert_columns(&[Arc::new(array.clone())])
-            .unwrap();
-
-        let arrays = converter.convert_rows(&rows).unwrap();
-        let result = arrays[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        assert_eq!(array.run_ends().values(), result.run_ends().values());
-        assert_eq!(array.values().as_ref(), result.values().as_ref());
+        assert_roundtrip(&array, DataType::Int32, DataType::Int64, None);
     }
 
     #[test]
@@ -243,24 +242,7 @@ mod tests {
         let array: RunArray<Int64Type> =
             RunArray::try_new(&PrimitiveArray::from(run_ends), &values).unwrap();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int64, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Int64, true)),
-        ))])
-        .unwrap();
-
-        let rows = converter
-            .convert_columns(&[Arc::new(array.clone())])
-            .unwrap();
-
-        let arrays = converter.convert_rows(&rows).unwrap();
-        let result = arrays[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int64Type>>()
-            .unwrap();
-
-        assert_eq!(array.run_ends().values(), result.run_ends().values());
-        assert_eq!(array.values().as_ref(), result.values().as_ref());
+        assert_roundtrip(&array, DataType::Int64, DataType::Int64, None);
     }
 
     #[test]
@@ -269,24 +251,7 @@ mod tests {
 
         let array: RunArray<Int32Type> = vec!["b", "b", "a"].into_iter().collect();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
-        ))])
-        .unwrap();
-
-        let rows = converter
-            .convert_columns(&[Arc::new(array.clone())])
-            .unwrap();
-
-        let arrays = converter.convert_rows(&rows).unwrap();
-        let result = arrays[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        assert_eq!(array.run_ends().values(), result.run_ends().values());
-        assert_eq!(array.values().as_ref(), result.values().as_ref());
+        assert_roundtrip(&array, DataType::Int32, DataType::Utf8, None);
     }
 
     #[test]
@@ -297,24 +262,7 @@ mod tests {
             .into_iter()
             .collect();
 
-        let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
-        ))])
-        .unwrap();
-
-        let rows = converter
-            .convert_columns(&[Arc::new(array.clone())])
-            .unwrap();
-
-        let arrays = converter.convert_rows(&rows).unwrap();
-        let result = arrays[0]
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        assert_eq!(array.run_ends().values(), result.run_ends().values());
-        assert_eq!(array.values().as_ref(), result.values().as_ref());
+        assert_roundtrip(&array, DataType::Int32, DataType::Utf8, None);
     }
 
     #[test]
