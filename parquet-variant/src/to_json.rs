@@ -24,6 +24,23 @@ use std::io::Write;
 
 use crate::variant::{Variant, VariantList, VariantObject};
 
+// Format string constants to avoid duplication and reduce errors
+const DATE_FORMAT: &str = "%Y-%m-%d";
+const TIMESTAMP_NTZ_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6f";
+
+// Helper functions for consistent formatting
+fn format_date_string(date: &chrono::NaiveDate) -> String {
+    date.format(DATE_FORMAT).to_string()
+}
+
+fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime) -> String {
+    ts.format(TIMESTAMP_NTZ_FORMAT).to_string()
+}
+
+fn format_binary_base64(bytes: &[u8]) -> String {
+    general_purpose::STANDARD.encode(bytes)
+}
+
 /// Converts a Variant to JSON and writes it to the provided buffer
 ///
 /// # Arguments
@@ -132,17 +149,17 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
             }
         }
         Variant::Date(date) => {
-            write!(json_buffer, "\"{}\"", date.format("%Y-%m-%d"))?;
+            write!(json_buffer, "\"{}\"", format_date_string(date))?;
         }
         Variant::TimestampMicros(ts) => {
             write!(json_buffer, "\"{}\"", ts.to_rfc3339())?;
         }
         Variant::TimestampNtzMicros(ts) => {
-            write!(json_buffer, "\"{}\"", ts.format("%Y-%m-%dT%H:%M:%S%.6f"))?;
+            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?;
         }
         Variant::Binary(bytes) => {
             // Encode binary as base64 string
-            let base64_str = general_purpose::STANDARD.encode(bytes);
+            let base64_str = format_binary_base64(bytes);
             let json_str = serde_json::to_string(&base64_str).map_err(|e| {
                 ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
             })?;
@@ -311,12 +328,10 @@ ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
 ArrowError::InvalidArgumentError("Invalid decimal value".to_string())
                 })
         }
-        Variant::Date(date) => Ok(Value::String(date.format("%Y-%m-%d").to_string())),
+        Variant::Date(date) => Ok(Value::String(format_date_string(date))),
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
-        Variant::TimestampNtzMicros(ts) => Ok(Value::String(
-            ts.format("%Y-%m-%dT%H:%M:%S%.6f").to_string(),
-        )),
-        Variant::Binary(bytes) => Ok(Value::String(general_purpose::STANDARD.encode(bytes))),
+        Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
+        Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
         Variant::String(s) | Variant::ShortString(s) => Ok(Value::String(s.to_string())),
         Variant::Object(obj) => {
             let mut map = serde_json::Map::new();
