@@ -742,7 +742,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => size >= self.props.dictionary_page_size_limit(),
+            Some(size) => {
+                size >= self
+                    .props
+                    .column_dictionary_page_size_limit(self.descr.path())
+            }
             None => false,
         }
     }
