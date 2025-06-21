@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
-use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant::{ShortString, Variant, VariantBuilder};
 
 fn cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -76,7 +76,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
         ("primitive_timestamp", Variant::TimestampMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(16, 34, 56, 780).unwrap().and_utc())),
         ("primitive_timestampntz", Variant::TimestampNtzMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap())),
-        ("short_string", Variant::ShortString("Less than 64 bytes (❤\u{fe0f} with utf8)")),
+        ("short_string", Variant::ShortString(ShortString::try_new("Less than 64 bytes (❤\u{fe0f} with utf8)").unwrap())),
     ]
 }
 #[test]
@@ -130,11 +130,20 @@ fn variant_object_primitive() {
         ),
         ("int_field", Variant::Int8(1)),
         ("null_field", Variant::Null),
-        ("string_field", Variant::ShortString("Apache Parquet")),
+        (
+            "string_field",
+            Variant::ShortString(
+                ShortString::try_new("Apache Parquet")
+                    .expect("value should fit inside a short string"),
+            ),
+        ),
         (
             // apparently spark wrote this as a string (not a timestamp)
             "timestamp_field",
-            Variant::ShortString("2025-04-16T12:34:56.78"),
+            Variant::ShortString(
+                ShortString::try_new("2025-04-16T12:34:56.78")
+                    .expect("value should fit inside a short string"),
+            ),
         ),
     ];
     let actual_fields: Vec<_> = variant_object.iter().collect();

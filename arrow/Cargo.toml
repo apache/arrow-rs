@@ -48,13 +48,13 @@ arrow-data = { workspace = true }
 arrow-ipc = { workspace = true, optional = true }
 arrow-json = { workspace = true, optional = true }
 arrow-ord = { workspace = true }
+arrow-pyarrow = { workspace = true, optional = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true }
 arrow-string = { workspace = true }
 
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-pyo3 = { version = "0.24.1", default-features = false, optional = true }
 half = { version = "2.1", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
@@ -72,7 +72,7 @@ prettyprint = ["arrow-cast/prettyprint"]
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
 test_utils = ["dep:rand", "dep:half"]
-pyarrow = ["pyo3", "ffi"]
+pyarrow = ["ffi", "dep:arrow-pyarrow"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
@@ -298,10 +298,6 @@ required-features = ["test_utils"]
 [[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
-
-[[test]]
-name = "pyarrow"
-required-features = ["pyarrow"]
 
 [[test]]
 name = "array_cast"

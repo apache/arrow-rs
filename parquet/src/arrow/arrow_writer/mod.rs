@@ -297,6 +297,14 @@ impl<W: Write + Send> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Writes the given buf bytes to the internal buffer.
+    ///
+    /// It's safe to use this method to write data to the underlying writer,
+    /// because it will ensure that the buffering and byte‐counting layers are used.
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.writer.write_all(buf)
+    }
+
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {
@@ -326,8 +334,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer, doing so
-    /// will likely result in a corrupt parquet file
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
+    ///
+    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner_mut(&mut self) -> &mut W {
         self.writer.inner_mut()
     }

@@ -479,6 +479,32 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         builder.finish()
     }
 
+    /// Returns the total number of bytes used by all non inlined views in all
+    /// buffers.
+    ///
+    /// Note this does not account for views that point at the same underlying
+    /// data in buffers
+    ///
+    /// For example, if the array has three strings views:
+    /// * View with length = 9 (inlined)
+    /// * View with length = 32 (non inlined)
+    /// * View with length = 16 (non inlined)
+    ///
+    /// Then this method would report 48
+    pub fn total_buffer_bytes_used(&self) -> usize {
+        self.views()
+            .iter()
+            .map(|v| {
+                let len = (*v as u32) as usize;
+                if len > 12 {
+                    len
+                } else {
+                    0
+                }
+            })
+            .sum()
+    }
+
     /// Compare two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
     /// Comparing two ByteView types is non-trivial.
