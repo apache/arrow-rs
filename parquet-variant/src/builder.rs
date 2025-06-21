@@ -1,3 +1,5 @@
+use arrow_schema::ArrowError;
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -484,13 +486,33 @@ impl<'a> ObjectBuilder<'a> {
         }
     }
 
+    fn check_duplicate_field_name(&self, key: &str) -> Result<(), ArrowError> {
+        if let Some(field_name_id) = self.parent.dict.get(key) {
+            if self.fields.contains_key(field_name_id) {
+                return Err(ArrowError::InvalidArgumentError(
+                    "field name must be unique and already exists in this object".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Add a field with key and value to the object
-    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        let id = self.parent.add_key(key);
+    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        &mut self,
+        key: &str,
+        value: T,
+    ) -> Result<(), ArrowError> {
+        self.check_duplicate_field_name(key)?;
+
+        let field_name_id = self.parent.add_key(key);
         let field_start = self.parent.offset() - self.start_pos;
         self.parent.append_value(value);
-        let res = self.fields.insert(id, field_start);
-        debug_assert!(res.is_none());
+        let res = self.fields.insert(field_name_id, field_start);
+        debug_assert!(res.is_none()); // this is almost like an unreachable!(), since we check if a duplicate field name already exists
+
+        Ok(())
     }
 
     /// Finalize object with sorted fields
@@ -704,8 +726,8 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("name", "John");
-            obj.append_value("age", 42i8);
+            obj.append_value("name", "John").unwrap();
+            obj.append_value("age", 42i8).unwrap();
             obj.finish();
         }
 
@@ -720,9 +742,9 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("zebra", "stripes"); // ID = 0
-            obj.append_value("apple", "red"); // ID = 1
-            obj.append_value("banana", "yellow"); // ID = 2
+            obj.append_value("zebra", "stripes").unwrap(); // ID = 0
+            obj.append_value("apple", "red").unwrap(); // ID = 1
+            obj.append_value("banana", "yellow").unwrap(); // ID = 2
             obj.finish();
         }
 
@@ -747,8 +769,8 @@ mod tests {
 
         let mut obj = builder.new_object();
 
-        obj.append_value("zebra", "stripes"); // ID = 0
-        obj.append_value("apple", "red"); // ID = 1
+        obj.append_value("zebra", "stripes").unwrap(); // ID = 0
+        obj.append_value("apple", "red").unwrap(); // ID = 1
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -776,7 +798,7 @@ mod tests {
             assert_eq!(dict_keys, vec!["zebra", "apple"]);
         }
 
-        obj.append_value("banana", "yellow"); // ID = 2
+        obj.append_value("banana", "yellow").unwrap(); // ID = 2
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -810,5 +832,19 @@ mod tests {
         obj.finish();
 
         builder.finish();
+    }
+
+    #[test]
+    fn test_duplicate_field_name_in_same_object() {
+        let mut builder = VariantBuilder::new();
+
+        let mut obj = builder.new_object();
+        obj.append_value("name", "John").unwrap();
+
+        let res = obj.append_value("name", 42i8);
+        assert!(
+            res.is_err(),
+            "ObjectBuilder should error when trying to append duplicate field name in same object"
+        );
     }
 }
