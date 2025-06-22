@@ -569,24 +569,17 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return l_view.cmp(r_view).is_eq();
+        }
+
         let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
         // We don't need to look at the actual bytes to determine if they are equal.
         if l_len != r_len {
             return false;
-        }
-
-        // When both len are same, we can compare the inlined bytes, this can handle the corner case after
-        // the len compare, for example:
-        // > println!("{:?}", "\0".cmp(""))
-        // > Greater
-        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
-            // If the lengths are equal, we can compare the inlined bytes
-            // Only need to compare the inlined bytes
-            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 12) };
-            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 12) };
-            return l_bytes.cmp(r_bytes).is_eq();
         }
 
         // # Safety
