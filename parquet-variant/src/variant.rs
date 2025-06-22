@@ -40,8 +40,128 @@ const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShortString<'a>(pub(crate) &'a str);
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariantDecimal4 {
+    pub(crate) integer: i32,
+    pub(crate) scale: u8,
+}
+
+impl VariantDecimal4 {
+    pub fn try_new(integer: i32, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+        // Validate that scale doesn't exceed precision
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Scale {} cannot be greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Validate precision is within reasonable bounds for 4-byte decimal
+        // Typically max precision for 4-byte decimal is around 9-10 digits
+        if precision > 9 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Precision {} exceeds maximum precision of 9 for 4-byte decimal",
+                precision
+            )));
+        }
+
+        // Check if the value fits within the specified precision
+        let max_value = 10_i32.pow(precision as u32) - 1;
+        let min_value = -(10_i32.pow(precision as u32)) + 1;
+
+        if integer > max_value || integer < min_value {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Value {} exceeds the range for precision {}",
+                integer, precision
+            )));
+        }
+
+        Ok(VariantDecimal4 { integer, scale })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariantDecimal8 {
+    pub(crate) integer: i64,
+    pub(crate) scale: u8,
+}
+
+impl VariantDecimal8 {
+    pub fn try_new(integer: i64, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+        // Validate that scale doesn't exceed precision
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Scale {} cannot be greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Validate precision is within reasonable bounds for 8-byte decimal
+        // Typically max precision for 8-byte decimal is around 18-19 digits
+        if precision > 18 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Precision {} exceeds maximum precision of 18 for 8-byte decimal",
+                precision
+            )));
+        }
+
+        // Check if the value fits within the specified precision
+        let max_value = 10_i64.pow(precision as u32) - 1;
+        let min_value = -(10_i64.pow(precision as u32)) + 1;
+
+        if integer > max_value || integer < min_value {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Value {} exceeds the range for precision {}",
+                integer, precision
+            )));
+        }
+
+        Ok(VariantDecimal8 { integer, scale })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariantDecimal16 {
+    pub(crate) integer: i128,
+    pub(crate) scale: u8,
+}
+
+impl VariantDecimal16 {
+    pub fn try_new(integer: i128, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+        // Validate that scale doesn't exceed precision
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Scale {} cannot be greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Validate precision is within reasonable bounds for 16-byte decimal
+        // Typically max precision for 16-byte decimal is around 38-39 digits
+        if precision > 38 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Precision {} exceeds maximum precision of 38 for 16-byte decimal",
+                precision
+            )));
+        }
+
+        // Check if the value fits within the specified precision
+        let max_value = 10_i128.pow(precision as u32) - 1;
+        let min_value = -(10_i128.pow(precision as u32)) + 1;
+
+        if integer > max_value || integer < min_value {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Value {} exceeds the range for precision {}",
+                integer, precision
+            )));
+        }
+
+        Ok(VariantDecimal16 { integer, scale })
+    }
+}
+
 impl<'a> ShortString<'a> {
-    /// Attempts to interpret `value` as a variant short string value.  
+    /// Attempts to interpret `value` as a variant short string value.
     ///
     /// # Validation
     ///
@@ -194,11 +314,11 @@ pub enum Variant<'m, 'v> {
     /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, MICROS)
     TimestampNtzMicros(NaiveDateTime),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 32-bits
-    Decimal4 { integer: i32, scale: u8 },
+    Decimal4(VariantDecimal4),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 64-bits
-    Decimal8 { integer: i64, scale: u8 },
+    Decimal8(VariantDecimal8),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 128-bits
-    Decimal16 { integer: i128, scale: u8 },
+    Decimal16(VariantDecimal16),
     /// Primitive (type_id=1): FLOAT
     Float(f32),
     /// Primitive (type_id=1): DOUBLE
@@ -269,15 +389,15 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value_data)?),
                 VariantPrimitiveType::Decimal4 => {
                     let (integer, scale) = decoder::decode_decimal4(value_data)?;
-                    Variant::Decimal4 { integer, scale }
+                    Variant::Decimal4(VariantDecimal4 { integer, scale })
                 }
                 VariantPrimitiveType::Decimal8 => {
                     let (integer, scale) = decoder::decode_decimal8(value_data)?;
-                    Variant::Decimal8 { integer, scale }
+                    Variant::Decimal8(VariantDecimal8 { integer, scale })
                 }
                 VariantPrimitiveType::Decimal16 => {
                     let (integer, scale) = decoder::decode_decimal16(value_data)?;
-                    Variant::Decimal16 { integer, scale }
+                    Variant::Decimal16(VariantDecimal16 { integer, scale })
                 }
                 VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
                 VariantPrimitiveType::Double => {
@@ -660,17 +780,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
         match *self {
-            Variant::Decimal4 { integer, scale } => Some((integer, scale)),
-            Variant::Decimal8 { integer, scale } => {
-                if let Ok(converted_integer) = integer.try_into() {
-                    Some((converted_integer, scale))
+            Variant::Decimal4(decimal4) => Some((decimal4.integer, decimal4.scale)),
+            Variant::Decimal8(decimal8) => {
+                if let Ok(converted_integer) = decimal8.integer.try_into() {
+                    Some((converted_integer, decimal8.scale))
                 } else {
                     None
                 }
             }
-            Variant::Decimal16 { integer, scale } => {
-                if let Ok(converted_integer) = integer.try_into() {
-                    Some((converted_integer, scale))
+            Variant::Decimal16(decimal16) => {
+                if let Ok(converted_integer) = decimal16.integer.try_into() {
+                    Some((converted_integer, decimal16.scale))
                 } else {
                     None
                 }
@@ -708,11 +828,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
         match *self {
-            Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
-            Variant::Decimal8 { integer, scale } => Some((integer, scale)),
-            Variant::Decimal16 { integer, scale } => {
-                if let Ok(converted_integer) = integer.try_into() {
-                    Some((converted_integer, scale))
+            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
+            Variant::Decimal8(decimal) => Some((decimal.integer, decimal.scale)),
+            Variant::Decimal16(decimal) => {
+                if let Ok(converted_integer) = decimal.integer.try_into() {
+                    Some((converted_integer, decimal.scale))
                 } else {
                     None
                 }
@@ -742,9 +862,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
         match *self {
-            Variant::Decimal4 { integer, scale } => Some((integer.into(), scale)),
-            Variant::Decimal8 { integer, scale } => Some((integer.into(), scale)),
-            Variant::Decimal16 { integer, scale } => Some((integer, scale)),
+            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
+            Variant::Decimal8(decimal) => Some((decimal.integer.into(), decimal.scale)),
+            Variant::Decimal16(decimal) => Some((decimal.integer, decimal.scale)),
             _ => None,
         }
     }
@@ -914,28 +1034,28 @@ impl From<i64> for Variant<'_, '_> {
 
 impl From<(i32, u8)> for Variant<'_, '_> {
     fn from(value: (i32, u8)) -> Self {
-        Variant::Decimal4 {
+        Variant::Decimal4(VariantDecimal4 {
             integer: value.0,
             scale: value.1,
-        }
+        })
     }
 }
 
 impl From<(i64, u8)> for Variant<'_, '_> {
     fn from(value: (i64, u8)) -> Self {
-        Variant::Decimal8 {
+        Variant::Decimal8(VariantDecimal8 {
             integer: value.0,
             scale: value.1,
-        }
+        })
     }
 }
 
 impl From<(i128, u8)> for Variant<'_, '_> {
     fn from(value: (i128, u8)) -> Self {
-        Variant::Decimal16 {
+        Variant::Decimal16(VariantDecimal16 {
             integer: value.0,
             scale: value.1,
-        }
+        })
     }
 }
 
