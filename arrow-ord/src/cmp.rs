@@ -581,8 +581,8 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
 
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             // Only need to compare the inlined bytes
-            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(&l_view, 12) };
-            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(&r_view, 12) };
+            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 12) };
+            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 12) };
             return l_bytes.cmp(r_bytes).is_eq();
         }
 
@@ -595,10 +595,10 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             // Only need to compare the inlined bytes
             let l_bytes = unsafe {
-                GenericByteViewArray::<T>::inline_value(&l.0.views().get_unchecked(l.1), 12)
+                GenericByteViewArray::<T>::inline_value(l.0.views().get_unchecked(l.1), 12)
             };
             let r_bytes = unsafe {
-                GenericByteViewArray::<T>::inline_value(&r.0.views().get_unchecked(r.1), 12)
+                GenericByteViewArray::<T>::inline_value(r.0.views().get_unchecked(r.1), 12)
             };
             return l_bytes.cmp(r_bytes).is_lt();
         }
@@ -646,10 +646,10 @@ pub fn compare_byte_view<T: ByteViewType>(
     if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
         // Only need to compare the inlined bytes
         let l_bytes = unsafe {
-            GenericByteViewArray::<T>::inline_value(&left.views().get_unchecked(left_idx), 12)
+            GenericByteViewArray::<T>::inline_value(left.views().get_unchecked(left_idx), 12)
         };
         let r_bytes = unsafe {
-            GenericByteViewArray::<T>::inline_value(&right.views().get_unchecked(right_idx), 12)
+            GenericByteViewArray::<T>::inline_value(right.views().get_unchecked(right_idx), 12)
         };
         return l_bytes.cmp(r_bytes);
     }
