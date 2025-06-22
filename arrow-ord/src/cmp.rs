@@ -565,6 +565,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
 
+    #[inline(always)]
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
@@ -575,8 +576,6 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return l_bytes.cmp(r_bytes).is_eq();
         }
 
-        // # Safety
-        // The index is within bounds as it is checked in value()
         let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
@@ -585,12 +584,13 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return false;
         }
 
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
+    #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
-        // # Safety
-        // The index is within bounds as it is checked in value()
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             // Only need to compare the inlined bytes
             let l_bytes = unsafe {
@@ -601,6 +601,8 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             };
             return l_bytes.cmp(r_bytes).is_lt();
         }
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
     }
 
@@ -634,6 +636,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+#[inline(always)]
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
