@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::Variant;
+use crate::{ShortString, Variant};
 use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
-const MAX_SHORT_STRING_SIZE: usize = 0x3F;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
@@ -114,11 +113,11 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 /// };
 /// assert_eq!(
 ///   variant_object.field_by_name("first_name").unwrap(),
-///   Some(Variant::ShortString("Jiaying"))
+///   Some(Variant::from("Jiaying"))
 /// );
 /// assert_eq!(
 ///   variant_object.field_by_name("last_name").unwrap(),
-///   Some(Variant::ShortString("Li"))
+///   Some(Variant::from("Li"))
 /// );
 /// ```
 ///
@@ -281,17 +280,18 @@ impl VariantBuilder {
         self.buffer.extend_from_slice(value);
     }
 
+    fn append_short_string(&mut self, value: ShortString) {
+        let inner = value.0;
+        self.buffer.push(short_string_header(inner.len()));
+        self.buffer.extend_from_slice(inner.as_bytes());
+    }
+
     fn append_string(&mut self, value: &str) {
-        if value.len() <= MAX_SHORT_STRING_SIZE {
-            self.buffer.push(short_string_header(value.len()));
-            self.buffer.extend_from_slice(value.as_bytes());
-        } else {
-            self.buffer
-                .push(primitive_header(VariantPrimitiveType::String));
-            self.buffer
-                .extend_from_slice(&(value.len() as u32).to_le_bytes());
-            self.buffer.extend_from_slice(value.as_bytes());
-        }
+        self.buffer
+            .push(primitive_header(VariantPrimitiveType::String));
+        self.buffer
+            .extend_from_slice(&(value.len() as u32).to_le_bytes());
+        self.buffer.extend_from_slice(value.as_bytes());
     }
 
     /// Add key to dictionary, return its ID
@@ -390,7 +390,8 @@ impl VariantBuilder {
             Variant::Float(v) => self.append_float(v),
             Variant::Double(v) => self.append_double(v),
             Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) | Variant::ShortString(s) => self.append_string(s),
+            Variant::String(s) => self.append_string(s),
+            Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(_) | Variant::List(_) => {
                 unreachable!("Object and List variants cannot be created through Into<Variant>")
             }
@@ -639,7 +640,7 @@ mod tests {
             builder.append_value("hello");
             let (metadata, value) = builder.finish();
             let variant = Variant::try_new(&metadata, &value).unwrap();
-            assert_eq!(variant, Variant::ShortString("hello"));
+            assert_eq!(variant, Variant::ShortString(ShortString("hello")));
         }
 
         {
@@ -688,7 +689,7 @@ mod tests {
                 assert_eq!(val1, Variant::Int8(2));
 
                 let val2 = list.get(2).unwrap();
-                assert_eq!(val2, Variant::ShortString("test"));
+                assert_eq!(val2, Variant::ShortString(ShortString("test")));
             }
             _ => panic!("Expected an array variant, got: {:?}", variant),
         }
