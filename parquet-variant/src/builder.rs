@@ -822,7 +822,7 @@ mod tests {
 
         builder.finish();
     }
-  
+
     #[test]
     fn test_append_object() {
         let (object_metadata, object_value) = {
