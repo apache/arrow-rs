@@ -589,17 +589,45 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
 
     #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        // If both arrays use only the inline buffer
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
-            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
-            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
-            let l_len = *l_view as u32 as usize;
-            let r_len = *r_view as u32 as usize;
-            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
-            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
-            return l_bytes.cmp(r_bytes).is_lt();
+            // Directly load the 16-byte view as an u128 (little-endian)
+            let l_bits: u128 = unsafe { *l.0.views().get_unchecked(l.1) };
+            let r_bits: u128 = unsafe { *r.0.views().get_unchecked(r.1) };
+
+            // The lower 32 bits encode the length (little-endian),
+            // the upper 96 bits hold the actual data
+            let l_len = (l_bits as u32) as usize;
+            let r_len = (r_bits as u32) as usize;
+
+            // Mask to keep only the upper 96 bits (data), zeroing out the length
+            // 0xFFFF_FFFF_0000_0000_..._0000
+            const DATA_MASK: u128 = !0u128 << 32;
+
+            // Remove the length bits, leaving only the data
+            let l_data = (l_bits & DATA_MASK) >> 32;
+            let r_data = (r_bits & DATA_MASK) >> 32;
+
+            // The data is stored in little-endian order. To compare lexicographically,
+            // convert to big-endian and use a simple < comparison:
+            let l_be = u128::from_be(l_data.to_le());
+            let r_be = u128::from_be(r_data.to_le());
+
+            // Compare only the first min_len bytes
+            let min_len = l_len.min(r_len);
+            // We have all 12 bytes in the high bits, but only want the top min_len
+            let shift = (12 - min_len) * 8;
+            let l_partial = l_be >> shift;
+            let r_partial = r_be >> shift;
+            if l_partial != r_partial {
+                return l_partial < r_partial;
+            }
+
+            // If the prefixes are equal, the shorter one is considered smaller
+            return l_len < r_len;
         }
-        // # Safety
-        // The index is within bounds as it is checked in value()
+
+        // Fallback to the generic, unchecked comparison for non-inline cases
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
     }
 
@@ -643,13 +671,41 @@ pub fn compare_byte_view<T: ByteViewType>(
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
     if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
-        let l_view = unsafe { left.views().get_unchecked(left_idx) };
-        let r_view = unsafe { right.views().get_unchecked(right_idx) };
-        let l_len = *l_view as u32 as usize;
-        let r_len = *r_view as u32 as usize;
-        let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
-        let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
-        return l_bytes.cmp(r_bytes);
+        // Directly load the 16-byte view as an u128 (little-endian)
+        let l_bits: u128 = unsafe { *left.views().get_unchecked(left_idx) };
+        let r_bits: u128 = unsafe { *left.views().get_unchecked(right_idx) };
+
+        // The lower 32 bits encode the length (little-endian),
+        // the upper 96 bits hold the actual data
+        let l_len = (l_bits as u32) as usize;
+        let r_len = (r_bits as u32) as usize;
+
+        // Mask to keep only the upper 96 bits (data), zeroing out the length
+        // 0xFFFF_FFFF_0000_0000_..._0000
+        const DATA_MASK: u128 = !0u128 << 32;
+
+        // Remove the length bits, leaving only the data
+        let l_data = (l_bits & DATA_MASK) >> 32;
+        let r_data = (r_bits & DATA_MASK) >> 32;
+
+        // The data is stored in little-endian order. To compare lexicographically,
+        // convert to big-endian and use a simple < comparison:
+        let l_be = u128::from_be(l_data.to_le());
+        let r_be = u128::from_be(r_data.to_le());
+
+        // Compare only the first min_len bytes
+        let min_len = l_len.min(r_len);
+        // We have all 12 bytes in the high bits, but only want the top min_len
+        let shift = (12 - min_len) * 8;
+        let l_partial = l_be >> shift;
+        let r_partial = r_be >> shift;
+        if l_partial < r_partial {
+            return std::cmp::Ordering::Less;
+        } else if l_partial > r_partial {
+            return std::cmp::Ordering::Greater;
+        }
+        // Prefix equal: shorter length is less
+        return l_len.cmp(&r_len);
     }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
