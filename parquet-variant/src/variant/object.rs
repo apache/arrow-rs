@@ -22,6 +22,9 @@ use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
+// The value header occupies one byte; use a named constant for readability
+const NUM_HEADER_BYTES: usize = 1;
+
 /// Header structure for [`VariantObject`]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantObjectHeader {
@@ -72,36 +75,44 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantObjectHeader::try_new(header_byte)?;
 
-        // Determine num_elements size based on is_large flag
+        // Determine num_elements size based on is_large flag and fetch the value
         let num_elements_size = if header.is_large {
             OffsetSizeBytes::Four
         } else {
             OffsetSizeBytes::One
         };
+        let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
 
-        // Parse num_elements
-        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
+        // Calculate byte offsets for different sections with overflow protection
+        let overflow = || ArrowError::InvalidArgumentError("Integer overflow".into());
+        let field_ids_start_byte = NUM_HEADER_BYTES
+            .checked_add(num_elements_size as usize)
+            .ok_or_else(overflow)?;
 
-        // Calculate byte offsets for different sections
-        let field_ids_start_byte = 1 + num_elements_size as usize;
-        let field_offsets_start_byte =
-            field_ids_start_byte + num_elements * header.field_id_size as usize;
-        let values_start_byte =
-            field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
+        let field_offsets_start_byte = num_elements
+            .checked_mul(header.field_id_size as usize)
+            .and_then(|n| n.checked_add(field_ids_start_byte))
+            .ok_or_else(overflow)?;
+
+        let values_start_byte = num_elements
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(header.field_offset_size as usize))
+            .and_then(|n| n.checked_add(field_offsets_start_byte))
+            .ok_or_else(overflow)?;
 
         // Spec says: "The last field_offset points to the byte after the end of the last value"
         //
         // Use the last offset as a bounds check. The iterator check below doesn't use it -- offsets
         // are not monotonic -- so we have to check separately here.
-        let last_field_offset =
-            header
-                .field_offset_size
-                .unpack_usize(value, field_offsets_start_byte, num_elements)?;
-        if values_start_byte + last_field_offset > value.len() {
+        let end_offset = header
+            .field_offset_size
+            .unpack_usize(value, field_offsets_start_byte, num_elements)?
+            .checked_add(values_start_byte)
+            .ok_or_else(overflow)?;
+        if end_offset > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Last field offset value {} at offset {} is outside the value slice of length {}",
-                last_field_offset,
-                values_start_byte,
+                "Last field offset value {} is outside the value slice of length {}",
+                end_offset,
                 value.len()
             )));
         }
@@ -140,7 +151,11 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             self.field_offsets_start_byte,
             i,
         )?;
-        let value_bytes = slice_from_slice(self.value, self.values_start_byte + start_offset..)?;
+        let value_start = self
+            .values_start_byte
+            .checked_add(start_offset)
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
+        let value_bytes = slice_from_slice(self.value, value_start..)?;
         Variant::try_new_with_metadata(self.metadata, value_bytes)
     }
 

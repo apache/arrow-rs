@@ -20,6 +20,9 @@ use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
+// The value header occupies one byte; use a named constant for readability
+const NUM_HEADER_BYTES: usize = 1;
+
 /// A parsed version of the variant array value header byte.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantListHeader {
@@ -78,12 +81,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
             false => OffsetSizeBytes::One,
         };
 
-        // Skip the header byte to read the num_elements
-        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
-        let first_offset_byte = 1 + num_elements_size as usize;
+        // Skip the header byte to read the num_elements; the offset array immediately follows
+        let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
+        let first_offset_byte = NUM_HEADER_BYTES + num_elements_size as usize;
 
-        let overflow =
-            || ArrowError::InvalidArgumentError("Variant value_byte_length overflow".into());
+        let overflow = || ArrowError::InvalidArgumentError("Integer overflow".into());
 
         // 1.  num_elements + 1
         let n_offsets = num_elements.checked_add(1).ok_or_else(overflow)?;
@@ -139,9 +141,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
         };
 
         // Read the value bytes from the offsets
-        let variant_value_bytes = slice_from_slice(
+        let variant_value_bytes = slice_from_slice_at_offset(
             self.value,
-            self.first_value_byte + unpack(index)?..self.first_value_byte + unpack(index + 1)?,
+            self.first_value_byte,
+            unpack(index)?..unpack(index + 1)?,
         )?;
         let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)

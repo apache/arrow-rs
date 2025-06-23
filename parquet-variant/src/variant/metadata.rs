@@ -35,6 +35,9 @@ pub(crate) struct VariantMetadataHeader {
 // purposes and to make that visible.
 const CORRECT_VERSION_VALUE: u8 = 1;
 
+// The metadata header occupies one byte; use a named constant for readability
+const NUM_HEADER_BYTES: usize = 1;
+
 impl VariantMetadataHeader {
     /// Tries to construct the variant metadata header, which has the form
     ///
@@ -102,20 +105,22 @@ impl<'m> VariantMetadata<'m> {
         let header_byte = first_byte_from_slice(bytes)?;
         let header = VariantMetadataHeader::try_new(header_byte)?;
 
-        // Offset 1, index 0 because first element after header is dictionary size
-        let dict_size = header.offset_size.unpack_usize(bytes, 1, 0)?;
+        // First element after header is dictionary size
+        let dict_size = header
+            .offset_size
+            .unpack_usize(bytes, NUM_HEADER_BYTES, 0)?;
 
         // Calculate the starting offset of the dictionary string bytes.
         //
         // Value header, dict_size (offset_size bytes), and dict_size+1 offsets
-        // = 1 + offset_size + (dict_size + 1) * offset_size
-        // = (dict_size + 2) * offset_size + 1
+        // = NUM_HEADER_BYTES + offset_size + (dict_size + 1) * offset_size
+        // = (dict_size + 2) * offset_size + NUM_HEADER_BYTES
         let dictionary_key_start_byte = dict_size
             .checked_add(2)
             .and_then(|n| n.checked_mul(header.offset_size as usize))
-            .and_then(|n| n.checked_add(1))
-            .ok_or_else(|| ArrowError::InvalidArgumentError("metadata length overflow".into()))?;
-        println!("dictionary_key_start_byte: {dictionary_key_start_byte}");
+            .and_then(|n| n.checked_add(NUM_HEADER_BYTES))
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
+
         let new_self = Self {
             bytes,
             header,
@@ -149,16 +154,17 @@ impl<'m> VariantMetadata<'m> {
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
     fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
-        // Skipping the header byte (setting byte_offset = 1) and the dictionary_size (setting offset_index +1)
+        // Skip the header byte and the dictionary_size entry (by offset_index + 1)
         let bytes = slice_from_slice(self.bytes, ..self.dictionary_key_start_byte)?;
-        self.header.offset_size.unpack_usize(bytes, 1, i + 1)
+        self.header
+            .offset_size
+            .unpack_usize(bytes, NUM_HEADER_BYTES, i + 1)
     }
 
     /// Gets a dictionary entry by index
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let dictionary_keys_bytes = slice_from_slice(self.bytes, self.dictionary_key_start_byte..)?;
         let byte_range = self.get_offset(i)?..self.get_offset(i + 1)?;
-        string_from_slice(dictionary_keys_bytes, byte_range)
+        string_from_slice(self.bytes, self.dictionary_key_start_byte, byte_range)
     }
 
     /// Get all dictionary entries as an Iterator of strings

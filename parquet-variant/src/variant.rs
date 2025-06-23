@@ -76,13 +76,13 @@ impl<'a> TryFrom<&'a str> for ShortString<'a> {
     }
 }
 
-impl<'a> AsRef<str> for ShortString<'a> {
+impl AsRef<str> for ShortString<'_> {
     fn as_ref(&self) -> &str {
         self.0
     }
 }
 
-impl<'a> Deref for ShortString<'a> {
+impl Deref for ShortString<'_> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
