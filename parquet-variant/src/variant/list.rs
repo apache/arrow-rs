@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::OffsetSizeBytes;
-use crate::utils::{first_byte_from_slice, slice_from_slice, validate_fallible_iterator};
+use crate::utils::{first_byte_from_slice, slice_from_slice_at_offset, validate_fallible_iterator};
 use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
