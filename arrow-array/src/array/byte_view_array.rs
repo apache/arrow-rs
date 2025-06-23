@@ -545,9 +545,41 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_len = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {
-            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
-            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
-            return l_data.cmp(r_data);
+            // Directly load the 16-byte view as an u128 (little-endian)
+            let l_bits: u128 = *l_view;
+            let r_bits: u128 = *r_view;
+
+            // The lower 32 bits encode the length (little-endian),
+            // the upper 96 bits hold the actual data
+            let l_len = (l_bits as u32) as usize;
+            let r_len = (r_bits as u32) as usize;
+
+            // Mask to keep only the upper 96 bits (data), zeroing out the length
+            // 0xFFFF_FFFF_0000_0000_..._0000
+            const DATA_MASK: u128 = !0u128 << 32;
+
+            // Remove the length bits, leaving only the data
+            let l_data = (l_bits & DATA_MASK) >> 32;
+            let r_data = (r_bits & DATA_MASK) >> 32;
+
+            // The data is stored in little-endian order. To compare lexicographically,
+            // convert to big-endian and use a simple < comparison:
+            let l_be = u128::from_be(l_data.to_le());
+            let r_be = u128::from_be(r_data.to_le());
+
+            // Compare only the first min_len bytes
+            let min_len = l_len.min(r_len);
+            // We have all 12 bytes in the high bits, but only want the top min_len
+            let shift = (12 - min_len) * 8;
+            let l_partial = l_be >> shift;
+            let r_partial = r_be >> shift;
+            if l_partial < r_partial {
+                return std::cmp::Ordering::Less;
+            } else if l_partial > r_partial {
+                return std::cmp::Ordering::Greater;
+            }
+            // Prefix equal: shorter length is less
+            return l_len.cmp(&r_len);
         }
 
         // one of the string is larger than 12 bytes,
