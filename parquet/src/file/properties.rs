@@ -562,23 +562,6 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
-    /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
-    ///
-    /// The parquet writer will attempt to limit the size of each
-    /// `DataPage` used to store dictionaries to this many
-    /// bytes. Reducing this value will result in larger parquet
-    /// files, but may improve the effectiveness of page index based
-    /// predicate pushdown during reading.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
-        self.default_column_properties
-            .set_dictionary_page_size_limit(value);
-        self
-    }
-
     /// Sets write batch size (defaults to 1024 via [`DEFAULT_WRITE_BATCH_SIZE`]).
     ///
     /// For performance reasons, data for each column is written in
@@ -768,6 +751,23 @@ impl WriterPropertiesBuilder {
     /// encoding in `set_encoding` method.
     pub fn set_dictionary_enabled(mut self, value: bool) -> Self {
         self.default_column_properties.set_dictionary_enabled(value);
+        self
+    }
+
+    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
+    ///
+    /// The parquet writer will attempt to limit the size of each
+    /// `DataPage` used to store dictionaries to this many
+    /// bytes. Reducing this value will result in larger parquet
+    /// files, but may improve the effectiveness of page index based
+    /// predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
+        self.default_column_properties
+            .set_dictionary_page_size_limit(value);
         self
     }
 
