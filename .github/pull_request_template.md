@@ -13,6 +13,14 @@ Explaining clearly why changes are proposed helps reviewers understand your chan
 
 There is no need to duplicate the description in the issue here but it is sometimes worth providing a summary of the individual changes in this PR.
 
+# Are these changes tested?
+
+We typically require tests for all PRs in order to:
+1. Prevent the code from being accidentally broken by subsequent changes
+2. Serve as another way to document the expected behavior of the code
+
+If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
+
 # Are there any user-facing changes?
 
 If there are user-facing changes then we may require documentation to be updated before approving the PR.
