@@ -18,19 +18,63 @@
 //! End-to-end check: (almost) every sample from apache/parquet-testing/variant
 //! can be parsed into our `Variant`.
 
-// NOTE: We keep this file separate rather than a test mod inside variant.rs because it should be
-// moved to the test folder later
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use chrono::NaiveDate;
 use parquet_variant::{ShortString, Variant, VariantBuilder};
 
+/// Returns a directory path for the parquet variant test data.
+///
+/// The data lives in the `parquet-testing` git repository:
+/// <https://github.com/apache/parquet-testing>
+///
+/// Normally this is checked out as a git submodule in the root of the `arrow-rs` repository,
+/// so the relative path is
+/// * `CARGO_MANIFEST_DIR/../parquet-testing/variant`.
+///
+/// However, the user can override this by setting the environment variable `PARQUET_TEST_DATA`
+/// to point to a different directory (as is done by the `verify-release-candidate.sh` script).
+///
+/// In this case, the environment variable `PARQUET_TEST_DATA` is expected to point to a directory
+/// `parquet-testing/data`, so the relative path to the `variant` subdirectory is
+/// * `PARQUET_TEST_DATA/../variant`.
 fn cases_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // which we expect to point at "../parquet-testing/data"
+    let env_name = "PARQUET_TEST_DATA";
+    if let Ok(dir) = env::var(env_name) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            let pb = PathBuf::from(trimmed).join("..").join("variant");
+            if pb.is_dir() {
+                return pb;
+            } else {
+                panic!(
+                    "Can't find variant data at `{pb:?}`. Used value of env `{env_name}`../variant ",
+                )
+            }
+        }
+    }
+
+    // PARQUET_TEST_DATA is undefined or its value is trimmed to empty, let's try default dir.
+
+    // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
+    // set by `cargo run` or `cargo test`, see:
+    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
+    let pb = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("parquet-testing")
-        .join("variant")
+        .join("variant");
+
+    if pb.is_dir() {
+        pb
+    } else {
+        panic!(
+            "env `{env_name}` is undefined or has empty value, and \
+             `CARGO_MANIFEST_DIR/../parquet-testing/variant` is not a directory: `{pb:?}`\n\
+             HINT: try running `git submodule update --init`",
+        )
+    }
 }
 
 struct Case {
