@@ -1,4 +1,5 @@
 use crate::cast::*;
+
 /// Attempts to cast a Run-End Encoded array to another type, handling both REE-to-REE
 /// and REE-to-other type conversions with proper validation and error handling.
 ///
@@ -171,7 +172,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     values_indices.push(0);
     // Step 3: Identify runs of consecutive equal values
     for i in 1..cast_array.len() {
-        // For simplicity, we'll use a basic comparison approach
+        // We can afford to perform the simple comparison here as we already validated the type in [can_cast_run_end_encoded]
         let values_equal = match (cast_array.is_null(i), cast_array.is_null(i - 1)) {
             (true, true) => true, // Both null
             (false, false) => {
@@ -190,18 +191,14 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     }
 
     // Add the final run end
-    run_ends_vec.push(cast_array.len() as usize);
+    run_ends_vec.push(cast_array.len());
 
     // Step 4: Build the run_ends array
     for run_end in run_ends_vec {
-        run_ends_builder.append_value(match K::Native::from_usize(run_end) {
-            Some(value) => value,
-            None => {
-                return Err(ArrowError::CastError(
-                    "Run end index out of range".to_string(),
-                ))
-            }
-        });
+        run_ends_builder.append_value(
+            K::Native::from_usize(run_end)
+                .ok_or_else(|| ArrowError::CastError("Run end index out of range".to_string()))?,
+        );
     }
     let run_ends_array = run_ends_builder.finish();
 
@@ -216,8 +213,13 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     Ok(Arc::new(run_array))
 }
 
-// There might be a cleaner way to handle this but for now this works
-pub(crate) fn can_cast_run_end_encoded(from_type: &DataType, to_type: &DataType) -> bool {
+/// Checks if a given data type can be cast to a RunEndEncoded array.
+///
+/// # Arguments
+/// * `from_type` - The source data type to be checked
+/// * `to_type` - The target data type to be checked
+///
+pub(crate) fn can_cast_to_run_end_encoded(from_type: &DataType, to_type: &DataType) -> bool {
     match to_type {
         DataType::RunEndEncoded(_, _) => {
             // Check if from_type supports equality (can be REE-encoded)

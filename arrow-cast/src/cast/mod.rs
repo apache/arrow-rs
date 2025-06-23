@@ -48,7 +48,7 @@ use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::run_array::{
-    can_cast_run_end_encoded, cast_to_run_end_encoded, run_end_encoded_cast,
+    can_cast_to_run_end_encoded, cast_to_run_end_encoded, run_end_encoded_cast,
 };
 use crate::cast::string::*;
 
@@ -142,7 +142,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
-        (_, RunEndEncoded(_, _value_type)) => can_cast_run_end_encoded(from_type, to_type),
+        (_, RunEndEncoded(_, _value_type)) => can_cast_to_run_end_encoded(from_type, to_type),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
@@ -10716,13 +10716,13 @@ mod tests {
         )) as ArrayRef;
         assert_eq!(*fixed_array, *r);
     }
+
     #[cfg(test)]
     mod run_end_encoded_tests {
         use super::*;
         use arrow_schema::{DataType, Field};
         use std::sync::Arc;
 
-        /// Test casting FROM RunEndEncoded to primitive types
         #[test]
         fn test_run_end_encoded_to_primitive() {
             // Create a RunEndEncoded array: [1, 1, 2, 2, 2, 3]
@@ -10740,10 +10740,8 @@ mod tests {
             );
         }
 
-        /// Test casting FROM RunEndEncoded to string
         #[test]
         fn test_run_end_encoded_to_string() {
-            // Create a RunEndEncoded array with Int32 values: [10, 10, 20, 30, 30]
             let run_ends = Int32Array::from(vec![2, 3, 5]);
             let values = Int32Array::from(vec![10, 20, 30]);
             let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
@@ -10760,7 +10758,6 @@ mod tests {
             assert_eq!(result_array.value(2), "20");
         }
 
-        /// Test casting TO RunEndEncoded from primitive types
         #[test]
         fn test_primitive_to_run_end_encoded() {
             // Create an Int32 array with repeated values: [1, 1, 2, 2, 2, 3]
@@ -10788,7 +10785,94 @@ mod tests {
             assert_eq!(values_array.values(), &[1, 2, 3]);
         }
 
-        /// Test casting TO RunEndEncoded from string
+        #[test]
+        fn test_primitive_to_run_end_encoded_with_nulls() {
+            let source_array = Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(2),
+                Some(2),
+                Some(3),
+                Some(3),
+                None,
+                None,
+                Some(4),
+                Some(4),
+                Some(5),
+                Some(5),
+                None,
+                None,
+            ]);
+            let array_ref = Arc::new(source_array) as ArrayRef;
+            let target_type = DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            );
+            let cast_result = cast(&array_ref, &target_type).unwrap();
+            let result_run_array = cast_result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+            assert_eq!(
+                result_run_array.run_ends().values(),
+                &[2, 4, 6, 8, 10, 12, 14, 16]
+            );
+            assert_eq!(
+                result_run_array
+                    .values()
+                    .as_primitive::<Int32Type>()
+                    .values(),
+                &[1, 0, 2, 3, 0, 4, 5, 0]
+            );
+            assert_eq!(result_run_array.values().null_count(), 3);
+        }
+
+        #[test]
+        fn test_primitive_to_run_end_encoded_with_nulls_consecutive() {
+            let source_array = Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(4),
+                Some(20),
+                Some(500),
+                Some(500),
+                None,
+                None,
+            ]);
+            let array_ref = Arc::new(source_array) as ArrayRef;
+            let target_type = DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int16, false)),
+                Arc::new(Field::new("values", DataType::Int64, true)),
+            );
+            let cast_result = cast(&array_ref, &target_type).unwrap();
+            let result_run_array = cast_result
+                .as_any()
+                .downcast_ref::<RunArray<Int16Type>>()
+                .unwrap();
+            assert_eq!(
+                result_run_array.run_ends().values(),
+                &[2, 10, 11, 12, 14, 16]
+            );
+            assert_eq!(
+                result_run_array
+                    .values()
+                    .as_primitive::<Int64Type>()
+                    .values(),
+                &[1, 0, 4, 20, 500, 0]
+            );
+            assert_eq!(result_run_array.values().null_count(), 2);
+        }
+
         #[test]
         fn test_string_to_run_end_encoded() {
             // Create a String array with repeated values: ["a", "a", "b", "c", "c"]
@@ -10818,7 +10902,6 @@ mod tests {
             assert_eq!(values_array.value(2), "c");
         }
 
-        /// Test casting with type conversion (Int32 -> RunEndEncoded<Int32, String>)
         #[test]
         fn test_cast_with_type_conversion() {
             // Create an Int32 array: [1, 1, 2, 2, 3]
@@ -10851,7 +10934,6 @@ mod tests {
             assert_eq!(values_array.value(2), "3");
         }
 
-        /// Test casting empty array to RunEndEncoded
         #[test]
         fn test_empty_array_to_run_end_encoded() {
             // Create an empty Int32 array
@@ -10876,7 +10958,6 @@ mod tests {
             assert_eq!(result_run_array.values().len(), 0);
         }
 
-        /// Test casting RunEndEncoded with nulls
         #[test]
         fn test_run_end_encoded_with_nulls() {
             // Create a RunEndEncoded array with nulls: [1, 1, null, 2, 2]
@@ -10895,7 +10976,6 @@ mod tests {
             assert_eq!(result_run_array.value(4), "2");
         }
 
-        /// Test different index types (Int16, Int64)
         #[test]
         fn test_different_index_types() {
             // Test with Int16 index type
@@ -10917,6 +10997,7 @@ mod tests {
             let cast_result = cast(&array_ref, &target_type).unwrap();
             assert_eq!(cast_result.data_type(), &target_type);
         }
+
         #[test]
         fn test_unsupported_cast_to_run_end_encoded() {
             // Create a Struct array - complex nested type that might not be supported
@@ -10935,8 +11016,10 @@ mod tests {
             // Expect this to fail
             assert!(cast_result.is_err());
         }
+
         #[test]
         fn test_cast_run_end_encoded_int64_to_int16_should_fail() {
+            /// Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail
             use arrow_array::{Int64Array, RunArray, StringArray};
             use arrow_schema::{DataType, Field};
             use std::sync::Arc;
@@ -10973,8 +11056,10 @@ mod tests {
                 }
             }
         }
+
         #[test]
         fn test_cast_run_end_encoded_int16_to_int64_should_succeed() {
+            /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
             use arrow_array::{Int16Array, RunArray, StringArray};
             use arrow_schema::{DataType, Field};
             use std::sync::Arc;
@@ -11023,6 +11108,7 @@ mod tests {
 
         #[test]
         fn test_cast_run_end_encoded_int32_to_int16_should_fail() {
+            /// Test casting RunEndEncoded<Int32, String> to RunEndEncoded<Int16, String> should fail
             use arrow_array::{Int32Array, RunArray, StringArray};
             use arrow_schema::{DataType, Field};
             use std::sync::Arc;
@@ -11030,9 +11116,6 @@ mod tests {
             // Construct a valid REE array with Int32 run-ends
             let run_ends = Int32Array::from(vec![1000, 50000, 80000]); // values too large for Int16
             let values = StringArray::from(vec!["x", "y", "z"]);
-
-            println!("Original run_ends null count: {}", run_ends.null_count());
-            println!("Original run_ends values: {:?}", run_ends.values());
 
             let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
             let array_ref = Arc::new(ree_array) as ArrayRef;
