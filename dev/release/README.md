@@ -109,20 +109,20 @@ distribution servers.
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-Use a string such as `43.0.0` as the `<version>`.
-
-Create and push the tag thusly:
-
-```shell
-git fetch apache
-git tag <version> apache/main
-# push tag to apache
-git push apache <version>
-```
-
 ### Pick an Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
+
+Use a string such as `43.0.0` as the `<version>`.
+
+Create and push the tag thusly (for example, for version `4.1.0` and `rc2` would be `4.1.0-rc2`):
+
+```shell
+git fetch apache
+git tag <version>-<rc> apache/main
+# push tag to apache
+git push apache <version>-<rc>
+```
 
 ### Create, sign, and upload tarball
 
@@ -191,9 +191,15 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 ### If the release is approved,
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
+Then, create a new release on GitHub using the tag `<version>` (e.g. `4.1.0`).
 
-Rust Arrow Crates:
+Push the release tag to github
+```shell
+git tag <version> <version>-<rc>
+git push apache <version>
+```
+
+Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
