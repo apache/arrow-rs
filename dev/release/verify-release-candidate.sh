@@ -115,7 +115,9 @@ test_source_distribution() {
 
   # ignore arrow-pyarrow due to
   # https://github.com/apache/arrow-rs/issues/7736
-  cargo test --all --exclude arrow-pyarrow
+  # ignore parquet-variant due to
+  # https://github.com/apache/arrow-rs/issues/7746
+  cargo test --all --exclude arrow-pyarrow --exclude parquet-variant
 
   # verify that the leaf crates can be published to crates.io
   # we can't verify crates that depend on others
