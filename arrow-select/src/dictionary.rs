@@ -76,6 +76,9 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
 pub fn garbage_collect_any_dictionary(
     dictionary: &dyn AnyDictionaryArray,
 ) -> Result<ArrayRef, ArrowError> {
+    // FIXME: this is a workaround for MSRV Rust versions below 1.86 where trait upcasting is not stable.
+    // From 1.86 onward, `&dyn AnyDictionaryArray` can be directly passed to `downcast_dictionary_array!`.
+    let dictionary = &*dictionary.slice(0, dictionary.len());
     downcast_dictionary_array!(
         dictionary => garbage_collect_dictionary(dictionary).map(|dict| Arc::new(dict) as ArrayRef),
         _ => unreachable!("have a dictionary array")
