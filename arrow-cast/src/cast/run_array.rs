@@ -6,7 +6,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     match array.data_type() {
-        DataType::RunEndEncoded(_run_end_field, _values_field) => {
+        DataType::RunEndEncoded(_, _) => {
             let run_array = array
                 .as_any()
                 .downcast_ref::<RunArray<K>>()
@@ -16,16 +16,33 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
 
             match to_type {
                 // CASE 1: Stay as RunEndEncoded, cast only the values
-                DataType::RunEndEncoded(_target_run_end_field, target_value_field) => {
+                DataType::RunEndEncoded(target_index_field, target_value_field) => {
                     let cast_values =
                         cast_with_options(values, target_value_field.data_type(), cast_options)?;
 
                     let run_ends_array = PrimitiveArray::<K>::from_iter_values(
                         run_array.run_ends().values().iter().copied(),
                     );
-
-                    let new_run_array =
-                        RunArray::<K>::try_new(&run_ends_array, cast_values.as_ref())?;
+                    let cast_run_ends = cast_with_options(
+                        &run_ends_array,
+                        target_index_field.data_type(),
+                        cast_options,
+                    )?;
+                    let new_run_array: ArrayRef = match target_index_field.data_type() {
+                        DataType::Int16 => {
+                            let re = cast_run_ends.as_primitive::<Int16Type>();
+                            Arc::new(RunArray::<Int16Type>::try_new(re, cast_values.as_ref())?)
+                        }
+                        DataType::Int32 => {
+                            let re = cast_run_ends.as_primitive::<Int32Type>();
+                            Arc::new(RunArray::<Int32Type>::try_new(re, cast_values.as_ref())?)
+                        }
+                        DataType::Int64 => {
+                            let re = cast_run_ends.as_primitive::<Int64Type>();
+                            Arc::new(RunArray::<Int64Type>::try_new(re, cast_values.as_ref())?)
+                        }
+                        _ => unreachable!("Run-end type must be i16, i32, or i64"),
+                    };
                     Ok(Arc::new(new_run_array))
                 }
 
