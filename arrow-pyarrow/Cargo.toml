@@ -16,24 +16,27 @@
 # under the License.
 
 [package]
-name = "parquet-variant"
-# This package is still in development and thus the version does
-# not follow the versions of the rest of the crates in this repo.
-version = "0.1.0"
-license = { workspace = true }
-description = "Apache Parquet Variant implementation in Rust"
+name = "arrow-pyarrow"
+version = { workspace = true }
+description = "Pyarrow bindings"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-keywords = ["arrow", "parquet", "variant"]
-readme = "README.md"
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
 edition = { workspace = true }
-# needs a newer version than workspace due to
-# rror: `Option::<T>::unwrap` is not yet stable as a const fn
-rust-version = "1.83"
-
-[dependencies]
-arrow-schema = { workspace = true }
-chrono = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
+name = "arrow_pyarrow"
+bench = false
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+arrow-array = { workspace = true, features = ["ffi"] }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
+pyo3 = { version = "0.24.1", default-features = false }

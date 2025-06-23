@@ -27,7 +27,7 @@ use std::fmt::Display;
 use comfy_table::{Cell, Table};
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::display::{ArrayFormatter, FormatOptions};
 
@@ -65,6 +65,38 @@ pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, Ar
     pretty_format_batches_with_options(results, &options)
 }
 
+/// Create a visual representation of [`RecordBatch`]es with a provided schema.
+///
+/// Useful to display empty batches.
+///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_cast::pretty::pretty_format_batches_with_schema;
+/// # use arrow_schema::{DataType, Field, Schema};
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("a", DataType::Int32, false),
+///     Field::new("b", DataType::Utf8, true),
+/// ]));
+/// // Note, returned object implements `Display`
+/// let pretty_table = pretty_format_batches_with_schema(schema, &[]).unwrap();
+/// let table_str = format!("Batches:\n{pretty_table}");
+/// assert_eq!(table_str,
+/// r#"Batches:
+/// +---+---+
+/// | a | b |
+/// +---+---+
+/// +---+---+"#);
+/// ```
+pub fn pretty_format_batches_with_schema(
+    schema: SchemaRef,
+    results: &[RecordBatch],
+) -> Result<impl Display, ArrowError> {
+    let options = FormatOptions::default().with_display_error(true);
+    create_table(Some(schema), results, &options)
+}
+
 /// Create a visual representation of [`RecordBatch`]es with formatting options.
 ///
 /// # Arguments
@@ -99,7 +131,7 @@ pub fn pretty_format_batches_with_options(
     results: &[RecordBatch],
     options: &FormatOptions,
 ) -> Result<impl Display, ArrowError> {
-    create_table(results, options)
+    create_table(None, results, options)
 }
 
 /// Create a visual representation of [`ArrayRef`]
@@ -139,29 +171,41 @@ pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<(), ArrowEr
 }
 
 /// Convert a series of record batches into a table
-fn create_table(results: &[RecordBatch], options: &FormatOptions) -> Result<Table, ArrowError> {
+fn create_table(
+    schema_opt: Option<SchemaRef>,
+    results: &[RecordBatch],
+    options: &FormatOptions,
+) -> Result<Table, ArrowError> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
+
+    let schema_opt = schema_opt.or_else(|| {
+        if results.is_empty() {
+            None
+        } else {
+            Some(results[0].schema())
+        }
+    });
+
+    if let Some(schema) = schema_opt {
+        let mut header = Vec::new();
+        for field in schema.fields() {
+            if options.types_info() {
+                header.push(Cell::new(format!(
+                    "{}\n{}",
+                    field.name(),
+                    field.data_type()
+                )))
+            } else {
+                header.push(Cell::new(field.name()));
+            }
+        }
+        table.set_header(header);
+    }
 
     if results.is_empty() {
         return Ok(table);
     }
-
-    let schema = results[0].schema();
-
-    let mut header = Vec::new();
-    for field in schema.fields() {
-        if options.types_info() {
-            header.push(Cell::new(format!(
-                "{}\n{}",
-                field.name(),
-                field.data_type()
-            )))
-        } else {
-            header.push(Cell::new(field.name()));
-        }
-    }
-    table.set_header(header);
 
     for batch in results {
         let formatters = batch

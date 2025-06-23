@@ -38,7 +38,7 @@ use crate::sql::CommandGetDbSchemas;
 /// Builds rows like this:
 ///
 /// * catalog_name: utf8,
-/// * db_schema_name: utf8,
+/// * db_schema_name: utf8 not null
 pub struct GetDbSchemasBuilder {
     // Specifies the Catalog to search for the tables.
     // - An empty string retrieves those without a catalog.
@@ -177,7 +177,7 @@ fn get_db_schemas_schema() -> SchemaRef {
 /// The schema for GetDbSchemas
 static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, false),
     ]))
 });

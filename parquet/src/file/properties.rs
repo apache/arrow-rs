@@ -158,7 +158,6 @@ pub type WriterPropertiesPtr = Arc<WriterProperties>;
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
     data_page_size_limit: usize,
-    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -212,7 +211,18 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_page_size_limit`]
     pub fn dictionary_page_size_limit(&self) -> usize {
-        self.dictionary_page_size_limit
+        self.default_column_properties
+            .dictionary_page_size_limit()
+            .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
+    }
+
+    /// Returns dictionary page size limit for a specific column.
+    pub fn column_dictionary_page_size_limit(&self, col: &ColumnPath) -> usize {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.dictionary_page_size_limit())
+            .or_else(|| self.default_column_properties.dictionary_page_size_limit())
+            .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
     }
 
     /// Returns the maximum page row count
@@ -443,7 +453,6 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
-    dictionary_page_size_limit: usize,
     data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_size: usize,
@@ -467,7 +476,6 @@ impl WriterPropertiesBuilder {
     fn with_defaults() -> Self {
         Self {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
-            dictionary_page_size_limit: DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_size: DEFAULT_MAX_ROW_GROUP_SIZE,
@@ -491,7 +499,6 @@ impl WriterPropertiesBuilder {
     pub fn build(self) -> WriterProperties {
         WriterProperties {
             data_page_size_limit: self.data_page_size_limit,
-            dictionary_page_size_limit: self.dictionary_page_size_limit,
             data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_size: self.max_row_group_size,
@@ -567,7 +574,8 @@ impl WriterPropertiesBuilder {
     /// Note: this is a best effort limit based on value of
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
-        self.dictionary_page_size_limit = value;
+        self.default_column_properties
+            .set_dictionary_page_size_limit(value);
         self
     }
 
@@ -895,6 +903,15 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets dictionary page size limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_dictionary_page_size_limit`].
+    pub fn set_column_dictionary_page_size_limit(mut self, col: ColumnPath, value: usize) -> Self {
+        self.get_mut_props(col)
+            .set_dictionary_page_size_limit(value);
+        self
+    }
+
     /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
@@ -1048,6 +1065,7 @@ impl Default for BloomFilterProperties {
 struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
+    dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
     write_page_header_statistics: Option<bool>,
@@ -1082,6 +1100,11 @@ impl ColumnProperties {
     /// Sets whether dictionary encoding is enabled for this column.
     fn set_dictionary_enabled(&mut self, enabled: bool) {
         self.dictionary_enabled = Some(enabled);
+    }
+
+    /// Sets dictionary page size limit for this column.
+    fn set_dictionary_page_size_limit(&mut self, value: usize) {
+        self.dictionary_page_size_limit = Some(value);
     }
 
     /// Sets the statistics level for this column.
@@ -1152,6 +1175,11 @@ impl ColumnProperties {
     /// been provided.
     fn dictionary_enabled(&self) -> Option<bool> {
         self.dictionary_enabled
+    }
+
+    /// Returns optional dictionary page size limit for this column.
+    fn dictionary_page_size_limit(&self) -> Option<usize> {
+        self.dictionary_page_size_limit
     }
 
     /// Returns optional statistics level requested for this column. If result is `None`,
@@ -1504,6 +1532,24 @@ mod tests {
                 fpp: 0.1,
                 ndv: 1_000_000_u64
             })
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_column_dictionary_page_size_limit() {
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(100)
+            .set_column_dictionary_page_size_limit(ColumnPath::from("col"), 10)
+            .build();
+
+        assert_eq!(props.dictionary_page_size_limit(), 100);
+        assert_eq!(
+            props.column_dictionary_page_size_limit(&ColumnPath::from("col")),
+            10
+        );
+        assert_eq!(
+            props.column_dictionary_page_size_limit(&ColumnPath::from("other")),
+            100
         );
     }
 

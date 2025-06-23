@@ -565,13 +565,16 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
 
+    #[inline(always)]
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
-        // # Safety
-        // The index is within bounds as it is checked in value()
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
-        let l_len = *l_view as u32;
-
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return l_view.cmp(r_view).is_eq();
+        }
+
+        let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
         // We don't need to look at the actual bytes to determine if they are equal.
@@ -579,10 +582,22 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             return false;
         }
 
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
+    #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+            let l_len = *l_view as u32 as usize;
+            let r_len = *r_view as u32 as usize;
+            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
+            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
+            return l_bytes.cmp(r_bytes).is_lt();
+        }
         // # Safety
         // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
@@ -618,6 +633,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+#[inline(always)]
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
@@ -626,6 +642,15 @@ pub fn compare_byte_view<T: ByteViewType>(
 ) -> std::cmp::Ordering {
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
+    if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
+        let l_view = unsafe { left.views().get_unchecked(left_idx) };
+        let r_view = unsafe { right.views().get_unchecked(right_idx) };
+        let l_len = *l_view as u32 as usize;
+        let r_len = *r_view as u32 as usize;
+        let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
+        let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
+        return l_bytes.cmp(r_bytes);
+    }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
 
