@@ -2197,6 +2197,9 @@ mod tests {
         builder.values().append_null();
         builder.append(true);
         builder.append(true);
+        builder.values().append_value(17); // MASKED
+        builder.values().append_null(); // MASKED
+        builder.append(false);
 
         let list = Arc::new(builder.finish()) as ArrayRef;
         let d = list.data_type().clone();
@@ -2210,6 +2213,7 @@ mod tests {
         assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
         assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
         assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -2227,6 +2231,7 @@ mod tests {
         assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
         assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
         assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -2244,6 +2249,7 @@ mod tests {
         assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
         assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
         assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -2261,6 +2267,7 @@ mod tests {
         assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
         assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
         assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
