@@ -392,8 +392,19 @@ impl VariantBuilder {
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(_) | Variant::List(_) => {
-                unreachable!("Object and List variants cannot be created through Into<Variant>")
+            Variant::Object(obj) => {
+                let mut obj_builder = self.new_object();
+                for (key, value) in obj.iter() {
+                    obj_builder.append_value(key, value);
+                }
+                obj_builder.finish();
+            }
+            Variant::List(list) => {
+                let mut list_builder = self.new_list();
+                for value in list.iter() {
+                    list_builder.append_value(value);
+                }
+                list_builder.finish();
             }
         }
     }
@@ -736,5 +747,42 @@ mod tests {
 
         // apple(1), banana(2), zebra(0)
         assert_eq!(field_ids, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_append_object() {
+        let (object_metadata, object_value) = {
+            let mut builder = VariantBuilder::new();
+            let mut obj = builder.new_object();
+            obj.append_value("name", "John");
+            obj.finish();
+            builder.finish()
+        };
+        let object_variant = Variant::try_new(&object_metadata, &object_value).unwrap();
+
+        let mut builder = VariantBuilder::new();
+        builder.append_value(object_variant.clone());
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant, object_variant);
+    }
+
+    #[test]
+    fn test_append_list() {
+        let (list_metadata, list_value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(1i8);
+            list.append_value(2i8);
+            list.finish();
+            builder.finish()
+        };
+        let list_variant = Variant::try_new(&list_metadata, &list_value).unwrap();
+
+        let mut builder = VariantBuilder::new();
+        builder.append_value(list_variant.clone());
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant, list_variant);
     }
 }
