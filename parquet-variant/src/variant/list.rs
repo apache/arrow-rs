@@ -85,20 +85,12 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
         let first_offset_byte = NUM_HEADER_BYTES + num_elements_size as usize;
 
-        let overflow = || ArrowError::InvalidArgumentError("Integer overflow".into());
-
-        // 1.  num_elements + 1
-        let n_offsets = num_elements.checked_add(1).ok_or_else(overflow)?;
-
-        // 2.  (num_elements + 1) * offset_size
-        let value_bytes = n_offsets
-            .checked_mul(header.offset_size as usize)
-            .ok_or_else(overflow)?;
-
-        // 3.  first_offset_byte + ...
-        let first_value_byte = first_offset_byte
-            .checked_add(value_bytes)
-            .ok_or_else(overflow)?;
+        // (num_elements + 1) * offset_size + first_offset_byte
+        let first_value_byte = num_elements
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(header.offset_size as usize))
+            .and_then(|n| n.checked_add(first_offset_byte))
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow computing first_value_byte".into()))?;
 
         let new_self = Self {
             metadata,
