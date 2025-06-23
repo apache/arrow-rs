@@ -2,7 +2,7 @@
 
 We generally require a GitHub issue to be filed for all bug fixes and enhancements and this helps us generate change logs for our releases. You can link an issue to this PR using the GitHub syntax.
 
-Closes #NNN.
+- Closes #NNN.
 
 # Rationale for this change
 
