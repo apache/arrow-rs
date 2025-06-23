@@ -628,6 +628,8 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         }
 
         // Fallback to the generic, unchecked comparison for non-inline cases
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
     }
 
