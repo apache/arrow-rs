@@ -112,6 +112,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
+
+    pub(crate) provenance: bool,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -128,6 +130,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("selection", &self.selection)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }
@@ -146,6 +149,7 @@ impl<T> ArrowReaderBuilder<T> {
             selection: None,
             limit: None,
             offset: None,
+            provenance: false,
         }
     }
 
@@ -293,6 +297,20 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
+            ..self
+        }
+    }
+    
+    /// Enable reading the rows with provenance information
+    /// 
+    /// When enabled, the reader will add three additional columns to the Arrow schema:
+    /// 
+    /// 1. `__file_id` - The file id of the row in the parquet file
+    /// 2. `__row_group_idx` - The row group id of the row in the parquet file
+    /// 3. `__row_idx` - The row id of the row in the row group
+    pub fn with_provenance(self) -> Self {
+        Self {
+            provenance: true,
             ..self
         }
     }

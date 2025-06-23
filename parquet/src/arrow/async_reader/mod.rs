@@ -532,6 +532,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             schema,
             reader_factory: Some(reader_factory),
             state: StreamState::Init,
+            provenance: self.provenance,
         })
     }
 }
@@ -726,6 +727,8 @@ pub struct ParquetRecordBatchStream<T> {
     reader_factory: Option<ReaderFactory<T>>,
 
     state: StreamState<T>,
+    
+    provenance: bool
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -736,6 +739,7 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
             .field("batch_size", &self.batch_size)
             .field("projection", &self.projection)
             .field("state", &self.state)
+            .field("provenance", &self.provenance)
             .finish()
     }
 }
