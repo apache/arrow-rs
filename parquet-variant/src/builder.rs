@@ -288,11 +288,11 @@ impl MetadataBuilder {
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// let variant_object = variant.as_object().unwrap();
 /// assert_eq!(
-///   variant_object.field_by_name("first_name").unwrap(),
+///   variant_object.get("first_name"),
 ///   Some(Variant::from("Jiaying"))
 /// );
 /// assert_eq!(
-///   variant_object.field_by_name("last_name").unwrap(),
+///   variant_object.get("last_name"),
 ///   Some(Variant::from("Li"))
 /// );
 /// ```

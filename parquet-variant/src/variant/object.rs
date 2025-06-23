@@ -145,7 +145,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Get a field's value by index in `0..self.len()`
-    pub fn field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
+        self.field_err(i).ok()
+    }
+
+    /// Fallible version of `field`. Returns field value by index, capturing validation errors
+    fn field_err(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         let start_offset = self.header.field_offset_size.unpack_usize(
             self.value,
             self.field_offsets_start_byte,
@@ -160,7 +165,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Get a field's name by index in `0..self.len()`
-    pub fn field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
+    pub fn field_name(&self, i: usize) -> Option<&'m str> {
+        self.field_name_err(i).ok()
+    }
+
+    /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
+    fn field_name_err(&self, i: usize) -> Result<&'m str, ArrowError> {
         let field_id =
             self.header
                 .field_id_size
@@ -179,22 +189,22 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_checked(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| Ok((self.field_name(i)?, self.field(i)?)))
+        (0..self.num_elements).map(move |i| Ok((self.field_name_err(i)?, self.field_err(i)?)))
     }
 
     /// Returns the value of the field with the specified name, if any.
     ///
     /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
-    pub fn field_by_name(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
+    pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let search_result =
-            try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?;
+        let i = try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?
+            .ok()?;
 
-        search_result.ok().map(|i| self.field(i)).transpose()
+        self.field(i)
     }
 }
 
@@ -260,21 +270,34 @@ mod tests {
         assert!(!variant_obj.is_empty());
 
         // Test field access
-        let active_field = variant_obj.field_by_name("active").unwrap();
+        let active_field = variant_obj.get("active");
         assert!(active_field.is_some());
         assert_eq!(active_field.unwrap().as_boolean(), Some(true));
 
-        let age_field = variant_obj.field_by_name("age").unwrap();
+        let age_field = variant_obj.get("age");
         assert!(age_field.is_some());
         assert_eq!(age_field.unwrap().as_int8(), Some(42));
 
-        let name_field = variant_obj.field_by_name("name").unwrap();
+        let name_field = variant_obj.get("name");
         assert!(name_field.is_some());
         assert_eq!(name_field.unwrap().as_string(), Some("hello"));
 
         // Test non-existent field
-        let missing_field = variant_obj.field_by_name("missing").unwrap();
+        let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
+
+        // Fixme: This assertion will panic! That is not good
+        // let missing_field_name = variant_obj.field_name(3);
+        // assert!(missing_field_name.is_none());
+
+        let missing_field_name = variant_obj.field_name(300);
+        assert!(missing_field_name.is_none());
+
+        let missing_field_value = variant_obj.field(3);
+        assert!(missing_field_value.is_none());
+
+        let missing_field_value = variant_obj.field(300);
+        assert!(missing_field_value.is_none());
 
         // Test fields iterator
         let fields: Vec<_> = variant_obj.iter().collect();
@@ -289,6 +312,17 @@ mod tests {
 
         assert_eq!(fields[2].0, "name");
         assert_eq!(fields[2].1.as_string(), Some("hello"));
+
+        // Test field access by index
+        // Fields should be in sorted order: active, age, name
+        assert_eq!(variant_obj.field_name(0), Some("active"));
+        assert_eq!(variant_obj.field(0).unwrap().as_boolean(), Some(true));
+
+        assert_eq!(variant_obj.field_name(1), Some("age"));
+        assert_eq!(variant_obj.field(1).unwrap().as_int8(), Some(42));
+
+        assert_eq!(variant_obj.field_name(2), Some("name"));
+        assert_eq!(variant_obj.field(2).unwrap().as_string(), Some("hello"));
     }
 
     #[test]
@@ -316,7 +350,7 @@ mod tests {
         assert!(variant_obj.is_empty());
 
         // Test field access on empty object
-        let missing_field = variant_obj.field_by_name("anything").unwrap();
+        let missing_field = variant_obj.get("anything");
         assert!(missing_field.is_none());
 
         // Test fields iterator on empty object

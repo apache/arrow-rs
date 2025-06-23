@@ -119,7 +119,13 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.len() == 0
     }
 
-    pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    /// Returns element by index in `0..self.len()`, if any
+    pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
+        self.get_err(index).ok()
+    }
+
+    /// Fallible version of `get`. Returns element by index, capturing validation errors
+    fn get_err(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         if index >= self.num_elements {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for list of length {}",
@@ -153,7 +159,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     // Fallible iteration over the fields of this dictionary. The constructor traverses the iterator
     // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn iter_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.get(i))
+        (0..self.len()).map(move |i| self.get_err(i))
     }
 }
 
@@ -208,11 +214,7 @@ mod tests {
 
         // Test out of bounds access
         let out_of_bounds = variant_list.get(3);
-        assert!(out_of_bounds.is_err());
-        assert!(matches!(
-            out_of_bounds.unwrap_err(),
-            ArrowError::InvalidArgumentError(ref msg) if msg.contains("out of bounds")
-        ));
+        assert!(out_of_bounds.is_none());
 
         // Test values iterator
         let values: Vec<_> = variant_list.iter().collect();
@@ -248,7 +250,7 @@ mod tests {
 
         // Test out of bounds access on empty list
         let out_of_bounds = variant_list.get(0);
-        assert!(out_of_bounds.is_err());
+        assert!(out_of_bounds.is_none());
 
         // Test values iterator on empty list
         let values: Vec<_> = variant_list.iter().collect();

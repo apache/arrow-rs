@@ -94,33 +94,33 @@ pub(crate) fn string_from_slice(
 /// * `range` - The range to search in
 /// * `target` - The target value to search for
 /// * `key_extractor` - A function that extracts a comparable key from slice elements.
-///   This function can fail and return an error.
+///   This function can fail and return None.
 ///
 /// # Returns
-/// * `Ok(Ok(index))` - Element found at the given index
-/// * `Ok(Err(index))` - Element not found, but would be inserted at the given index
-/// * `Err(e)` - Key extraction failed with error `e`
-pub(crate) fn try_binary_search_range_by<K, E, F>(
+/// * `Some(Ok(index))` - Element found at the given index
+/// * `Some(Err(index))` - Element not found, but would be inserted at the given index
+/// * `None` - Key extraction failed
+pub(crate) fn try_binary_search_range_by<K, F>(
     range: Range<usize>,
     target: &K,
-    mut key_extractor: F,
-) -> Result<Result<usize, usize>, E>
+    key_extractor: F,
+) -> Option<Result<usize, usize>>
 where
     K: Ord,
-    F: FnMut(usize) -> Result<K, E>,
+    F: Fn(usize) -> Option<K>,
 {
     let Range { mut start, mut end } = range;
     while start < end {
         let mid = start + (end - start) / 2;
         let key = key_extractor(mid)?;
         match key.cmp(target) {
-            std::cmp::Ordering::Equal => return Ok(Ok(mid)),
+            std::cmp::Ordering::Equal => return Some(Ok(mid)),
             std::cmp::Ordering::Greater => end = mid,
             std::cmp::Ordering::Less => start = mid + 1,
         }
     }
 
-    Ok(Err(start))
+    Some(Err(start))
 }
 
 /// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
