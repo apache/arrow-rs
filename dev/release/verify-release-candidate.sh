@@ -113,7 +113,9 @@ test_source_distribution() {
   export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
   export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
 
-  cargo test --all
+  # ignore arrow-pyarrow due to
+  # https://github.com/apache/arrow-rs/issues/7736
+  cargo test --all --exclude arrow-pyarrow
 
   # verify that the leaf crates can be published to crates.io
   # we can't verify crates that depend on others
