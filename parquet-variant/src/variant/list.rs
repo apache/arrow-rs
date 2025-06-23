@@ -90,7 +90,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
             .checked_add(1)
             .and_then(|n| n.checked_mul(header.offset_size as usize))
             .and_then(|n| n.checked_add(first_offset_byte))
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow computing first_value_byte".into()))?;
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
 
         let new_self = Self {
             metadata,
