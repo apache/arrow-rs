@@ -197,9 +197,15 @@ impl VariantBuffer {
             Variant::Date(v) => self.append_date(v),
             Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
             Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4 { integer, scale } => self.append_decimal4(integer, scale),
-            Variant::Decimal8 { integer, scale } => self.append_decimal8(integer, scale),
-            Variant::Decimal16 { integer, scale } => self.append_decimal16(integer, scale),
+            Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
+                self.append_decimal4(integer, scale)
+            }
+            Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
+                self.append_decimal8(integer, scale)
+            }
+            Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
+                self.append_decimal16(integer, scale)
+            }
             Variant::Float(v) => self.append_float(v),
             Variant::Double(v) => self.append_double(v),
             Variant::Binary(v) => self.append_binary(v),
