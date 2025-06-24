@@ -73,9 +73,9 @@ fn make_room_for_header(buffer: &mut Vec<u8>, start_pos: usize, header_size: usi
 }
 
 #[derive(Default)]
-struct VariantBuffer(Vec<u8>);
+struct ValueBuffer(Vec<u8>);
 
-impl VariantBuffer {
+impl ValueBuffer {
     fn append_null(&mut self) {
         self.0.push(primitive_header(VariantPrimitiveType::Null));
     }
@@ -387,14 +387,14 @@ impl MetadataBuilder {
 ///
 /// ```
 pub struct VariantBuilder {
-    buffer: VariantBuffer,
+    buffer: ValueBuffer,
     metadata_builder: MetadataBuilder,
 }
 
 impl VariantBuilder {
     pub fn new() -> Self {
         Self {
-            buffer: VariantBuffer::default(),
+            buffer: ValueBuffer::default(),
             metadata_builder: MetadataBuilder::default(),
         }
     }
@@ -473,23 +473,20 @@ impl Default for VariantBuilder {
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ListBuilder<'a> {
-    parent_buffer: &'a mut VariantBuffer,
+    parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
     offsets: Vec<usize>,
-    buffer: VariantBuffer,
+    buffer: ValueBuffer,
     pending: bool,
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(
-        parent_buffer: &'a mut VariantBuffer,
-        metadata_builder: &'a mut MetadataBuilder,
-    ) -> Self {
+    fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
         Self {
             parent_buffer,
             metadata_builder,
             offsets: vec![0],
-            buffer: VariantBuffer::default(),
+            buffer: ValueBuffer::default(),
             pending: false,
         }
     }
@@ -578,22 +575,19 @@ impl<'a> ListBuilder<'a> {
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ObjectBuilder<'a> {
-    parent_buffer: &'a mut VariantBuffer,
+    parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
     fields: BTreeMap<u32, usize>, // (field_id, offset)
-    buffer: VariantBuffer,
+    buffer: ValueBuffer,
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(
-        parent_buffer: &'a mut VariantBuffer,
-        metadata_builder: &'a mut MetadataBuilder,
-    ) -> Self {
+    fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
         Self {
             parent_buffer,
             metadata_builder,
             fields: BTreeMap::new(),
-            buffer: VariantBuffer::default(),
+            buffer: ValueBuffer::default(),
         }
     }
 
