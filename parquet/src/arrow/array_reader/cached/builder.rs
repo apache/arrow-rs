@@ -20,9 +20,9 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::ProjectionMask;
 use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
+use arrow_select::coalesce::BatchCoalescer;
 use arrow_select::filter::prep_null_mask_filter;
 use std::sync::Arc;
-use arrow_select::coalesce::BatchCoalescer;
 
 /// Incrementally builds the result of evaluating an ArrowPredicate on
 /// a RowGroup.
@@ -86,10 +86,8 @@ impl CachedPredicateResultBuilder {
                 (None, Some(projection_mask)) => (projection_mask, projection_mask),
                 (None, None) => {
                     // this means all columns are in the projection *and* filter so cache them all when possible
-                    let cached_batches_builder = BatchCoalescer::new(
-                        Arc::clone(filter_schema),
-                        batch_size,
-                    );
+                    let cached_batches_builder =
+                        BatchCoalescer::new(Arc::clone(filter_schema), batch_size);
                     let strategy = CacheStrategy::All {
                         cached_batches_builder,
                         original_projection: (0..num_original_columns).collect(),
@@ -216,8 +214,7 @@ impl CachedPredicateResultBuilder {
             } => {
                 // explode out the cached batches into the proper place in the original schema
                 cached_batches_builder.finish_buffered_batch()?;
-                let completed_batches = cached_batches_builder
-                    .take_completed_batches();
+                let completed_batches = cached_batches_builder.take_completed_batches();
 
                 let mut cached_result = CachedPredicateResult::new(num_original_columns, filters);
                 for (batch_index, original_idx) in original_projection.iter().enumerate() {
