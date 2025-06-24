@@ -809,6 +809,70 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to an `Object` if it is an [`VariantObject`].
+    ///
+    /// Returns `Some(&VariantObject)` for object variants,
+    /// `None` for non-object variants.
+    ///
+    /// # Examples
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantObject};
+    /// # let (metadata, value) = {
+    /// # let mut builder = VariantBuilder::new();
+    /// #   let mut obj = builder.new_object();
+    /// #   obj.append_value("name", "John");
+    /// #   obj.finish();
+    /// #   builder.finish()
+    /// # };
+    /// // object that is {"name": "John"}
+    ///  let variant = Variant::try_new(&metadata, &value).unwrap();
+    /// // use the `as_object` method to access the object
+    /// let obj = variant.as_object().expect("variant should be an object");
+    /// assert_eq!(obj.field_by_name("name").unwrap(), Some(Variant::from("John")));
+    /// ```
+    pub fn as_object(&'m self) -> Option<&'m VariantObject<'m, 'v>> {
+        if let Variant::Object(obj) = self {
+            Some(obj)
+        } else {
+            None
+        }
+    }
+
+    /// Converts this variant to a `List` if it is a [`VariantList`].
+    ///
+    /// Returns `Some(&VariantList)` for list variants,
+    /// `None` for non-list variants.
+    ///
+    /// # Examples
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantList};
+    /// # let (metadata, value) = {
+    /// # let mut builder = VariantBuilder::new();
+    /// #   let mut list = builder.new_list();
+    /// #   list.append_value("John");
+    /// #   list.append_value("Doe");
+    /// #   list.finish();
+    /// #   builder.finish()
+    /// # };
+    /// // list that is ["John", "Doe"]
+    /// let variant = Variant::try_new(&metadata, &value).unwrap();
+    /// // use the `as_list` method to access the list
+    /// let list = variant.as_list().expect("variant should be a list");
+    /// assert_eq!(list.len(), 2);
+    /// assert_eq!(list.get(0).unwrap(), Variant::from("John"));
+    /// assert_eq!(list.get(1).unwrap(), Variant::from("Doe"));
+    /// ```
+    pub fn as_list(&'m self) -> Option<&'m VariantList<'m, 'v>> {
+        if let Variant::List(list) = self {
+            Some(list)
+        } else {
+            None
+        }
+    }
+
+    /// Return the metadata associated with this variant, if any.
+    ///
+    /// Returns `Some(&VariantMetadata)` for object and list variants,
     pub fn metadata(&self) -> Option<&'m VariantMetadata> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
