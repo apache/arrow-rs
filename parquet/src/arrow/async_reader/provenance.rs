@@ -12,7 +12,7 @@ use crate::arrow::arrow_reader::ReadPlan;
 /// * `__row_idx`        – absolute row number inside the file
 pub struct ProvenanceReader<R> {
     inner: R,
-    file_id: u32,
+    file_id: Option<u32>,
     row_group_idx: u32,
     // pre-computed absolute row numbers that survive all pruning
     row_numbers: Vec<u64>,
@@ -22,9 +22,9 @@ pub struct ProvenanceReader<R> {
 impl<R> ProvenanceReader<R> {
     pub fn new(inner: R,
                plan: ReadPlan,
-               file_id: u32,
                row_group_idx: u32,
-               file_row_base: u64) -> Self {
+               file_row_base: u64,
+               file_id: Option<u32>) -> Self {
         // Flatten `RowSelection` into absolute row numbers
         let row_numbers = match plan.selection() {
             // if None, keep every row
@@ -83,7 +83,7 @@ where
 
         match RecordBatch::try_new(schema, cols) {
             Ok(new_batch) => Some(Ok(new_batch)),
-            Err(e)        => Some(Err(ParquetError::ArrowError(e.to_string()))),
+            Err(e)        => Some(Err(e)),
         }
     }
 }
