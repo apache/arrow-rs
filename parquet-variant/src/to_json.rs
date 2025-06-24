@@ -23,6 +23,7 @@ use serde_json::Value;
 use std::io::Write;
 
 use crate::variant::{Variant, VariantList, VariantObject};
+use crate::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -106,7 +107,7 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::Double(f) => {
             write!(json_buffer, "{}", f)?;
         }
-        Variant::Decimal4 { integer, scale } => {
+        Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
             // Convert decimal to string representation using integer arithmetic
             if *scale == 0 {
                 write!(json_buffer, "{}", integer)?;
@@ -123,7 +124,7 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
                 }
             }
         }
-        Variant::Decimal8 { integer, scale } => {
+        Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
             // Convert decimal to string representation using integer arithmetic
             if *scale == 0 {
                 write!(json_buffer, "{}", integer)?;
@@ -140,7 +141,7 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
                 }
             }
         }
-        Variant::Decimal16 { integer, scale } => {
+        Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
             // Convert decimal to string representation using integer arithmetic
             if *scale == 0 {
                 write!(json_buffer, "{}", integer)?;
@@ -364,7 +365,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Double(f) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
-        Variant::Decimal4 { integer, scale } => {
+        Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
             // Use integer arithmetic to avoid f64 precision loss
             if *scale == 0 {
                 Ok(Value::Number((*integer).into()))
@@ -390,7 +391,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                     })
             }
         }
-        Variant::Decimal8 { integer, scale } => {
+        Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
             // Use integer arithmetic to avoid f64 precision loss
             if *scale == 0 {
                 Ok(Value::Number((*integer).into()))
@@ -416,7 +417,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                     })
             }
         }
-        Variant::Decimal16 { integer, scale } => {
+        Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
             // Use integer arithmetic to avoid f64 precision loss
             if *scale == 0 {
                 Ok(Value::Number((*integer as i64).into())) // Convert to i64 for JSON compatibility
@@ -482,18 +483,12 @@ mod tests {
     #[test]
     fn test_decimal_edge_cases() -> Result<(), ArrowError> {
         // Test negative decimal
-        let negative_variant = Variant::Decimal4 {
-            integer: -12345,
-            scale: 3,
-        };
+        let negative_variant = Variant::from(VariantDecimal4::try_new(-12345, 3)?);
         let negative_json = variant_to_json_string(&negative_variant)?;
         assert_eq!(negative_json, "-12.345");
 
         // Test large scale decimal
-        let large_scale_variant = Variant::Decimal8 {
-            integer: 123456789,
-            scale: 6,
-        };
+        let large_scale_variant = Variant::from(VariantDecimal8::try_new(123456789, 6)?);
         let large_scale_json = variant_to_json_string(&large_scale_variant)?;
         assert_eq!(large_scale_json, "123.456789");
 
@@ -502,10 +497,7 @@ mod tests {
 
     #[test]
     fn test_decimal16_to_json() -> Result<(), ArrowError> {
-        let variant = Variant::Decimal16 {
-            integer: 123456789012345,
-            scale: 4,
-        };
+        let variant = Variant::from(VariantDecimal16::try_new(123456789012345, 4)?);
         let json = variant_to_json_string(&variant)?;
         assert_eq!(json, "12345678901.2345");
 
@@ -513,10 +505,7 @@ mod tests {
         assert!(matches!(json_value, Value::Number(_)));
 
         // Test very large number
-        let large_variant = Variant::Decimal16 {
-            integer: 999999999999999999,
-            scale: 2,
-        };
+        let large_variant = Variant::from(VariantDecimal16::try_new(999999999999999999, 2)?);
         let large_json = variant_to_json_string(&large_variant)?;
         // Due to f64 precision limits, very large numbers may lose precision
         assert!(
@@ -839,10 +828,7 @@ mod tests {
 
         // Decimals
         JsonTest {
-            variant: Variant::Decimal4 {
-                integer: 12345,
-                scale: 2,
-            },
+            variant: Variant::from(VariantDecimal4::try_new(12345, 2).unwrap()),
             expected_json: "123.45",
             expected_value: serde_json::Number::from_f64(123.45)
                 .map(Value::Number)
@@ -851,10 +837,7 @@ mod tests {
         .run();
 
         JsonTest {
-            variant: Variant::Decimal4 {
-                integer: 42,
-                scale: 0,
-            },
+            variant: Variant::from(VariantDecimal4::try_new(42, 0).unwrap()),
             expected_json: "42",
             expected_value: serde_json::Number::from_f64(42.0)
                 .map(Value::Number)
@@ -863,10 +846,7 @@ mod tests {
         .run();
 
         JsonTest {
-            variant: Variant::Decimal8 {
-                integer: 1234567890,
-                scale: 3,
-            },
+            variant: Variant::from(VariantDecimal8::try_new(1234567890, 3).unwrap()),
             expected_json: "1234567.89",
             expected_value: serde_json::Number::from_f64(1234567.89)
                 .map(Value::Number)
@@ -875,10 +855,7 @@ mod tests {
         .run();
 
         JsonTest {
-            variant: Variant::Decimal16 {
-                integer: 123456789012345,
-                scale: 4,
-            },
+            variant: Variant::from(VariantDecimal16::try_new(123456789012345, 4).unwrap()),
             expected_json: "12345678901.2345",
             expected_value: serde_json::Number::from_f64(12345678901.2345)
                 .map(Value::Number)
@@ -1277,10 +1254,10 @@ mod tests {
     fn test_high_precision_decimal_no_loss() -> Result<(), ArrowError> {
         // Test case that would lose precision with f64 conversion
         // This is a 63-bit precision decimal8 value that f64 cannot represent exactly
-        let high_precision_decimal8 = Variant::Decimal8 {
-            integer: 9007199254740993, // 2^53 + 1, exceeds f64 precision
-            scale: 6,
-        };
+        let high_precision_decimal8 = Variant::from(VariantDecimal8::try_new(
+            9007199254740993, // 2^53 + 1, exceeds f64 precision
+            6,
+        )?);
 
         let json_string = variant_to_json_string(&high_precision_decimal8)?;
         let json_value = variant_to_json_value(&high_precision_decimal8)?;
@@ -1294,10 +1271,10 @@ mod tests {
         assert_eq!(parsed, json_value);
 
         // Test another case with trailing zeros that should be trimmed
-        let decimal_with_zeros = Variant::Decimal8 {
-            integer: 1234567890000, // Should result in 1234567.89 (trailing zeros trimmed)
-            scale: 6,
-        };
+        let decimal_with_zeros = Variant::from(VariantDecimal8::try_new(
+            1234567890000, // Should result in 1234567.89 (trailing zeros trimmed)
+            6,
+        )?);
 
         let json_string_zeros = variant_to_json_string(&decimal_with_zeros)?;
         assert_eq!(json_string_zeros, "1234567.89");
