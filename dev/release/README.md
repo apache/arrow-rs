@@ -194,6 +194,7 @@ If the release is not approved, fix whatever the problem is and try again with t
 Then, create a new release on GitHub using the tag `<version>` (e.g. `4.1.0`).
 
 Push the release tag to github
+
 ```shell
 git tag <version> <version>-<rc>
 git push apache <version>
