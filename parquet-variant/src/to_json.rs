@@ -923,15 +923,14 @@ mod tests {
         // Parse the JSON to verify structure - handle JSON parsing errors manually
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        if let Value::Object(obj) = parsed {
-            assert_eq!(obj.get("name"), Some(&Value::String("Alice".to_string())));
-            assert_eq!(obj.get("age"), Some(&Value::Number(30.into())));
-            assert_eq!(obj.get("active"), Some(&Value::Bool(true)));
-            assert!(matches!(obj.get("score"), Some(Value::Number(_))));
-            assert_eq!(obj.len(), 4);
-        } else {
+        let Value::Object(obj) = parsed else {
             panic!("Expected JSON object");
-        }
+        };
+        assert_eq!(obj.get("name"), Some(&Value::String("Alice".to_string())));
+        assert_eq!(obj.get("age"), Some(&Value::Number(30.into())));
+        assert_eq!(obj.get("active"), Some(&Value::Bool(true)));
+        assert!(matches!(obj.get("score"), Some(Value::Number(_))));
+        assert_eq!(obj.len(), 4);
 
         // Test variant_to_json_value as well
         let json_value = variant_to_json_value(&variant)?;
@@ -1015,13 +1014,12 @@ mod tests {
         assert_eq!(json, "[1,2,3,4,5]");
 
         let json_value = variant_to_json_value(&variant)?;
-        if let Value::Array(arr) = json_value {
-            assert_eq!(arr.len(), 5);
-            assert_eq!(arr[0], Value::Number(1.into()));
-            assert_eq!(arr[4], Value::Number(5.into()));
-        } else {
+        let Value::Array(arr) = json_value else {
             panic!("Expected JSON array");
-        }
+        };
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr[0], Value::Number(1.into()));
+        assert_eq!(arr[4], Value::Number(5.into()));
 
         Ok(())
     }
@@ -1070,16 +1068,15 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        if let Value::Array(arr) = parsed {
-            assert_eq!(arr.len(), 5);
-            assert_eq!(arr[0], Value::String("hello".to_string()));
-            assert_eq!(arr[1], Value::Number(42.into()));
-            assert_eq!(arr[2], Value::Bool(true));
-            assert_eq!(arr[3], Value::Null);
-            assert!(matches!(arr[4], Value::Number(_)));
-        } else {
+        let Value::Array(arr) = parsed else {
             panic!("Expected JSON array");
-        }
+        };
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr[0], Value::String("hello".to_string()));
+        assert_eq!(arr[1], Value::Number(42.into()));
+        assert_eq!(arr[2], Value::Bool(true));
+        assert_eq!(arr[3], Value::Null);
+        assert!(matches!(arr[4], Value::Number(_)));
 
         Ok(())
     }
@@ -1106,14 +1103,13 @@ mod tests {
         // Parse and verify all fields are present
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        if let Value::Object(obj) = parsed {
-            assert_eq!(obj.len(), 3);
-            assert_eq!(obj.get("alpha"), Some(&Value::String("first".to_string())));
-            assert_eq!(obj.get("beta"), Some(&Value::String("second".to_string())));
-            assert_eq!(obj.get("zebra"), Some(&Value::String("last".to_string())));
-        } else {
+        let Value::Object(obj) = parsed else {
             panic!("Expected JSON object");
-        }
+        };
+        assert_eq!(obj.len(), 3);
+        assert_eq!(obj.get("alpha"), Some(&Value::String("first".to_string())));
+        assert_eq!(obj.get("beta"), Some(&Value::String("second".to_string())));
+        assert_eq!(obj.get("zebra"), Some(&Value::String("last".to_string())));
 
         Ok(())
     }
@@ -1142,18 +1138,17 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        if let Value::Array(arr) = parsed {
-            assert_eq!(arr.len(), 7);
-            assert_eq!(arr[0], Value::String("string_value".to_string()));
-            assert_eq!(arr[1], Value::Number(42.into()));
-            assert_eq!(arr[2], Value::Bool(true));
-            assert!(matches!(arr[3], Value::Number(_))); // float
-            assert_eq!(arr[4], Value::Bool(false));
-            assert_eq!(arr[5], Value::Null);
-            assert_eq!(arr[6], Value::Number(100.into()));
-        } else {
+        let Value::Array(arr) = parsed else {
             panic!("Expected JSON array");
-        }
+        };
+        assert_eq!(arr.len(), 7);
+        assert_eq!(arr[0], Value::String("string_value".to_string()));
+        assert_eq!(arr[1], Value::Number(42.into()));
+        assert_eq!(arr[2], Value::Bool(true));
+        assert!(matches!(arr[3], Value::Number(_))); // float
+        assert_eq!(arr[4], Value::Bool(false));
+        assert_eq!(arr[5], Value::Null);
+        assert_eq!(arr[6], Value::Number(100.into()));
 
         Ok(())
     }
@@ -1181,20 +1176,19 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        if let Value::Object(obj) = parsed {
-            assert_eq!(obj.len(), 6);
-            assert_eq!(
-                obj.get("string_field"),
-                Some(&Value::String("test_string".to_string()))
-            );
-            assert_eq!(obj.get("int_field"), Some(&Value::Number(123.into())));
-            assert_eq!(obj.get("bool_field"), Some(&Value::Bool(true)));
-            assert!(matches!(obj.get("float_field"), Some(Value::Number(_))));
-            assert_eq!(obj.get("null_field"), Some(&Value::Null));
-            assert_eq!(obj.get("long_field"), Some(&Value::Number(999.into())));
-        } else {
+        let Value::Object(obj) = parsed else {
             panic!("Expected JSON object");
-        }
+        };
+        assert_eq!(obj.len(), 6);
+        assert_eq!(
+            obj.get("string_field"),
+            Some(&Value::String("test_string".to_string()))
+        );
+        assert_eq!(obj.get("int_field"), Some(&Value::Number(123.into())));
+        assert_eq!(obj.get("bool_field"), Some(&Value::Bool(true)));
+        assert!(matches!(obj.get("float_field"), Some(Value::Number(_))));
+        assert_eq!(obj.get("null_field"), Some(&Value::Null));
+        assert_eq!(obj.get("long_field"), Some(&Value::Number(999.into())));
 
         Ok(())
     }
