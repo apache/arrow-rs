@@ -45,7 +45,7 @@ publish = false
 
 
 [dependencies]
-# Note no dependency on arrow, to ensure arrow-pyarrow can be used by itsel
+# Note no dependency on arrow, to ensure arrow-pyarrow can be used by itself
 arrow-array = { path = "../arrow-array" }
 arrow-pyarrow = { path = "../arrow-pyarrow" }
 pyo3 = { version = "0.24.1", default-features = false }
