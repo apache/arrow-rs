@@ -64,7 +64,7 @@ else
     tar=tar
 fi
 
-release_hash=$(cd "${SOURCE_TOP_DIR}" && git rev-list --max-count=1 ${tag}-rc${rc})
+release_hash=$(cd "${SOURCE_TOP_DIR}" && git rev-list --max-count=1 ${tag})
 
 release=apache-arrow-rs-${tag}
 distdir=${SOURCE_TOP_DIR}/dev/dist/${release}-rc${rc}
