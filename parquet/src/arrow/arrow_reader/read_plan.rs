@@ -243,11 +243,6 @@ impl ReadPlan {
     pub(crate) fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
         self.selection.as_mut()
     }
-    
-    /// Returns a reference to the selection, if any
-    pub(crate) fn selection(&self) -> Option<&VecDeque<RowSelector>> {
-        self.selection.as_ref()
-    }
 
     /// Return the number of rows to read in each output batch
     #[inline(always)]

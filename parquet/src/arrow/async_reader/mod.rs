@@ -36,7 +36,7 @@ use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{ArrowError, DataType, Fields, Schema, SchemaRef};
+use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
 use crate::arrow::arrow_reader::{
@@ -60,8 +60,6 @@ pub use metadata::*;
 
 #[cfg(feature = "object_store")]
 mod store;
-mod provenance;
-use provenance::ProvenanceReader;
 
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
@@ -541,11 +539,11 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 }
 
-/// Constructed to allow flexibility between [`ParquetRecordBatchReader`] and [`ProvenanceReader`]
-pub type BatchIter = Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + Send>;
-
-/// Returns a [`ReaderFactory`] and an optional [`BatchIter`]
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<BatchIter>)>;
+/// Returns a [`ReaderFactory`] and an optional [`ParquetRecordBatchReader`] for the next row group
+///
+/// Note: If all rows are filtered out in the row group (e.g by filters, limit or
+/// offset), returns `None` for the reader.
+type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
 /// [`ParquetRecordBatchReader`]
@@ -723,20 +721,17 @@ where
         let array_reader = ArrayReaderBuilder::new(&row_group)
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
-        let plain = ParquetRecordBatchReader::new(array_reader, plan.clone());
-
-        let reader: BatchIter = if self.provenance.unwrap_or(false) {
-            let file_row_base = self.file_row_base(row_group_idx).expect("expect this to be valid if provenance");
-            let prov = ProvenanceReader::new(
-                plain,
+        let reader = if self.provenance.unwrap_or(false) {
+            ParquetRecordBatchReader::new_with_provenance(
+                array_reader,
                 plan,
-                row_group_idx as u32,
-                file_row_base as u64,
-                self.file_id
-            );
-            Box::new(prov)
+                self.provenance.unwrap_or(false),
+                self.file_id,
+                Some(row_group_idx as u32),
+                self.file_row_base(row_group_idx).map(|x| x as u64),
+            )
         } else {
-            Box::new(plain)
+            ParquetRecordBatchReader::new(array_reader, plan)
         };
 
         Ok((self, Some(reader)))
@@ -747,7 +742,7 @@ enum StreamState<T> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
-    Decoding(BatchIter),
+    Decoding(ParquetRecordBatchReader),
     /// Reading data from input
     Reading(BoxFuture<'static, ReadResult<T>>),
     /// Error
@@ -843,7 +838,7 @@ where
     /// - `Ok(None)` if the stream has ended.
     /// - `Err(error)` if the stream has errored. All subsequent calls will return `Ok(None)`.
     /// - `Ok(Some(reader))` which holds all the data for the row group.
-    pub async fn next_row_group(&mut self) -> Result<Option<BatchIter>> {
+    pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
         loop {
             match &mut self.state {
                 StreamState::Decoding(_) | StreamState::Reading(_) => {
