@@ -268,45 +268,47 @@ fn test_binary_type_to_json() {
 
 #[test]
 fn test_comprehensive_roundtrip_compatibility() {
-    // Test that our JSON output can be parsed back by serde_json for all types
-    let test_cases = vec![
-        Variant::Null,
-        Variant::BooleanTrue,
-        Variant::BooleanFalse,
-        Variant::Int8(42),
-        Variant::Int16(1000),
-        Variant::Int32(100000),
-        Variant::Int64(10000000000),
-        Variant::Float(3.5), // Use a value that can be represented exactly in f32
-        Variant::Double(std::f64::consts::E),
-        Variant::Decimal4 {
-            integer: 12345,
-            scale: 2,
-        },
-        Variant::Decimal8 {
-            integer: 1234567890,
-            scale: 3,
-        },
-        Variant::Decimal16 {
-            integer: 123456789012345,
-            scale: 4,
-        },
-        Variant::Date(NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
-        Variant::String("test string"),
-        Variant::ShortString(parquet_variant::ShortString::try_new("short").unwrap()),
-        Variant::Binary(b"binary data"),
-    ];
-
-    for variant in test_cases {
-        let json_string = variant_to_json_string(&variant).unwrap();
-
-        // Ensure the JSON can be parsed back
-        let parsed: Value = serde_json::from_str(&json_string).unwrap();
-
-        // Ensure our direct Value conversion matches
-        let direct_value = variant_to_json_value(&variant).unwrap();
-        assert_eq!(parsed, direct_value, "Mismatch for variant: {:?}", variant);
-    }
+    Test {
+        variant: Variant::Float(3.5),
+        json: "3.5",
+        value: serde_json::Number::from_f64(3.5).map(Value::Number).unwrap(),
+    }.run();
+    
+    Test {
+        variant: Variant::Double(2.718281828459045),
+        json: "2.718281828459045",
+        value: serde_json::Number::from_f64(2.718281828459045).map(Value::Number).unwrap(),
+    }.run();
+    
+    Test {
+        variant: Variant::Decimal4 { integer: 12345, scale: 2 },
+        json: "123.45",
+        value: serde_json::Number::from_f64(123.45).map(Value::Number).unwrap(),
+    }.run();
+    
+    Test {
+        variant: Variant::Decimal8 { integer: 1234567890, scale: 3 },
+        json: "1234567.89",
+        value: serde_json::Number::from_f64(1234567.89).map(Value::Number).unwrap(),
+    }.run();
+    
+    Test {
+        variant: Variant::Decimal16 { integer: 123456789012345, scale: 4 },
+        json: "12345678901.2345",
+        value: serde_json::Number::from_f64(12345678901.2345).map(Value::Number).unwrap(),
+    }.run();
+    
+    Test {
+        variant: Variant::Date(NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
+        json: "\"2023-01-01\"",
+        value: Value::String("2023-01-01".to_string()),
+    }.run();
+    
+    Test {
+        variant: Variant::Binary(b"binary data"),
+        json: "\"YmluYXJ5IGRhdGE=\"", // base64 encoded "binary data"
+        value: Value::String("YmluYXJ5IGRhdGE=".to_string()),
+    }.run();
 }
 
 #[test]
@@ -327,68 +329,103 @@ fn test_string_escaping_edge_cases() {
 }
 
 #[test]
-fn test_json_roundtrip_compatibility() {
-    // Test that our JSON output can be parsed back by serde_json
-    let test_cases = vec![
-        Variant::Null,
-        Variant::BooleanTrue,
-        Variant::BooleanFalse,
-        Variant::Int8(0),
-        Variant::Int8(127),
-        Variant::Int8(-128),
-        Variant::String(""),
-        Variant::String("simple string"),
-        Variant::String("string with\nnewlines\tand\ttabs"),
-        Variant::ShortString(parquet_variant::ShortString::try_new("short").unwrap()),
-    ];
-
-    for variant in test_cases {
-        let json_string = variant_to_json_string(&variant).unwrap();
-
-        // Ensure the JSON can be parsed back
-        let parsed: Value = serde_json::from_str(&json_string).unwrap();
-
-        // Ensure our direct Value conversion matches
-        let direct_value = variant_to_json_value(&variant).unwrap();
-        assert_eq!(parsed, direct_value, "Mismatch for variant: {:?}", variant);
-    }
-}
-
-#[test]
 fn test_buffer_writing() {
     use parquet_variant::variant_to_json;
-    use std::io::Write;
-
     let variant = Variant::String("test buffer writing");
-
     // Test writing to a Vec<u8>
     let mut buffer = Vec::new();
     variant_to_json(&mut buffer, &variant).unwrap();
     let result = String::from_utf8(buffer).unwrap();
     assert_eq!(result, "\"test buffer writing\"");
-
-    // Test writing to a custom writer
-    struct CustomWriter {
-        data: Vec<u8>,
-    }
-
-    impl Write for CustomWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.data.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut custom_writer = CustomWriter { data: Vec::new() };
-    variant_to_json(&mut custom_writer, &variant).unwrap();
-    let result = String::from_utf8(custom_writer.data).unwrap();
+    let mut buffer = vec![];
+    variant_to_json(&mut buffer, &variant).unwrap();
+    let result = String::from_utf8(buffer).unwrap();
     assert_eq!(result, "\"test buffer writing\"");
 }
 
-// Note: Tests for arrays and objects would require actual Variant data structures
-// to be created, which would need the builder API to be implemented first.
-// These tests demonstrate the primitive functionality that's currently working.
+struct Test {
+    variant: Variant<'static, 'static>,
+    json: &'static str,
+    value: Value,
+}
+
+impl Test {
+    fn run(self) {
+        let json_string = variant_to_json_string(&self.variant).unwrap();
+        assert_eq!(json_string, self.json, "JSON string mismatch for variant: {:?}", self.variant);
+        
+        let json_value = variant_to_json_value(&self.variant).unwrap();
+        assert_eq!(json_value, self.value, "JSON value mismatch for variant: {:?}", self.variant);
+        let parsed: Value = serde_json::from_str(&json_string).unwrap();
+        assert_eq!(parsed, self.value, "Parsed JSON mismatch for variant: {:?}", self.variant);
+    }
+}
+
+#[test]
+fn test_json_roundtrip_compatibility() {
+    Test {
+        variant: Variant::Null,
+        json: "null",
+        value: Value::Null,
+    }.run();
+    
+    Test {
+        variant: Variant::BooleanTrue,
+        json: "true", 
+        value: Value::Bool(true),
+    }.run();
+    
+    Test {
+        variant: Variant::BooleanFalse,
+        json: "false",
+        value: Value::Bool(false),
+    }.run();
+    
+    Test {
+        variant: Variant::Int8(42),
+        json: "42",
+        value: Value::Number(42.into()),
+    }.run();
+    
+    Test {
+        variant: Variant::Int8(-128),
+        json: "-128",
+        value: Value::Number((-128).into()),
+    }.run();
+    
+    Test {
+        variant: Variant::Int16(1000),
+        json: "1000",
+        value: Value::Number(1000.into()),
+    }.run();
+    
+    Test {
+        variant: Variant::Int32(100000),
+        json: "100000",
+        value: Value::Number(100000.into()),
+    }.run();
+    
+    Test {
+        variant: Variant::Int64(10000000000),
+        json: "10000000000",
+        value: Value::Number(10000000000i64.into()),
+    }.run();
+    
+    Test {
+        variant: Variant::String("simple string"),
+        json: "\"simple string\"",
+        value: Value::String("simple string".to_string()),
+    }.run();
+    
+    Test {
+        variant: Variant::String(""),
+        json: "\"\"",
+        value: Value::String("".to_string()),
+    }.run();
+    
+    Test {
+        variant: Variant::ShortString(parquet_variant::ShortString::try_new("short").unwrap()),
+        json: "\"short\"",
+        value: Value::String("short".to_string()),
+    }.run();
+}
