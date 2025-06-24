@@ -146,11 +146,18 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Get a field's value by index in `0..self.len()`
     pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
-        self.field_err(i).ok()
+        if i >= self.num_elements {
+            return None;
+        }
+
+        match self.try_field(i) {
+            Ok(field) => Some(field),
+            Err(err) => panic!("validation error: {}", err),
+        }
     }
 
     /// Fallible version of `field`. Returns field value by index, capturing validation errors
-    fn field_err(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    fn try_field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         let start_offset = self.header.field_offset_size.unpack_usize(
             self.value,
             self.field_offsets_start_byte,
@@ -166,11 +173,18 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Get a field's name by index in `0..self.len()`
     pub fn field_name(&self, i: usize) -> Option<&'m str> {
-        self.field_name_err(i).ok()
+        if i >= self.num_elements {
+            return None;
+        }
+
+        match self.try_field_name(i) {
+            Ok(field_name) => Some(field_name),
+            Err(err) => panic!("validation error: {}", err),
+        }
     }
 
     /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
-    fn field_name_err(&self, i: usize) -> Result<&'m str, ArrowError> {
+    fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let field_id =
             self.header
                 .field_id_size
@@ -189,7 +203,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_checked(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| Ok((self.field_name_err(i)?, self.field_err(i)?)))
+        (0..self.num_elements).map(move |i| Ok((self.try_field_name(i)?, self.try_field(i)?)))
     }
 
     /// Returns the value of the field with the specified name, if any.

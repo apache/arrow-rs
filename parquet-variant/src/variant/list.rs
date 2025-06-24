@@ -121,11 +121,18 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Returns element by index in `0..self.len()`, if any
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
-        self.get_err(index).ok()
+        if index >= self.num_elements {
+            return None;
+        }
+
+        match self.try_get(index) {
+            Ok(variant) => Some(variant),
+            Err(err) => panic!("validation error: {}", err),
+        }
     }
 
     /// Fallible version of `get`. Returns element by index, capturing validation errors
-    fn get_err(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    fn try_get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         if index >= self.num_elements {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for list of length {}",
@@ -159,7 +166,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     // Fallible iteration over the fields of this dictionary. The constructor traverses the iterator
     // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn iter_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.get_err(i))
+        (0..self.len()).map(move |i| self.try_get(i))
     }
 }
 
