@@ -109,7 +109,7 @@ distribution servers.
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-### Pick an Release Candidate (RC) number
+### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
