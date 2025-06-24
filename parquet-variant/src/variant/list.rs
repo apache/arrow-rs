@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::OffsetSizeBytes;
-use crate::utils::{first_byte_from_slice, slice_from_slice_at_offset, validate_fallible_iterator};
+use crate::utils::{
+    first_byte_from_slice, overflow_error, slice_from_slice_at_offset, validate_fallible_iterator,
+};
 use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
@@ -90,7 +92,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
             .checked_add(1)
             .and_then(|n| n.checked_mul(header.offset_size as usize))
             .and_then(|n| n.checked_add(first_offset_byte))
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
+            .ok_or_else(|| overflow_error("offset of variant list values"))?;
 
         let new_self = Self {
             metadata,

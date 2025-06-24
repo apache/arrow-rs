@@ -17,7 +17,8 @@
 
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
-    first_byte_from_slice, slice_from_slice, string_from_slice, validate_fallible_iterator,
+    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
+    validate_fallible_iterator,
 };
 
 use arrow_schema::ArrowError;
@@ -119,7 +120,7 @@ impl<'m> VariantMetadata<'m> {
             .checked_add(2)
             .and_then(|n| n.checked_mul(header.offset_size as usize))
             .and_then(|n| n.checked_add(NUM_HEADER_BYTES))
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
+            .ok_or_else(|| overflow_error("offset of variant metadata dictionary"))?;
 
         let new_self = Self {
             bytes,

@@ -16,7 +16,8 @@
 // under the License.
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
-    first_byte_from_slice, slice_from_slice, try_binary_search_range_by, validate_fallible_iterator,
+    first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
+    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
@@ -84,21 +85,20 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
 
         // Calculate byte offsets for different sections with overflow protection
-        let overflow = || ArrowError::InvalidArgumentError("Integer overflow".into());
         let field_ids_start_byte = NUM_HEADER_BYTES
             .checked_add(num_elements_size as usize)
-            .ok_or_else(overflow)?;
+            .ok_or_else(|| overflow_error("offset of variant object field ids"))?;
 
         let field_offsets_start_byte = num_elements
             .checked_mul(header.field_id_size as usize)
             .and_then(|n| n.checked_add(field_ids_start_byte))
-            .ok_or_else(overflow)?;
+            .ok_or_else(|| overflow_error("offset of variant object field offsets"))?;
 
         let values_start_byte = num_elements
             .checked_add(1)
             .and_then(|n| n.checked_mul(header.field_offset_size as usize))
             .and_then(|n| n.checked_add(field_offsets_start_byte))
-            .ok_or_else(overflow)?;
+            .ok_or_else(|| overflow_error("offset of variant object field values"))?;
 
         // Spec says: "The last field_offset points to the byte after the end of the last value"
         //
@@ -108,7 +108,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             .field_offset_size
             .unpack_usize(value, field_offsets_start_byte, num_elements)?
             .checked_add(values_start_byte)
-            .ok_or_else(overflow)?;
+            .ok_or_else(|| overflow_error("end of variant object field values"))?;
         if end_offset > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Last field offset value {} is outside the value slice of length {}",
@@ -154,7 +154,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let value_start = self
             .values_start_byte
             .checked_add(start_offset)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Integer overflow".into()))?;
+            .ok_or_else(|| overflow_error("offset of variant object field"))?;
         let value_bytes = slice_from_slice(self.value, value_start..)?;
         Variant::try_new_with_metadata(self.metadata, value_bytes)
     }

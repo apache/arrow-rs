@@ -21,6 +21,11 @@ use arrow_schema::ArrowError;
 use std::fmt::Debug;
 use std::slice::SliceIndex;
 
+/// Helper for reporting integer overflow errors in a consistent way.
+pub(crate) fn overflow_error(msg: &str) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!("Integer overflow computing {msg}"))
+}
+
 #[inline]
 pub(crate) fn slice_from_slice<I: SliceIndex<[u8]> + Clone + Debug>(
     bytes: &[u8],
@@ -44,12 +49,12 @@ pub(crate) fn slice_from_slice_at_offset(
     base_offset: usize,
     range: Range<usize>,
 ) -> Result<&[u8], ArrowError> {
-    let start_byte = base_offset.checked_add(range.start).ok_or_else(|| {
-        ArrowError::InvalidArgumentError("Overflow computing start byte".to_string())
-    })?;
-    let end_byte = base_offset.checked_add(range.end).ok_or_else(|| {
-        ArrowError::InvalidArgumentError("Overflow computing end byte".to_string())
-    })?;
+    let start_byte = base_offset
+        .checked_add(range.start)
+        .ok_or_else(|| overflow_error("slice start"))?;
+    let end_byte = base_offset
+        .checked_add(range.end)
+        .ok_or_else(|| overflow_error("slice end"))?;
     slice_from_slice(bytes, start_byte..end_byte)
 }
 
