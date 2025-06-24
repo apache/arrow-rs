@@ -14,13 +14,17 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::utils::{array_from_slice, slice_from_slice, string_from_slice};
+use crate::utils::{array_from_slice, slice_from_slice_at_offset, string_from_slice};
+use crate::ShortString;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 
 use std::array::TryFromSliceError;
 use std::num::TryFromIntError;
+
+// Makes the code a bit more readable
+pub(crate) const VARIANT_VALUE_HEADER_BYTES: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
@@ -261,22 +265,20 @@ pub(crate) fn decode_timestampntz_micros(data: &[u8]) -> Result<NaiveDateTime, A
 /// Decodes a Binary from the value section of a variant.
 pub(crate) fn decode_binary(data: &[u8]) -> Result<&[u8], ArrowError> {
     let len = u32::from_le_bytes(array_from_slice(data, 0)?) as usize;
-    let value = slice_from_slice(data, 4..4 + len)?;
-    Ok(value)
+    slice_from_slice_at_offset(data, 4, 0..len)
 }
 
 /// Decodes a long string from the value section of a variant.
 pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
     let len = u32::from_le_bytes(array_from_slice(data, 0)?) as usize;
-    let string = string_from_slice(data, 4..4 + len)?;
-    Ok(string)
+    string_from_slice(data, 4, 0..len)
 }
 
 /// Decodes a short string from the value section of a variant.
-pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<&str, ArrowError> {
+pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortString, ArrowError> {
     let len = (metadata >> 2) as usize;
-    let string = string_from_slice(data, 0..len)?;
-    Ok(string)
+    let string = string_from_slice(data, 0, 0..len)?;
+    ShortString::try_new(string)
 }
 
 #[cfg(test)]
@@ -420,7 +422,7 @@ mod tests {
     fn test_short_string() -> Result<(), ArrowError> {
         let data = [b'H', b'e', b'l', b'l', b'o', b'o'];
         let result = decode_short_string(1 | 5 << 2, &data)?;
-        assert_eq!(result, "Hello");
+        assert_eq!(result.0, "Hello");
         Ok(())
     }
 
@@ -517,10 +519,11 @@ mod tests {
 
         let width = OffsetSizeBytes::Two;
 
-        // dictionary_size starts immediately after the header
+        // dictionary_size starts immediately after the header byte
         let dict_size = width.unpack_usize(&buf, 1, 0).unwrap();
         assert_eq!(dict_size, 2);
 
+        // offset array immediately follows the dictionary size
         let first = width.unpack_usize(&buf, 1, 1).unwrap();
         assert_eq!(first, 0);
 
