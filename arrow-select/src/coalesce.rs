@@ -318,6 +318,11 @@ impl BatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
+
+    /// Returns all the completed batches
+    pub fn take_completed_batches(&mut self) -> VecDeque<RecordBatch> {
+        std::mem::take(&mut self.completed)
+    }
 }
 
 /// Return a new `InProgressArray` for the given data type

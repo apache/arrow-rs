@@ -599,6 +599,11 @@ where
 
         let filter = self.filter.as_mut();
         let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
+        let num_original_columns = row_group
+            .metadata
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
 
         // Update selection based on any filters
         if let Some(filter) = filter {
@@ -613,10 +618,16 @@ where
                     .fetch(&mut self.input, predicate.projection(), selection)
                     .await?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let array_reader =
+                    ArrayReaderBuilder::new(&row_group, plan_builder.cached_predicate_result())
+                        .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                plan_builder = plan_builder.with_predicate(
+                    num_original_columns,
+                    array_reader,
+                    predicate.as_mut(),
+                    &projection,
+                )?;
             }
         }
 
@@ -661,7 +672,7 @@ where
 
         let plan = plan_builder.build();
 
-        let array_reader = ArrayReaderBuilder::new(&row_group)
+        let array_reader = ArrayReaderBuilder::new(&row_group, plan.cached_predicate_result())
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);

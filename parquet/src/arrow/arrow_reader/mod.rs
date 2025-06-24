@@ -716,6 +716,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .row_groups
             .unwrap_or_else(|| (0..self.metadata.num_row_groups()).collect());
 
+        let num_original_columns = self.metadata.file_metadata().schema_descr().num_columns();
+
         let reader = ReaderRowGroups {
             reader: Arc::new(self.input.0),
             metadata: self.metadata,
@@ -733,14 +735,24 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                let array_reader = ArrayReaderBuilder::new(&reader)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                // TODO move this into the read_plan??
 
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+                // Create an ArrayReader for evaluating (just) the predicate columns
+                let array_reader =
+                    ArrayReaderBuilder::new(&reader, plan_builder.cached_predicate_result())
+                        .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+
+                // Update the plan with the results of predicate evaluation
+                plan_builder = plan_builder.with_predicate(
+                    num_original_columns,
+                    array_reader,
+                    predicate.as_mut(),
+                    &self.projection,
+                )?;
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader)
+        let array_reader = ArrayReaderBuilder::new(&reader, plan_builder.cached_predicate_result())
             .build_array_reader(self.fields.as_deref(), &self.projection)?;
 
         let read_plan = plan_builder
@@ -941,7 +953,8 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         selection: Option<RowSelection>,
     ) -> Result<Self> {
-        let array_reader = ArrayReaderBuilder::new(row_groups)
+        let cached_predicate_result = None;
+        let array_reader = ArrayReaderBuilder::new(row_groups, cached_predicate_result)
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)

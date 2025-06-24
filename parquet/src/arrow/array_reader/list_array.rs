@@ -563,7 +563,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut array_reader = ArrayReaderBuilder::new(&file_reader)
+        let cached_predicate_result = None;
+        let mut array_reader = ArrayReaderBuilder::new(&file_reader, cached_predicate_result)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 

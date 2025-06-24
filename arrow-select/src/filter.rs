@@ -324,6 +324,8 @@ impl IterationStrategy {
 }
 
 /// A filtering predicate that can be applied to an [`Array`]
+///
+/// See [`FilterBuilder`] to create a [`FilterPredicate`].
 #[derive(Debug)]
 pub struct FilterPredicate {
     filter: BooleanArray,
@@ -502,6 +504,9 @@ fn filter_null_mask(
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
+///
+/// Panics for `IterationStrategy::All` or `IterationStrategy::None` which must
+/// be handled by the caller
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
@@ -536,7 +541,8 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             }
             builder.into()
         }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+        IterationStrategy::All => unreachable!(),
+        IterationStrategy::None => unreachable!(),
     }
 }
 
