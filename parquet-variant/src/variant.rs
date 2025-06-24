@@ -762,7 +762,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::Variant;
+    /// use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8};
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
     /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
@@ -810,7 +810,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::Variant;
+    /// use parquet_variant::{Variant, VariantDecimal8, VariantDecimal16};
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
     /// let v1 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
@@ -852,10 +852,10 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::Variant;
+    /// use parquet_variant::{Variant, VariantDecimal16};
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i128, 2));
+    /// let v1 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
     /// assert_eq!(v1.as_decimal_int128(), Some((1234_i128, 2)));
     ///
     /// // but not if the variant is not a decimal
