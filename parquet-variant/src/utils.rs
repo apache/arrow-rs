@@ -62,13 +62,9 @@ pub(crate) fn array_from_slice<const N: usize>(
     bytes: &[u8],
     offset: usize,
 ) -> Result<[u8; N], ArrowError> {
-    let bytes = slice_from_slice_at_offset(bytes, offset, 0..N)?;
-    bytes.try_into().map_err(map_try_from_slice_error)
-}
-
-/// To be used in `map_err` when unpacking an integer from a slice of bytes.
-pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
-    ArrowError::InvalidArgumentError(e.to_string())
+    slice_from_slice_at_offset(bytes, offset, 0..N)?
+        .try_into()
+        .map_err(|e: TryFromSliceError| ArrowError::InvalidArgumentError(e.to_string()))
 }
 
 pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
