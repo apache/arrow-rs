@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use crate::{ShortString, Variant};
 use std::collections::BTreeMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
@@ -384,14 +384,14 @@ impl VariantBuilder {
             Variant::Date(v) => self.append_date(v),
             Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
             Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-                self.append_decimal4(integer, scale)
+            Variant::Decimal4(decimal4) => {
+                self.append_decimal4(decimal4.integer(), decimal4.scale())
             }
-            Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-                self.append_decimal8(integer, scale)
+            Variant::Decimal8(decimal8) => {
+                self.append_decimal8(decimal8.integer(), decimal8.scale())
             }
-            Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-                self.append_decimal16(integer, scale)
+            Variant::Decimal16(decimal16) => {
+                self.append_decimal16(decimal16.integer(), decimal16.scale())
             }
             Variant::Float(v) => self.append_float(v),
             Variant::Double(v) => self.append_double(v),
