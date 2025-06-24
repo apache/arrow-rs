@@ -279,7 +279,7 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// ```
 ///
 /// # Example: Create a [`Variant::Object`] and convert to JSON
-/// 
+///
 /// This example shows how to create an object with two fields and convert it to JSON:
 /// ```json
 /// {
@@ -287,7 +287,7 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 ///   "last_name": "Li"
 /// }
 /// ```
-/// 
+///
 /// ```rust
 /// # use parquet_variant::{Variant, VariantBuilder, variant_to_json_string};
 /// # use arrow_schema::ArrowError;
@@ -374,17 +374,20 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let remainder = (integer % divisor).abs();
                 let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
                 let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                
+
                 let decimal_str = if trimmed_remainder.is_empty() {
                     quotient.to_string()
                 } else {
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
-                
+
                 // Parse as serde_json::Number to preserve precision
-                decimal_str.parse::<serde_json::Number>()
+                decimal_str
+                    .parse::<serde_json::Number>()
                     .map(Value::Number)
-                    .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e)))
+                    .map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
+                    })
             }
         }
         Variant::Decimal8 { integer, scale } => {
@@ -397,17 +400,20 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let remainder = (integer % divisor).abs();
                 let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
                 let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                
+
                 let decimal_str = if trimmed_remainder.is_empty() {
                     quotient.to_string()
                 } else {
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
-                
+
                 // Parse as serde_json::Number to preserve precision
-                decimal_str.parse::<serde_json::Number>()
+                decimal_str
+                    .parse::<serde_json::Number>()
                     .map(Value::Number)
-                    .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e)))
+                    .map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
+                    })
             }
         }
         Variant::Decimal16 { integer, scale } => {
@@ -420,17 +426,20 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let remainder = (integer % divisor).abs();
                 let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
                 let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                
+
                 let decimal_str = if trimmed_remainder.is_empty() {
                     quotient.to_string()
                 } else {
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
-                
+
                 // Parse as serde_json::Number to preserve precision
-                decimal_str.parse::<serde_json::Number>()
+                decimal_str
+                    .parse::<serde_json::Number>()
                     .map(Value::Number)
-                    .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e)))
+                    .map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
+                    })
             }
         }
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
@@ -479,15 +488,15 @@ mod tests {
         };
         let negative_json = variant_to_json_string(&negative_variant)?;
         assert_eq!(negative_json, "-12.345");
-        
-        // Test large scale decimal  
+
+        // Test large scale decimal
         let large_scale_variant = Variant::Decimal8 {
             integer: 123456789,
             scale: 6,
         };
         let large_scale_json = variant_to_json_string(&large_scale_variant)?;
         assert_eq!(large_scale_json, "123.456789");
-        
+
         Ok(())
     }
 
@@ -651,42 +660,59 @@ mod tests {
         fn run(self) {
             let json_string = variant_to_json_string(&self.variant)
                 .expect("variant_to_json_string should succeed");
-            assert_eq!(json_string, self.expected_json, 
-                "JSON string mismatch for variant: {:?}", self.variant);
-            
-            let json_value = variant_to_json_value(&self.variant)
-                .expect("variant_to_json_value should succeed");
-            
+            assert_eq!(
+                json_string, self.expected_json,
+                "JSON string mismatch for variant: {:?}",
+                self.variant
+            );
+
+            let json_value =
+                variant_to_json_value(&self.variant).expect("variant_to_json_value should succeed");
+
             // For floating point numbers, we need special comparison due to JSON number representation
             match (&json_value, &self.expected_value) {
                 (Value::Number(actual), Value::Number(expected)) => {
                     let actual_f64 = actual.as_f64().unwrap_or(0.0);
                     let expected_f64 = expected.as_f64().unwrap_or(0.0);
-                    assert!((actual_f64 - expected_f64).abs() < f64::EPSILON,
-                        "JSON value mismatch for variant: {:?}, got {}, expected {}", 
-                        self.variant, actual_f64, expected_f64);
+                    assert!(
+                        (actual_f64 - expected_f64).abs() < f64::EPSILON,
+                        "JSON value mismatch for variant: {:?}, got {}, expected {}",
+                        self.variant,
+                        actual_f64,
+                        expected_f64
+                    );
                 }
                 _ => {
-                    assert_eq!(json_value, self.expected_value, 
-                        "JSON value mismatch for variant: {:?}", self.variant);
+                    assert_eq!(
+                        json_value, self.expected_value,
+                        "JSON value mismatch for variant: {:?}",
+                        self.variant
+                    );
                 }
             }
-            
+
             // Verify roundtrip: JSON string should parse to same value
-            let parsed: Value = serde_json::from_str(&json_string)
-                .expect("Generated JSON should be valid");
+            let parsed: Value =
+                serde_json::from_str(&json_string).expect("Generated JSON should be valid");
             // Same floating point handling for roundtrip
             match (&parsed, &self.expected_value) {
                 (Value::Number(actual), Value::Number(expected)) => {
                     let actual_f64 = actual.as_f64().unwrap_or(0.0);
                     let expected_f64 = expected.as_f64().unwrap_or(0.0);
-                    assert!((actual_f64 - expected_f64).abs() < f64::EPSILON,
-                        "Parsed JSON mismatch for variant: {:?}, got {}, expected {}", 
-                        self.variant, actual_f64, expected_f64);
+                    assert!(
+                        (actual_f64 - expected_f64).abs() < f64::EPSILON,
+                        "Parsed JSON mismatch for variant: {:?}, got {}, expected {}",
+                        self.variant,
+                        actual_f64,
+                        expected_f64
+                    );
                 }
                 _ => {
-                    assert_eq!(parsed, self.expected_value, 
-                        "Parsed JSON mismatch for variant: {:?}", self.variant);
+                    assert_eq!(
+                        parsed, self.expected_value,
+                        "Parsed JSON mismatch for variant: {:?}",
+                        self.variant
+                    );
                 }
             }
         }
@@ -695,170 +721,222 @@ mod tests {
     #[test]
     fn test_primitive_json_conversion() {
         use crate::variant::ShortString;
-        
+
         // Null
         JsonTest {
             variant: Variant::Null,
             expected_json: "null",
             expected_value: Value::Null,
-        }.run();
-        
+        }
+        .run();
+
         // Booleans
         JsonTest {
             variant: Variant::BooleanTrue,
-            expected_json: "true", 
+            expected_json: "true",
             expected_value: Value::Bool(true),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::BooleanFalse,
             expected_json: "false",
             expected_value: Value::Bool(false),
-        }.run();
-        
+        }
+        .run();
+
         // Integers - positive and negative edge cases
         JsonTest {
             variant: Variant::Int8(42),
             expected_json: "42",
             expected_value: Value::Number(42.into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int8(-128),
             expected_json: "-128",
             expected_value: Value::Number((-128).into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int16(32767),
             expected_json: "32767",
             expected_value: Value::Number(32767.into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int16(-32768),
             expected_json: "-32768",
             expected_value: Value::Number((-32768).into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int32(2147483647),
             expected_json: "2147483647",
             expected_value: Value::Number(2147483647.into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int32(-2147483648),
             expected_json: "-2147483648",
             expected_value: Value::Number((-2147483648).into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int64(9223372036854775807),
             expected_json: "9223372036854775807",
             expected_value: Value::Number(9223372036854775807i64.into()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Int64(-9223372036854775808),
             expected_json: "-9223372036854775808",
             expected_value: Value::Number((-9223372036854775808i64).into()),
-        }.run();
-        
+        }
+        .run();
+
         // Floats
         JsonTest {
             variant: Variant::Float(3.5),
             expected_json: "3.5",
-            expected_value: serde_json::Number::from_f64(3.5).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(3.5)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Float(0.0),
             expected_json: "0",
             expected_value: Value::Number(0.into()), // Use integer 0 to match JSON parsing
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Float(-1.5),
             expected_json: "-1.5",
-            expected_value: serde_json::Number::from_f64(-1.5).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(-1.5)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Double(2.718281828459045),
             expected_json: "2.718281828459045",
-            expected_value: serde_json::Number::from_f64(2.718281828459045).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(2.718281828459045)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         // Decimals
         JsonTest {
-            variant: Variant::Decimal4 { integer: 12345, scale: 2 },
+            variant: Variant::Decimal4 {
+                integer: 12345,
+                scale: 2,
+            },
             expected_json: "123.45",
-            expected_value: serde_json::Number::from_f64(123.45).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(123.45)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         JsonTest {
-            variant: Variant::Decimal4 { integer: 42, scale: 0 },
+            variant: Variant::Decimal4 {
+                integer: 42,
+                scale: 0,
+            },
             expected_json: "42",
-            expected_value: serde_json::Number::from_f64(42.0).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(42.0)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         JsonTest {
-            variant: Variant::Decimal8 { integer: 1234567890, scale: 3 },
+            variant: Variant::Decimal8 {
+                integer: 1234567890,
+                scale: 3,
+            },
             expected_json: "1234567.89",
-            expected_value: serde_json::Number::from_f64(1234567.89).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(1234567.89)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         JsonTest {
-            variant: Variant::Decimal16 { integer: 123456789012345, scale: 4 },
+            variant: Variant::Decimal16 {
+                integer: 123456789012345,
+                scale: 4,
+            },
             expected_json: "12345678901.2345",
-            expected_value: serde_json::Number::from_f64(12345678901.2345).map(Value::Number).unwrap(),
-        }.run();
-        
+            expected_value: serde_json::Number::from_f64(12345678901.2345)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
         // Strings
         JsonTest {
             variant: Variant::String("hello world"),
             expected_json: "\"hello world\"",
             expected_value: Value::String("hello world".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::String(""),
             expected_json: "\"\"",
             expected_value: Value::String("".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::ShortString(ShortString::try_new("test").unwrap()),
             expected_json: "\"test\"",
             expected_value: Value::String("test".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         // Date and timestamps
         JsonTest {
             variant: Variant::Date(NaiveDate::from_ymd_opt(2023, 12, 25).unwrap()),
             expected_json: "\"2023-12-25\"",
             expected_value: Value::String("2023-12-25".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         // Binary data (base64 encoded)
         JsonTest {
             variant: Variant::Binary(b"test"),
             expected_json: "\"dGVzdA==\"", // base64 encoded "test"
             expected_value: Value::String("dGVzdA==".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Binary(b""),
             expected_json: "\"\"", // empty base64
             expected_value: Value::String("".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::Binary(b"binary data"),
             expected_json: "\"YmluYXJ5IGRhdGE=\"", // base64 encoded "binary data"
             expected_value: Value::String("YmluYXJ5IGRhdGE=".to_string()),
-        }.run();
+        }
+        .run();
     }
 
     #[test]
@@ -868,35 +946,37 @@ mod tests {
             variant: Variant::String("line1\nline2\ttab\"quote\"\\backslash"),
             expected_json: "\"line1\\nline2\\ttab\\\"quote\\\"\\\\backslash\"",
             expected_value: Value::String("line1\nline2\ttab\"quote\"\\backslash".to_string()),
-        }.run();
-        
+        }
+        .run();
+
         JsonTest {
             variant: Variant::String("Hello 世界 🌍"),
             expected_json: "\"Hello 世界 🌍\"",
             expected_value: Value::String("Hello 世界 🌍".to_string()),
-        }.run();
+        }
+        .run();
     }
 
     #[test]
     fn test_buffer_writing_variants() -> Result<(), ArrowError> {
         use crate::variant_to_json;
-        
+
         let variant = Variant::String("test buffer writing");
-        
+
         // Test writing to a Vec<u8>
         let mut buffer = Vec::new();
         variant_to_json(&mut buffer, &variant)?;
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
         assert_eq!(result, "\"test buffer writing\"");
-        
+
         // Test writing to vec![]
         let mut buffer = vec![];
         variant_to_json(&mut buffer, &variant)?;
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
         assert_eq!(result, "\"test buffer writing\"");
-        
+
         Ok(())
     }
 
@@ -1201,27 +1281,27 @@ mod tests {
             integer: 9007199254740993, // 2^53 + 1, exceeds f64 precision
             scale: 6,
         };
-        
+
         let json_string = variant_to_json_string(&high_precision_decimal8)?;
         let json_value = variant_to_json_value(&high_precision_decimal8)?;
-        
+
         // Expected result: 9007199254.740993 (exact representation)
         assert_eq!(json_string, "9007199254.740993");
-        
+
         // Verify that both functions produce consistent results
         let parsed: Value = serde_json::from_str(&json_string)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
         assert_eq!(parsed, json_value);
-        
+
         // Test another case with trailing zeros that should be trimmed
         let decimal_with_zeros = Variant::Decimal8 {
             integer: 1234567890000, // Should result in 1234567.89 (trailing zeros trimmed)
             scale: 6,
         };
-        
+
         let json_string_zeros = variant_to_json_string(&decimal_with_zeros)?;
         assert_eq!(json_string_zeros, "1234567.89");
-        
+
         Ok(())
     }
 }

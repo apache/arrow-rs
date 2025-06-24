@@ -17,11 +17,13 @@
 
 //! Example showing how to convert Variant values to JSON
 
-use parquet_variant::{variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder};
+use parquet_variant::{
+    variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = VariantBuilder::new();
-    
+
     {
         let mut person = builder.new_object();
         person.append_value("name", "Alice");
@@ -32,22 +34,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         person.append_value("department", "Engineering");
         person.finish();
     }
-    
+
     let (metadata, value) = builder.finish();
     let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
-    
+
     let json_string = variant_to_json_string(&variant)?;
     let json_value = variant_to_json_value(&variant)?;
     let pretty_json = serde_json::to_string_pretty(&json_value)?;
     println!("{}", pretty_json);
-    
+
     let mut buffer = Vec::new();
     variant_to_json(&mut buffer, &variant)?;
     let buffer_result = String::from_utf8(buffer)?;
-    
+
     // Verify all methods produce the same result
     assert_eq!(json_string, buffer_result);
     assert_eq!(json_string, serde_json::to_string(&json_value)?);
-    
+
     Ok(())
 }

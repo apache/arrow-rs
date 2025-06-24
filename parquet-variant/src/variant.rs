@@ -33,7 +33,6 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
-
 /// Represents a variant array.
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
