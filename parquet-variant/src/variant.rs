@@ -40,6 +40,16 @@ const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShortString<'a>(pub(crate) &'a str);
 
+/// Represents a 4-byte decimal value in the Variant format.
+///
+/// This struct stores a decimal number using a 32-bit signed integer for the coefficient
+/// and an 8-bit unsigned integer for the scale (number of decimal places).
+///
+/// The decimal value is calculated as: `integer * 10^(-scale)`
+///
+/// For valid precision and scale values, see the Variant specification:
+/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal4 {
     pub(crate) integer: i32,
@@ -47,9 +57,11 @@ pub struct VariantDecimal4 {
 }
 
 impl VariantDecimal4 {
-    pub fn try_new(integer: i32, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+    pub fn try_new(integer: i32, scale: u8) -> Result<Self, ArrowError> {
+        let precision = integer.abs().ilog10() + 1;
+
         // Validate that scale doesn't exceed precision
-        if scale > precision {
+        if scale as u32 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Scale {} cannot be greater than precision {}",
                 scale, precision
@@ -65,21 +77,20 @@ impl VariantDecimal4 {
             )));
         }
 
-        // Check if the value fits within the specified precision
-        let max_value = 10_i32.pow(precision as u32) - 1;
-        let min_value = -(10_i32.pow(precision as u32)) + 1;
-
-        if integer > max_value || integer < min_value {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Value {} exceeds the range for precision {}",
-                integer, precision
-            )));
-        }
-
         Ok(VariantDecimal4 { integer, scale })
     }
 }
 
+/// Represents an 8-byte decimal value in the Variant format.
+///
+/// This struct stores a decimal number using a 64-bit signed integer for the coefficient
+/// and an 8-bit unsigned integer for the scale (number of decimal places).
+///
+/// The decimal value is calculated as: `integer * 10^(-scale)`
+/// For valid precision and scale values, see the Variant specification:
+///
+/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal8 {
     pub(crate) integer: i64,
@@ -87,9 +98,10 @@ pub struct VariantDecimal8 {
 }
 
 impl VariantDecimal8 {
-    pub fn try_new(integer: i64, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+    pub fn try_new(integer: i64, scale: u8) -> Result<Self, ArrowError> {
+        let precision = integer.abs().ilog10() + 1;
         // Validate that scale doesn't exceed precision
-        if scale > precision {
+        if scale as u32 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Scale {} cannot be greater than precision {}",
                 scale, precision
@@ -105,21 +117,20 @@ impl VariantDecimal8 {
             )));
         }
 
-        // Check if the value fits within the specified precision
-        let max_value = 10_i64.pow(precision as u32) - 1;
-        let min_value = -(10_i64.pow(precision as u32)) + 1;
-
-        if integer > max_value || integer < min_value {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Value {} exceeds the range for precision {}",
-                integer, precision
-            )));
-        }
-
         Ok(VariantDecimal8 { integer, scale })
     }
 }
 
+/// Represents an 16-byte decimal value in the Variant format.
+///
+/// This struct stores a decimal number using a 128-bit signed integer for the coefficient
+/// and an 8-bit unsigned integer for the scale (number of decimal places).
+///
+/// The decimal value is calculated as: `integer * 10^(-scale)`
+/// For valid precision and scale values, see the Variant specification:
+///
+/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal16 {
     pub(crate) integer: i128,
@@ -127,9 +138,11 @@ pub struct VariantDecimal16 {
 }
 
 impl VariantDecimal16 {
-    pub fn try_new(integer: i128, scale: u8, precision: u8) -> Result<Self, ArrowError> {
+    pub fn try_new(integer: i128, scale: u8) -> Result<Self, ArrowError> {
+        let precision = integer.abs().ilog10() + 1;
+
         // Validate that scale doesn't exceed precision
-        if scale > precision {
+        if scale as u32 > precision {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Scale {} cannot be greater than precision {}",
                 scale, precision
@@ -142,17 +155,6 @@ impl VariantDecimal16 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Precision {} exceeds maximum precision of 38 for 16-byte decimal",
                 precision
-            )));
-        }
-
-        // Check if the value fits within the specified precision
-        let max_value = 10_i128.pow(precision as u32) - 1;
-        let min_value = -(10_i128.pow(precision as u32)) + 1;
-
-        if integer > max_value || integer < min_value {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Value {} exceeds the range for precision {}",
-                integer, precision
             )));
         }
 
@@ -1032,30 +1034,21 @@ impl From<i64> for Variant<'_, '_> {
     }
 }
 
-impl From<(i32, u8)> for Variant<'_, '_> {
-    fn from(value: (i32, u8)) -> Self {
-        Variant::Decimal4(VariantDecimal4 {
-            integer: value.0,
-            scale: value.1,
-        })
+impl From<VariantDecimal4> for Variant<'_, '_> {
+    fn from(value: VariantDecimal4) -> Self {
+        Variant::Decimal4(value)
     }
 }
 
-impl From<(i64, u8)> for Variant<'_, '_> {
-    fn from(value: (i64, u8)) -> Self {
-        Variant::Decimal8(VariantDecimal8 {
-            integer: value.0,
-            scale: value.1,
-        })
+impl From<VariantDecimal8> for Variant<'_, '_> {
+    fn from(value: VariantDecimal8) -> Self {
+        Variant::Decimal8(value)
     }
 }
 
-impl From<(i128, u8)> for Variant<'_, '_> {
-    fn from(value: (i128, u8)) -> Self {
-        Variant::Decimal16(VariantDecimal16 {
-            integer: value.0,
-            scale: value.1,
-        })
+impl From<VariantDecimal16> for Variant<'_, '_> {
+    fn from(value: VariantDecimal16) -> Self {
+        Variant::Decimal16(value)
     }
 }
 

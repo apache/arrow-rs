@@ -65,10 +65,10 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
         ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
-        ("primitive_decimal4", Variant::Decimal4(VariantDecimal4::try_new(1234, 2, 4).unwrap())),
+        ("primitive_decimal4", Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap())), 
         // ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
-        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2, 10).unwrap())), 
-        ("primitive_decimal16", Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2, 19).unwrap())),
+        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2).unwrap())), 
+        ("primitive_decimal16", Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap())),
         ("primitive_float", Variant::Float(1234567890.1234)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
@@ -126,7 +126,7 @@ fn variant_object_primitive() {
         // spark wrote this as a decimal4 (not a double)
         (
             "double_field",
-            Variant::Decimal4(VariantDecimal4::try_new(123456789, 8, 9).unwrap()),
+            Variant::Decimal4(VariantDecimal4::try_new(123456789, 8).unwrap()),
         ),
         ("int_field", Variant::Int8(1)),
         ("null_field", Variant::Null),
@@ -210,7 +210,10 @@ fn variant_object_builder() {
 
     // The double field is actually encoded as decimal4 with scale 8
     // Value: 123456789, Scale: 8 -> 1.23456789
-    obj.append_value("double_field", (123456789i32, 8u8));
+    obj.append_value(
+        "double_field",
+        VariantDecimal4::try_new(123456789i32, 8u8).unwrap(),
+    );
     obj.append_value("boolean_true_field", true);
     obj.append_value("boolean_false_field", false);
     obj.append_value("string_field", "Apache Parquet");
