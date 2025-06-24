@@ -43,7 +43,7 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 
 /// Converts a Variant to JSON and writes it to the provided `Write`
 ///
-/// This function writes JSON directly to any type that implements [`Write`](std::io::Write),
+/// This function writes JSON directly to any type that implements [`Write`],
 /// making it efficient for streaming or when you want to control the output destination.
 ///
 /// # Arguments
@@ -829,9 +829,9 @@ mod tests {
         .run();
 
         JsonTest {
-            variant: Variant::Double(2.718281828459045),
+            variant: Variant::Double(std::f64::consts::E),
             expected_json: "2.718281828459045",
-            expected_value: serde_json::Number::from_f64(2.718281828459045)
+            expected_value: serde_json::Number::from_f64(std::f64::consts::E)
                 .map(Value::Number)
                 .unwrap(),
         }
