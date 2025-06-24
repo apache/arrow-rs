@@ -16,89 +16,63 @@
 // under the License.
 
 //! Example showing how to convert Variant values to JSON
+//!
+//! This example demonstrates building a complex Variant
+//! and converting it to JSON using the three main conversion functions.
 
-use parquet_variant::{variant_to_json, variant_to_json_string, variant_to_json_value, Variant};
+use parquet_variant::{variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let variants = vec![
-        ("Null", Variant::Null),
-        ("Boolean True", Variant::BooleanTrue),
-        ("Boolean False", Variant::BooleanFalse),
-        ("Integer 42", Variant::Int8(42)),
-        ("Negative Integer", Variant::Int8(-123)),
-        ("String", Variant::String("Hello, World!")),
-        ("Short String", Variant::ShortString(parquet_variant::ShortString::try_new("Hi!").unwrap())),
-    ];
-
-    for (name, variant) in variants {
-        let json_string = variant_to_json_string(&variant)?;
-        println!("   {} -> {}", name, json_string);
+    let mut builder = VariantBuilder::new();
+    
+    {
+        let mut person = builder.new_object();
+        person.append_value("name", "Alice");
+        person.append_value("age", 30i32);
+        person.append_value("email", "alice@example.com");
+        person.append_value("is_active", true);
+        person.append_value("score", 95.7f64);
+        person.append_value("department", "Engineering");
+        person.finish();
     }
-
-    // Example 2: String escaping
-    println!("\n🔤 2. String Escaping:");
-
-    let special_string =
-        Variant::String("Line 1\nLine 2\tTabbed\r\nWith \"quotes\" and \\backslashes");
-    let escaped_json = variant_to_json_string(&special_string)?;
-    println!("   Original: Line 1\\nLine 2\\tTabbed\\r\\nWith \"quotes\" and \\\\backslashes");
-    println!("   JSON:     {}", escaped_json);
-
-    let unicode_variants = vec![
-        Variant::String("Hello 世界 🌍"),
-        Variant::String("Emoji: 💻"),
-        Variant::String("Math: α + β = γ"),
-    ];
-
-    for variant in unicode_variants {
-        let json_string = variant_to_json_string(&variant)?;
-        println!("   {}", json_string);
-    }
-
-    let test_variant = Variant::String("Buffer test");
-
-    // Write to Vec<u8>
-    let mut vec_buffer = Vec::new();
-    variant_to_json(&mut vec_buffer, &test_variant)?;
-    println!("   Vec<u8> buffer: {}", String::from_utf8(vec_buffer)?);
-
-    // Write to String (through write! macro)
-    let mut string_buffer = String::new();
-    use std::fmt::Write;
-    write!(string_buffer, "Prefix: ")?;
-
-    // Convert to bytes temporarily to use the Write trait
-    let mut temp_buffer = Vec::new();
-    variant_to_json(&mut temp_buffer, &test_variant)?;
-    string_buffer.push_str(&String::from_utf8(temp_buffer)?);
-    println!("   String buffer: {}", string_buffer);
-
-    let variants_for_value = vec![
-        Variant::Null,
-        Variant::BooleanTrue,
-        Variant::Int8(100),
-        Variant::String("Value conversion"),
-    ];
-
-    for variant in variants_for_value {
-        let json_value = variant_to_json_value(&variant)?;
-        println!("   {:?} -> {:?}", variant, json_value);
-    }
-
-    let start = std::time::Instant::now();
-    for i in 0..1000 {
-        let variant = Variant::Int8((i % 128) as i8);
-        let _json = variant_to_json_string(&variant)?;
-    }
-    let duration = start.elapsed();
-    println!("   Converted 1000 variants in {:?}", duration);
-
-    // This would demonstrate error handling if we had invalid variants
-    // For now, all our examples work, so we'll just show the pattern
-    match variant_to_json_string(&Variant::String("Valid string")) {
-        Ok(json) => println!("   Success: {}", json),
-        Err(e) => println!("   Error: {}", e),
-    }
-
+    
+    let (metadata, value) = builder.finish();
+    let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
+    
+    // Method 1: Convert to JSON string (most common)
+    let json_string = variant_to_json_string(&variant)?;
+    // Method 2: Convert to serde_json::Value (for programmatic use)
+    println!("🔧 Using variant_to_json_value() -> serde_json::Value:");
+    let json_value = variant_to_json_value(&variant)?;
+    let pretty_json = serde_json::to_string_pretty(&json_value)?;
+    println!("{}\n", pretty_json);
+    
+    // Method 3: Write directly to buffer (for performance)
+    println!("⚡ Using variant_to_json() -> Write to buffer:");
+    let mut buffer = Vec::new();
+    variant_to_json(&mut buffer, &variant)?;
+    let buffer_result = String::from_utf8(buffer)?;
+    println!("{}\n", buffer_result);
+    
+    // Verify all methods produce the same result
+    assert_eq!(json_string, buffer_result);
+    assert_eq!(json_string, serde_json::to_string(&json_value)?);
+    
+    // Simple string
+    let simple_string = parquet_variant::Variant::String("Hello, JSON!");
+    println!("String: {}", variant_to_json_string(&simple_string)?);
+    
+    // Simple number
+    let simple_number = parquet_variant::Variant::Int32(42);
+    println!("Number: {}", variant_to_json_string(&simple_number)?);
+    
+    // Simple boolean
+    let simple_bool = parquet_variant::Variant::BooleanTrue;
+    println!("Boolean: {}", variant_to_json_string(&simple_bool)?);
+    
+    // Simple null
+    let simple_null = parquet_variant::Variant::Null;
+    println!("Null: {}", variant_to_json_string(&simple_null)?);
+    
     Ok(())
 }

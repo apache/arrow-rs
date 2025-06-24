@@ -41,7 +41,10 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
-/// Converts a Variant to JSON and writes it to the provided buffer
+/// Converts a Variant to JSON and writes it to the provided `Write`
+///
+/// This function writes JSON directly to any type that implements [`Write`](std::io::Write),
+/// making it efficient for streaming or when you want to control the output destination.
 ///
 /// # Arguments
 ///
@@ -53,20 +56,26 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 /// * `Ok(())` if successful
 /// * `Err` with error details if conversion fails
 ///
-/// # Example
+/// # Examples
 ///
 /// ```rust
-/// use parquet_variant::{Variant, variant_to_json};
-/// use arrow_schema::ArrowError;
+/// # use parquet_variant::{Variant, variant_to_json};
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::Int32(42);
+/// let mut buffer = Vec::new();
+/// variant_to_json(&mut buffer, &variant)?;
+/// assert_eq!(String::from_utf8(buffer).unwrap(), "42");
+/// # Ok::<(), ArrowError>(())
+/// ```
 ///
-/// fn example() -> Result<(), ArrowError> {
-///     let variant = Variant::Int8(42);
-///     let mut buffer = Vec::new();
-///     variant_to_json(&mut buffer, &variant)?;
-///     assert_eq!(String::from_utf8(buffer).unwrap(), "42");
-///     Ok(())
-/// }
-/// example().unwrap();
+/// ```rust
+/// # use parquet_variant::{Variant, variant_to_json};
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::String("Hello, World!");
+/// let mut buffer = Vec::new();
+/// variant_to_json(&mut buffer, &variant)?;
+/// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
+/// # Ok::<(), ArrowError>(())
 /// ```
 pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
     match variant {
@@ -236,6 +245,9 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 
 /// Convert Variant to JSON string
 ///
+/// This is a convenience function that converts a Variant to a JSON string.
+/// It's the simplest way to get a JSON representation when you just need a String result.
+///
 /// # Arguments
 ///
 /// * `variant` - The Variant value to convert
@@ -245,19 +257,24 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// * `Ok(String)` containing the JSON representation
 /// * `Err` with error details if conversion fails
 ///
-/// # Example
+/// # Examples
 ///
 /// ```rust
-/// use parquet_variant::{Variant, variant_to_json_string};
-/// use arrow_schema::ArrowError;
+/// # use parquet_variant::{Variant, variant_to_json_string};
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::Int32(42);
+/// let json = variant_to_json_string(&variant)?;
+/// assert_eq!(json, "42");
+/// # Ok::<(), ArrowError>(())
+/// ```
 ///
-/// fn example() -> Result<(), ArrowError> {
-///     let variant = Variant::String("hello");
-///     let json = variant_to_json_string(&variant)?;
-///     assert_eq!(json, "\"hello\"");
-///     Ok(())
-/// }
-/// example().unwrap();
+/// ```rust
+/// # use parquet_variant::{Variant, variant_to_json_string};
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::String("Hello, World!");
+/// let json = variant_to_json_string(&variant)?;
+/// assert_eq!(json, "\"Hello, World!\"");
+/// # Ok::<(), ArrowError>(())
 /// ```
 pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
     let mut buffer = Vec::new();
@@ -268,6 +285,10 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 
 /// Convert Variant to serde_json::Value
 ///
+/// This function converts a Variant to a [`serde_json::Value`], which is useful
+/// when you need to work with the JSON data programmatically or integrate with
+/// other serde-based JSON processing.
+///
 /// # Arguments
 ///
 /// * `variant` - The Variant value to convert
@@ -277,20 +298,26 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// * `Ok(Value)` containing the JSON value
 /// * `Err` with error details if conversion fails
 ///
-/// # Example
+/// # Examples
 ///
 /// ```rust
-/// use parquet_variant::{Variant, variant_to_json_value};
-/// use serde_json::Value;
-/// use arrow_schema::ArrowError;
+/// # use parquet_variant::{Variant, variant_to_json_value};
+/// # use serde_json::Value;
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::Int32(42);
+/// let json_value = variant_to_json_value(&variant)?;
+/// assert_eq!(json_value, Value::Number(42.into()));
+/// # Ok::<(), ArrowError>(())
+/// ```
 ///
-/// fn example() -> Result<(), ArrowError> {
-///     let variant = Variant::Int8(42);
-///     let json_value = variant_to_json_value(&variant)?;
-///     assert_eq!(json_value, Value::Number(42.into()));
-///     Ok(())
-/// }
-/// example().unwrap();
+/// ```rust
+/// # use parquet_variant::{Variant, variant_to_json_value};
+/// # use serde_json::Value;
+/// # use arrow_schema::ArrowError;
+/// let variant = Variant::String("hello");
+/// let json_value = variant_to_json_value(&variant)?;
+/// assert_eq!(json_value, Value::String("hello".to_string()));
+/// # Ok::<(), ArrowError>(())
 /// ```
 pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
     match variant {
