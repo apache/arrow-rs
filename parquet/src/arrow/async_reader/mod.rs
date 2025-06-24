@@ -36,7 +36,7 @@ use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Fields, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
 use crate::arrow::arrow_reader::{
@@ -60,6 +60,8 @@ pub use metadata::*;
 
 #[cfg(feature = "object_store")]
 mod store;
+mod provenance;
+use provenance::ProvenanceReader;
 
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
@@ -503,14 +505,16 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let batch_size = self
             .batch_size
             .min(self.metadata.file_metadata().num_rows() as usize);
-        let reader_factory = ReaderFactory {
-            input: self.input.0,
-            filter: self.filter,
-            metadata: self.metadata.clone(),
-            fields: self.fields,
-            limit: self.limit,
-            offset: self.offset,
-        };
+        let reader_factory = ReaderFactory::new(
+            self.metadata.clone(),
+            self.fields,
+            self.input.0,
+            self.filter,
+            self.limit,
+            self.offset,
+            self.provenance,
+            1,
+        );
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
@@ -541,7 +545,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 ///
 /// Note: If all rows are filtered out in the row group (e.g by filters, limit or
 /// offset), returns `None` for the reader.
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
+pub type BatchIter = Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + Send>;
+
+pub type ReadResult<T> = Result<(ReaderFactory<T>, Option<BatchIter>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
 /// [`ParquetRecordBatchReader`]
@@ -561,12 +567,67 @@ struct ReaderFactory<T> {
 
     /// Offset to apply to the next
     offset: Option<usize>,
+
+    /// Flag to enable provenance information with retrieved rows
+    provenance: bool,
+
+    /// Contains prefix sums to allow easier
+    row_group_first_row: Option<Vec<usize>>,
+
+    /// Constant per file, inject via builder. (TODO)
+    file_id:  usize,
 }
 
 impl<T> ReaderFactory<T>
 where
     T: AsyncFileReader + Send,
 {
+    /// Build a new `ReaderFactory`, pre-computing the first-row numbers for each row group
+    pub fn new(
+        metadata: Arc<ParquetMetaData>,
+        fields: Option<Arc<ParquetField>>,
+        input: T,
+        filter: Option<RowFilter>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        provenance: bool,
+        file_id: usize
+    ) -> Self {
+        // Build a vec of first-row number for each row group if provenance is enabled
+        let row_group_first_row = match provenance {
+            true => {
+                let mut running = 0;
+                let mut first_row = Vec::with_capacity(metadata.num_row_groups());
+                for rg in 0..metadata.num_row_groups() {
+                    first_row.push(running);
+                    running += metadata.row_group(rg).num_rows() as usize;
+                }
+                Some(first_row)
+            }
+            false => None,
+        };
+
+        Self {
+            metadata,
+            fields,
+            input,
+            filter,
+            limit,
+            offset,
+            provenance,
+            row_group_first_row,
+            file_id,
+        }
+    }
+
+    #[inline]
+    fn file_row_base(&self, row_group_idx: usize) -> Option<usize> {
+        match self.row_group_first_row {
+            Some(ref v) => Some(v[row_group_idx]),
+            None => None
+        }
+    }
+
     /// Reads the next row group with the provided `selection`, `projection` and `batch_size`
     ///
     /// Updates the `limit` and `offset` of the reader factory
@@ -665,7 +726,21 @@ where
         let array_reader = ArrayReaderBuilder::new(&row_group)
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
-        let reader = ParquetRecordBatchReader::new(array_reader, plan);
+        let plain = ParquetRecordBatchReader::new(array_reader, plan.clone());
+
+        let reader: BatchIter = if self.provenance {
+            let file_row_base = self.file_row_base(row_group_idx).expect("expect this to be valid if provenance");
+            let prov = ProvenanceReader::new(
+                plain,
+                plan,
+                self.file_id as u32,
+                row_group_idx as u32,
+                file_row_base as u64
+            );
+            Box::new(prov)
+        } else {
+            Box::new(plain)
+        };
 
         Ok((self, Some(reader)))
     }
@@ -675,7 +750,7 @@ enum StreamState<T> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
+    Decoding(BatchIter),
     /// Reading data from input
     Reading(BoxFuture<'static, ReadResult<T>>),
     /// Error
@@ -727,8 +802,8 @@ pub struct ParquetRecordBatchStream<T> {
     reader_factory: Option<ReaderFactory<T>>,
 
     state: StreamState<T>,
-    
-    provenance: bool
+
+    provenance: bool,
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -771,7 +846,7 @@ where
     /// - `Ok(None)` if the stream has ended.
     /// - `Err(error)` if the stream has errored. All subsequent calls will return `Ok(None)`.
     /// - `Ok(Some(reader))` which holds all the data for the row group.
-    pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
+    pub async fn next_row_group(&mut self) -> Result<Option<BatchIter>> {
         loop {
             match &mut self.state {
                 StreamState::Decoding(_) | StreamState::Reading(_) => {
@@ -2389,5 +2464,114 @@ mod tests {
         // Panics here
         let result = reader.try_collect::<Vec<_>>().await.unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_provenance_with_row_filter() {
+        // Row group 1:
+        //   name: a, b, a, b, a
+        //   val: 0, 1, 2, 3, 4
+        //   ts: 0, 1, 2, 3, 4
+        // Row group 2:
+        //   name: b, a, b, a, b
+        //   val: 5, 6, 7, 8, 9
+        //   ts: 5, 6, 7, 8, 9
+        let ts   = Int64Array::from((0..10).collect::<Vec<_>>());
+        let name = StringArray::from(vec![
+            "alpha","beta","alpha","beta","alpha",
+            "beta","gamma","gamma","beta","gamma",
+        ]);
+        let val  = Int32Array::from((0..10).collect::<Vec<_>>());
+
+        let batch = RecordBatch::try_from_iter(vec![
+            ("ts",   Arc::new(ts)   as ArrayRef),
+            ("name", Arc::new(name) as ArrayRef),
+            ("val",  Arc::new(val)  as ArrayRef),
+        ]).unwrap();
+
+        // write with RG size, two row groups
+        let mut buf = Vec::with_capacity(2048);
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(5)
+            .build();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        let bytes: Bytes = buf.into();
+        let test_reader  = TestReader::new(bytes.clone());
+
+        // build predicate
+        let schema = batch.schema();
+        let ts_ge_2 = binary_expr(col("ts"), Operator::GtEq, lit(ScalarValue::from(2_i64)));
+        let name_eq = binary_expr(col("name"), Operator::Eq,
+                                    lit(ScalarValue::Utf8(Some("gamma".into()))));
+        let expr = and(ts_ge_2, name_eq);
+
+        let exec_props = execution_props::ExecutionProps::new();
+        let phys: Arc<dyn PhysicalExpr> = create_physical_expr(
+            &expr, &schema, &schema, &exec_props).unwrap();
+
+        let stream = ParquetRecordBatchStreamBuilder::new(test_reader.clone())
+            .await
+            .unwrap()
+            .with_batch_size(1024)
+            .with_provenance()
+            .with_row_filter(phys)
+            .build()
+            .unwrap();
+
+        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(batches.len(), 1, "first RG should be dropped by row-filter");
+
+        let result = &batches[0];
+        assert_eq!(result.num_rows(), 3);
+
+        // columns: ts, name, val, file_id, row_idx, row_group_idx
+        let col_ts   = result.column(0).as_primitive::<Int64Array>();
+        assert_eq!(col_ts.values(), &[6, 7, 9]);
+
+        let file_id  = result.column(3).as_primitive::<Int32Array>();
+        assert!(file_id.values().iter().all(|&v| v == file_id.value(0)));
+
+        let row_idx  = result.column(4).as_primitive::<UInt64Array>();
+        assert_eq!(row_idx.values(), &[6, 7, 9]);
+        assert!(row_idx.values().windows(2).all(|w| w[0] < w[1]));
+
+        let rg_idx   = result.column(5).as_primitive::<UInt32Array>();
+        assert_eq!(rg_idx.values(), &[1, 1, 1]);
+
+        // ────────────────────────────────────────── second scenario
+        // ts ≤ 3 ∧ name = 'beta' → rows 1,3 in RG 0 only
+        let ts_le_3  = binary_expr(col("ts"), Operator::LtEq, lit(ScalarValue::from(3_i64)));
+        let beta_eq  = binary_expr(col("name"), Operator::Eq,
+                                   lit(ScalarValue::Utf8(Some("beta".into()))));
+        let expr2    = and(ts_le_3, beta_eq);
+        let phys2: Arc<dyn PhysicalExpr> = create_physical_expr(
+            &expr2, &schema, &schema, &exec_props).unwrap();
+
+        let stream2 = ParquetRecordBatchStreamBuilder::new(test_reader)
+            .await
+            .unwrap()
+            .with_batch_size(1024)
+            .with_provenance(true)
+            .with_row_filter(phys2)
+            .build()
+            .unwrap();
+
+        let batches2 = stream2.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(batches2.len(), 1);                                  // RG 1 pruned
+        let r2 = &batches2[0];
+        assert_eq!(r2.num_rows(), 2);
+
+        let ts2 = r2.column(0).as_primitive::<Int64Array>();
+        assert_eq!(ts2.values(), &[1, 3]);
+
+        let idx2 = r2.column(4).as_primitive::<UInt64Array>();
+        assert_eq!(idx2.values(), &[1, 3]);                            // absolute idx
+        let rg2  = r2.column(5).as_primitive::<UInt32Array>();
+        assert_eq!(rg2.values(), &[0, 0]);                             // RG 0
     }
 }
