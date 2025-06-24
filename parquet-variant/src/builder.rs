@@ -600,7 +600,6 @@ impl<'a> ObjectBuilder<'a> {
         let field_start = self.buffer.offset();
 
         self.fields.insert(field_id, field_start);
-
         self.buffer.append_value(value);
     }
 
