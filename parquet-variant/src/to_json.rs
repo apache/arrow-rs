@@ -980,9 +980,7 @@ mod tests {
         // Parse the JSON to verify structure - handle JSON parsing errors manually
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        let Value::Object(obj) = parsed else {
-            panic!("Expected JSON object");
-        };
+        let obj = parsed.as_object().expect("expected JSON object");
         assert_eq!(obj.get("name"), Some(&Value::String("Alice".to_string())));
         assert_eq!(obj.get("age"), Some(&Value::Number(30.into())));
         assert_eq!(obj.get("active"), Some(&Value::Bool(true)));
@@ -1071,9 +1069,7 @@ mod tests {
         assert_eq!(json, "[1,2,3,4,5]");
 
         let json_value = variant_to_json_value(&variant)?;
-        let Value::Array(arr) = json_value else {
-            panic!("Expected JSON array");
-        };
+        let arr = json_value.as_array().expect("expected JSON array");
         assert_eq!(arr.len(), 5);
         assert_eq!(arr[0], Value::Number(1.into()));
         assert_eq!(arr[4], Value::Number(5.into()));
@@ -1125,9 +1121,7 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        let Value::Array(arr) = parsed else {
-            panic!("Expected JSON array");
-        };
+        let arr = parsed.as_array().expect("expected JSON array");
         assert_eq!(arr.len(), 5);
         assert_eq!(arr[0], Value::String("hello".to_string()));
         assert_eq!(arr[1], Value::Number(42.into()));
@@ -1160,9 +1154,7 @@ mod tests {
         // Parse and verify all fields are present
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        let Value::Object(obj) = parsed else {
-            panic!("Expected JSON object");
-        };
+        let obj = parsed.as_object().expect("expected JSON object");
         assert_eq!(obj.len(), 3);
         assert_eq!(obj.get("alpha"), Some(&Value::String("first".to_string())));
         assert_eq!(obj.get("beta"), Some(&Value::String("second".to_string())));
@@ -1195,9 +1187,7 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        let Value::Array(arr) = parsed else {
-            panic!("Expected JSON array");
-        };
+        let arr = parsed.as_array().expect("expected JSON array");
         assert_eq!(arr.len(), 7);
         assert_eq!(arr[0], Value::String("string_value".to_string()));
         assert_eq!(arr[1], Value::Number(42.into()));
@@ -1233,9 +1223,7 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&json)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
-        let Value::Object(obj) = parsed else {
-            panic!("Expected JSON object");
-        };
+        let obj = parsed.as_object().expect("expected JSON object");
         assert_eq!(obj.len(), 6);
         assert_eq!(
             obj.get("string_field"),
