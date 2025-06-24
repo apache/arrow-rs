@@ -43,9 +43,7 @@ pub struct ShortString<'a>(pub(crate) &'a str);
 /// Represents a 4-byte decimal value in the Variant format.
 ///
 /// This struct stores a decimal number using a 32-bit signed integer for the coefficient
-/// and an 8-bit unsigned integer for the scale (number of decimal places).
-///
-/// The decimal value is calculated as: `integer * 10^(-scale)`
+/// and an 8-bit unsigned integer for the scale (number of decimal places). Its precision is limited to 9 digits.
 ///
 /// For valid precision and scale values, see the Variant specification:
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
@@ -58,22 +56,13 @@ pub struct VariantDecimal4 {
 
 impl VariantDecimal4 {
     pub fn try_new(integer: i32, scale: u8) -> Result<Self, ArrowError> {
-        let precision = integer.abs().ilog10() + 1;
+        const PRECISION_MAX: u32 = 9;
 
         // Validate that scale doesn't exceed precision
-        if scale as u32 > precision {
+        if scale as u32 > PRECISION_MAX {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} cannot be greater than precision {}",
-                scale, precision
-            )));
-        }
-
-        // Validate precision is within reasonable bounds for 4-byte decimal
-        // Typically max precision for 4-byte decimal is around 9-10 digits
-        if precision > 9 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Precision {} exceeds maximum precision of 9 for 4-byte decimal",
-                precision
+                "Scale {} cannot be greater than precision  9 for 4-byte decimal",
+                scale
             )));
         }
 
@@ -84,9 +73,8 @@ impl VariantDecimal4 {
 /// Represents an 8-byte decimal value in the Variant format.
 ///
 /// This struct stores a decimal number using a 64-bit signed integer for the coefficient
-/// and an 8-bit unsigned integer for the scale (number of decimal places).
+/// and an 8-bit unsigned integer for the scale (number of decimal places). Its precision is between 10 and 18 digits.
 ///
-/// The decimal value is calculated as: `integer * 10^(-scale)`
 /// For valid precision and scale values, see the Variant specification:
 ///
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
@@ -99,21 +87,13 @@ pub struct VariantDecimal8 {
 
 impl VariantDecimal8 {
     pub fn try_new(integer: i64, scale: u8) -> Result<Self, ArrowError> {
-        let precision = integer.abs().ilog10() + 1;
-        // Validate that scale doesn't exceed precision
-        if scale as u32 > precision {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} cannot be greater than precision {}",
-                scale, precision
-            )));
-        }
+        const PRECISION_MAX: u32 = 18;
 
-        // Validate precision is within reasonable bounds for 8-byte decimal
-        // Typically max precision for 8-byte decimal is around 18-19 digits
-        if precision > 18 {
+        // Validate that scale doesn't exceed precision
+        if scale as u32 > PRECISION_MAX {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Precision {} exceeds maximum precision of 18 for 8-byte decimal",
-                precision
+                "Scale {} cannot be greater than precision  18 for 8-byte decimal",
+                scale
             )));
         }
 
@@ -124,9 +104,8 @@ impl VariantDecimal8 {
 /// Represents an 16-byte decimal value in the Variant format.
 ///
 /// This struct stores a decimal number using a 128-bit signed integer for the coefficient
-/// and an 8-bit unsigned integer for the scale (number of decimal places).
+/// and an 8-bit unsigned integer for the scale (number of decimal places). Its precision is between 19 and 38 digits.
 ///
-/// The decimal value is calculated as: `integer * 10^(-scale)`
 /// For valid precision and scale values, see the Variant specification:
 ///
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
@@ -139,22 +118,13 @@ pub struct VariantDecimal16 {
 
 impl VariantDecimal16 {
     pub fn try_new(integer: i128, scale: u8) -> Result<Self, ArrowError> {
-        let precision = integer.abs().ilog10() + 1;
+        const PRECISION_MAX: u32 = 38;
 
         // Validate that scale doesn't exceed precision
-        if scale as u32 > precision {
+        if scale as u32 > PRECISION_MAX {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} cannot be greater than precision {}",
-                scale, precision
-            )));
-        }
-
-        // Validate precision is within reasonable bounds for 16-byte decimal
-        // Typically max precision for 16-byte decimal is around 38-39 digits
-        if precision > 38 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Precision {} exceeds maximum precision of 38 for 16-byte decimal",
-                precision
+                "Scale {} cannot be greater than precision 38 for 16-byte decimal",
+                scale
             )));
         }
 
@@ -1149,5 +1119,29 @@ mod tests {
         let long_string = "a".repeat(MAX_SHORT_STRING_BYTES + 1);
         let res = ShortString::try_new(&long_string);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_variant_decimal_conversion() {
+        let decimal4 = VariantDecimal4::try_new(1234_i32, 2).unwrap();
+        let variant = Variant::from(decimal4);
+        assert_eq!(variant.as_decimal_int32(), Some((1234_i32, 2)));
+
+        let decimal8 = VariantDecimal8::try_new(12345678901_i64, 2).unwrap();
+        let variant = Variant::from(decimal8);
+        assert_eq!(variant.as_decimal_int64(), Some((12345678901_i64, 2)));
+
+        let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890_i128, 2).unwrap();
+        let variant = Variant::from(decimal16);
+        assert_eq!(
+            variant.as_decimal_int128(),
+            Some((123456789012345678901234567890_i128, 2))
+        );
+    }
+
+    #[test]
+    fn test_invalid_variant_decimal_conversion() {
+        let decimal4 = VariantDecimal4::try_new(123456789_i32, 20);
+        assert!(decimal4.is_err(), "i32 overflow should fail");
     }
 }
