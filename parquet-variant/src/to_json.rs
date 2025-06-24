@@ -246,6 +246,7 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// Convert Variant to JSON string
 ///
 /// This is a convenience function that converts a Variant to a JSON string.
+/// This is the same as calling variant_to_json with a Vec
 /// It's the simplest way to get a JSON representation when you just need a String result.
 ///
 /// # Arguments
@@ -274,6 +275,35 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// let variant = Variant::String("Hello, World!");
 /// let json = variant_to_json_string(&variant)?;
 /// assert_eq!(json, "\"Hello, World!\"");
+/// # Ok::<(), ArrowError>(())
+/// ```
+///
+/// # Example: Create a [`Variant::Object`] and convert to JSON
+/// 
+/// This example shows how to create an object with two fields and convert it to JSON:
+/// ```json
+/// {
+///   "first_name": "Jiaying",
+///   "last_name": "Li"
+/// }
+/// ```
+/// 
+/// ```rust
+/// # use parquet_variant::{Variant, VariantBuilder, variant_to_json_string};
+/// # use arrow_schema::ArrowError;
+/// let mut builder = VariantBuilder::new();
+/// // Create an object builder that will write fields to the object
+/// let mut object_builder = builder.new_object();
+/// object_builder.append_value("first_name", "Jiaying");
+/// object_builder.append_value("last_name", "Li");
+/// object_builder.finish();
+/// // Finish the builder to get the metadata and value
+/// let (metadata, value) = builder.finish();
+/// // Create the Variant and convert to JSON
+/// let variant = Variant::try_new(&metadata, &value)?;
+/// let json = variant_to_json_string(&variant)?;
+/// assert!(json.contains("\"first_name\":\"Jiaying\""));
+/// assert!(json.contains("\"last_name\":\"Li\""));
 /// # Ok::<(), ArrowError>(())
 /// ```
 pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
