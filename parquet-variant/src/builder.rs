@@ -219,12 +219,12 @@ impl VariantBuffer {
 }
 
 #[derive(Default)]
-struct FieldMetadataDictionary {
+struct MetadataBuilder {
     field_name_to_id: BTreeMap<String, u32>,
     field_names: Vec<String>,
 }
 
-impl FieldMetadataDictionary {
+impl MetadataBuilder {
     /// Add field name to dictionary, return its ID
     fn add_field_name(&mut self, field_name: &str) -> u32 {
         use std::collections::btree_map::Entry;
@@ -388,14 +388,14 @@ impl FieldMetadataDictionary {
 /// ```
 pub struct VariantBuilder {
     buffer: VariantBuffer,
-    field_metadata_dictionary: FieldMetadataDictionary,
+    metadata_builder: MetadataBuilder,
 }
 
 impl VariantBuilder {
     pub fn new() -> Self {
         Self {
             buffer: VariantBuffer::default(),
-            field_metadata_dictionary: FieldMetadataDictionary::default(),
+            metadata_builder: MetadataBuilder::default(),
         }
     }
 
@@ -403,14 +403,14 @@ impl VariantBuilder {
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder {
-        ListBuilder::new(&mut self.buffer, &mut self.field_metadata_dictionary)
+        ListBuilder::new(&mut self.buffer, &mut self.metadata_builder)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder {
-        ObjectBuilder::new(&mut self.buffer, &mut self.field_metadata_dictionary)
+        ObjectBuilder::new(&mut self.buffer, &mut self.metadata_builder)
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
@@ -418,10 +418,10 @@ impl VariantBuilder {
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        let nkeys = self.field_metadata_dictionary.num_field_names();
+        let nkeys = self.metadata_builder.num_field_names();
 
         // Calculate metadata size
-        let total_dict_size: usize = self.field_metadata_dictionary.metadata_size();
+        let total_dict_size: usize = self.metadata_builder.metadata_size();
 
         // Determine appropriate offset size based on the larger of dict size or total string size
         let max_offset = std::cmp::max(total_dict_size, nkeys);
@@ -442,12 +442,7 @@ impl VariantBuilder {
 
         // Write offsets and string data
         let mut cur_offset = 0;
-        for (i, key) in self
-            .field_metadata_dictionary
-            .field_names
-            .iter()
-            .enumerate()
-        {
+        for (i, key) in self.metadata_builder.field_names.iter().enumerate() {
             write_offset(
                 &mut metadata[offset_start + i * offset_size as usize..],
                 cur_offset,
@@ -479,9 +474,8 @@ impl Default for VariantBuilder {
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ListBuilder<'a> {
     parent_buffer: &'a mut VariantBuffer,
-    field_metadata_dictionary: &'a mut FieldMetadataDictionary,
+    metadata_builder: &'a mut MetadataBuilder,
     offsets: Vec<usize>,
-
     buffer: VariantBuffer,
     pending: bool,
 }
@@ -489,11 +483,11 @@ pub struct ListBuilder<'a> {
 impl<'a> ListBuilder<'a> {
     fn new(
         parent_buffer: &'a mut VariantBuffer,
-        field_metadata_dictionary: &'a mut FieldMetadataDictionary,
+        metadata_builder: &'a mut MetadataBuilder,
     ) -> Self {
         Self {
             parent_buffer,
-            field_metadata_dictionary,
+            metadata_builder,
             offsets: vec![0],
             buffer: VariantBuffer::default(),
             pending: false,
@@ -514,7 +508,7 @@ impl<'a> ListBuilder<'a> {
     pub fn new_object(&mut self) -> ObjectBuilder {
         self.check_new_offset();
 
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.field_metadata_dictionary);
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
         self.pending = true;
 
         obj_builder
@@ -523,7 +517,7 @@ impl<'a> ListBuilder<'a> {
     pub fn new_list(&mut self) -> ListBuilder {
         self.check_new_offset();
 
-        let list_builder = ListBuilder::new(&mut self.buffer, self.field_metadata_dictionary);
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
         self.pending = true;
 
         list_builder
@@ -585,29 +579,27 @@ impl<'a> ListBuilder<'a> {
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ObjectBuilder<'a> {
     parent_buffer: &'a mut VariantBuffer,
-    field_metadata_dictionary: &'a mut FieldMetadataDictionary,
+    metadata_builder: &'a mut MetadataBuilder,
     fields: BTreeMap<u32, usize>, // (field_id, offset)
-
     buffer: VariantBuffer,
 }
 
 impl<'a> ObjectBuilder<'a> {
     fn new(
         parent_buffer: &'a mut VariantBuffer,
-        field_metadata_dictionary: &'a mut FieldMetadataDictionary,
+        metadata_builder: &'a mut MetadataBuilder,
     ) -> Self {
         Self {
             parent_buffer,
-            field_metadata_dictionary,
+            metadata_builder,
             fields: BTreeMap::new(),
-
             buffer: VariantBuffer::default(),
         }
     }
 
     /// Add a field with key and value to the object
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        let field_id = self.field_metadata_dictionary.add_field_name(key);
+        let field_id = self.metadata_builder.add_field_name(key);
         let field_start = self.buffer.offset();
         self.buffer.append_value(value);
         let res = self.fields.insert(field_id, field_start);
@@ -622,7 +614,7 @@ impl<'a> ObjectBuilder<'a> {
         let size_bytes = if is_large { 4 } else { 1 };
 
         let field_ids_by_sorted_field_name = self
-            .field_metadata_dictionary
+            .metadata_builder
             .field_name_to_id
             .iter()
             .filter_map(|(_, id)| self.fields.contains_key(id).then_some(*id))
@@ -881,9 +873,8 @@ mod tests {
             assert_eq!(fields_map, vec![0, 1]);
 
             // dict is ordered by field names
-            // NOTE: when we support nested objects, we'll want to perform a filter by fields_map field ids
             let dict_metadata = obj
-                .field_metadata_dictionary
+                .metadata_builder
                 .field_name_to_id
                 .iter()
                 .map(|(f, i)| (f.as_str(), *i))
@@ -893,7 +884,7 @@ mod tests {
 
             // dict_keys is ordered by insertion order (field id)
             let dict_keys = obj
-                .field_metadata_dictionary
+                .metadata_builder
                 .field_names
                 .iter()
                 .map(|k| k.as_str())
@@ -909,9 +900,8 @@ mod tests {
             assert_eq!(fields_map, vec![0, 1, 2]);
 
             // dict is ordered by field names
-            // NOTE: when we support nested objects, we'll want to perform a filter by fields_map field ids
             let dict_metadata = obj
-                .field_metadata_dictionary
+                .metadata_builder
                 .field_name_to_id
                 .iter()
                 .map(|(f, i)| (f.as_str(), *i))
@@ -924,7 +914,7 @@ mod tests {
 
             // dict_keys is ordered by insertion order (field id)
             let dict_keys = obj
-                .field_metadata_dictionary
+                .metadata_builder
                 .field_names
                 .iter()
                 .map(|k| k.as_str())
