@@ -48,7 +48,7 @@ pub struct ShortString<'a>(pub(crate) &'a str);
 /// The decimal value is calculated as: `integer * 10^(-scale)`
 ///
 /// For valid precision and scale values, see the Variant specification:
-/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+/// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal4 {
@@ -89,7 +89,7 @@ impl VariantDecimal4 {
 /// The decimal value is calculated as: `integer * 10^(-scale)`
 /// For valid precision and scale values, see the Variant specification:
 ///
-/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+/// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal8 {
@@ -129,7 +129,7 @@ impl VariantDecimal8 {
 /// The decimal value is calculated as: `integer * 10^(-scale)`
 /// For valid precision and scale values, see the Variant specification:
 ///
-/// https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420
+/// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal16 {
@@ -765,15 +765,15 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use parquet_variant::Variant;
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from((1234_i32, 2));
+    /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
     /// assert_eq!(v1.as_decimal_int32(), Some((1234_i32, 2)));
     ///
     /// // and from larger decimal variants if they fit
-    /// let v2 = Variant::from((1234_i64, 2));
+    /// let v2 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
     /// assert_eq!(v2.as_decimal_int32(), Some((1234_i32, 2)));
     ///
     /// // but not if the value would overflow i32
-    /// let v3 = Variant::from((12345678901i64, 2));
+    /// let v3 = Variant::from(VariantDecimal8::try_new(12345678901i64, 2).unwrap());
     /// assert_eq!(v3.as_decimal_int32(), None);
     ///
     /// // or if the variant is not a decimal
@@ -813,15 +813,15 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use parquet_variant::Variant;
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from((1234_i64, 2));
+    /// let v1 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
     /// assert_eq!(v1.as_decimal_int64(), Some((1234_i64, 2)));
     ///
     /// // and from larger decimal variants if they fit
-    /// let v2 = Variant::from((1234_i128, 2));
+    /// let v2 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
     /// assert_eq!(v2.as_decimal_int64(), Some((1234_i64, 2)));
     ///
     /// // but not if the value would overflow i64
-    /// let v3 = Variant::from((2e19 as i128, 2));
+    /// let v3 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
     /// assert_eq!(v3.as_decimal_int64(), None);
     ///
     /// // or if the variant is not a decimal
@@ -855,7 +855,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use parquet_variant::Variant;
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from((1234_i128, 2));
+    /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i128, 2));
     /// assert_eq!(v1.as_decimal_int128(), Some((1234_i128, 2)));
     ///
     /// // but not if the variant is not a decimal
@@ -1104,6 +1104,36 @@ impl<'v> From<&'v str> for Variant<'_, 'v> {
         } else {
             Variant::ShortString(ShortString(value))
         }
+    }
+}
+
+impl TryFrom<(i32, u8)> for Variant<'_, '_> {
+    type Error = ArrowError;
+
+    fn try_from(value: (i32, u8)) -> Result<Self, Self::Error> {
+        Ok(Variant::Decimal4(VariantDecimal4::try_new(
+            value.0, value.1,
+        )?))
+    }
+}
+
+impl TryFrom<(i64, u8)> for Variant<'_, '_> {
+    type Error = ArrowError;
+
+    fn try_from(value: (i64, u8)) -> Result<Self, Self::Error> {
+        Ok(Variant::Decimal8(VariantDecimal8::try_new(
+            value.0, value.1,
+        )?))
+    }
+}
+
+impl TryFrom<(i128, u8)> for Variant<'_, '_> {
+    type Error = ArrowError;
+
+    fn try_from(value: (i128, u8)) -> Result<Self, Self::Error> {
+        Ok(Variant::Decimal16(VariantDecimal16::try_new(
+            value.0, value.1,
+        )?))
     }
 }
 
