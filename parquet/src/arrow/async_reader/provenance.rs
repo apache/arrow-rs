@@ -52,7 +52,7 @@ where
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut batch = match self.inner.next()? {
+        let batch = match self.inner.next()? {
             Ok(b) => b,
             Err(e) => return Some(Err(e)),
         };
@@ -73,7 +73,7 @@ where
         let mut cols = batch.columns().to_vec();
         cols.extend([file_id_arr, row_idx_arr, rg_idx_arr]);
 
-        let mut fields = batch.schema().fields().clone();
+        let fields = batch.schema().fields().clone();
         fields.to_vec().extend([
             Arc::new(Field::new("__file_id", DataType::Int32,  false)),
             Arc::new(Field::new("__row_idx", DataType::UInt64, false)),

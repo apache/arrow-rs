@@ -541,13 +541,11 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     }
 }
 
-/// Returns a [`ReaderFactory`] and an optional [`ParquetRecordBatchReader`] for the next row group
-///
-/// Note: If all rows are filtered out in the row group (e.g by filters, limit or
-/// offset), returns `None` for the reader.
+/// Constructed to allow flexibility between [`ParquetRecordBatchReader`] and [`ProvenanceReader`]
 pub type BatchIter = Box<dyn Iterator<Item = Result<RecordBatch, ArrowError>> + Send>;
 
-pub type ReadResult<T> = Result<(ReaderFactory<T>, Option<BatchIter>)>;
+/// Returns a [`ReaderFactory`] and an optional [`BatchIter`]
+type ReadResult<T> = Result<(ReaderFactory<T>, Option<BatchIter>)>;
 
 /// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
 /// [`ParquetRecordBatchReader`]
