@@ -443,41 +443,56 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_date() -> Result<(), ArrowError> {
-        let data = [0xe2, 0x4e, 0x0, 0x0];
-        let result = decode_date(&data)?;
-        assert_eq!(result, NaiveDate::from_ymd_opt(2025, 4, 16).unwrap());
-        Ok(())
-    }
+    mod datetime {
+        use super::*;
 
-    #[test]
-    fn test_timestamp_micros() -> Result<(), ArrowError> {
-        let data = [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00];
-        let result = decode_timestamp_micros(&data)?;
-        assert_eq!(
-            result,
+        macro_rules! decoder_tests {
+            ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
+                paste! {
+                    #[test]
+                    fn [<$test_name _exact_length>]() {
+                        let result = $decode_fn(&$data).unwrap();
+                        assert_eq!(result, $expected);
+                    }
+
+                    #[test]
+                    fn [<$test_name _truncated_length>]() {
+                        // Remove the last byte of data so that there is not enough to decode
+                        let truncated_data = &$data[.. $data.len() - 1];
+                        let result = $decode_fn(&truncated_data);
+                        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                    }
+                }
+            };
+        }
+
+        decoder_tests!(
+            test_date,
+            [0xe2, 0x4e, 0x0, 0x0],
+            decode_date,
+            NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()
+        );
+
+        decoder_tests!(
+            test_timestamp_micros,
+            [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00],
+            decode_timestamp_micros,
             NaiveDate::from_ymd_opt(2025, 4, 16)
                 .unwrap()
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
                 .and_utc()
         );
-        Ok(())
-    }
 
-    #[test]
-    fn test_timestampntz_micros() -> Result<(), ArrowError> {
-        let data = [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00];
-        let result = decode_timestampntz_micros(&data)?;
-        assert_eq!(
-            result,
+        decoder_tests!(
+            test_timestampntz_micros,
+            [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00],
+            decode_timestampntz_micros,
             NaiveDate::from_ymd_opt(2025, 4, 16)
                 .unwrap()
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
         );
-        Ok(())
     }
 
     #[test]
