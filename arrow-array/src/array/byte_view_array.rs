@@ -918,9 +918,10 @@ impl From<Vec<Option<String>>> for StringViewArray {
 #[cfg(test)]
 mod tests {
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
-    use crate::{Array, BinaryViewArray, StringViewArray};
+    use crate::{Array, BinaryViewArray, GenericByteViewArray, StringViewArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
+    use crate::types::BinaryViewType;
 
     #[test]
     fn try_new_string() {
@@ -1133,5 +1134,55 @@ mod tests {
         assert_eq!(array1, array1.clone());
         assert_eq!(array2, array2.clone());
         assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_inline_key_fast_various_lengths() {
+        /// Helper to create a raw u128 value representing an inline ByteView
+        /// - `length`: number of meaningful bytes (<= 12)
+        /// - `data`: the actual inline data (prefix + padding)
+        fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
+            assert!(length as usize <= 12, "Inline length must be ≤ 12");
+            assert!(data.len() == length as usize, "Data must match length");
+
+            let mut raw_bytes = [0u8; 16];
+            raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // little-endian length
+            raw_bytes[4..(4 + data.len())].copy_from_slice(data);    // inline data
+            u128::from_le_bytes(raw_bytes)
+        }
+
+        // Test multiple inline values of increasing length and content
+        let test_inputs: Vec<&[u8]> = vec![
+            b"a",
+            b"ab",
+            b"abc",
+            b"abcd",
+            b"abcde",
+            b"abcdef",
+            b"abcdefg",
+            b"abcdefgh",
+            b"abcdefghi",
+            b"abcdefghij",
+            b"abcdefghijk",
+            b"abcdefghijkl", // 12 bytes, max inline
+        ];
+
+        let mut previous_key = None;
+
+        for input in test_inputs {
+            let raw = make_raw_inline(input.len() as u32, input);
+            let key = GenericByteViewArray::<BinaryViewType>::inline_key_fast(raw);
+
+            // Validate that keys are monotonically increasing in lexicographic+length order
+            if let Some(prev) = previous_key {
+                assert!(
+                    prev < key,
+                    "Key for {:?} was not greater than previous key",
+                    input
+                );
+            }
+
+            previous_key = Some(key);
+        }
     }
 }
