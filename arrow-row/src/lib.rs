@@ -347,6 +347,46 @@ mod variable;
 ///
 /// With `[]` represented by an empty byte array, and `null` a null byte array.
 ///
+/// ## Fixed Size List Encoding
+///
+/// Fixed Size Lists are encoded by first encoding all child elements to the row format.
+///
+/// A non-null list value is then encoded as 0x01 followed by the concatenation of each
+/// of the child elements. A null list value is encoded as a null marker.
+///
+/// For example given:
+///
+/// ```text
+/// [1_u8, 2_u8]
+/// [3_u8, null]
+/// null
+/// ```
+///
+/// The elements would be converted to:
+///
+/// ```text
+///     ┌──┬──┐     ┌──┬──┐     ┌──┬──┐        ┌──┬──┐
+///  1  │01│01│  2  │01│02│  3  │01│03│  null  │00│00│
+///     └──┴──┘     └──┴──┘     └──┴──┘        └──┴──┘
+///```
+///
+/// Which would be encoded as
+///
+/// ```text
+///                 ┌──┬──┬──┬──┬──┐
+///  [1_u8, 2_u8]   │01│01│01│01│02│
+///                 └──┴──┴──┴──┴──┘
+///                     └ 1 ┘ └ 2 ┘
+///                 ┌──┬──┬──┬──┬──┐
+///  [3_u8, null]   │01│01│03│00│00│
+///                 └──┴──┴──┴──┴──┘
+///                     └ 1 ┘ └null┘
+///                 ┌──┐
+///  null           │00│
+///                 └──┘
+///
+///```
+///
 /// # Ordering
 ///
 /// ## Float Ordering
