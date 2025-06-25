@@ -748,9 +748,7 @@ impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
         let new_buffers = {
             let mut buffers = Vec::with_capacity(array.buffers.len() + 1);
             buffers.push(array.views.into_inner());
-            for buffer in array.buffers.iter() {
-                buffers.push(buffer.clone());
-            }
+            buffers.extend_from_slice(&array.buffers.0);
             buffers
         };
 
