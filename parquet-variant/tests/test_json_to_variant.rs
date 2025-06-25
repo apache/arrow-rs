@@ -323,27 +323,30 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         compare_results(json.as_str(), &whole_array, empty_metadata)?;
     }
 
-    // objects
+    // // objects
     compare_results(
         "{\"b\": 2, \"a\": 1, \"a\": 3}",
         &[2u8, 2u8, 1u8, 0u8, 2u8, 0u8, 4u8, 12u8, 2u8, 12u8, 3u8],
         &[1, 2, 0, 1, 2, 98u8, 97u8],
     )?;
+
     // TODO: verify different offset_size, id_size, is_large values, nesting and more object
     // tests in general
-    // compare_results(
-    //     "{\"numbers\": [4, -3e0, 1.001], \"null\": null, \"booleans\": [true, false]}",
-    //     &[
-    //         2u8, 3u8, 2u8, 1u8, 0u8, 24u8, 23u8, 0u8, 31u8, 3u8, 3u8, 0u8, 2u8, 11u8, 17u8,
-    //         12u8, 4u8, 28u8, 0, 0, 0, 0, 0, 0, 0x08, 0xc0, 32u8, 3, 0xe9, 0x03, 0, 0, 0, 3u8,
-    //         2u8, 0u8, 1u8, 2u8, 4u8, 8u8,
-    //     ],
-    //     &[
-    //         1u8, 3u8, 0u8, 7u8, 11u8, 19u8, 0x6eu8, 0x75u8, 0x6du8, 0x62u8, 0x65u8, 0x72u8,
-    //         0x73u8, 0x6eu8, 0x75u8, 0x6cu8, 0x6cu8, 0x62u8, 0x6fu8, 0x6fu8, 0x6cu8, 0x65u8,
-    //         0x61u8, 0x6eu8, 0x73u8,
-    //     ],
-    // )?;
+    // NOTE: objects and lists are treated as `pending` and are added to the dictionary after scalar
+    // values. Therefore "null" has ID 0, "numbers" as ID 1 and "booleans" has ID 2.
+    compare_results(
+        "{\"numbers\": [4, -3e0, 1.001], \"null\": null, \"booleans\": [true, false]}",
+        &[
+            2u8, 3u8, 2u8, 0u8, 1u8, 24u8, 23u8, 0u8, 31u8, 3u8, 3u8, 0u8, 2u8, 11u8, 17u8, 12u8,
+            4u8, 28u8, 0, 0, 0, 0, 0, 0, 0x08, 0xc0, 32u8, 3, 0xe9, 0x03, 0, 0, 0, 3u8, 2u8, 0u8,
+            1u8, 2u8, 4u8, 8u8,
+        ],
+        &[
+            1u8, 3u8, 0u8, 4u8, 11u8, 19u8, 0x6eu8, 0x75u8, 0x6cu8, 0x6cu8, 0x6eu8, 0x75u8, 0x6du8,
+            0x62u8, 0x65u8, 0x72u8, 0x73u8, 0x62u8, 0x6fu8, 0x6fu8, 0x6cu8, 0x65u8, 0x61u8, 0x6eu8,
+            0x73u8,
+        ],
+    )?;
 
     Ok(())
 }

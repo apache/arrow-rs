@@ -23,6 +23,7 @@ pub fn json_to_variant<'a, T: VariantBufferManager>(
     // buffers anyway
     variant_buffer_manager.ensure_metadata_buffer_size(metadata_size)?;
     variant_buffer_manager.ensure_value_buffer_size(value_size)?;
+
     let caller_metadata_buffer = variant_buffer_manager.borrow_metadata_buffer();
     caller_metadata_buffer[..metadata_size].copy_from_slice(metadata.as_slice());
     let caller_value_buffer = variant_buffer_manager.borrow_value_buffer();
@@ -78,18 +79,28 @@ fn build_list(arr: &Vec<Value>, builder: &mut ListBuilder) -> Result<(), ArrowEr
     Ok(())
 }
 
-fn build_object(obj: &Map<String, Value>, builder: &mut ObjectBuilder) -> Result<(), ArrowError> {
+fn build_object<'a, 'b>(
+    obj: &'b Map<String, Value>,
+    builder: &mut ObjectBuilder<'a, 'b>,
+) -> Result<(), ArrowError> {
     for (key, value) in obj.iter() {
         match value {
-            Value::Null => builder.append_value(key, Variant::Null),
-            Value::Bool(b) => builder.append_value(key, *b),
+            Value::Null => builder.insert(key, Variant::Null),
+            Value::Bool(b) => builder.insert(key, *b),
             Value::Number(n) => {
                 let v: Variant = n.try_into()?;
-                builder.append_value(key, v)
+                builder.insert(key, v)
             }
-            Value::String(s) => builder.append_value(key, s.as_str()),
-            Value::Array(_) | Value::Object(_) => {
-                todo!("Nesting within objects unsupported right now.");
+            Value::String(s) => builder.insert(key, s.as_str()),
+            Value::Array(arr) => {
+                let mut list_builder = builder.new_list(key);
+                build_list(arr, &mut list_builder)?;
+                list_builder.finish()
+            }
+            Value::Object(obj) => {
+                let mut obj_builder = builder.new_object(key);
+                build_object(obj, &mut obj_builder)?;
+                obj_builder.finish();
             }
         }
     }
