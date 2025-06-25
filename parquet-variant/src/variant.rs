@@ -33,7 +33,7 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
-/// A Variant [`ShortString`]
+/// Represents a variant array.
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
 /// the length of the underlying string is a valid Variant short string (63 bytes or less)
@@ -980,6 +980,15 @@ impl From<()> for Variant<'_, '_> {
     }
 }
 
+impl From<bool> for Variant<'_, '_> {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Variant::BooleanTrue,
+            false => Variant::BooleanFalse,
+        }
+    }
+}
+
 impl From<i8> for Variant<'_, '_> {
     fn from(value: i8) -> Self {
         Variant::Int8(value)
@@ -1031,16 +1040,6 @@ impl From<f32> for Variant<'_, '_> {
 impl From<f64> for Variant<'_, '_> {
     fn from(value: f64) -> Self {
         Variant::Double(value)
-    }
-}
-
-impl From<bool> for Variant<'_, '_> {
-    fn from(value: bool) -> Self {
-        if value {
-            Variant::BooleanTrue
-        } else {
-            Variant::BooleanFalse
-        }
     }
 }
 
