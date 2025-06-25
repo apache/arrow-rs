@@ -16,7 +16,15 @@ fn datetime_to_int96(dt: &str) -> Int96 {
     let datetime: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive, Utc);
     let nanos = datetime.timestamp_nanos_opt().unwrap();
     let mut int96 = Int96::new();
-    int96.set_data_from_nanos(nanos);
+    const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
+    const NANOSECONDS_IN_DAY: i64 = 86_400_000_000_000;
+    let days = nanos / NANOSECONDS_IN_DAY;
+    let remaining_nanos = nanos % NANOSECONDS_IN_DAY;
+    let julian_day = (days + JULIAN_DAY_OF_EPOCH) as i32;
+    let julian_day_u32 = julian_day as u32;
+    let nanos_low = (remaining_nanos & 0xFFFFFFFF) as u32;
+    let nanos_high = ((remaining_nanos >> 32) & 0xFFFFFFFF) as u32;
+    int96.set_data(nanos_low, nanos_high, julian_day_u32);
     int96
 }
 
