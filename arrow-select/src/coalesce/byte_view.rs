@@ -20,7 +20,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
 use arrow_buffer::{Buffer, NullBufferBuilder};
-use arrow_data::ByteView;
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -125,7 +125,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             // If there are buffers, we need to update the buffer index
             let updated_views = views.iter().map(|v| {
                 let mut byte_view = ByteView::from(*v);
-                if byte_view.length > 12 {
+                if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
                 };
@@ -182,7 +182,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             if remaining_capacity < str_len as usize {
                 break;
             }
-            if str_len > 12 {
+            if str_len > MAX_INLINE_VIEW_LEN {
                 remaining_capacity -= str_len as usize;
             }
             num_view_to_current += 1;
@@ -233,7 +233,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 .iter()
                 .filter_map(|v| {
                     let b = ByteView::from(*v);
-                    if b.length > 12 {
+                    if b.length > MAX_INLINE_VIEW_LEN {
                         Some(b.length as usize)
                     } else {
                         None
@@ -251,7 +251,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         // Copy the views, updating the buffer index and copying the data as needed
         let new_views = views.iter().map(|v| {
             let mut b: ByteView = ByteView::from(*v);
-            if b.length > 12 {
+            if b.length > MAX_INLINE_VIEW_LEN {
                 let buffer_index = b.buffer_index as usize;
                 let buffer_offset = b.offset as usize;
                 let str_len = b.length as usize;
