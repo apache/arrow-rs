@@ -822,7 +822,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # let (metadata, value) = {
     /// # let mut builder = VariantBuilder::new();
     /// #   let mut obj = builder.new_object();
-    /// #   obj.append_value("name", "John");
+    /// #   obj.insert("name", "John");
     /// #   obj.finish();
     /// #   builder.finish()
     /// # };
