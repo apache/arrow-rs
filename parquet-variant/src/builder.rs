@@ -184,7 +184,7 @@ impl ValueBuffer {
         self.0.len()
     }
 
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+    fn append_non_nested_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         let variant = value.into();
         match variant {
             Variant::Null => self.append_null(),
@@ -212,7 +212,7 @@ impl ValueBuffer {
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(_) | Variant::List(_) => {
-                todo!("How does this work with the redesign?");
+                unreachable!("Nested values are handled specially by ObjectBuilder and ListBuilder");
             }
         }
     }
@@ -414,7 +414,7 @@ impl VariantBuilder {
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.buffer.append_value(value);
+        self.buffer.append_non_nested_value(value);
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
@@ -477,6 +477,7 @@ pub struct ListBuilder<'a> {
     metadata_builder: &'a mut MetadataBuilder,
     offsets: Vec<usize>,
     buffer: ValueBuffer,
+    /// Is there a pending nested object or list that needs to be finalized?
     pending: bool,
 }
 
@@ -523,7 +524,7 @@ impl<'a> ListBuilder<'a> {
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.check_new_offset();
 
-        self.buffer.append_value(value);
+        self.buffer.append_non_nested_value(value);
         let element_end = self.buffer.offset();
         self.offsets.push(element_end);
     }
@@ -574,15 +575,16 @@ impl<'a> ListBuilder<'a> {
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ObjectBuilder<'a> {
+pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
     fields: BTreeMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
-    pending: Option<(String, usize)>,
+    /// Is there a pending list or object that needs to be finalized?
+    pending: Option<(&'b str, usize)>,
 }
 
-impl<'a> ObjectBuilder<'a> {
+impl<'a, 'b> ObjectBuilder<'a, 'b> {
     fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
         Self {
             parent_buffer,
@@ -597,7 +599,7 @@ impl<'a> ObjectBuilder<'a> {
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
         let field_id = self.metadata_builder.add_field_name(key);
         let field_start = self.buffer.offset();
-        self.buffer.append_value(value);
+        self.buffer.append_non_nested_value(value);
         let res = self.fields.insert(field_id, field_start);
         debug_assert!(res.is_none());
     }
@@ -613,27 +615,33 @@ impl<'a> ObjectBuilder<'a> {
         self.pending = None;
     }
 
-    pub fn new_object(&mut self, key: &str) -> ObjectBuilder {
+    /// Return a new [`ObjectBuilder`] to add a nested object with the specified
+    /// key to the object.
+    pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
         let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
-        self.pending = Some((key.to_string(), field_start));
+        self.pending = Some((key, field_start));
 
         obj_builder
     }
 
-    pub fn new_list(&mut self, key: &str) -> ListBuilder {
+    /// Return a new [`ListBuilder`] to add a list with the specified key to the
+    /// object.
+    pub fn new_list(&mut self, key: &'b str) -> ListBuilder {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
         let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
-        self.pending = Some((key.to_string(), field_start));
+        self.pending = Some((key, field_start));
 
         list_builder
     }
 
-    /// Finalize object with sorted fields
+    /// Finalize object
+    /// 
+    /// This consumes self and writes the object to the parent buffer.
     pub fn finish(mut self) {
         self.check_pending_field();
 
