@@ -80,33 +80,15 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 /// ```
 pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
     match variant {
-        Variant::Null => {
-            write!(json_buffer, "null")?;
-        }
-        Variant::BooleanTrue => {
-            write!(json_buffer, "true")?;
-        }
-        Variant::BooleanFalse => {
-            write!(json_buffer, "false")?;
-        }
-        Variant::Int8(i) => {
-            write!(json_buffer, "{}", i)?;
-        }
-        Variant::Int16(i) => {
-            write!(json_buffer, "{}", i)?;
-        }
-        Variant::Int32(i) => {
-            write!(json_buffer, "{}", i)?;
-        }
-        Variant::Int64(i) => {
-            write!(json_buffer, "{}", i)?;
-        }
-        Variant::Float(f) => {
-            write!(json_buffer, "{}", f)?;
-        }
-        Variant::Double(f) => {
-            write!(json_buffer, "{}", f)?;
-        }
+        Variant::Null => write!(json_buffer, "null")?,
+        Variant::BooleanTrue => write!(json_buffer, "true")?,
+        Variant::BooleanFalse => write!(json_buffer, "false")?,
+        Variant::Int8(i) => write!(json_buffer, "{}", i)?,
+        Variant::Int16(i) => write!(json_buffer, "{}", i)?,
+        Variant::Int32(i) => write!(json_buffer, "{}", i)?,
+        Variant::Int64(i) => write!(json_buffer, "{}", i)?,
+        Variant::Float(f) => write!(json_buffer, "{}", f)?,
+        Variant::Double(f) => write!(json_buffer, "{}", f)?,
         Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
             // Convert decimal to string representation using integer arithmetic
             if *scale == 0 {
@@ -158,14 +140,10 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
                 }
             }
         }
-        Variant::Date(date) => {
-            write!(json_buffer, "\"{}\"", format_date_string(date))?;
-        }
-        Variant::TimestampMicros(ts) => {
-            write!(json_buffer, "\"{}\"", ts.to_rfc3339())?;
-        }
+        Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
+        Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
         Variant::TimestampNtzMicros(ts) => {
-            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?;
+            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
         }
         Variant::Binary(bytes) => {
             // Encode binary as base64 string
@@ -173,21 +151,21 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
             let json_str = serde_json::to_string(&base64_str).map_err(|e| {
                 ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
             })?;
-            write!(json_buffer, "{}", json_str)?;
+            write!(json_buffer, "{}", json_str)?
         }
         Variant::String(s) => {
             // Use serde_json to properly escape the string
             let json_str = serde_json::to_string(s).map_err(|e| {
                 ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
             })?;
-            write!(json_buffer, "{}", json_str)?;
+            write!(json_buffer, "{}", json_str)?
         }
         Variant::ShortString(s) => {
             // Use serde_json to properly escape the string
             let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
                 ArrowError::InvalidArgumentError(format!("JSON encoding error: {}", e))
             })?;
-            write!(json_buffer, "{}", json_str)?;
+            write!(json_buffer, "{}", json_str)?
         }
         Variant::Object(obj) => {
             convert_object_to_json(json_buffer, obj)?;
