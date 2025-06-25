@@ -321,7 +321,7 @@ mod tests {
                     fn [<$test_name _truncated_length>]() {
                         // Remove the last byte of data so that there is not enough to decode
                         let truncated_data = &$data[.. $data.len() - 1];
-                        let result = $decode_fn(&truncated_data);
+                        let result = $decode_fn(truncated_data);
                         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                     }
                 }
@@ -355,7 +355,7 @@ mod tests {
                     fn [<$test_name _truncated_integer>]() {
                         // Remove the last byte of data so that there is not enough to decode
                         let truncated_data = &$data[.. $data.len() - 1];
-                        let result = $decode_fn(&truncated_data);
+                        let result = $decode_fn(truncated_data);
                         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                     }
 
@@ -421,7 +421,7 @@ mod tests {
                     fn [<$test_name _truncated_length>]() {
                         // Remove the last byte of data so that there is not enough to decode
                         let truncated_data = &$data[.. $data.len() - 1];
-                        let result = $decode_fn(&truncated_data);
+                        let result = $decode_fn(truncated_data);
                         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                     }
                 }
@@ -459,7 +459,7 @@ mod tests {
                     fn [<$test_name _truncated_length>]() {
                         // Remove the last byte of data so that there is not enough to decode
                         let truncated_data = &$data[.. $data.len() - 1];
-                        let result = $decode_fn(&truncated_data);
+                        let result = $decode_fn(truncated_data);
                         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                     }
                 }
