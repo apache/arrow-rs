@@ -601,12 +601,12 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
 
             // The lower 32 bits encode the length (little-endian),
             // the upper 96 bits hold the actual data
-            let l_len = l_bits as u32;
-            let r_len = r_bits as u32;
+            let l_len = l_bits as u32 as u64;
+            let r_len = r_bits as u32 as u64;
 
             // Remove the length bits, leaving only the data
-            let l_data = (l_bits >> 32) as u64;
-            let r_data = (r_bits >> 32) as u64;
+            let l_data = l_bits >> 32;
+            let r_data = r_bits >> 32;
 
             // The data is stored in little-endian order. To compare lexicographically,
             // convert to big-endian:
@@ -679,12 +679,12 @@ pub fn compare_byte_view<T: ByteViewType>(
 
         // The lower 32 bits encode the length (little-endian),
         // the upper 96 bits hold the actual data
-        let l_len = l_bits as u32;
-        let r_len = r_bits as u32;
+        let l_len = l_bits as u32 as u64;
+        let r_len = r_bits as u32 as u64;
 
         // Remove the length bits, leaving only the data
-        let l_data = (l_bits >> 32) as u64;
-        let r_data = (r_bits >> 32) as u64;
+        let l_data = l_bits >> 32;
+        let r_data = r_bits >> 32;
 
         // The data is stored in little-endian order. To compare lexicographically,
         // convert to big-endian:
