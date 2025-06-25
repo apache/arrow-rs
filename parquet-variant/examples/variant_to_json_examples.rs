@@ -26,12 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let mut person = builder.new_object();
-        person.append_value("name", "Alice");
-        person.append_value("age", 30i32);
-        person.append_value("email", "alice@example.com");
-        person.append_value("is_active", true);
-        person.append_value("score", 95.7f64);
-        person.append_value("department", "Engineering");
+        person.insert("name", "Alice");
+        person.insert("age", 30i32);
+        person.insert("email", "alice@example.com");
+        person.insert("is_active", true);
+        person.insert("score", 95.7f64);
+        person.insert("department", "Engineering");
         person.finish();
     }
 
