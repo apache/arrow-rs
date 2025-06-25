@@ -918,10 +918,10 @@ impl From<Vec<Option<String>>> for StringViewArray {
 #[cfg(test)]
 mod tests {
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
+    use crate::types::BinaryViewType;
     use crate::{Array, BinaryViewArray, GenericByteViewArray, StringViewArray};
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
-    use crate::types::BinaryViewType;
 
     #[test]
     fn try_new_string() {
@@ -1147,7 +1147,7 @@ mod tests {
 
             let mut raw_bytes = [0u8; 16];
             raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // little-endian length
-            raw_bytes[4..(4 + data.len())].copy_from_slice(data);    // inline data
+            raw_bytes[4..(4 + data.len())].copy_from_slice(data); // inline data
             u128::from_le_bytes(raw_bytes)
         }
 
