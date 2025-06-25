@@ -259,6 +259,8 @@ pub mod temporal_conversions;
 pub mod timezone;
 mod trusted_len;
 pub mod types;
+mod view_buffers;
+pub use view_buffers::ViewBuffers;
 
 #[cfg(test)]
 mod tests {
