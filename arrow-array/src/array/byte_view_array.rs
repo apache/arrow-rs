@@ -185,7 +185,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// # Panics
     ///
     /// Panics if [`GenericByteViewArray::try_new`] returns an error
-    pub fn new(views: ScalarBuffer<u128>, buffers: Vec<Buffer>, nulls: Option<NullBuffer>) -> Self {
+    pub fn new(
+        views: ScalarBuffer<u128>,
+        buffers: impl Into<Arc<[Buffer]>>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
         Self::try_new(views, buffers, nulls).unwrap()
     }
 
@@ -197,9 +201,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// * [ByteViewType::validate] fails
     pub fn try_new(
         views: ScalarBuffer<u128>,
-        buffers: Vec<Buffer>,
+        buffers: impl Into<Arc<[Buffer]>>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
+        let buffers: Arc<[Buffer]> = buffers.into();
+
         T::validate(&views, &buffers)?;
 
         if let Some(n) = nulls.as_ref() {
@@ -216,7 +222,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         Ok(Self {
             data_type: T::DATA_TYPE,
             views,
-            buffers: buffers.into(),
+            buffers,
             nulls,
             phantom: Default::default(),
         })
@@ -607,8 +613,9 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
 
     fn shrink_to_fit(&mut self) {
         self.views.shrink_to_fit();
-        self.buffers.iter_mut().for_each(|b| b.shrink_to_fit());
-        self.buffers.shrink_to_fit();
+        if let Some(buffers) = Arc::get_mut(&mut self.buffers) {
+            buffers.iter_mut().for_each(|b| b.shrink_to_fit());
+        }
         if let Some(nulls) = &mut self.nulls {
             nulls.shrink_to_fit();
         }
