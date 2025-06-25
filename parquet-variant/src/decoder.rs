@@ -519,22 +519,37 @@ mod tests {
     }
 
     #[test]
-    fn test_short_string() -> Result<(), ArrowError> {
+    fn test_short_string_exact_length() {
         let data = [b'H', b'e', b'l', b'l', b'o', b'o'];
-        let result = decode_short_string(1 | 5 << 2, &data)?;
+        let result = decode_short_string(1 | 5 << 2, &data).unwrap();
         assert_eq!(result.0, "Hello");
-        Ok(())
     }
 
     #[test]
-    fn test_string() -> Result<(), ArrowError> {
+    fn test_short_string_truncated_length() {
+        let data = [b'H', b'e', b'l'];
+        let result = decode_short_string(1 | 5 << 2, &data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+    }
+
+    #[test]
+    fn test_string_exact_length() {
         let data = [
             0x05, 0, 0, 0, // Length of string, 4-byte little-endian
             b'H', b'e', b'l', b'l', b'o', b'o',
         ];
-        let result = decode_long_string(&data)?;
+        let result = decode_long_string(&data).unwrap();
         assert_eq!(result, "Hello");
-        Ok(())
+    }
+
+    #[test]
+    fn test_string_truncated_length() {
+        let data = [
+            0x05, 0, 0, 0, // Length of string, 4-byte little-endian
+            b'H', b'e', b'l',
+        ];
+        let result = decode_long_string(&data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 
     #[test]
