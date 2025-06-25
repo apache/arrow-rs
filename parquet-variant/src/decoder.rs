@@ -405,20 +405,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_float() -> Result<(), ArrowError> {
-        let data = [0x06, 0x2c, 0x93, 0x4e];
-        let result = decode_float(&data)?;
-        assert_eq!(result, 1234567890.1234);
-        Ok(())
-    }
+    mod float {
+        use super::*;
 
-    #[test]
-    fn test_double() -> Result<(), ArrowError> {
-        let data = [0xc9, 0xe5, 0x87, 0xb4, 0x80, 0x65, 0xd2, 0x41];
-        let result = decode_double(&data)?;
-        assert_eq!(result, 1234567890.1234);
-        Ok(())
+        macro_rules! decoder_tests {
+            ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
+                paste! {
+                    #[test]
+                    fn [<$test_name _exact_length>]() {
+                        let result = $decode_fn(&$data).unwrap();
+                        assert_eq!(result, $expected);
+                    }
+
+                    #[test]
+                    fn [<$test_name _truncated_length>]() {
+                        // Remove the last byte of data so that there is not enough to decode
+                        let truncated_data = &$data[.. $data.len() - 1];
+                        let result = $decode_fn(&truncated_data);
+                        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                    }
+                }
+            };
+        }
+
+        decoder_tests!(
+            test_float,
+            [0x06, 0x2c, 0x93, 0x4e],
+            decode_float,
+            1234567890.1234
+        );
+
+        decoder_tests!(
+            test_double,
+            [0xc9, 0xe5, 0x87, 0xb4, 0x80, 0x65, 0xd2, 0x41],
+            decode_double,
+            1234567890.1234
+        );
     }
 
     #[test]
