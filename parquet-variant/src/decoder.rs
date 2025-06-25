@@ -25,6 +25,7 @@ use std::num::TryFromIntError;
 
 // Makes the code a bit more readable
 pub(crate) const VARIANT_VALUE_HEADER_BYTES: usize = 1;
+pub(crate) const DECIMAL_MAX_SCALE: u8 = 38;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
@@ -205,22 +206,40 @@ pub(crate) fn decode_int64(data: &[u8]) -> Result<i64, ArrowError> {
 /// Decodes a Decimal4 from the value section of a variant.
 pub(crate) fn decode_decimal4(data: &[u8]) -> Result<(i32, u8), ArrowError> {
     let scale = u8::from_le_bytes(array_from_slice(data, 0)?);
-    let integer = i32::from_le_bytes(array_from_slice(data, 1)?);
-    Ok((integer, scale))
+    if scale <= DECIMAL_MAX_SCALE {
+        let integer = i32::from_le_bytes(array_from_slice(data, 1)?);
+        Ok((integer, scale))
+    } else {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "Scale must be <= {DECIMAL_MAX_SCALE}"
+        )))
+    }
 }
 
 /// Decodes a Decimal8 from the value section of a variant.
 pub(crate) fn decode_decimal8(data: &[u8]) -> Result<(i64, u8), ArrowError> {
     let scale = u8::from_le_bytes(array_from_slice(data, 0)?);
-    let integer = i64::from_le_bytes(array_from_slice(data, 1)?);
-    Ok((integer, scale))
+    if scale <= DECIMAL_MAX_SCALE {
+        let integer = i64::from_le_bytes(array_from_slice(data, 1)?);
+        Ok((integer, scale))
+    } else {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "Scale must be <= {DECIMAL_MAX_SCALE}"
+        )))
+    }
 }
 
 /// Decodes a Decimal16 from the value section of a variant.
 pub(crate) fn decode_decimal16(data: &[u8]) -> Result<(i128, u8), ArrowError> {
     let scale = u8::from_le_bytes(array_from_slice(data, 0)?);
-    let integer = i128::from_le_bytes(array_from_slice(data, 1)?);
-    Ok((integer, scale))
+    if scale <= DECIMAL_MAX_SCALE {
+        let integer = i128::from_le_bytes(array_from_slice(data, 1)?);
+        Ok((integer, scale))
+    } else {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "Scale must be <= {DECIMAL_MAX_SCALE}"
+        )))
+    }
 }
 
 /// Decodes a Float from the value section of a variant.
@@ -320,38 +339,70 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_decimal4() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0x04, 0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal4(&data)?;
-        assert_eq!(result, (1234, 2));
-        Ok(())
-    }
+    mod decimal {
+        use super::*;
 
-    #[test]
-    fn test_decimal8() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0x02, 0x96, 0x49, 0x00, 0x00, 0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal8(&data)?;
-        assert_eq!(result, (1234567890, 2));
-        Ok(())
-    }
+        macro_rules! decoder_tests {
+            ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
+                paste! {
+                    #[test]
+                    fn [<$test_name _success>]() {
+                        let result = $decode_fn(&$data).unwrap();
+                        assert_eq!(result, $expected);
+                    }
 
-    #[test]
-    fn test_decimal16() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0xb6, 0x23, 0xc0, 0xf4, 0x10, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal16(&data)?;
-        assert_eq!(result, (1234567891234567890, 2));
-        Ok(())
+                    #[test]
+                    fn [<$test_name _truncated_integer>]() {
+                        // Remove the last byte of data so that there is not enough to decode
+                        let truncated_data = &$data[.. $data.len() - 1];
+                        let result = $decode_fn(&truncated_data);
+                        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                    }
+
+                    #[test]
+                    fn [<$test_name _scale_too_large>]() {
+                        let mut data = $data;
+
+                        // Modify the scale byte to that it exceeds the limit in the spec
+                        data[0] = 0xFF;
+
+                        let result = $decode_fn(&data);
+                        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                    }
+                }
+            };
+        }
+
+        decoder_tests!(
+            test_decimal4,
+            [
+                0x02, // Scale
+                0xd2, 0x04, 0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal4,
+            (1234, 2)
+        );
+
+        decoder_tests!(
+            test_decimal8,
+            [
+                0x02, // Scale
+                0xd2, 0x02, 0x96, 0x49, 0x00, 0x00, 0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal8,
+            (1234567890, 2)
+        );
+
+        decoder_tests!(
+            test_decimal16,
+            [
+                0x02, // Scale
+                0xd2, 0xb6, 0x23, 0xc0, 0xf4, 0x10, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal16,
+            (1234567891234567890, 2)
+        );
     }
 
     #[test]
