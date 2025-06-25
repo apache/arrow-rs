@@ -22,7 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::filter::filter_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -31,9 +31,11 @@ use std::sync::Arc;
 
 mod byte_view;
 mod generic;
+mod primitive;
 
 use byte_view::InProgressByteViewArray;
 use generic::GenericInProgressArray;
+use primitive::InProgressPrimitiveArray;
 
 /// Concatenate multiple [`RecordBatch`]es
 ///
@@ -322,7 +324,15 @@ impl BatchCoalescer {
 
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
-    match data_type {
+    macro_rules! instantiate_primitive {
+        ($t:ty) => {
+            Box::new(InProgressPrimitiveArray::<$t>::new(batch_size))
+        };
+    }
+
+    downcast_primitive! {
+        // Instantiate InProgressPrimitiveArray for each primitive type
+        data_type => (instantiate_primitive),
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
@@ -364,7 +374,9 @@ mod tests {
     use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
-    use arrow_array::{BinaryViewArray, RecordBatchOptions, StringViewArray, UInt32Array};
+    use arrow_array::{
+        BinaryViewArray, RecordBatchOptions, StringArray, StringViewArray, UInt32Array,
+    };
     use arrow_schema::{DataType, Field, Schema};
     use std::ops::Range;
 
@@ -453,6 +465,17 @@ mod tests {
         Test::new()
             .with_batch(batch)
             .with_expected_output_sizes(vec![])
+            .run();
+    }
+
+    #[test]
+    fn test_utf8_split() {
+        Test::new()
+            // 4040 rows of utf8 strings in total, split into batches of 1024
+            .with_batch(utf8_batch(0..3000))
+            .with_batch(utf8_batch(0..1040))
+            .with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
             .run();
     }
 
@@ -945,11 +968,24 @@ mod tests {
     fn uint32_batch(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
-        RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(UInt32Array::from_iter_values(range))],
-        )
-        .unwrap()
+        let array = UInt32Array::from_iter_values(range);
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch with a StringArrary with values `value0`, `value1`, ...
+    /// and every third value is `None`.
+    fn utf8_batch(range: Range<u32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));
+
+        let array = StringArray::from_iter(range.map(|i| {
+            if i % 3 == 0 {
+                None
+            } else {
+                Some(format!("value{}", i))
+            }
+        }));
+
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
     /// Return a RecordBatch with a StringViewArray with (only) the specified values
@@ -960,14 +996,11 @@ mod tests {
             false,
         )]));
 
-        RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringViewArray::from_iter(values))],
-        )
-        .unwrap()
+        let array = StringViewArray::from_iter(values);
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
-    /// Return a RecordBatch with a StringViewArray with num_rows by repating
+    /// Return a RecordBatch with a StringViewArray with num_rows by repeating
     /// values over and over.
     fn stringview_batch_repeated<'a>(
         num_rows: usize,
