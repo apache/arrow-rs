@@ -18,19 +18,65 @@
 //! End-to-end check: (almost) every sample from apache/parquet-testing/variant
 //! can be parsed into our `Variant`.
 
-// NOTE: We keep this file separate rather than a test mod inside variant.rs because it should be
-// moved to the test folder later
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use chrono::NaiveDate;
-use parquet_variant::{ShortString, Variant, VariantBuilder};
+use parquet_variant::{
+    ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+};
 
+/// Returns a directory path for the parquet variant test data.
+///
+/// The data lives in the `parquet-testing` git repository:
+/// <https://github.com/apache/parquet-testing>
+///
+/// Normally this is checked out as a git submodule in the root of the `arrow-rs` repository,
+/// so the relative path is
+/// * `CARGO_MANIFEST_DIR/../parquet-testing/variant`.
+///
+/// However, the user can override this by setting the environment variable `PARQUET_TEST_DATA`
+/// to point to a different directory (as is done by the `verify-release-candidate.sh` script).
+///
+/// In this case, the environment variable `PARQUET_TEST_DATA` is expected to point to a directory
+/// `parquet-testing/data`, so the relative path to the `variant` subdirectory is
+/// * `PARQUET_TEST_DATA/../variant`.
 fn cases_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    // which we expect to point at "../parquet-testing/data"
+    let env_name = "PARQUET_TEST_DATA";
+    if let Ok(dir) = env::var(env_name) {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            let pb = PathBuf::from(trimmed).join("..").join("variant");
+            if pb.is_dir() {
+                return pb;
+            } else {
+                panic!(
+                    "Can't find variant data at `{pb:?}`. Used value of env `{env_name}`../variant ",
+                )
+            }
+        }
+    }
+
+    // PARQUET_TEST_DATA is undefined or its value is trimmed to empty, let's try default dir.
+
+    // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
+    // set by `cargo run` or `cargo test`, see:
+    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
+    let pb = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("parquet-testing")
-        .join("variant")
+        .join("variant");
+
+    if pb.is_dir() {
+        pb
+    } else {
+        panic!(
+            "env `{env_name}` is undefined or has empty value, and \
+             `CARGO_MANIFEST_DIR/../parquet-testing/variant` is not a directory: `{pb:?}`\n\
+             HINT: try running `git submodule update --init`",
+        )
+    }
 }
 
 struct Case {
@@ -63,9 +109,10 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
         ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
-        ("primitive_decimal4", Variant::Decimal4{integer: 1234, scale: 2}),
-        ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
-        ("primitive_decimal16", Variant::Decimal16{integer: 1234567891234567890, scale: 2}),
+        ("primitive_decimal4", Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap())), 
+        // ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
+        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2).unwrap())), 
+        ("primitive_decimal16", Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap())),
         ("primitive_float", Variant::Float(1234567890.1234)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
@@ -123,10 +170,7 @@ fn variant_object_primitive() {
         // spark wrote this as a decimal4 (not a double)
         (
             "double_field",
-            Variant::Decimal4 {
-                integer: 123456789,
-                scale: 8,
-            },
+            Variant::Decimal4(VariantDecimal4::try_new(123456789, 8).unwrap()),
         ),
         ("int_field", Variant::Int8(1)),
         ("null_field", Variant::Null),
@@ -210,7 +254,10 @@ fn variant_object_builder() {
 
     // The double field is actually encoded as decimal4 with scale 8
     // Value: 123456789, Scale: 8 -> 1.23456789
-    obj.append_value("double_field", (123456789i32, 8u8));
+    obj.append_value(
+        "double_field",
+        VariantDecimal4::try_new(123456789i32, 8u8).unwrap(),
+    );
     obj.append_value("boolean_true_field", true);
     obj.append_value("boolean_false_field", false);
     obj.append_value("string_field", "Apache Parquet");

@@ -581,6 +581,9 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         if l_len != r_len {
             return false;
         }
+        if l_len == 0 && r_len == 0 {
+            return true;
+        }
 
         // # Safety
         // The index is within bounds as it is checked in value()
