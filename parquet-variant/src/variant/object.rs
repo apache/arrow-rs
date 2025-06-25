@@ -150,10 +150,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             return None;
         }
 
-        match self.try_field(i) {
-            Ok(field) => Some(field),
-            Err(err) => panic!("validation error: {}", err),
-        }
+        Some(
+            self.try_field(i)
+                .expect("validation error after construction"),
+        )
     }
 
     /// Fallible version of `field`. Returns field value by index, capturing validation errors
@@ -173,14 +173,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Get a field's name by index in `0..self.len()`
     pub fn field_name(&self, i: usize) -> Option<&'m str> {
-        if i >= self.num_elements {
-            return None;
-        }
-
-        match self.try_field_name(i) {
-            Ok(field_name) => Some(field_name),
-            Err(err) => panic!("validation error: {}", err),
-        }
+        Some(
+            self.try_field_name(i)
+                .expect("validation error after construction"),
+        )
     }
 
     /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
