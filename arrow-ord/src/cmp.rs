@@ -598,7 +598,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             let l_view = unsafe { l.0.views().get_unchecked(l.1) };
             let r_view = unsafe { r.0.views().get_unchecked(r.1) };
             return GenericByteViewArray::<T>::inline_key_fast(*l_view)
-                 < GenericByteViewArray::<T>::inline_key_fast(*r_view)
+                < GenericByteViewArray::<T>::inline_key_fast(*r_view);
         }
 
         // Fallback to the generic, unchecked comparison for non-inline cases

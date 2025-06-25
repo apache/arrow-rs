@@ -572,8 +572,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Builds a 128-bit composite key for an inline value:
-    /// - High 96 bits: the inline data, in big-endian order
-    /// - Low  32 bits: the length, in big-endian order (so shorter is always numerically smaller)
+    /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting)
+    /// - Low  32 bits: the length in big-endian byte order (so shorter strings are always numerically smaller)
+    ///
+    /// This function extracts the length and the 12-byte inline string data from the
+    /// raw little-endian u128 representation, converts them to big-endian ordering,
+    /// and packs them into a single u128 value suitable for fast comparisons.
+    ///
+    /// # Note
+    /// The input `raw` is assumed to be in little-endian format with the following layout:
+    /// - bytes 0..4: length (u32)
+    /// - bytes 4..16: inline string data (padded with zeros if less than 12 bytes)
+    ///
+    /// The output u128 key places the inline string data in the upper 96 bits (big-endian)
+    /// and the length in the lower 32 bits (big-endian).
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
         // Convert the raw u128 (little-endian) into bytes for manipulation
