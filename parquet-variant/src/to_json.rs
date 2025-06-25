@@ -294,8 +294,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
 /// let mut object_builder = builder.new_object();
-/// object_builder.append_value("first_name", "Jiaying");
-/// object_builder.append_value("last_name", "Li");
+/// object_builder.insert("first_name", "Jiaying");
+/// object_builder.insert("last_name", "Li");
 /// object_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
@@ -923,10 +923,10 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("name", "Alice");
-            obj.append_value("age", 30i32);
-            obj.append_value("active", true);
-            obj.append_value("score", 95.5f64);
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i32);
+            obj.insert("active", true);
+            obj.insert("score", 95.5f64);
             obj.finish();
         }
 
@@ -981,9 +981,9 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("message", "Hello \"World\"\nWith\tTabs");
-            obj.append_value("path", "C:\\Users\\Alice\\Documents");
-            obj.append_value("unicode", "😀 Smiley");
+            obj.insert("message", "Hello \"World\"\nWith\tTabs");
+            obj.insert("path", "C:\\Users\\Alice\\Documents");
+            obj.insert("unicode", "😀 Smiley");
             obj.finish();
         }
 
@@ -1098,9 +1098,9 @@ mod tests {
         {
             let mut obj = builder.new_object();
             // Add fields in non-alphabetical order
-            obj.append_value("zebra", "last");
-            obj.append_value("alpha", "first");
-            obj.append_value("beta", "second");
+            obj.insert("zebra", "last");
+            obj.insert("alpha", "first");
+            obj.insert("beta", "second");
             obj.finish();
         }
 
@@ -1165,12 +1165,12 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("string_field", "test_string");
-            obj.append_value("int_field", 123i32);
-            obj.append_value("bool_field", true);
-            obj.append_value("float_field", 2.71f64);
-            obj.append_value("null_field", ());
-            obj.append_value("long_field", 999i64);
+            obj.insert("string_field", "test_string");
+            obj.insert("int_field", 123i32);
+            obj.insert("bool_field", true);
+            obj.insert("float_field", 2.71f64);
+            obj.insert("null_field", ());
+            obj.insert("long_field", 999i64);
             obj.finish();
         }
 
