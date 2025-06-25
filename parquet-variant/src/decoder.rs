@@ -496,17 +496,26 @@ mod tests {
     }
 
     #[test]
-    fn test_binary() -> Result<(), ArrowError> {
+    fn test_binary_exact_length() {
         let data = [
             0x09, 0, 0, 0, // Length of binary data, 4-byte little-endian
             0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
         ];
-        let result = decode_binary(&data)?;
+        let result = decode_binary(&data).unwrap();
         assert_eq!(
             result,
             [0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]
         );
-        Ok(())
+    }
+
+    #[test]
+    fn test_binary_truncated_length() {
+        let data = [
+            0x09, 0, 0, 0, // Length of binary data, 4-byte little-endian
+            0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca,
+        ];
+        let result = decode_binary(&data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 
     #[test]
