@@ -23,15 +23,12 @@ use parquet_variant::{
     VariantBufferManager,
 };
 
-/// The caller must provide an object implementing the `VariantBufferManager` trait to the library.
-/// This allows the library to write the constructed variant to buffers provided by the caller.
-/// This way, the caller has direct control over the output buffers.
-pub struct SampleVariantBufferManager {
+pub struct SampleBoxBasedVariantBufferManager {
     pub value_buffer: Box<[u8]>,
     pub metadata_buffer: Box<[u8]>,
 }
 
-impl VariantBufferManager for SampleVariantBufferManager {
+impl VariantBufferManager for SampleBoxBasedVariantBufferManager {
     #[inline(always)]
     fn borrow_value_buffer(&mut self) -> &mut [u8] {
         &mut self.value_buffer
@@ -66,7 +63,10 @@ impl VariantBufferManager for SampleVariantBufferManager {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut variant_buffer_manager = SampleVariantBufferManager {
+    // The caller must provide an object implementing the `VariantBufferManager` trait to the library.
+    // This allows the library to write the constructed variant to buffers provided by the caller.
+    // This way, the caller has direct control over the output buffers.
+    let mut variant_buffer_manager = SampleBoxBasedVariantBufferManager {
         value_buffer: vec![0u8; 1].into_boxed_slice(),
         metadata_buffer: vec![0u8; 1].into_boxed_slice(),
     };
@@ -74,18 +74,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
         + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
         + "\"additional_info\": null}";
-    let mut value_size = 0usize;
-    let mut metadata_size = 0usize;
-    json_to_variant(
-        &person_string,
-        &mut variant_buffer_manager,
-        &mut value_size,
-        &mut metadata_size,
-    )?;
+    let (metadata_size, value_size) = json_to_variant(&person_string, &mut variant_buffer_manager)?;
 
     let variant = parquet_variant::Variant::try_new(
-        &variant_buffer_manager.metadata_buffer,
-        &variant_buffer_manager.value_buffer,
+        &variant_buffer_manager.metadata_buffer[..metadata_size],
+        &variant_buffer_manager.value_buffer[..value_size],
     )?;
 
     let json_string = variant_to_json_string(&variant)?;

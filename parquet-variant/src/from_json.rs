@@ -4,31 +4,30 @@ use arrow_schema::ArrowError;
 use serde_json::{Map, Value};
 
 /// Eventually, internal writes should also be performed using VariantBufferManager instead of
-/// ValueBuffer and MetadataBuffer so the caller has control of the memory
-pub fn json_to_variant<T: VariantBufferManager>(
+/// ValueBuffer and MetadataBuffer so the caller has control of the memory.
+/// Returns a pair <value_size, metadata_size>
+pub fn json_to_variant<'a, T: VariantBufferManager>(
     json: &str,
-    variant_buffer_manager: &mut T,
-    value_size: &mut usize,
-    metadata_size: &mut usize,
-) -> Result<(), ArrowError> {
+    variant_buffer_manager: &'a mut T,
+) -> Result<(usize, usize), ArrowError> {
     let mut builder = VariantBuilder::new();
     let json: Value = serde_json::from_str(json)
         .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {}", e)))?;
 
     build_json(&json, &mut builder)?;
     let (metadata, value) = builder.finish();
-    *value_size = value.len();
-    *metadata_size = metadata.len();
+    let value_size = value.len();
+    let metadata_size = metadata.len();
 
     // Write to caller's buffers - Remove this when the library internally writes to the caller's
     // buffers anyway
-    variant_buffer_manager.ensure_value_buffer_size(*value_size)?;
-    variant_buffer_manager.ensure_metadata_buffer_size(*metadata_size)?;
-    let caller_value_buffer = variant_buffer_manager.borrow_value_buffer();
-    caller_value_buffer[..*value_size].copy_from_slice(value.as_slice());
+    variant_buffer_manager.ensure_metadata_buffer_size(metadata_size)?;
+    variant_buffer_manager.ensure_value_buffer_size(value_size)?;
     let caller_metadata_buffer = variant_buffer_manager.borrow_metadata_buffer();
-    caller_metadata_buffer[..*metadata_size].copy_from_slice(metadata.as_slice());
-    Ok(())
+    caller_metadata_buffer[..metadata_size].copy_from_slice(metadata.as_slice());
+    let caller_value_buffer = variant_buffer_manager.borrow_value_buffer();
+    caller_value_buffer[..value_size].copy_from_slice(value.as_slice());
+    Ok((metadata_size, value_size))
 }
 
 fn build_object(obj: &Map<String, Value>, builder: &mut ObjectBuilder) -> Result<(), ArrowError> {

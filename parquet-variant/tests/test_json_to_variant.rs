@@ -46,23 +46,16 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         expected_metadata: &[u8],
     ) -> Result<(), ArrowError> {
         let json = json;
-        let mut value_size: usize = 0;
-        let mut metadata_size: usize = 0;
 
         let mut variant_buffer_manager = SampleVariantBufferManager {
             value_buffer: vec![0u8; 1].into_boxed_slice(),
             metadata_buffer: vec![0u8; 1].into_boxed_slice(),
         };
-        json_to_variant(
-            json,
-            &mut variant_buffer_manager,
-            &mut value_size,
-            &mut metadata_size,
-        )?;
-        let computed_value_slize: &[u8] = &*variant_buffer_manager.value_buffer;
+        let (metadata_size, value_size) = json_to_variant(json, &mut variant_buffer_manager)?;
         let computed_metadata_slize: &[u8] = &*variant_buffer_manager.metadata_buffer;
-        assert_eq!(&computed_value_slize[..value_size], expected_value);
+        let computed_value_slize: &[u8] = &*variant_buffer_manager.value_buffer;
         assert_eq!(&computed_metadata_slize[..metadata_size], expected_metadata);
+        assert_eq!(&computed_value_slize[..value_size], expected_value);
         Ok(())
     }
 
