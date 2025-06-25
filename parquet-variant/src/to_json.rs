@@ -207,13 +207,13 @@ fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Resul
 fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(), ArrowError> {
     write!(buffer, "[")?;
 
-    let len = arr.len();
-    for i in 0..len {
-        if i > 0 {
+    let mut first = true;
+    for element in arr.iter() {
+        if !first {
             write!(buffer, ",")?;
         }
+        first = false;
 
-        let element = arr.get(i)?;
         variant_to_json(buffer, &element)?;
     }
 
@@ -336,7 +336,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Int16(i) => Ok(Value::Number((*i).into())),
         Variant::Int32(i) => Ok(Value::Number((*i).into())),
         Variant::Int64(i) => Ok(Value::Number((*i).into())),
-        Variant::Float(f) => serde_json::Number::from_f64(*f as f64)
+        Variant::Float(f) => serde_json::Number::from_f64((*f).into())
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string())),
         Variant::Double(f) => serde_json::Number::from_f64(*f)
@@ -350,12 +350,14 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let divisor = 10_i32.pow(*scale as u32);
                 let quotient = integer / divisor;
                 let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
 
-                let decimal_str = if trimmed_remainder.is_empty() {
+                let decimal_str = if remainder == 0 {
                     quotient.to_string()
                 } else {
+                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
+                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                    // Then strip away any trailing zeros (e.g., .00001)
+                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
 
@@ -376,12 +378,14 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let divisor = 10_i64.pow(*scale as u32);
                 let quotient = integer / divisor;
                 let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
 
-                let decimal_str = if trimmed_remainder.is_empty() {
+                let decimal_str = if remainder == 0 {
                     quotient.to_string()
                 } else {
+                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
+                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                    // Then strip away any trailing zeros (e.g., .00001)
+                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
 
@@ -402,12 +406,14 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 let divisor = 10_i128.pow(*scale as u32);
                 let quotient = integer / divisor;
                 let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
 
-                let decimal_str = if trimmed_remainder.is_empty() {
+                let decimal_str = if remainder == 0 {
                     quotient.to_string()
                 } else {
+                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
+                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
+                    // Then strip away any trailing zeros (e.g., .00001)
+                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
                     format!("{}.{}", quotient, trimmed_remainder)
                 };
 
@@ -1243,6 +1249,54 @@ mod tests {
 
         let json_string_zeros = variant_to_json_string(&decimal_with_zeros)?;
         assert_eq!(json_string_zeros, "1234567.89");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_nan_inf_handling() -> Result<(), ArrowError> {
+        // Test NaN handling - should return an error since JSON doesn't support NaN
+        let nan_variant = Variant::Float(f32::NAN);
+        let nan_result = variant_to_json_value(&nan_variant);
+        assert!(nan_result.is_err());
+        assert!(nan_result.unwrap_err().to_string().contains("Invalid float value"));
+
+        // Test positive infinity - should return an error since JSON doesn't support Infinity
+        let pos_inf_variant = Variant::Float(f32::INFINITY);
+        let pos_inf_result = variant_to_json_value(&pos_inf_variant);
+        assert!(pos_inf_result.is_err());
+        assert!(pos_inf_result.unwrap_err().to_string().contains("Invalid float value"));
+
+        // Test negative infinity - should return an error since JSON doesn't support -Infinity
+        let neg_inf_variant = Variant::Float(f32::NEG_INFINITY);
+        let neg_inf_result = variant_to_json_value(&neg_inf_variant);
+        assert!(neg_inf_result.is_err());
+        assert!(neg_inf_result.unwrap_err().to_string().contains("Invalid float value"));
+
+        // Test the same for Double variants
+        let nan_double_variant = Variant::Double(f64::NAN);
+        let nan_double_result = variant_to_json_value(&nan_double_variant);
+        assert!(nan_double_result.is_err());
+        assert!(nan_double_result.unwrap_err().to_string().contains("Invalid double value"));
+
+        let pos_inf_double_variant = Variant::Double(f64::INFINITY);
+        let pos_inf_double_result = variant_to_json_value(&pos_inf_double_variant);
+        assert!(pos_inf_double_result.is_err());
+        assert!(pos_inf_double_result.unwrap_err().to_string().contains("Invalid double value"));
+
+        let neg_inf_double_variant = Variant::Double(f64::NEG_INFINITY);
+        let neg_inf_double_result = variant_to_json_value(&neg_inf_double_variant);
+        assert!(neg_inf_double_result.is_err());
+        assert!(neg_inf_double_result.unwrap_err().to_string().contains("Invalid double value"));
+
+        // Test normal float values still work
+        let normal_float = Variant::Float(3.14f32);
+        let normal_result = variant_to_json_value(&normal_float)?;
+        assert!(matches!(normal_result, Value::Number(_)));
+
+        let normal_double = Variant::Double(2.71828f64);
+        let normal_double_result = variant_to_json_value(&normal_double)?;
+        assert!(matches!(normal_double_result, Value::Number(_)));
 
         Ok(())
     }
