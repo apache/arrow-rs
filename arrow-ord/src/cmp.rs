@@ -601,8 +601,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
             let l_byte_view = ByteView::from(*l_view);
             let r_byte_view = ByteView::from(*r_view);
             return GenericByteViewArray::<T>::inline_key_fast(l_byte_view)
-                .cmp(&GenericByteViewArray::<T>::inline_key_fast(r_byte_view))
-                .is_lt();
+                 < GenericByteViewArray::<T>::inline_key_fast(r_byte_view)
         }
 
         // Fallback to the generic, unchecked comparison for non-inline cases
