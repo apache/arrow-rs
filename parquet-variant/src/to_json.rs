@@ -415,25 +415,17 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::String(s) => Ok(Value::String(s.to_string())),
         Variant::ShortString(s) => Ok(Value::String(s.to_string())),
         Variant::Object(obj) => {
-            let mut map = serde_json::Map::new();
-
-            for (key, value) in obj.iter() {
-                let json_value = variant_to_json_value(&value)?;
-                map.insert(key.to_string(), json_value);
-            }
-
+            let map = obj
+                .iter()
+                .map(|(k, v)| variant_to_json_value(&v).map(|json_val| (k.to_string(), json_val)))
+                .collect::<Result<_, _>>()?;
             Ok(Value::Object(map))
         }
         Variant::List(arr) => {
-            let mut vec = Vec::new();
-            let len = arr.len();
-
-            for i in 0..len {
-                let element = arr.get(i)?;
-                let json_value = variant_to_json_value(&element)?;
-                vec.push(json_value);
-            }
-
+            let vec = arr
+                .iter()
+                .map(|element| variant_to_json_value(&element))
+                .collect::<Result<_, _>>()?;
             Ok(Value::Array(vec))
         }
     }
