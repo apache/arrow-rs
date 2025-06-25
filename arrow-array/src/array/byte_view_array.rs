@@ -546,18 +546,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_len = *r_view as u32;
 
         if l_len <= 12 && r_len <= 12 {
-            // Directly load the 16-byte view as an u128 (little-endian)
-            let l_bits: u128 = unsafe { *left.views().get_unchecked(left_idx) };
-            let r_bits: u128 = unsafe { *right.views().get_unchecked(right_idx) };
-
-            // The lower 32 bits encode the length (little-endian),
-            // the upper 96 bits hold the actual data
-            let l_len = l_bits as u32;
-            let r_len = r_bits as u32;
-
             // Remove the length bits, leaving only the data
-            let l_data = l_bits >> 32;
-            let r_data = r_bits >> 32;
+            let l_data = *l_view >> 32;
+            let r_data = *r_view >> 32;
 
             // The data is stored in little-endian order. To compare lexicographically,
             // convert to big-endian:
