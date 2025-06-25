@@ -31,6 +31,7 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_data::ByteView;
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -595,36 +596,13 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
         // If both arrays use only the inline buffer
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
-            // Directly load the 16-byte view as an u128 (little-endian)
-            let l_bits: u128 = unsafe { *l.0.views().get_unchecked(l.1) };
-            let r_bits: u128 = unsafe { *r.0.views().get_unchecked(r.1) };
-
-            // The lower 32 bits encode the length (little-endian),
-            // the upper 96 bits hold the actual data
-            let l_len = l_bits as u32;
-            let r_len = r_bits as u32;
-
-            // Remove the length bits, leaving only the data
-            let l_data = l_bits >> 32;
-            let r_data = r_bits >> 32;
-
-            // The data is stored in little-endian order. To compare lexicographically,
-            // convert to big-endian:
-            let l_be = l_data.swap_bytes();
-            let r_be = r_data.swap_bytes();
-
-            // Compare only the first min_len bytes
-            let min_len = l_len.min(r_len);
-            // We have all 12 bytes in the high bits, but only want the top min_len
-            let shift = (12 - min_len) * 8;
-            let l_partial = l_be >> shift;
-            let r_partial = r_be >> shift;
-            if l_partial != r_partial {
-                return l_partial < r_partial;
-            }
-
-            // If the prefixes are equal, the shorter one is considered smaller
-            return l_len < r_len;
+            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+            let l_byte_view = ByteView::from(*l_view);
+            let r_byte_view = ByteView::from(*r_view);
+            return GenericByteViewArray::<T>::inline_key_fast(l_byte_view)
+                .cmp(&GenericByteViewArray::<T>::inline_key_fast(r_byte_view))
+                .is_lt();
         }
 
         // Fallback to the generic, unchecked comparison for non-inline cases
@@ -673,38 +651,12 @@ pub fn compare_byte_view<T: ByteViewType>(
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
     if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
-        // Directly load the 16-byte view as an u128 (little-endian)
-        let l_bits: u128 = unsafe { *left.views().get_unchecked(left_idx) };
-        let r_bits: u128 = unsafe { *right.views().get_unchecked(right_idx) };
-
-        // The lower 32 bits encode the length (little-endian),
-        // the upper 96 bits hold the actual data
-        let l_len = l_bits as u32;
-        let r_len = r_bits as u32;
-
-        // Remove the length bits, leaving only the data
-        let l_data = l_bits >> 32;
-        let r_data = r_bits >> 32;
-
-        // The data is stored in little-endian order. To compare lexicographically,
-        // convert to big-endian:
-        let l_be = l_data.swap_bytes();
-        let r_be = r_data.swap_bytes();
-
-        // Compare only the first min_len bytes
-        let min_len = l_len.min(r_len);
-        // We have all 12 bytes in the high bits, but only want the top min_len
-        let shift = (12 - min_len) * 8;
-        let l_partial = l_be >> shift;
-        let r_partial = r_be >> shift;
-        if l_partial < r_partial {
-            return Ordering::Less;
-        } else if l_partial > r_partial {
-            return Ordering::Greater;
-        }
-
-        // If the prefixes are equal, the shorter one is considered smaller
-        return l_len.cmp(&r_len);
+        let l_view = unsafe { left.views().get_unchecked(left_idx) };
+        let r_view = unsafe { right.views().get_unchecked(right_idx) };
+        let l_byte_view = ByteView::from(*l_view);
+        let r_byte_view = ByteView::from(*r_view);
+        return GenericByteViewArray::<T>::inline_key_fast(l_byte_view)
+            .cmp(&GenericByteViewArray::<T>::inline_key_fast(r_byte_view));
     }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }

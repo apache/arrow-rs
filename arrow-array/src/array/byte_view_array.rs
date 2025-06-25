@@ -540,43 +540,24 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         right_idx: usize,
     ) -> Ordering {
         let l_view = left.views().get_unchecked(left_idx);
-        let l_len = *l_view as u32;
+        let l_byte_view = ByteView::from(*l_view);
 
         let r_view = right.views().get_unchecked(right_idx);
-        let r_len = *r_view as u32;
+        let r_byte_view = ByteView::from(*r_view);
+
+        let l_len = l_byte_view.length;
+        let r_len = r_byte_view.length;
 
         if l_len <= 12 && r_len <= 12 {
-            // Remove the length bits, leaving only the data
-            let l_data = *l_view >> 32;
-            let r_data = *r_view >> 32;
-
-            // The data is stored in little-endian order. To compare lexicographically,
-            // convert to big-endian:
-            let l_be = l_data.swap_bytes();
-            let r_be = r_data.swap_bytes();
-
-            // Compare only the first min_len bytes
-            let min_len = l_len.min(r_len);
-            // We have all 12 bytes in the high bits, but only want the top min_len
-            let shift = (12 - min_len) * 8;
-            let l_partial = l_be >> shift;
-            let r_partial = r_be >> shift;
-            if l_partial < r_partial {
-                return Ordering::Less;
-            } else if l_partial > r_partial {
-                return Ordering::Greater;
-            }
-
-            // If the prefixes are equal, the shorter one is considered smaller
-            return l_len.cmp(&r_len);
+            return Self::inline_key_fast(l_byte_view).cmp(&Self::inline_key_fast(r_byte_view));
         }
 
         // one of the string is larger than 12 bytes,
         // we then try to compare the inlined data first
-        let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
-        let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
-        if r_inlined_data != l_inlined_data {
-            return l_inlined_data.cmp(r_inlined_data);
+        let l_inlined_be = l_byte_view.prefix.swap_bytes();
+        let r_inlined_be = r_byte_view.prefix.swap_bytes();
+        if l_inlined_be != r_inlined_be {
+            return l_inlined_be.cmp(&r_inlined_be);
         }
 
         // unfortunately, we need to compare the full data
@@ -584,6 +565,25 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
 
         l_full_data.cmp(r_full_data)
+    }
+
+    /// Builds a 128-bit composite key for an inline value:
+    /// - High 96 bits: the inline data, in big-endian order
+    /// - Low  32 bits: the length, in big-endian order (so shorter is always numerically smaller)
+    #[inline(always)]
+    pub fn inline_key_fast(raw: ByteView) -> u128 {
+        // Convert each to big-endian (so their bytes go MSB→LSB in correct lexical order)
+        let a = raw.prefix.to_be() as u128; // data[0..4]
+        let b = raw.buffer_index.to_be() as u128; // data[4..8]
+        let c = raw.offset.to_be() as u128; // data[8..12]
+        let d = raw.length.to_be() as u128; // length
+
+        // Pack them into one u128:
+        // bits 127..96 = a
+        // bits 95..64  = b
+        // bits 63..32  = c
+        // bits 31..0   = d
+        (a << 96) | (b << 64) | (c << 32) | d
     }
 }
 
