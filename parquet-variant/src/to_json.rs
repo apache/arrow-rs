@@ -294,8 +294,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
 /// let mut object_builder = builder.new_object();
-/// object_builder.append_value("first_name", "Jiaying");
-/// object_builder.append_value("last_name", "Li");
+/// object_builder.insert("first_name", "Jiaying");
+/// object_builder.insert("last_name", "Li");
 /// object_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
