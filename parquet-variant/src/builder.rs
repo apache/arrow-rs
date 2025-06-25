@@ -212,7 +212,9 @@ impl ValueBuffer {
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(_) | Variant::List(_) => {
-                unreachable!("Nested values are handled specially by ObjectBuilder and ListBuilder");
+                unreachable!(
+                    "Nested values are handled specially by ObjectBuilder and ListBuilder"
+                );
             }
         }
     }
@@ -602,9 +604,9 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
         let field_id = self.metadata_builder.add_field_name(key);
         let field_start = self.buffer.offset();
+
+        self.fields.insert(field_id, field_start);
         self.buffer.append_non_nested_value(value);
-        let res = self.fields.insert(field_id, field_start);
-        debug_assert!(res.is_none());
     }
 
     fn check_pending_field(&mut self) {
@@ -643,7 +645,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 
     /// Finalize object
-    /// 
+    ///
     /// This consumes self and writes the object to the parent buffer.
     pub fn finish(mut self) {
         self.check_pending_field();
@@ -1252,7 +1254,7 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
-                inner_object_builder.append_value("b", "a");
+                inner_object_builder.insert("b", "a");
                 inner_object_builder.finish();
             }
 
@@ -1290,7 +1292,7 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
-                inner_object_builder.append_value("c", "a");
+                inner_object_builder.insert("c", "a");
                 inner_object_builder.finish();
             }
 
