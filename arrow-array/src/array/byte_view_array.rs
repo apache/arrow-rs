@@ -20,7 +20,9 @@ use crate::builder::{ArrayBuilder, GenericByteViewBuilder};
 use crate::iterator::ArrayIter;
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar};
+use crate::{
+    Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar, ViewBuffers,
+};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
 use arrow_schema::{ArrowError, DataType};
@@ -187,7 +189,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Panics if [`GenericByteViewArray::try_new`] returns an error
     pub fn new(
         views: ScalarBuffer<u128>,
-        buffers: impl Into<Arc<[Buffer]>>,
+        buffers: impl Into<ViewBuffers>,
         nulls: Option<NullBuffer>,
     ) -> Self {
         Self::try_new(views, buffers, nulls).unwrap()
@@ -201,10 +203,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// * [ByteViewType::validate] fails
     pub fn try_new(
         views: ScalarBuffer<u128>,
-        buffers: impl Into<Arc<[Buffer]>>,
+        buffers: impl Into<ViewBuffers>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let buffers: Arc<[Buffer]> = buffers.into();
+        let buffers: Arc<[Buffer]> = buffers.into().0;
 
         T::validate(&views, &buffers)?;
 
@@ -235,7 +237,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Safe if [`Self::try_new`] would not error
     pub unsafe fn new_unchecked(
         views: ScalarBuffer<u128>,
-        buffers: impl Into<Arc<[Buffer]>>,
+        buffers: impl Into<ViewBuffers>,
         nulls: Option<NullBuffer>,
     ) -> Self {
         if cfg!(feature = "force_validate") {
@@ -246,7 +248,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),
             views,
-            buffers: buffers.into(),
+            buffers: buffers.into().0,
             nulls,
         }
     }
@@ -810,7 +812,7 @@ impl BinaryViewArray {
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
     pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
-        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
+        StringViewArray::new_unchecked(self.views, ViewBuffers(self.buffers), self.nulls)
     }
 }
 
@@ -842,7 +844,7 @@ pub type StringViewArray = GenericByteViewArray<StringViewType>;
 impl StringViewArray {
     /// Convert the [`StringViewArray`] to [`BinaryViewArray`]
     pub fn to_binary_view(self) -> BinaryViewArray {
-        unsafe { BinaryViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
+        unsafe { BinaryViewArray::new_unchecked(self.views, ViewBuffers(self.buffers), self.nulls) }
     }
 
     /// Returns true if all data within this array is ASCII
