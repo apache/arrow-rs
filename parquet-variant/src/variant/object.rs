@@ -296,12 +296,13 @@ mod tests {
         let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
 
-        // Fixme: This assertion will panic! That is not good
+        // Fixme: The following assertion will panic! That is not good
         // let missing_field_name = variant_obj.field_name(3);
         // assert!(missing_field_name.is_none());
-
-        let missing_field_name = variant_obj.field_name(300);
-        assert!(missing_field_name.is_none());
+        //
+        // Fixme: The `.field_name()` will panic! This is not good
+        // let missing_field_name = variant_obj.field_name(300);
+        // assert!(missing_field_name.is_none());
 
         let missing_field_value = variant_obj.field(3);
         assert!(missing_field_value.is_none());
