@@ -367,11 +367,11 @@ impl MetadataBuilder {
 /// let obj1_variant = variant_list.get(0).unwrap();
 /// let obj1 = obj1_variant.as_object().unwrap();
 /// assert_eq!(
-///     obj1.field_by_name("id").unwrap(),
+///     obj1.get("id"),
 ///     Some(Variant::from(1))
 /// );
 /// assert_eq!(
-///     obj1.field_by_name("type").unwrap(),
+///     obj1.get("type"),
 ///     Some(Variant::from("Cauliflower"))
 /// );
 ///
@@ -379,11 +379,11 @@ impl MetadataBuilder {
 /// let obj2 = obj2_variant.as_object().unwrap();
 ///
 /// assert_eq!(
-///     obj2.field_by_name("id").unwrap(),
+///     obj2.get("id"),
 ///     Some(Variant::from(2))
 /// );
 /// assert_eq!(
-///     obj2.field_by_name("type").unwrap(),
+///     obj2.get("type"),
 ///     Some(Variant::from("Beets"))
 /// );
 ///
