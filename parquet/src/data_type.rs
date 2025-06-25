@@ -35,10 +35,7 @@ use crate::util::bit_util::FromBytes;
 /// The type only takes 12 bytes, without extra padding.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
-    /// First 8 bytes store nanoseconds since midnight
-    pub nanos: i64,
-    /// Last 4 bytes store Julian days
-    pub days: i32,
+    value: [u32; 3],
 }
 
 const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
@@ -62,25 +59,19 @@ const NANOSECONDS_IN_DAY: i64 = SECONDS_IN_DAY * NANOSECONDS;
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
-        Self { nanos: 0, days: 0 }
+        Self { value: [0; 3] }
     }
 
-    /// Returns underlying data as slice of [`u32`] for compatibility with Parquet format
+    /// Returns underlying data as slice of [`u32`].
     #[inline]
     pub fn data(&self) -> &[u32] {
-        // SAFETY: We're reinterpreting the bytes of our struct as [u32; 3]
-        // This is safe because:
-        // 1. The memory layout is compatible (12 bytes total)
-        // 2. The alignment requirements are met (u32 requires 4-byte alignment)
-        // 3. We maintain the invariant that the bytes are always valid u32s
-        unsafe { std::slice::from_raw_parts(self as *const Int96 as *const u32, 3) }
+        &self.value
     }
 
-    /// Sets data for this INT96 type from raw Parquet format.
+    /// Sets data for this INT96 type.
     #[inline]
     pub fn set_data(&mut self, elem0: u32, elem1: u32, elem2: u32) {
-        self.nanos = ((elem1 as i64) << 32) | (elem0 as i64);
-        self.days = elem2 as i32;
+        self.value = [elem0, elem1, elem2];
     }
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
@@ -133,19 +124,33 @@ impl Int96 {
             .wrapping_add(nanos)
     }
 
-    /// Sets the INT96 data directly from days and nanoseconds
+    /// Sets the INT96 data from seconds since epoch
+    ///
+    /// Will wrap around on overflow
     #[inline]
-    pub fn set_data_from_days_and_nanos(&mut self, days: i32, nanos: i64) {
-        self.days = days;
-        self.nanos = nanos;
+    pub fn set_data_from_seconds(&mut self, seconds: i64) {
+        self.set_data_from_nanos(seconds.wrapping_mul(NANOSECONDS));
     }
 
+    /// Sets the INT96 data from milliseconds since epoch
+    ///
+    /// Will wrap around on overflow
     #[inline]
-    fn data_as_days_and_nanos(&self) -> (i32, i64) {
-        (self.days, self.nanos)
+    pub fn set_data_from_millis(&mut self, millis: i64) {
+        self.set_data_from_nanos(millis.wrapping_mul(MICROSECONDS));
+    }
+
+    /// Sets the INT96 data from microseconds since epoch
+    ///
+    /// Will wrap around on overflow
+    #[inline]
+    pub fn set_data_from_micros(&mut self, micros: i64) {
+        self.set_data_from_nanos(micros.wrapping_mul(MILLISECONDS));
     }
 
     /// Sets the INT96 data from nanoseconds since epoch
+    ///
+    /// Will wrap around on overflow
     #[inline]
     pub fn set_data_from_nanos(&mut self, nanos: i64) {
         let days = nanos / NANOSECONDS_IN_DAY;
@@ -154,32 +159,24 @@ impl Int96 {
         self.set_data_from_days_and_nanos(julian_day, remaining_nanos);
     }
 
-    /// Sets the INT96 data from seconds since epoch
+    /// Sets the INT96 data directly from days and nanoseconds
+    ///
+    /// This is the most direct way to set the Int96 data structure which internally
+    /// stores days and nanoseconds. The days should be Julian days since epoch.
+
     #[inline]
-    pub fn set_data_from_seconds(&mut self, seconds: i64) {
-        self.set_data_from_nanos(seconds.wrapping_mul(NANOSECONDS))
+    pub fn set_data_from_days_and_nanos(&mut self, days: i32, nanos: i64) {
+        let julian_day = (days as i32) as u32;
+        let nanos_low = (nanos & 0xFFFFFFFF) as u32;
+        let nanos_high = ((nanos >> 32) & 0xFFFFFFFF) as u32;
+        self.set_data(nanos_low, nanos_high, julian_day);
     }
 
-    /// Sets the INT96 data from milliseconds since epoch
     #[inline]
-    pub fn set_data_from_millis(&mut self, millis: i64) {
-        self.set_data_from_nanos(millis.wrapping_mul(MICROSECONDS))
-    }
-
-    /// Sets the INT96 data from microseconds since epoch
-    #[inline]
-    pub fn set_data_from_micros(&mut self, micros: i64) {
-        self.set_data_from_nanos(micros.wrapping_mul(MILLISECONDS))
-    }
-}
-
-
-impl From<Vec<u32>> for Int96 {
-    fn from(buf: Vec<u32>) -> Self {
-        assert_eq!(buf.len(), 3);
-        let mut result = Self::new();
-        result.set_data(buf[0], buf[1], buf[2]);
-        result
+    fn data_as_days_and_nanos(&self) -> (i32, i64) {
+        let day = self.data()[2] as i32;
+        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
+        (day, nanos)
     }
 }
 
@@ -191,10 +188,22 @@ impl PartialOrd for Int96 {
 
 impl Ord for Int96 {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.days.cmp(&other.days) {
-            Ordering::Equal => self.nanos.cmp(&other.nanos),
+        let (self_days, self_nanos) = self.data_as_days_and_nanos();
+        let (other_days, other_nanos) = other.data_as_days_and_nanos();
+        
+        match self_days.cmp(&other_days) {
+            Ordering::Equal => self_nanos.cmp(&other_nanos),
             ord => ord,
         }
+    }
+}
+
+impl From<Vec<u32>> for Int96 {
+    fn from(buf: Vec<u32>) -> Self {
+        assert_eq!(buf.len(), 3);
+        let mut result = Self::new();
+        result.set_data(buf[0], buf[1], buf[2]);
+        result
     }
 }
 
@@ -666,8 +675,8 @@ impl AsBytes for bool {
 
 impl AsBytes for Int96 {
     fn as_bytes(&self) -> &[u8] {
-        // SAFETY: The layout of Int96 is i64 followed by i32, which is 12 contiguous bytes
-        unsafe { std::slice::from_raw_parts(self as *const Int96 as *const u8, 12) }
+        // SAFETY: Int96::data is a &[u32; 3].
+        unsafe { std::slice::from_raw_parts(self.data() as *const [u32] as *const u8, 12) }
     }
 }
 
