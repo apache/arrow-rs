@@ -42,6 +42,47 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
+/// Generic function to write decimal values to JSON buffer
+fn write_decimal(
+    json_buffer: &mut impl Write,
+    integer: impl std::fmt::Display + std::fmt::Debug,
+    scale: u8,
+) -> Result<(), ArrowError> {
+    if scale == 0 {
+        write!(json_buffer, "{}", integer)?;
+    } else {
+        // Convert to string and manually handle the decimal point placement
+        let integer_str = integer.to_string();
+        let is_negative = integer_str.starts_with('-');
+        let abs_str = if is_negative { &integer_str[1..] } else { &integer_str };
+        
+        let scale_usize = scale as usize;
+        if abs_str.len() <= scale_usize {
+            // Need to pad with leading zeros
+            let zeros_needed = scale_usize - abs_str.len();
+            let padded = format!("{}{}", "0".repeat(zeros_needed), abs_str);
+            let decimal_part = padded.trim_end_matches('0');
+            if decimal_part.is_empty() {
+                write!(json_buffer, "0")?;
+            } else {
+                write!(json_buffer, "{}0.{}", if is_negative { "-" } else { "" }, decimal_part)?;
+            }
+        } else {
+            // Split the string at the decimal point
+            let split_point = abs_str.len() - scale_usize;
+            let integer_part = &abs_str[..split_point];
+            let decimal_part = abs_str[split_point..].trim_end_matches('0');
+            
+            if decimal_part.is_empty() {
+                write!(json_buffer, "{}{}", if is_negative { "-" } else { "" }, integer_part)?;
+            } else {
+                write!(json_buffer, "{}{}.{}", if is_negative { "-" } else { "" }, integer_part, decimal_part)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Converts a Variant to JSON and writes it to the provided `Write`
 ///
 /// This function writes JSON directly to any type that implements [`Write`],
@@ -90,55 +131,13 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::Float(f) => write!(json_buffer, "{}", f)?,
         Variant::Double(f) => write!(json_buffer, "{}", f)?,
         Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-            // Convert decimal to string representation using integer arithmetic
-            if *scale == 0 {
-                write!(json_buffer, "{}", integer)?;
-            } else {
-                let divisor = 10_i32.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                if trimmed_remainder.is_empty() {
-                    write!(json_buffer, "{}", quotient)?;
-                } else {
-                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
-                }
-            }
+            write_decimal(json_buffer, *integer, *scale)?;
         }
         Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-            // Convert decimal to string representation using integer arithmetic
-            if *scale == 0 {
-                write!(json_buffer, "{}", integer)?;
-            } else {
-                let divisor = 10_i64.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                if trimmed_remainder.is_empty() {
-                    write!(json_buffer, "{}", quotient)?;
-                } else {
-                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
-                }
-            }
+            write_decimal(json_buffer, *integer, *scale)?;
         }
         Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-            // Convert decimal to string representation using integer arithmetic
-            if *scale == 0 {
-                write!(json_buffer, "{}", integer)?;
-            } else {
-                let divisor = 10_i128.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-                let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                if trimmed_remainder.is_empty() {
-                    write!(json_buffer, "{}", quotient)?;
-                } else {
-                    write!(json_buffer, "{}.{}", quotient, trimmed_remainder)?;
-                }
-            }
+            write_decimal(json_buffer, *integer, *scale)?;
         }
         Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
         Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
