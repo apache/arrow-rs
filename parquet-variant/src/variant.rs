@@ -30,6 +30,8 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 mod list;
 mod metadata;
 mod object;
+use rust_decimal::prelude::*;
+use serde_json::Number;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
@@ -1028,6 +1030,57 @@ impl From<VariantDecimal8> for Variant<'_, '_> {
 impl From<VariantDecimal16> for Variant<'_, '_> {
     fn from(value: VariantDecimal16) -> Self {
         Variant::Decimal16(value)
+    }
+}
+
+impl TryFrom<&Number> for Variant<'_, '_> {
+    type Error = ArrowError;
+
+    fn try_from(n: &Number) -> Result<Self, Self::Error> {
+        if n.is_i64() {
+            // Find minimum Integer width to fit
+            let i = n.as_i64().unwrap();
+            if i as i8 as i64 == i {
+                Ok((i as i8).into())
+            } else if i as i16 as i64 == i {
+                Ok((i as i16).into())
+            } else if i as i32 as i64 == i {
+                Ok((i as i32).into())
+            } else {
+                Ok(i.into())
+            }
+        } else {
+            // Try decimal
+            // TODO: Replace with custom decimal parsing as the rust_decimal library only supports
+            // a max unscaled value of 2^96.
+            match Decimal::from_str_exact(n.as_str()) {
+                Ok(dec) => {
+                    let unscaled: i128 = dec.mantissa();
+                    let scale = dec.scale() as u8;
+                    if unscaled.abs() <= decoder::MAX_UNSCALED_DECIMAL_4 as i128
+                        && scale <= decoder::MAX_PRECISION_DECIMAL_4
+                    {
+                        (unscaled as i32, scale).try_into()
+                    } else if unscaled.abs() <= decoder::MAX_UNSCALED_DECIMAL_8 as i128
+                        && scale <= decoder::MAX_PRECISION_DECIMAL_8
+                    {
+                        (unscaled as i64, scale).try_into()
+                    } else {
+                        (unscaled, scale).try_into()
+                    }
+                }
+                Err(_) => {
+                    // Try double
+                    match n.as_f64() {
+                        Some(f) => return Ok(f.into()),
+                        None => Err(ArrowError::InvalidArgumentError(format!(
+                            "Failed to parse {} as number",
+                            n.as_str()
+                        ))),
+                    }?
+                }
+            }
+        }
     }
 }
 
