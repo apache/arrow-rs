@@ -549,11 +549,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_len = r_byte_view.length;
 
         if l_len <= 12 && r_len <= 12 {
-            return Self::inline_key_fast(l_byte_view).cmp(&Self::inline_key_fast(r_byte_view));
+            return Self::inline_key_fast(*l_view).cmp(&Self::inline_key_fast(*r_view));
         }
 
         // one of the string is larger than 12 bytes,
         // we then try to compare the inlined data first
+
+        // Note: In theory, ByteView is only used for views larger than 12 bytes,
+        // but we can still use it to get the inlined prefix for shorter strings.
+        // The prefix is always the first 4 bytes of the view, for both short and long strings.
         let l_inlined_be = l_byte_view.prefix.swap_bytes();
         let r_inlined_be = r_byte_view.prefix.swap_bytes();
         if l_inlined_be != r_inlined_be {
@@ -571,19 +575,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// - High 96 bits: the inline data, in big-endian order
     /// - Low  32 bits: the length, in big-endian order (so shorter is always numerically smaller)
     #[inline(always)]
-    pub fn inline_key_fast(raw: ByteView) -> u128 {
-        // Convert each to big-endian (so their bytes go MSB→LSB in correct lexical order)
-        let a = raw.prefix.to_be() as u128; // data[0..4]
-        let b = raw.buffer_index.to_be() as u128; // data[4..8]
-        let c = raw.offset.to_be() as u128; // data[8..12]
-        let d = raw.length.to_be() as u128; // length
+    pub fn inline_key_fast(raw: u128) -> u128 {
+        // Convert the raw u128 (little-endian) into bytes for manipulation
+        let raw_bytes = raw.to_le_bytes();
 
-        // Pack them into one u128:
-        // bits 127..96 = a
-        // bits 95..64  = b
-        // bits 63..32  = c
-        // bits 31..0   = d
-        (a << 96) | (b << 64) | (c << 32) | d
+        // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
+        let len_le = &raw_bytes[0..4];
+        let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
+
+        // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
+        // padding the upper 4 bytes with zero to form a little-endian u128 value
+        let mut inline_bytes = [0u8; 16];
+        inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
+
+        // Convert to big-endian to ensure correct lexical ordering
+        let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
+
+        // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
+        // so that the inline string occupies the high 96 bits
+        let inline_part = inline_u128 >> 32;
+
+        // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
+        (inline_part << 32) | len_be
     }
 }
 

@@ -31,7 +31,6 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_data::ByteView;
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -598,10 +597,8 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             let l_view = unsafe { l.0.views().get_unchecked(l.1) };
             let r_view = unsafe { r.0.views().get_unchecked(r.1) };
-            let l_byte_view = ByteView::from(*l_view);
-            let r_byte_view = ByteView::from(*r_view);
-            return GenericByteViewArray::<T>::inline_key_fast(l_byte_view)
-                 < GenericByteViewArray::<T>::inline_key_fast(r_byte_view)
+            return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+                 < GenericByteViewArray::<T>::inline_key_fast(*r_view)
         }
 
         // Fallback to the generic, unchecked comparison for non-inline cases
@@ -652,10 +649,8 @@ pub fn compare_byte_view<T: ByteViewType>(
     if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
         let l_view = unsafe { left.views().get_unchecked(left_idx) };
         let r_view = unsafe { right.views().get_unchecked(right_idx) };
-        let l_byte_view = ByteView::from(*l_view);
-        let r_byte_view = ByteView::from(*r_view);
-        return GenericByteViewArray::<T>::inline_key_fast(l_byte_view)
-            .cmp(&GenericByteViewArray::<T>::inline_key_fast(r_byte_view));
+        return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+            .cmp(&GenericByteViewArray::<T>::inline_key_fast(*r_view));
     }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
