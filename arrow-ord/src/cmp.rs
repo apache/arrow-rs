@@ -573,7 +573,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             // For eq case, we can directly compare the inlined bytes
-            return l_view.eq(r_view);
+            return l_view == r_view;
         }
 
         let l_len = *l_view as u32;
