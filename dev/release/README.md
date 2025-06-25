@@ -200,7 +200,7 @@ git tag <version> <version>-<rc>
 git push apache <version>
 ```
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
+Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-rs-4.1.0/, using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
