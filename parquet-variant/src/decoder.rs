@@ -284,37 +284,40 @@ pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paste::paste;
 
-    #[test]
-    fn test_i8() -> Result<(), ArrowError> {
-        let data = [0x2a];
-        let result = decode_int8(&data)?;
-        assert_eq!(result, 42);
-        Ok(())
-    }
+    mod integer {
+        use super::*;
 
-    #[test]
-    fn test_i16() -> Result<(), ArrowError> {
-        let data = [0xd2, 0x04];
-        let result = decode_int16(&data)?;
-        assert_eq!(result, 1234);
-        Ok(())
-    }
+        macro_rules! decoder_tests {
+            ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
+                paste! {
+                    #[test]
+                    fn [<$test_name _exact_length>]() {
+                        let result = $decode_fn(&$data).unwrap();
+                        assert_eq!(result, $expected);
+                    }
 
-    #[test]
-    fn test_i32() -> Result<(), ArrowError> {
-        let data = [0x40, 0xe2, 0x01, 0x00];
-        let result = decode_int32(&data)?;
-        assert_eq!(result, 123456);
-        Ok(())
-    }
+                    #[test]
+                    fn [<$test_name _truncated_length>]() {
+                        // Remove the last byte of data so that there is not enough to decode
+                        let truncated_data = &$data[.. $data.len() - 1];
+                        let result = $decode_fn(&truncated_data);
+                        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                    }
+                }
+            };
+        }
 
-    #[test]
-    fn test_i64() -> Result<(), ArrowError> {
-        let data = [0x15, 0x81, 0xe9, 0x7d, 0xf4, 0x10, 0x22, 0x11];
-        let result = decode_int64(&data)?;
-        assert_eq!(result, 1234567890123456789);
-        Ok(())
+        decoder_tests!(test_i8, [0x2a], decode_int8, 42);
+        decoder_tests!(test_i16, [0xd2, 0x04], decode_int16, 1234);
+        decoder_tests!(test_i32, [0x40, 0xe2, 0x01, 0x00], decode_int32, 123456);
+        decoder_tests!(
+            test_i64,
+            [0x15, 0x81, 0xe9, 0x7d, 0xf4, 0x10, 0x22, 0x11],
+            decode_int64,
+            1234567890123456789
+        );
     }
 
     #[test]
