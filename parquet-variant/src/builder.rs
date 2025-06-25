@@ -277,8 +277,8 @@ impl MetadataBuilder {
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
 /// let mut object_builder = builder.new_object();
-/// object_builder.append_value("first_name", "Jiaying");
-/// object_builder.append_value("last_name", "Li");
+/// object_builder.insert("first_name", "Jiaying");
+/// object_builder.insert("last_name", "Li");
 /// object_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
@@ -342,15 +342,15 @@ impl MetadataBuilder {
 ///
 /// {
 ///     let mut object_builder = list_builder.new_object();
-///     object_builder.append_value("id", 1);
-///     object_builder.append_value("type", "Cauliflower");
+///     object_builder.insert("id", 1);
+///     object_builder.insert("type", "Cauliflower");
 ///     object_builder.finish();
 /// }
 ///
 /// {
 ///     let mut object_builder = list_builder.new_object();
-///     object_builder.append_value("id", 2);
-///     object_builder.append_value("type", "Beets");
+///     object_builder.insert("id", 2);
+///     object_builder.insert("type", "Beets");
 ///     object_builder.finish();
 /// }
 ///
@@ -596,7 +596,10 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 
     /// Add a field with key and value to the object
-    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+    ///
+    /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
+    /// but the old value remains in the buffer, resulting in a larger variant
+    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
         let field_id = self.metadata_builder.add_field_name(key);
         let field_start = self.buffer.offset();
         self.buffer.append_non_nested_value(value);
@@ -858,8 +861,8 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("name", "John");
-            obj.append_value("age", 42i8);
+            obj.insert("name", "John");
+            obj.insert("age", 42i8);
             obj.finish();
         }
 
@@ -874,9 +877,9 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("zebra", "stripes"); // ID = 0
-            obj.append_value("apple", "red"); // ID = 1
-            obj.append_value("banana", "yellow"); // ID = 2
+            obj.insert("zebra", "stripes"); // ID = 0
+            obj.insert("apple", "red"); // ID = 1
+            obj.insert("banana", "yellow"); // ID = 2
             obj.finish();
         }
 
@@ -901,8 +904,8 @@ mod tests {
 
         let mut obj = builder.new_object();
 
-        obj.append_value("zebra", "stripes"); // ID = 0
-        obj.append_value("apple", "red"); // ID = 1
+        obj.insert("zebra", "stripes"); // ID = 0
+        obj.insert("apple", "red"); // ID = 1
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -929,7 +932,7 @@ mod tests {
             assert_eq!(dict_keys, vec!["zebra", "apple"]);
         }
 
-        obj.append_value("banana", "yellow"); // ID = 2
+        obj.insert("banana", "yellow"); // ID = 2
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -962,6 +965,27 @@ mod tests {
         obj.finish();
 
         builder.finish();
+    }
+
+    #[test]
+    fn test_duplicate_fields_in_object() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("name", "Ron Artest");
+        object_builder.insert("name", "Metta World Peace");
+        object_builder.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.field(0).unwrap(), Variant::from("Metta World Peace"));
+
+        assert_eq!(
+            vec![("name", Variant::from("Metta World Peace"))],
+            obj.iter().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1068,15 +1092,15 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("id", 1);
-            object_builder.append_value("type", "Cauliflower");
+            object_builder.insert("id", 1);
+            object_builder.insert("type", "Cauliflower");
             object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("id", 2);
-            object_builder.append_value("type", "Beets");
+            object_builder.insert("id", 2);
+            object_builder.insert("type", "Beets");
             object_builder.finish();
         }
 
@@ -1117,13 +1141,13 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("a", 1);
+            object_builder.insert("a", 1);
             object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("b", 2);
+            object_builder.insert("b", 2);
             object_builder.finish();
         }
 
@@ -1170,7 +1194,7 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("a", 1);
+            object_builder.insert("a", 1);
             object_builder.finish();
         }
 
@@ -1178,7 +1202,7 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("b", 2);
+            object_builder.insert("b", 2);
             object_builder.finish();
         }
 
