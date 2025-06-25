@@ -1240,42 +1240,60 @@ mod tests {
         let nan_variant = Variant::Float(f32::NAN);
         let nan_result = variant_to_json_value(&nan_variant);
         assert!(nan_result.is_err());
-        assert!(nan_result.unwrap_err().to_string().contains("Invalid float value"));
+        assert!(nan_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid float value"));
 
         // Test positive infinity - should return an error since JSON doesn't support Infinity
         let pos_inf_variant = Variant::Float(f32::INFINITY);
         let pos_inf_result = variant_to_json_value(&pos_inf_variant);
         assert!(pos_inf_result.is_err());
-        assert!(pos_inf_result.unwrap_err().to_string().contains("Invalid float value"));
+        assert!(pos_inf_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid float value"));
 
         // Test negative infinity - should return an error since JSON doesn't support -Infinity
         let neg_inf_variant = Variant::Float(f32::NEG_INFINITY);
         let neg_inf_result = variant_to_json_value(&neg_inf_variant);
         assert!(neg_inf_result.is_err());
-        assert!(neg_inf_result.unwrap_err().to_string().contains("Invalid float value"));
+        assert!(neg_inf_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid float value"));
 
         // Test the same for Double variants
         let nan_double_variant = Variant::Double(f64::NAN);
         let nan_double_result = variant_to_json_value(&nan_double_variant);
         assert!(nan_double_result.is_err());
-        assert!(nan_double_result.unwrap_err().to_string().contains("Invalid double value"));
+        assert!(nan_double_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid double value"));
 
         let pos_inf_double_variant = Variant::Double(f64::INFINITY);
         let pos_inf_double_result = variant_to_json_value(&pos_inf_double_variant);
         assert!(pos_inf_double_result.is_err());
-        assert!(pos_inf_double_result.unwrap_err().to_string().contains("Invalid double value"));
+        assert!(pos_inf_double_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid double value"));
 
         let neg_inf_double_variant = Variant::Double(f64::NEG_INFINITY);
         let neg_inf_double_result = variant_to_json_value(&neg_inf_double_variant);
         assert!(neg_inf_double_result.is_err());
-        assert!(neg_inf_double_result.unwrap_err().to_string().contains("Invalid double value"));
+        assert!(neg_inf_double_result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid double value"));
 
         // Test normal float values still work
-        let normal_float = Variant::Float(3.14f32);
+        let normal_float = Variant::Float(std::f32::consts::PI);
         let normal_result = variant_to_json_value(&normal_float)?;
         assert!(matches!(normal_result, Value::Number(_)));
 
-        let normal_double = Variant::Double(2.71828f64);
+        let normal_double = Variant::Double(std::f64::consts::E);
         let normal_double_result = variant_to_json_value(&normal_double)?;
         assert!(matches!(normal_double_result, Value::Number(_)));
 
