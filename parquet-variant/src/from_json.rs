@@ -30,21 +30,26 @@ pub fn json_to_variant<'a, T: VariantBufferManager>(
     Ok((metadata_size, value_size))
 }
 
-fn build_object(obj: &Map<String, Value>, builder: &mut ObjectBuilder) -> Result<(), ArrowError> {
-    for (key, value) in obj.iter() {
-        match value {
-            Value::Null => builder.append_value(key, Variant::Null),
-            Value::Bool(b) => builder.append_value(key, *b),
-            Value::Number(n) => {
-                let v: Variant = n.try_into()?;
-                builder.append_value(key, v)
-            }
-            Value::String(s) => builder.append_value(key, s.as_str()),
-            Value::Array(_) | Value::Object(_) => {
-                todo!("Nesting within objects unsupported right now.");
-            }
+fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
+    match json {
+        Value::Null => builder.append_value(Variant::Null),
+        Value::Bool(b) => builder.append_value(*b),
+        Value::Number(n) => {
+            let v: Variant = n.try_into()?;
+            builder.append_value(v)
         }
-    }
+        Value::String(s) => builder.append_value(s.as_str()),
+        Value::Array(arr) => {
+            let mut list_builder = builder.new_list();
+            build_list(arr, &mut list_builder)?;
+            list_builder.finish();
+        }
+        Value::Object(obj) => {
+            let mut obj_builder = builder.new_object();
+            build_object(obj, &mut obj_builder)?;
+            obj_builder.finish();
+        }
+    };
     Ok(())
 }
 
@@ -73,25 +78,20 @@ fn build_list(arr: &Vec<Value>, builder: &mut ListBuilder) -> Result<(), ArrowEr
     Ok(())
 }
 
-fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
-    match json {
-        Value::Null => builder.append_value(Variant::Null),
-        Value::Bool(b) => builder.append_value(*b),
-        Value::Number(n) => {
-            let v: Variant = n.try_into()?;
-            builder.append_value(v)
+fn build_object(obj: &Map<String, Value>, builder: &mut ObjectBuilder) -> Result<(), ArrowError> {
+    for (key, value) in obj.iter() {
+        match value {
+            Value::Null => builder.append_value(key, Variant::Null),
+            Value::Bool(b) => builder.append_value(key, *b),
+            Value::Number(n) => {
+                let v: Variant = n.try_into()?;
+                builder.append_value(key, v)
+            }
+            Value::String(s) => builder.append_value(key, s.as_str()),
+            Value::Array(_) | Value::Object(_) => {
+                todo!("Nesting within objects unsupported right now.");
+            }
         }
-        Value::String(s) => builder.append_value(s.as_str()),
-        Value::Array(arr) => {
-            let mut list_builder = builder.new_list();
-            build_list(arr, &mut list_builder)?;
-            list_builder.finish();
-        }
-        Value::Object(obj) => {
-            let mut obj_builder = builder.new_object();
-            build_object(obj, &mut obj_builder)?;
-            obj_builder.finish();
-        }
-    };
+    }
     Ok(())
 }
