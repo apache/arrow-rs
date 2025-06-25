@@ -42,44 +42,47 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
-/// Generic function to write decimal values to JSON buffer
-fn write_decimal(
+/// Write decimal using scovich's hybrid approach for i32
+fn write_decimal_i32(
     json_buffer: &mut impl Write,
-    integer: impl std::fmt::Display + std::fmt::Debug,
+    integer: i32,
     scale: u8,
 ) -> Result<(), ArrowError> {
-    if scale == 0 {
-        write!(json_buffer, "{}", integer)?;
+    let integer = if scale == 0 {
+        integer
     } else {
-        // Convert to string and manually handle the decimal point placement
-        let integer_str = integer.to_string();
-        let is_negative = integer_str.starts_with('-');
-        let abs_str = if is_negative { &integer_str[1..] } else { &integer_str };
-        
-        let scale_usize = scale as usize;
-        if abs_str.len() <= scale_usize {
-            // Need to pad with leading zeros
-            let zeros_needed = scale_usize - abs_str.len();
-            let padded = format!("{}{}", "0".repeat(zeros_needed), abs_str);
-            let decimal_part = padded.trim_end_matches('0');
-            if decimal_part.is_empty() {
-                write!(json_buffer, "0")?;
-            } else {
-                write!(json_buffer, "{}0.{}", if is_negative { "-" } else { "" }, decimal_part)?;
-            }
-        } else {
-            // Split the string at the decimal point
-            let split_point = abs_str.len() - scale_usize;
-            let integer_part = &abs_str[..split_point];
-            let decimal_part = abs_str[split_point..].trim_end_matches('0');
-            
-            if decimal_part.is_empty() {
-                write!(json_buffer, "{}{}", if is_negative { "-" } else { "" }, integer_part)?;
-            } else {
-                write!(json_buffer, "{}{}.{}", if is_negative { "-" } else { "" }, integer_part, decimal_part)?;
-            }
+        let divisor = 10_i32.pow(scale as u32);
+        if integer % divisor != 0 {
+            // fall back to floating point
+            let result = integer as f64 / divisor as f64;
+            write!(json_buffer, "{}", result)?;
+            return Ok(());
         }
-    }
+        integer / divisor
+    };
+    write!(json_buffer, "{}", integer)?;
+    Ok(())
+}
+
+/// Write decimal using scovich's hybrid approach for i64
+fn write_decimal_i64(
+    json_buffer: &mut impl Write,
+    integer: i64,
+    scale: u8,
+) -> Result<(), ArrowError> {
+    let integer = if scale == 0 {
+        integer
+    } else {
+        let divisor = 10_i64.pow(scale as u32);
+        if integer % divisor != 0 {
+            // fall back to floating point
+            let result = integer as f64 / divisor as f64;
+            write!(json_buffer, "{}", result)?;
+            return Ok(());
+        }
+        integer / divisor
+    };
+    write!(json_buffer, "{}", integer)?;
     Ok(())
 }
 
@@ -131,13 +134,32 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::Float(f) => write!(json_buffer, "{}", f)?,
         Variant::Double(f) => write!(json_buffer, "{}", f)?,
         Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-            write_decimal(json_buffer, *integer, *scale)?;
+            write_decimal_i32(json_buffer, *integer, *scale)?;
         }
         Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-            write_decimal(json_buffer, *integer, *scale)?;
+            write_decimal_i64(json_buffer, *integer, *scale)?;
         }
         Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-            write_decimal(json_buffer, *integer, *scale)?;
+            let integer = if *scale == 0 {
+                *integer
+            } else {
+                let divisor = 10_i128.pow(*scale as u32);
+                if integer % divisor != 0 {
+                    // fall back to floating point
+                    let result = *integer as f64 / divisor as f64;
+                    write!(json_buffer, "{}", result)?;
+                    return Ok(());
+                }
+                integer / divisor
+            };
+            // Prefer to emit as i64, but fall back to u64 or even f64 (lossy) if necessary
+            if let Ok(i64_val) = i64::try_from(integer) {
+                write!(json_buffer, "{}", i64_val)?;
+            } else if let Ok(u64_val) = u64::try_from(integer) {
+                write!(json_buffer, "{}", u64_val)?;
+            } else {
+                write!(json_buffer, "{}", integer as f64)?;
+            }
         }
         Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
         Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
@@ -343,88 +365,48 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
         Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-            // Use integer arithmetic to avoid f64 precision loss
-            if *scale == 0 {
-                Ok(Value::Number((*integer).into()))
+            let integer = if *scale == 0 {
+                *integer
             } else {
                 let divisor = 10_i32.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-
-                let decimal_str = if remainder == 0 {
-                    quotient.to_string()
-                } else {
-                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
-                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                    // Then strip away any trailing zeros (e.g., .00001)
-                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                    format!("{}.{}", quotient, trimmed_remainder)
-                };
-
-                // Parse as serde_json::Number to preserve precision
-                decimal_str
-                    .parse::<serde_json::Number>()
-                    .map(Value::Number)
-                    .map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
-                    })
-            }
+                if integer % divisor != 0 {
+                    // fall back to floating point
+                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                }
+                integer / divisor
+            };
+            Ok(Value::from(integer))
         }
         Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-            // Use integer arithmetic to avoid f64 precision loss
-            if *scale == 0 {
-                Ok(Value::Number((*integer).into()))
+            let integer = if *scale == 0 {
+                *integer
             } else {
                 let divisor = 10_i64.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-
-                let decimal_str = if remainder == 0 {
-                    quotient.to_string()
-                } else {
-                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
-                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                    // Then strip away any trailing zeros (e.g., .00001)
-                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                    format!("{}.{}", quotient, trimmed_remainder)
-                };
-
-                // Parse as serde_json::Number to preserve precision
-                decimal_str
-                    .parse::<serde_json::Number>()
-                    .map(Value::Number)
-                    .map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
-                    })
-            }
+                if integer % divisor != 0 {
+                    // fall back to floating point
+                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                }
+                integer / divisor
+            };
+            Ok(Value::from(integer))
         }
         Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-            // Use integer arithmetic to avoid f64 precision loss
-            if *scale == 0 {
-                Ok(Value::Number((*integer as i64).into())) // Convert to i64 for JSON compatibility
+            let integer = if *scale == 0 {
+                *integer
             } else {
                 let divisor = 10_i128.pow(*scale as u32);
-                let quotient = integer / divisor;
-                let remainder = (integer % divisor).abs();
-
-                let decimal_str = if remainder == 0 {
-                    quotient.to_string()
-                } else {
-                    // The {:0width$} format ensures it correctly renders with leading zeros (e.g., .0000100)
-                    let formatted_remainder = format!("{:0width$}", remainder, width = *scale as usize);
-                    // Then strip away any trailing zeros (e.g., .00001)
-                    let trimmed_remainder = formatted_remainder.trim_end_matches('0');
-                    format!("{}.{}", quotient, trimmed_remainder)
-                };
-
-                // Parse as serde_json::Number to preserve precision
-                decimal_str
-                    .parse::<serde_json::Number>()
-                    .map(Value::Number)
-                    .map_err(|e| {
-                        ArrowError::InvalidArgumentError(format!("Invalid decimal string: {}", e))
-                    })
-            }
+                if integer % divisor != 0 {
+                    // fall back to floating point
+                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                }
+                integer / divisor
+            };
+            // Prefer to emit as i64, but fall back to u64 or even f64 (lossy) if necessary
+            let value = i64::try_from(integer)
+                .map(Value::from)
+                .or_else(|_| u64::try_from(integer).map(Value::from))
+                .unwrap_or_else(|_| Value::from(integer as f64));
+            Ok(value)
         }
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
@@ -1222,8 +1204,8 @@ mod tests {
     }
 
     #[test]
-    fn test_high_precision_decimal_no_loss() -> Result<(), ArrowError> {
-        // Test case that would lose precision with f64 conversion
+    fn test_decimal_precision_behavior() -> Result<(), ArrowError> {
+        // Test case that demonstrates f64 precision limits
         // This is a 63-bit precision decimal8 value that f64 cannot represent exactly
         let high_precision_decimal8 = Variant::from(VariantDecimal8::try_new(
             9007199254740993, // 2^53 + 1, exceeds f64 precision
@@ -1233,22 +1215,29 @@ mod tests {
         let json_string = variant_to_json_string(&high_precision_decimal8)?;
         let json_value = variant_to_json_value(&high_precision_decimal8)?;
 
-        // Expected result: 9007199254.740993 (exact representation)
-        assert_eq!(json_string, "9007199254.740993");
-
-        // Verify that both functions produce consistent results
+        // Due to f64 precision limits, we expect precision loss for values > 2^53
+        // Both functions should produce consistent results (even if not exact)
         let parsed: Value = serde_json::from_str(&json_string)
             .map_err(|e| ArrowError::ParseError(format!("JSON parse error: {}", e)))?;
         assert_eq!(parsed, json_value);
 
-        // Test another case with trailing zeros that should be trimmed
-        let decimal_with_zeros = Variant::from(VariantDecimal8::try_new(
+        // Test a case that can be exactly represented (integer result)
+        let exact_decimal = Variant::from(VariantDecimal8::try_new(
             1234567890000, // Should result in 1234567.89 (trailing zeros trimmed)
             6,
         )?);
 
-        let json_string_zeros = variant_to_json_string(&decimal_with_zeros)?;
-        assert_eq!(json_string_zeros, "1234567.89");
+        let json_string_exact = variant_to_json_string(&exact_decimal)?;
+        assert_eq!(json_string_exact, "1234567.89");
+
+        // Test integer case (should be exact)
+        let integer_decimal = Variant::from(VariantDecimal8::try_new(
+            42000000, // Should result in 42 (integer)
+            6,
+        )?);
+
+        let json_string_integer = variant_to_json_string(&integer_decimal)?;
+        assert_eq!(json_string_integer, "42");
 
         Ok(())
     }
