@@ -1031,9 +1031,25 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `i` - The Date64Type to convert
+    #[deprecated]
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         epoch.add(Duration::try_milliseconds(i).unwrap())
+    }
+
+    /// Converts an arrow Date64Type into a chrono::NaiveDateTime if it fits in the range that chrono::NaiveDateTime can represent.
+    /// Returns `None` if the calculation would overflow or underflow.
+    ///
+    /// This function is able to handle dates ranging between 1677-09-21 (-9,223,372,800,000) and 2262-04-11 (9,223,286,400,000).
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date64Type to convert
+    ///
+    /// Returns `Some(NaiveDateTime)` if it fits, `None` otherwise.
+    pub fn to_naive_date_opt(i: <Date64Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        Duration::try_milliseconds(i).and_then(|d| epoch.checked_add_signed(d))
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date64Type
@@ -1052,14 +1068,38 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let prior = Date64Type::to_naive_date(date);
+        Self::add_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::add_year_months overflowed for date: {}, delta: {}",
+                date, delta
+            )
+        })
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_year_months_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
+        let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(delta);
         let posterior = shift_months(prior, months);
-        Date64Type::from_naive_date(posterior)
+        Some(Date64Type::from_naive_date(posterior))
     }
 
     /// Adds the given IntervalDayTimeType to an arrow Date64Type
@@ -1068,15 +1108,39 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::add_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::add_day_time overflowed for date: {}, delta: {:?}",
+                date, delta
+            )
+        })
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_day_time_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_naive_date(res)
+        let res = Date64Type::to_naive_date_opt(date)?;
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1085,16 +1149,40 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::add_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::add_month_day_nano overflowed for date: {}, delta: {:?}",
+                date, delta
+            )
+        })
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_month_day_nano_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_naive_date_opt(date)?;
         let res = shift_months(res, months);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::nanoseconds(nanos));
-        Date64Type::from_naive_date(res)
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalYearMonthType to an arrow Date64Type
@@ -1103,14 +1191,38 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let prior = Date64Type::to_naive_date(date);
+        Self::subtract_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::subtract_year_months overflowed for date: {}, delta: {}",
+                date, delta
+            )
+        })
+    }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_year_months_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
+        let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(-delta);
         let posterior = shift_months(prior, months);
-        Date64Type::from_naive_date(posterior)
+        Some(Date64Type::from_naive_date(posterior))
     }
 
     /// Subtract the given IntervalDayTimeType to an arrow Date64Type
@@ -1119,15 +1231,39 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::subtract_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::subtract_day_time overflowed for date: {}, delta: {:?}",
+                date, delta
+            )
+        })
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_day_time_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_naive_date(res)
+        let res = Date64Type::to_naive_date_opt(date)?;
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1136,16 +1272,40 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::subtract_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::subtract_month_day_nano overflowed for date: {}, delta: {:?}",
+                date, delta
+            )
+        })
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_month_day_nano_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_naive_date_opt(date)?;
         let res = shift_months(res, -months);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::nanoseconds(nanos));
-        Date64Type::from_naive_date(res)
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
+        Some(Date64Type::from_naive_date(res))
     }
 }
 
