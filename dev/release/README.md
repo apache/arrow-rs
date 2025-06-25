@@ -105,13 +105,13 @@ create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
 
-### Create git tag for the release:
-
-While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
-
 ### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
+
+### Create git tag for the release:
+
+While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
 Use a string such as `43.0.0` as the `<version>`.
 
