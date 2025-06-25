@@ -469,6 +469,16 @@ mod tests {
     }
 
     #[test]
+    fn test_coalesce_non_null() {
+        Test::new()
+            // 4040 rows of unit32
+            .with_batch(uint32_batch_non_null(0..3000))
+            .with_batch(uint32_batch_non_null(0..1040))
+            .with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
+            .run();
+    }
+    #[test]
     fn test_utf8_split() {
         Test::new()
             // 4040 rows of utf8 strings in total, split into batches of 1024
@@ -964,8 +974,17 @@ mod tests {
         }
     }
 
-    /// Return a RecordBatch with a UInt32Array with the specified range
+    /// Return a RecordBatch with a UInt32Array with the specified range and
+    /// every third value is null.
     fn uint32_batch(range: Range<u32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, true)]));
+
+        let array = UInt32Array::from_iter(range.map(|i| if i % 3 == 0 { None } else { Some(i) }));
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch with a UInt32Array with no nulls specified range
+    fn uint32_batch_non_null(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
         let array = UInt32Array::from_iter_values(range);
