@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use arrow_buffer::Buffer;
 
@@ -40,5 +40,13 @@ impl From<Vec<Buffer>> for ViewBuffers {
 impl From<&[Buffer]> for ViewBuffers {
     fn from(value: &[Buffer]) -> Self {
         Self(value.into())
+    }
+}
+
+impl Deref for ViewBuffers {
+    type Target = [Buffer];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
     }
 }

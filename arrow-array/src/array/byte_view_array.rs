@@ -164,7 +164,7 @@ use super::ByteArrayType;
 pub struct GenericByteViewArray<T: ByteViewType + ?Sized> {
     data_type: DataType,
     views: ScalarBuffer<u128>,
-    buffers: Arc<[Buffer]>,
+    buffers: ViewBuffers,
     phantom: PhantomData<T>,
     nulls: Option<NullBuffer>,
 }
@@ -206,7 +206,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         buffers: impl Into<ViewBuffers>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let buffers: Arc<[Buffer]> = buffers.into().0;
+        let buffers = buffers.into();
 
         T::validate(&views, &buffers)?;
 
@@ -248,7 +248,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),
             views,
-            buffers: buffers.into().0,
+            buffers: buffers.into(),
             nulls,
         }
     }
@@ -284,7 +284,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Deconstruct this array into its constituent parts
-    pub fn into_parts(self) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
+    pub fn into_parts(self) -> (ScalarBuffer<u128>, ViewBuffers, Option<NullBuffer>) {
         (self.views, self.buffers, self.nulls)
     }
 
@@ -615,7 +615,7 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
 
     fn shrink_to_fit(&mut self) {
         self.views.shrink_to_fit();
-        if let Some(buffers) = Arc::get_mut(&mut self.buffers) {
+        if let Some(buffers) = Arc::get_mut(&mut self.buffers.0) {
             buffers.iter_mut().for_each(|b| b.shrink_to_fit());
         }
         if let Some(nulls) = &mut self.nulls {
@@ -812,7 +812,7 @@ impl BinaryViewArray {
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
     pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
-        StringViewArray::new_unchecked(self.views, ViewBuffers(self.buffers), self.nulls)
+        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
     }
 }
 
@@ -844,7 +844,7 @@ pub type StringViewArray = GenericByteViewArray<StringViewType>;
 impl StringViewArray {
     /// Convert the [`StringViewArray`] to [`BinaryViewArray`]
     pub fn to_binary_view(self) -> BinaryViewArray {
-        unsafe { BinaryViewArray::new_unchecked(self.views, ViewBuffers(self.buffers), self.nulls) }
+        unsafe { BinaryViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
     }
 
     /// Returns true if all data within this array is ASCII
