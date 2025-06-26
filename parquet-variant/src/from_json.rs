@@ -1,5 +1,5 @@
 use crate::variant_buffer_manager::VariantBufferManager;
-use crate::{ListBuilder, ObjectBuilder, Variant, VariantBuilder};
+use crate::{AppendVariantHelper, ListBuilder, ObjectBuilder, Variant, VariantBuilder};
 use arrow_schema::ArrowError;
 use serde_json::{Map, Value};
 
@@ -31,18 +31,23 @@ pub fn json_to_variant(
 }
 
 fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
+    append_json(json, builder)?;
+    Ok(())
+}
+
+fn append_json(json: &Value, builder: &mut impl AppendVariantHelper) -> Result<(), ArrowError> {
     match json {
-        Value::Null => builder.append_value(Variant::Null),
-        Value::Bool(b) => builder.append_value(*b),
-        Value::Number(n) => builder.append_value(Variant::try_from(n)?),
-        Value::String(s) => builder.append_value(s.as_str()),
+        Value::Null => builder.append_value_helper(Variant::Null),
+        Value::Bool(b) => builder.append_value_helper(*b),
+        Value::Number(n) => builder.append_value_helper(Variant::try_from(n)?),
+        Value::String(s) => builder.append_value_helper(s.as_str()),
         Value::Array(arr) => {
-            let mut list_builder = builder.new_list();
+            let mut list_builder = builder.new_list_helper();
             build_list(arr, &mut list_builder)?;
             list_builder.finish();
         }
         Value::Object(obj) => {
-            let mut obj_builder = builder.new_object();
+            let mut obj_builder = builder.new_object_helper();
             build_object(obj, &mut obj_builder)?;
             obj_builder.finish();
         }
@@ -52,22 +57,7 @@ fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowErr
 
 fn build_list(arr: &[Value], builder: &mut ListBuilder) -> Result<(), ArrowError> {
     for val in arr {
-        match val {
-            Value::Null => builder.append_value(Variant::Null),
-            Value::Bool(b) => builder.append_value(*b),
-            Value::Number(n) => builder.append_value(Variant::try_from(n)?),
-            Value::String(s) => builder.append_value(s.as_str()),
-            Value::Array(arr) => {
-                let mut list_builder = builder.new_list();
-                build_list(arr, &mut list_builder)?;
-                list_builder.finish()
-            }
-            Value::Object(obj) => {
-                let mut obj_builder = builder.new_object();
-                build_object(obj, &mut obj_builder)?;
-                obj_builder.finish();
-            }
-        }
+        append_json(val, builder)?;
     }
     Ok(())
 }
@@ -76,6 +66,7 @@ fn build_object<'a, 'b>(
     obj: &'b Map<String, Value>,
     builder: &mut ObjectBuilder<'a, 'b>,
 ) -> Result<(), ArrowError> {
+
     for (key, value) in obj.iter() {
         match value {
             Value::Null => builder.insert(key, Variant::Null),

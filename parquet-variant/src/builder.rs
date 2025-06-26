@@ -721,6 +721,42 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 }
 
+pub(crate) trait AppendVariantHelper {
+    fn append_value_helper<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T);
+
+    fn new_list_helper(&mut self) -> ListBuilder;
+
+    fn new_object_helper(&mut self) -> ObjectBuilder;
+}
+
+impl AppendVariantHelper for ListBuilder<'_> {
+    fn append_value_helper<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.append_value(value);
+    }
+
+    fn new_list_helper(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object_helper(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
+}
+
+impl AppendVariantHelper for VariantBuilder {
+    fn append_value_helper<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.append_value(value);
+    }
+
+    fn new_list_helper(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object_helper(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
