@@ -758,7 +758,18 @@ impl RowConverter {
         // SAFETY
         // We have validated that the rows came from this [`RowConverter`]
         // and therefore must be valid
-        unsafe { self.convert_raw(&mut rows, validate_utf8) }
+        let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
+
+        for (i, row) in rows.iter().enumerate() {
+            if !row.is_empty() {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Codecs {codecs:?} did not consume all bytes for row {i}, remaining bytes: {row:?}",
+                    codecs = &self.codecs
+                )));
+            }
+        }
+
+        Ok(result)
     }
 
     /// Returns an empty [`Rows`] with capacity for `row_capacity` rows with
@@ -2547,6 +2558,64 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+    }
+
+    #[test]
+    fn test_two_fixed_size_lists() {
+        let mut first = FixedSizeListBuilder::new(UInt8Builder::new(), 1);
+        // 0: [100]
+        first.values().append_value(100);
+        first.append(true);
+        // 1: [101]
+        first.values().append_value(101);
+        first.append(true);
+        // 2: [102]
+        first.values().append_value(102);
+        first.append(true);
+        // 3: [null]
+        first.values().append_null();
+        first.append(true);
+        // 4: null
+        first.values().append_null(); // MASKED
+        first.append(false);
+        let first = Arc::new(first.finish()) as ArrayRef;
+        let first_type = first.data_type().clone();
+
+        let mut second = FixedSizeListBuilder::new(UInt8Builder::new(), 1);
+        // 0: [200]
+        second.values().append_value(200);
+        second.append(true);
+        // 1: [201]
+        second.values().append_value(201);
+        second.append(true);
+        // 2: [202]
+        second.values().append_value(202);
+        second.append(true);
+        // 3: [null]
+        second.values().append_null();
+        second.append(true);
+        // 4: null
+        second.values().append_null(); // MASKED
+        second.append(false);
+        let second = Arc::new(second.finish()) as ArrayRef;
+        let second_type = second.data_type().clone();
+
+        let converter = RowConverter::new(vec![
+            SortField::new(first_type.clone()),
+            SortField::new(second_type.clone()),
+        ])
+        .unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::clone(&first), Arc::clone(&second)])
+            .unwrap();
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 2);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &first);
+        back[1].to_data().validate_full().unwrap();
+        assert_eq!(&back[1], &second);
     }
 
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>

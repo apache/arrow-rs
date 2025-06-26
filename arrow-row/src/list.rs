@@ -292,6 +292,7 @@ pub unsafe fn decode_fixed_size_list(
                 row_offset = next_offset;
             }
         }
+        *row = &row[row_offset..]; // Update row for the next decoder
     }
 
     let children = converter.convert_raw(&mut child_rows, validate_utf8)?;
