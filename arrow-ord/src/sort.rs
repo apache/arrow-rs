@@ -303,6 +303,15 @@ fn sort_bytes<T: ByteArrayType>(
     sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
 }
 
+#[inline(always)]
+fn prefix_to_u32(bytes: &[u8]) -> u32 {
+    let mut acc = 0;
+    for (i, &b) in bytes.iter().take(4).enumerate() {
+        acc |= (b as u32) << (8 * (3 - i));
+    }
+    acc
+}
+
 fn sort_byte_view<T: ByteViewType>(
     values: &GenericByteViewArray<T>,
     value_indices: Vec<u32>,
@@ -314,7 +323,40 @@ fn sort_byte_view<T: ByteViewType>(
         .into_iter()
         .map(|index| (index, values.value(index as usize).as_ref()))
         .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
+    };
+
+    let cmp_prefix = |a: &[u8], b: &[u8]| {
+        let pa = prefix_to_u32(a);
+        let pb = prefix_to_u32(b);
+        match pa.cmp(&pb) {
+            Ordering::Equal => a.cmp(b),
+            non_eq => non_eq,
+        }
+    };
+
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, |a, b| cmp_prefix(a.1, b.1));
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |a, b| cmp_prefix(a.1, b.1).reverse());
+    }
+
+    let total_len = valids.len() + nulls.len();
+    let limit = limit.unwrap_or(total_len).min(total_len);
+    let mut out = Vec::with_capacity(total_len);
+    if options.nulls_first {
+        out.extend_from_slice(&nulls[..nulls.len().min(limit)]);
+        let rem = limit - out.len();
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+    } else {
+        out.extend(valids.iter().map(|&(i, _)| i).take(limit));
+        let rem = limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_fixed_size_binary(
