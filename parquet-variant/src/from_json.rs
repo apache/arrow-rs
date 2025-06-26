@@ -66,24 +66,28 @@ fn build_object<'a, 'b>(
     obj: &'b Map<String, Value>,
     builder: &mut ObjectBuilder<'a, 'b>,
 ) -> Result<(), ArrowError> {
-
     for (key, value) in obj.iter() {
-        match value {
-            Value::Null => builder.insert(key, Variant::Null),
-            Value::Bool(b) => builder.insert(key, *b),
-            Value::Number(n) => builder.insert(key, Variant::try_from(n)?),
-            Value::String(s) => builder.insert(key, s.as_str()),
-            Value::Array(arr) => {
-                let mut list_builder = builder.new_list(key);
-                build_list(arr, &mut list_builder)?;
-                list_builder.finish()
-            }
-            Value::Object(obj) => {
-                let mut obj_builder = builder.new_object(key);
-                build_object(obj, &mut obj_builder)?;
-                obj_builder.finish();
-            }
-        }
+        let mut field_builder = ObjectFieldBuilder { key, builder };
+        append_json(value, &mut field_builder)?;
     }
     Ok(())
+}
+
+struct ObjectFieldBuilder<'a, 'b, 'c> {
+    key: &'a str,
+    builder: &'b mut ObjectBuilder<'c, 'a>,
+}
+
+impl AppendVariantHelper for ObjectFieldBuilder<'_, '_, '_> {
+    fn append_value_helper<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.builder.insert(self.key, value);
+    }
+
+    fn new_list_helper(&mut self) -> ListBuilder {
+        self.builder.new_list(self.key)
+    }
+
+    fn new_object_helper(&mut self) -> ObjectBuilder {
+        self.builder.new_object(self.key)
+    }
 }
