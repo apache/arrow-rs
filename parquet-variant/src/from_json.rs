@@ -6,9 +6,9 @@ use serde_json::{Map, Value};
 /// Eventually, internal writes should also be performed using VariantBufferManager instead of
 /// ValueBuffer and MetadataBuffer so the caller has control of the memory.
 /// Returns a pair <value_size, metadata_size>
-pub fn json_to_variant<'a, T: VariantBufferManager>(
+pub fn json_to_variant<T: VariantBufferManager>(
     json: &str,
-    variant_buffer_manager: &'a mut T,
+    variant_buffer_manager: &mut T,
 ) -> Result<(usize, usize), ArrowError> {
     let mut builder = VariantBuilder::new();
     let json: Value = serde_json::from_str(json)
@@ -54,15 +54,12 @@ fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowErr
     Ok(())
 }
 
-fn build_list(arr: &Vec<Value>, builder: &mut ListBuilder) -> Result<(), ArrowError> {
+fn build_list(arr: &[Value], builder: &mut ListBuilder) -> Result<(), ArrowError> {
     for val in arr {
         match val {
             Value::Null => builder.append_value(Variant::Null),
             Value::Bool(b) => builder.append_value(*b),
-            Value::Number(n) => {
-                let v: Variant = n.try_into()?;
-                builder.append_value(v)
-            }
+            Value::Number(n) => builder.append_value(Variant::try_from(n)?),
             Value::String(s) => builder.append_value(s.as_str()),
             Value::Array(arr) => {
                 let mut list_builder = builder.new_list();
@@ -87,10 +84,7 @@ fn build_object<'a, 'b>(
         match value {
             Value::Null => builder.insert(key, Variant::Null),
             Value::Bool(b) => builder.insert(key, *b),
-            Value::Number(n) => {
-                let v: Variant = n.try_into()?;
-                builder.insert(key, v)
-            }
+            Value::Number(n) => builder.insert(key, Variant::try_from(n)?),
             Value::String(s) => builder.insert(key, s.as_str()),
             Value::Array(arr) => {
                 let mut list_builder = builder.new_list(key);

@@ -947,9 +947,8 @@ impl TryFrom<&Number> for Variant<'_, '_> {
     type Error = ArrowError;
 
     fn try_from(n: &Number) -> Result<Self, Self::Error> {
-        if n.is_i64() {
+        if let Some(i) = n.as_i64() {
             // Find minimum Integer width to fit
-            let i = n.as_i64().unwrap();
             if i as i8 as i64 == i {
                 Ok((i as i8).into())
             } else if i as i16 as i64 == i {

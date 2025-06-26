@@ -1,42 +1,5 @@
 use arrow_schema::ArrowError;
-use parquet_variant::{json_to_variant, VariantBufferManager};
-
-pub struct SampleVariantBufferManager {
-    pub value_buffer: Box<[u8]>,
-    pub metadata_buffer: Box<[u8]>,
-}
-
-impl VariantBufferManager for SampleVariantBufferManager {
-    fn borrow_value_buffer(&mut self) -> &mut [u8] {
-        &mut self.value_buffer
-    }
-
-    fn ensure_value_buffer_size(&mut self, size: usize) -> Result<(), ArrowError> {
-        let cur_len = self.value_buffer.len();
-        if size > cur_len {
-            // Reallocate larger buffer
-            let mut new_buffer = vec![0u8; size].into_boxed_slice();
-            new_buffer[..cur_len].copy_from_slice(&self.value_buffer);
-            self.value_buffer = new_buffer;
-        }
-        Ok(())
-    }
-
-    fn borrow_metadata_buffer(&mut self) -> &mut [u8] {
-        &mut self.metadata_buffer
-    }
-
-    fn ensure_metadata_buffer_size(&mut self, size: usize) -> Result<(), ArrowError> {
-        let cur_len = self.metadata_buffer.len();
-        if size > cur_len {
-            // Reallocate larger buffer
-            let mut new_buffer = vec![0u8; size].into_boxed_slice();
-            new_buffer[..cur_len].copy_from_slice(&self.metadata_buffer);
-            self.metadata_buffer = new_buffer;
-        }
-        Ok(())
-    }
-}
+use parquet_variant::{json_to_variant, SampleVecBasedVariantBufferManager};
 
 #[test]
 fn test_json_to_variant() -> Result<(), ArrowError> {
@@ -47,9 +10,9 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
     ) -> Result<(), ArrowError> {
         let json = json;
 
-        let mut variant_buffer_manager = SampleVariantBufferManager {
-            value_buffer: vec![0u8; 1].into_boxed_slice(),
-            metadata_buffer: vec![0u8; 1].into_boxed_slice(),
+        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
+            value_buffer: vec![0u8; 1],
+            metadata_buffer: vec![0u8; 1],
         };
         let (metadata_size, value_size) = json_to_variant(json, &mut variant_buffer_manager)?;
         let computed_metadata_slize: &[u8] = &*variant_buffer_manager.metadata_buffer;
