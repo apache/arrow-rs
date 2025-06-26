@@ -474,11 +474,15 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
     let nulls = take_nulls(array.nulls(), indices);
 
     let (offsets, values) = if array.null_count() == 0 && indices.null_count() == 0 {
-        offsets.extend(indices.values().iter().map(|index| {
+        offsets.reserve(indices.len());
+        for index in indices.values() {
             let index = index.as_usize();
             capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
-            T::Offset::from_usize(capacity).expect("overflow")
-        }));
+            offsets.push(
+                T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+            );
+        }
         let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
@@ -486,13 +490,17 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }
         (offsets, values)
     } else if indices.null_count() == 0 {
-        offsets.extend(indices.values().iter().map(|index| {
+        offsets.reserve(indices.len());
+        for index in indices.values() {
             let index = index.as_usize();
             if array.is_valid(index) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
-            T::Offset::from_usize(capacity).expect("overflow")
-        }));
+            offsets.push(
+                T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+            );
+        }
         let mut values = Vec::with_capacity(capacity);
 
         for index in indices.values() {
@@ -503,13 +511,17 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         }
         (offsets, values)
     } else if array.null_count() == 0 {
-        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+        offsets.reserve(indices.len());
+        for (i, index) in indices.values().iter().enumerate() {
             let index = index.as_usize();
             if indices.is_valid(i) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
-            T::Offset::from_usize(capacity).expect("overflow")
-        }));
+            offsets.push(
+                T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+            );
+        }
         let mut values = Vec::with_capacity(capacity);
 
         for (i, index) in indices.values().iter().enumerate() {
@@ -520,13 +532,17 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         (offsets, values)
     } else {
         let nulls = nulls.as_ref().unwrap();
-        offsets.extend(indices.values().iter().enumerate().map(|(i, index)| {
+        offsets.reserve(indices.len());
+        for (i, index) in indices.values().iter().enumerate() {
             let index = index.as_usize();
             if nulls.is_valid(i) {
                 capacity += input_offsets[index + 1].as_usize() - input_offsets[index].as_usize();
             }
-            T::Offset::from_usize(capacity).expect("overflow")
-        }));
+            offsets.push(
+                T::Offset::from_usize(capacity)
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+            );
+        }
         let mut values = Vec::with_capacity(capacity);
 
         for (i, index) in indices.values().iter().enumerate() {
@@ -540,11 +556,8 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
         (offsets, values)
     };
 
-    T::Offset::from_usize(values.len()).ok_or(ArrowError::ComputeError(format!(
-        "Offset overflow for {}BinaryArray: {}",
-        T::Offset::PREFIX,
-        values.len()
-    )))?;
+    T::Offset::from_usize(values.len())
+        .ok_or_else(|| ArrowError::OffsetOverflowError(values.len()))?;
 
     let array = unsafe {
         let offsets = OffsetBuffer::new_unchecked(offsets.into());
@@ -2410,5 +2423,16 @@ mod tests {
         let indicies = Int64Array::from(vec![0, 2, 4]);
         let array = take(&array, &indicies, None).unwrap();
         assert_eq!(array.len(), 3);
+    }
+
+    #[test]
+    fn test_take_bytes_offset_overflow() {
+        let indices = Int32Array::from(vec![0; (i32::MAX >> 4) as usize]);
+        let text = ('a'..='z').collect::<String>();
+        let values = StringArray::from(vec![Some(text.clone())]);
+        assert!(matches!(
+            take(&values, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
     }
 }
