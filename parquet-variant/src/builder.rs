@@ -855,7 +855,7 @@ mod tests {
                 let val2 = list.get(2).unwrap();
                 assert_eq!(val2, Variant::ShortString(ShortString("test")));
             }
-            _ => panic!("Expected an array variant, got: {:?}", variant),
+            _ => panic!("Expected an array variant, got: {variant:?}"),
         }
     }
 

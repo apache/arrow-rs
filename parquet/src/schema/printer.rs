@@ -391,7 +391,7 @@ impl Printer<'_> {
                     scale,
                 );
                 if !logical_type_str.is_empty() {
-                    write!(self.output, " ({});", logical_type_str);
+                    write!(self.output, " ({logical_type_str});");
                 } else {
                     write!(self.output, ";");
                 }

@@ -261,8 +261,7 @@ pub unsafe fn decode_fixed_size_list(
         DataType::FixedSizeList(element_field, _) => element_field.data_type(),
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Expected FixedSizeListArray, found: {:?}",
-                list_type
+                "Expected FixedSizeListArray, found: {list_type:?}",
             )))
         }
     };
