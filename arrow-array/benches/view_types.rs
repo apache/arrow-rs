@@ -17,7 +17,6 @@
 
 use arrow_array::StringViewArray;
 use criterion::*;
-use std::hint;
 
 fn gen_view_array(size: usize) -> StringViewArray {
     StringViewArray::from_iter((0..size).map(|v| match v % 3 {
@@ -33,14 +32,20 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("gc view types all", |b| {
         b.iter(|| {
-            hint::black_box(array.gc());
+            black_box(array.gc());
         });
     });
 
     let sliced = array.slice(0, 100_000 / 2);
     c.bench_function("gc view types slice half", |b| {
         b.iter(|| {
-            hint::black_box(sliced.gc());
+            black_box(sliced.gc());
+        });
+    });
+
+    c.bench_function("view types slice", |b| {
+        b.iter(|| {
+            black_box(array.slice(0, 100_000 / 2));
         });
     });
 }
